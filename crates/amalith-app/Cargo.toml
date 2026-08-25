@@ -1,0 +1,11 @@
+[package]
+name = "amalith-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amalith desktop application."
+
+[dependencies]
+eframe.workspace = true
+amalith-core = { path = "../amalith-core" }
+amalith-commands = { path = "../amalith-commands" }

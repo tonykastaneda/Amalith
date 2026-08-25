@@ -1,0 +1,15 @@
+[package]
+name = "amalith-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amalith document model: IDs, units, transforms, bounds, artboards, layers, objects."
+
+[dependencies]
+kurbo.workspace = true
+uuid.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

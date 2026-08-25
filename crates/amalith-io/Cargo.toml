@@ -1,0 +1,19 @@
+[package]
+name = "amalith-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Serialization of Amalith documents to/from the open .amalith zip container."
+
+[dependencies]
+amalith-core = { path = "../amalith-core" }
+kurbo.workspace = true
+uuid.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+amalith-commands = { path = "../amalith-commands" }

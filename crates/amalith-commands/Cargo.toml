@@ -1,0 +1,11 @@
+[package]
+name = "amalith-commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command engine and undo/redo history for Amalith documents."
+
+[dependencies]
+amalith-core = { path = "../amalith-core" }
+kurbo.workspace = true
+thiserror.workspace = true
