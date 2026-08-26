@@ -2,7 +2,7 @@ use amalith_commands::{Command, CommandError, Editor};
 use amalith_core::{Affine, Document, ObjectId, ObjectKind, ObjectParent, Point, Rect, Vec2};
 
 use crate::artboard_tool::Handle;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const MIN_SIZE: f64 = 1.0;
 
@@ -21,14 +21,14 @@ enum Drag {
     Scale {
         handle: Handle,
         start_bounds: Rect,
-        start_transform: Affine,
-        preview_transform: Affine,
+        start_transforms: HashMap<ObjectId, Affine>,
+        preview_transforms: HashMap<ObjectId, Affine>,
     },
     Rotate {
         center: Point,
         start_angle: f64,
-        start_transform: Affine,
-        preview_transform: Affine,
+        start_transforms: HashMap<ObjectId, Affine>,
+        preview_transforms: HashMap<ObjectId, Affine>,
     },
 }
 
@@ -65,15 +65,20 @@ impl SelectionTool {
         add: bool,
     ) {
         if let Some(id) = topmost_path_at(document, point, visible) {
-            if !self.selected.contains(&id) {
+            if add {
+                if !self.selected.insert(id) {
+                    self.selected.remove(&id);
+                }
+                self.drag = None;
+            } else {
                 self.selected.clear();
                 self.selected.insert(id);
+                self.drag = Some(if duplicate {
+                    Drag::Duplicate { start: point }
+                } else {
+                    Drag::Move { start: point }
+                });
             }
-            self.drag = Some(if duplicate {
-                Drag::Duplicate { start: point }
-            } else {
-                Drag::Move { start: point }
-            });
         } else {
             if !add {
                 self.selected.clear();
@@ -88,47 +93,45 @@ impl SelectionTool {
     }
 
     pub(crate) fn begin_scale(&mut self, document: &Document, handle: Handle) {
-        let Some(id) = (self.selected.len() == 1)
-            .then(|| self.selected.iter().next().copied())
-            .flatten()
-        else {
+        let Some(start_bounds) = self.selected_union_bounds(document) else {
             return;
         };
-        let Some(object) = document.object(id) else {
+        let start_transforms: HashMap<_, _> = self
+            .selected
+            .iter()
+            .filter_map(|id| document.object(*id).map(|object| (*id, object.transform)))
+            .collect();
+        if start_transforms.is_empty() {
             return;
-        };
-        let Some(start_bounds) = document.bounds_of(object.id) else {
-            return;
-        };
+        }
         self.preview_delta = Vec2::ZERO;
         self.drag = Some(Drag::Scale {
             handle,
             start_bounds,
-            start_transform: object.transform,
-            preview_transform: object.transform,
+            preview_transforms: start_transforms.clone(),
+            start_transforms,
         });
     }
 
     pub(crate) fn begin_rotate(&mut self, document: &Document, pointer: Point) {
-        let Some(id) = (self.selected.len() == 1)
-            .then(|| self.selected.iter().next().copied())
-            .flatten()
-        else {
+        let Some(bounds) = self.selected_union_bounds(document) else {
             return;
         };
-        let Some(object) = document.object(id) else {
+        let center = bounds.center();
+        let start_transforms: HashMap<_, _> = self
+            .selected
+            .iter()
+            .filter_map(|id| document.object(*id).map(|object| (*id, object.transform)))
+            .collect();
+        if start_transforms.is_empty() {
             return;
-        };
-        let Some(quad) = object_quad(document, object.id, object.transform) else {
-            return;
-        };
-        let center = quad_center(quad);
+        }
         self.preview_delta = Vec2::ZERO;
         self.drag = Some(Drag::Rotate {
             center,
             start_angle: (pointer.y - center.y).atan2(pointer.x - center.x),
-            start_transform: object.transform,
-            preview_transform: object.transform,
+            preview_transforms: start_transforms.clone(),
+            start_transforms,
         });
     }
 
@@ -140,24 +143,26 @@ impl SelectionTool {
             Some(Drag::Scale {
                 handle,
                 start_bounds,
-                start_transform,
-                preview_transform,
+                start_transforms,
+                preview_transforms,
             }) => {
-                let (transform, _) = scaled_transform(
+                let (scale, _) = scaled_transform(
                     *start_bounds,
-                    *start_transform,
+                    Affine::IDENTITY,
                     *handle,
                     point,
                     uniform,
                     from_center,
                 );
-                *preview_transform = transform;
+                for (id, start) in start_transforms.iter() {
+                    preview_transforms.insert(*id, scale * *start);
+                }
             }
             Some(Drag::Rotate {
                 center,
                 start_angle,
-                start_transform,
-                preview_transform,
+                start_transforms,
+                preview_transforms,
             }) => {
                 let current_angle = (point.y - center.y).atan2(point.x - center.x);
                 let mut theta = current_angle - *start_angle;
@@ -168,7 +173,9 @@ impl SelectionTool {
                 let rotate_about_center = Affine::translate((center.x, center.y))
                     * Affine::rotate(theta)
                     * Affine::translate((-center.x, -center.y));
-                *preview_transform = rotate_about_center * *start_transform;
+                for (id, start) in start_transforms.iter() {
+                    preview_transforms.insert(*id, rotate_about_center * *start);
+                }
             }
             None => {}
         }
@@ -202,24 +209,22 @@ impl SelectionTool {
                 Ok(true)
             }
             Some(Drag::Scale {
-                start_transform,
-                preview_transform,
+                start_transforms,
+                preview_transforms,
                 ..
-            }) if preview_transform != start_transform => {
-                editor.execute(Command::SetTransform {
-                    object,
-                    transform: preview_transform,
+            }) if preview_transforms != start_transforms => {
+                editor.execute(Command::SetTransforms {
+                    items: preview_transforms.into_iter().collect(),
                 })?;
                 Ok(true)
             }
             Some(Drag::Rotate {
-                start_transform,
-                preview_transform,
+                start_transforms,
+                preview_transforms,
                 ..
-            }) if preview_transform != start_transform => {
-                editor.execute(Command::SetTransform {
-                    object,
-                    transform: preview_transform,
+            }) if preview_transforms != start_transforms => {
+                editor.execute(Command::SetTransforms {
+                    items: preview_transforms.into_iter().collect(),
                 })?;
                 Ok(true)
             }
@@ -230,7 +235,9 @@ impl SelectionTool {
             }) => {
                 let marquee = normalized_rect(start, current);
                 if marquee.width() <= 0.0 || marquee.height() <= 0.0 {
-                    self.selected.clear();
+                    if !add {
+                        self.selected.clear();
+                    }
                 } else {
                     if !add {
                         self.selected.clear();
@@ -264,11 +271,11 @@ impl SelectionTool {
         }
         match &self.drag {
             Some(Drag::Scale {
-                preview_transform, ..
+                preview_transforms, ..
             })
             | Some(Drag::Rotate {
-                preview_transform, ..
-            }) => Some(*preview_transform),
+                preview_transforms, ..
+            }) => preview_transforms.get(&id).copied(),
             Some(Drag::Move { .. }) => {
                 Some(Affine::translate(self.preview_delta) * document.world_transform(id))
             }
@@ -279,10 +286,19 @@ impl SelectionTool {
     }
 
     pub(crate) fn selected_quad(&self, document: &Document) -> Option<[Point; 4]> {
-        let id = (self.selected.len() == 1)
+        if let Some(id) = (self.selected.len() == 1)
             .then(|| self.selected.iter().next().copied())
-            .flatten()?;
-        self.display_quad(document, id)
+            .flatten()
+        {
+            return self.display_quad(document, id);
+        }
+        let bounds = self.selected_union_bounds(document)?;
+        Some([
+            Point::new(bounds.x0, bounds.y0),
+            Point::new(bounds.x1, bounds.y0),
+            Point::new(bounds.x1, bounds.y1),
+            Point::new(bounds.x0, bounds.y1),
+        ])
     }
 
     pub(crate) fn selected_intersects(&self, document: &Document, visible: Rect) -> bool {
@@ -752,6 +768,136 @@ mod tests {
         selection.finish_drag(&mut editor).unwrap();
         assert!(selection.selected.contains(&first));
         assert!(selection.selected.contains(&second));
+    }
+
+    #[test]
+    fn shift_click_toggles_individual_objects() {
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(30.0, 0.0, 50.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let visible = Rect::new(-100.0, -100.0, 100.0, 100.0);
+        let mut selection = SelectionTool::default();
+
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            false,
+            false,
+        );
+        selection.finish_drag(&mut editor).unwrap();
+        selection.press(
+            editor.document(),
+            Point::new(35.0, 5.0),
+            visible,
+            false,
+            true,
+        );
+        selection.finish_drag(&mut editor).unwrap();
+        assert_eq!(selection.selected.len(), 2);
+
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            false,
+            true,
+        );
+        selection.finish_drag(&mut editor).unwrap();
+        assert_eq!(selection.selected.len(), 1);
+        assert!(selection.selected.contains(&second));
+        assert!(!selection.selected.contains(&first));
+    }
+
+    #[test]
+    fn multi_transform_scales_and_rotates_as_one_undo_group() {
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(30.0, 0.0, 50.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let first_transform = editor.document().object(first).unwrap().transform;
+        let second_transform = editor.document().object(second).unwrap().transform;
+        let mut selection = SelectionTool::default();
+        selection.selected.insert(first);
+        selection.selected.insert(second);
+
+        selection.begin_scale(editor.document(), Handle::East);
+        selection.drag(Point::new(100.0, 10.0), false, false);
+        assert!(selection.finish_drag(&mut editor).unwrap());
+        assert_eq!(
+            editor.document().bounds_of(first),
+            Some(Rect::new(0.0, 0.0, 40.0, 20.0))
+        );
+        assert_eq!(
+            editor.document().bounds_of(second),
+            Some(Rect::new(60.0, 0.0, 100.0, 20.0))
+        );
+
+        selection.begin_rotate(editor.document(), Point::new(75.0, 10.0));
+        selection.drag(Point::new(50.0, 35.0), false, false);
+        assert!(selection.finish_drag(&mut editor).unwrap());
+        assert_ne!(
+            editor.document().object(first).unwrap().transform,
+            first_transform
+        );
+        assert_ne!(
+            editor.document().object(second).unwrap().transform,
+            second_transform
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().bounds_of(first),
+            Some(Rect::new(0.0, 0.0, 40.0, 20.0))
+        );
+        assert_eq!(
+            editor.document().bounds_of(second),
+            Some(Rect::new(60.0, 0.0, 100.0, 20.0))
+        );
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().bounds_of(first),
+            Some(Rect::new(0.0, 0.0, 20.0, 20.0))
+        );
+        assert_eq!(
+            editor.document().bounds_of(second),
+            Some(Rect::new(30.0, 0.0, 50.0, 20.0))
+        );
     }
 
     #[test]

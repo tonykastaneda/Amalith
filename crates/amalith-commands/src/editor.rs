@@ -242,6 +242,13 @@ impl Editor {
                 id: object,
                 transform,
             }],
+            Command::SetTransforms { items } => items
+                .into_iter()
+                .map(|(object, transform)| Edit::SetTransform {
+                    id: object,
+                    transform,
+                })
+                .collect(),
         };
         Ok(edits)
     }

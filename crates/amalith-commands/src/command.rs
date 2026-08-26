@@ -78,6 +78,9 @@ pub enum Command {
         object: ObjectId,
         transform: Affine,
     },
+    SetTransforms {
+        items: Vec<(ObjectId, Affine)>,
+    },
 }
 
 /// What a successfully executed command produced, when relevant to the
