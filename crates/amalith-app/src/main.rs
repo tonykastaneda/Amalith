@@ -37,6 +37,7 @@ struct AmalithApp {
     creating: Option<NewDocumentForm>,
     error: Option<String>,
     artboards_panel: ArtboardsPanelState,
+    layers_panel: LayersPanelState,
 }
 
 struct DocumentTab {
@@ -52,11 +53,19 @@ struct ArtboardsPanelState {
     renaming: Option<ArtboardId>,
     rename_text: String,
     focus_rename: bool,
+    chrome: PanelChromeState,
+}
+
+struct LayersPanelState {
+    selected_layer: Option<LayerId>,
+    chrome: PanelChromeState,
+}
+
+struct PanelChromeState {
     dock: PanelDock,
     hidden: bool,
     drag_offset: Vec2,
     dragging: bool,
-    selected_layer: Option<LayerId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,11 +81,27 @@ impl Default for ArtboardsPanelState {
             renaming: None,
             rename_text: String::new(),
             focus_rename: false,
+            chrome: PanelChromeState::default(),
+        }
+    }
+}
+
+impl Default for LayersPanelState {
+    fn default() -> Self {
+        Self {
+            selected_layer: None,
+            chrome: PanelChromeState::default(),
+        }
+    }
+}
+
+impl Default for PanelChromeState {
+    fn default() -> Self {
+        Self {
             dock: PanelDock::Right,
             hidden: false,
             drag_offset: Vec2::ZERO,
             dragging: false,
-            selected_layer: None,
         }
     }
 }
@@ -205,6 +230,7 @@ impl AmalithApp {
             creating: Some(NewDocumentForm::default()),
             error: None,
             artboards_panel: ArtboardsPanelState::default(),
+            layers_panel: LayersPanelState::default(),
         }
     }
 
@@ -584,6 +610,7 @@ impl AmalithApp {
                     &mut tab.ellipse_tool,
                     &mut tab.selection_tool,
                     &mut self.artboards_panel,
+                    &mut self.layers_panel,
                     &mut self.error,
                 );
             }
@@ -598,15 +625,17 @@ impl AmalithApp {
         rectangle_tool: &mut RectangleTool,
         ellipse_tool: &mut EllipseTool,
         selection_tool: &mut SelectionTool,
-        panel_state: &mut ArtboardsPanelState,
+        artboards_panel: &mut ArtboardsPanelState,
+        layers_panel: &mut LayersPanelState,
         error: &mut Option<String>,
     ) {
-        Self::artboards_panel_ui(
+        Self::panels_ui(
             ctx,
             editor,
             artboard_tool,
             selection_tool,
-            panel_state,
+            artboards_panel,
+            layers_panel,
             error,
         );
         Self::tools_bar_ui(
@@ -1542,7 +1571,7 @@ impl AmalithApp {
         ui: &mut egui::Ui,
         editor: &mut Editor,
         selection_tool: &mut SelectionTool,
-        state: &mut ArtboardsPanelState,
+        state: &mut LayersPanelState,
         error: &mut Option<String>,
     ) {
         let layers = editor.document().layers().to_vec();
@@ -1654,129 +1683,239 @@ impl AmalithApp {
         });
     }
 
-    fn artboards_panel_ui(
+    fn panels_ui(
         ctx: &egui::Context,
         editor: &mut Editor,
         artboard_tool: &mut ArtboardTool,
         selection_tool: &mut SelectionTool,
+        artboards: &mut ArtboardsPanelState,
+        layers: &mut LayersPanelState,
+        error: &mut Option<String>,
+    ) {
+        let artboards_left = !artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Left;
+        let layers_left = !layers.chrome.hidden && layers.chrome.dock == PanelDock::Left;
+        if artboards_left || layers_left {
+            egui::SidePanel::left("left_panel_dock")
+                .exact_width(220.0)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                .show(ctx, |ui| {
+                    Self::dock_column_body(
+                        ui,
+                        ctx,
+                        PanelDock::Left,
+                        editor,
+                        artboard_tool,
+                        selection_tool,
+                        artboards,
+                        layers,
+                        error,
+                    );
+                });
+        }
+
+        let artboards_right = !artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Right;
+        let layers_right = !layers.chrome.hidden && layers.chrome.dock == PanelDock::Right;
+        if artboards_right || layers_right {
+            egui::SidePanel::right("right_panel_dock")
+                .exact_width(220.0)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                .show(ctx, |ui| {
+                    Self::dock_column_body(
+                        ui,
+                        ctx,
+                        PanelDock::Right,
+                        editor,
+                        artboard_tool,
+                        selection_tool,
+                        artboards,
+                        layers,
+                        error,
+                    );
+                });
+        }
+
+        Self::floating_artboards_panel(ctx, editor, artboard_tool, artboards, error);
+        Self::floating_layers_panel(ctx, editor, selection_tool, layers, error);
+        Self::paint_panel_drop_target(ctx, &artboards.chrome, "artboards_drop_target");
+        Self::paint_panel_drop_target(ctx, &layers.chrome, "layers_drop_target");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dock_column_body(
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        side: PanelDock,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
+        selection_tool: &mut SelectionTool,
+        artboards: &mut ArtboardsPanelState,
+        layers: &mut LayersPanelState,
+        error: &mut Option<String>,
+    ) {
+        let show_artboards = !artboards.chrome.hidden && artboards.chrome.dock == side;
+        let show_layers = !layers.chrome.hidden && layers.chrome.dock == side;
+        let panel_count = usize::from(show_artboards) + usize::from(show_layers);
+        let panel_height = ui.available_height() / panel_count.max(1) as f32;
+
+        if show_artboards {
+            ui.push_id("artboards_panel", |ui| {
+                ui.allocate_ui(Vec2::new(ui.available_width(), panel_height), |ui| {
+                    let header = Self::panel_title_bar(ui, "Artboards");
+                    Self::handle_panel_drag(ctx, header, &mut artboards.chrome);
+                    ui.separator();
+                    Self::artboards_panel_body(ui, editor, artboard_tool, artboards, error);
+                });
+            });
+        }
+        if show_layers {
+            ui.push_id("layers_panel", |ui| {
+                ui.allocate_ui(Vec2::new(ui.available_width(), panel_height), |ui| {
+                    let header = Self::panel_title_bar(ui, "Layers");
+                    Self::handle_panel_drag(ctx, header, &mut layers.chrome);
+                    ui.separator();
+                    Self::layers_panel_body(ui, editor, selection_tool, layers, error);
+                });
+            });
+        }
+    }
+
+    fn panel_title_bar(ui: &mut egui::Ui, title: &str) -> egui::Response {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(title)
+                        .strong()
+                        .color(Color32::from_gray(226)),
+                )
+                .sense(egui::Sense::drag()),
+            )
+        })
+        .inner
+        .on_hover_cursor(egui::CursorIcon::Grab)
+    }
+
+    fn handle_panel_drag(
+        ctx: &egui::Context,
+        response: egui::Response,
+        chrome: &mut PanelChromeState,
+    ) {
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        if response.drag_started() {
+            chrome.drag_offset = pointer - response.rect.min;
+            chrome.dragging = true;
+        }
+        if response.dragged() || response.drag_stopped() {
+            chrome.dock = Self::dock_target(pointer, ctx).unwrap_or(PanelDock::Floating {
+                pos: pointer - chrome.drag_offset,
+            });
+            ctx.request_repaint();
+        }
+        if response.drag_stopped() && !matches!(chrome.dock, PanelDock::Floating { .. }) {
+            chrome.dragging = false;
+        }
+    }
+
+    fn floating_artboards_panel(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
         state: &mut ArtboardsPanelState,
         error: &mut Option<String>,
     ) {
-        if state.hidden {
+        let PanelDock::Floating { pos } = state.chrome.dock else {
+            return;
+        };
+        if state.chrome.hidden {
             return;
         }
-        let dock = state.dock;
-        let show_panel = |ui: &mut egui::Ui,
-                          editor: &mut Editor,
-                          artboard_tool: &mut ArtboardTool,
-                          selection_tool: &mut SelectionTool,
-                          state: &mut ArtboardsPanelState,
-                          error: &mut Option<String>| {
-            let header = ui
-                .horizontal(|ui| {
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("Artboards")
-                                .strong()
-                                .color(Color32::from_gray(226)),
-                        )
-                        .sense(egui::Sense::drag()),
-                    )
-                })
-                .inner
-                .on_hover_cursor(egui::CursorIcon::Grab);
-            ui.separator();
-            let artboards_height = (ui.available_height() * 0.48).max(120.0);
-            ui.allocate_ui(Vec2::new(ui.available_width(), artboards_height), |ui| {
+        let mut open = true;
+        let response = egui::Window::new("Artboards")
+            .id(egui::Id::new("artboards_panel"))
+            .default_width(220.0)
+            .min_width(180.0)
+            .min_height(180.0)
+            .current_pos(pos)
+            .open(&mut open)
+            .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
+            .show(ctx, |ui| {
                 Self::artboards_panel_body(ui, editor, artboard_tool, state, error)
             });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.add_space(8.0);
-                ui.label(
-                    egui::RichText::new("Layers")
-                        .strong()
-                        .color(Color32::from_gray(226)),
-                );
-            });
-            ui.separator();
-            Self::layers_panel_body(ui, editor, selection_tool, state, error);
-            header
-        };
+        state.chrome.hidden = !open;
+        Self::handle_floating_response(
+            ctx,
+            response.map(|window| window.response),
+            &mut state.chrome,
+            pos,
+        );
+    }
 
-        let response = match dock {
-            PanelDock::Left => {
-                egui::SidePanel::left("artboards_panel")
-                    .exact_width(220.0)
-                    .resizable(false)
-                    .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
-                    .show(ctx, |ui| {
-                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
-                    })
-                    .inner
-            }
-            PanelDock::Right => {
-                egui::SidePanel::right("artboards_panel")
-                    .exact_width(220.0)
-                    .resizable(false)
-                    .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
-                    .show(ctx, |ui| {
-                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
-                    })
-                    .inner
-            }
-            PanelDock::Floating { pos } => {
-                let mut open = true;
-                let response = egui::Window::new("Artboards")
-                    .default_width(220.0)
-                    .min_width(180.0)
-                    .min_height(180.0)
-                    .current_pos(pos)
-                    .open(&mut open)
-                    .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
-                    .show(ctx, |ui| {
-                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
-                    });
-                if !open {
-                    state.hidden = true;
-                }
-                if let Some(window) = response {
-                    let actual_pos = window.response.rect.min;
-                    let pointer_down = ctx.input(|input| input.pointer.primary_down());
-                    if pointer_down && actual_pos.distance(pos) > 0.1 {
-                        state.dragging = true;
-                    }
-                    state.dock = PanelDock::Floating { pos: actual_pos };
-                    if state.dragging && ctx.input(|input| input.pointer.primary_released()) {
-                        if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                            if let Some(target) = Self::dock_target(pointer, ctx) {
-                                state.dock = target;
-                            }
-                        }
-                        state.dragging = false;
-                    }
-                }
-                return Self::paint_panel_drop_target(ctx, state);
-            }
+    fn floating_layers_panel(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        selection_tool: &mut SelectionTool,
+        state: &mut LayersPanelState,
+        error: &mut Option<String>,
+    ) {
+        let PanelDock::Floating { pos } = state.chrome.dock else {
+            return;
         };
-
-        if let Some(pointer) = response.interact_pointer_pos() {
-            if response.drag_started() {
-                state.drag_offset = pointer - response.rect.min;
-                state.dragging = true;
-            }
-            if response.dragged() || response.drag_stopped() {
-                state.dock = Self::dock_target(pointer, ctx).unwrap_or(PanelDock::Floating {
-                    pos: pointer - state.drag_offset,
-                });
-                ctx.request_repaint();
-            }
-            if response.drag_stopped() && !matches!(state.dock, PanelDock::Floating { .. }) {
-                state.dragging = false;
-            }
+        if state.chrome.hidden {
+            return;
         }
-        Self::paint_panel_drop_target(ctx, state);
+        let mut open = true;
+        let response = egui::Window::new("Layers")
+            .id(egui::Id::new("layers_panel"))
+            .default_width(220.0)
+            .min_width(180.0)
+            .min_height(180.0)
+            .current_pos(pos)
+            .open(&mut open)
+            .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
+            .show(ctx, |ui| {
+                Self::layers_panel_body(ui, editor, selection_tool, state, error)
+            });
+        state.chrome.hidden = !open;
+        Self::handle_floating_response(
+            ctx,
+            response.map(|window| window.response),
+            &mut state.chrome,
+            pos,
+        );
+    }
+
+    fn handle_floating_response(
+        ctx: &egui::Context,
+        response: Option<egui::Response>,
+        chrome: &mut PanelChromeState,
+        previous_pos: Pos2,
+    ) {
+        let Some(response) = response else { return };
+        let actual_pos = response.rect.min;
+        let pointer_down = ctx.input(|input| input.pointer.primary_down());
+        let window_moved = actual_pos.distance(previous_pos) > 0.1;
+        if pointer_down && window_moved {
+            chrome.dragging = true;
+        }
+        let pos = if chrome.dragging && pointer_down && !window_moved {
+            ctx.input(|input| input.pointer.interact_pos())
+                .map_or(actual_pos, |pointer| pointer - chrome.drag_offset)
+        } else {
+            actual_pos
+        };
+        chrome.dock = PanelDock::Floating { pos };
+        if chrome.dragging && ctx.input(|input| input.pointer.primary_released()) {
+            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                if let Some(target) = Self::dock_target(pointer, ctx) {
+                    chrome.dock = target;
+                }
+            }
+            chrome.dragging = false;
+        }
     }
 
     fn dock_target(pointer: Pos2, ctx: &egui::Context) -> Option<PanelDock> {
@@ -1790,7 +1929,7 @@ impl AmalithApp {
         }
     }
 
-    fn paint_panel_drop_target(ctx: &egui::Context, state: &ArtboardsPanelState) {
+    fn paint_panel_drop_target(ctx: &egui::Context, state: &PanelChromeState, id: &'static str) {
         if !state.dragging || !ctx.input(|input| input.pointer.primary_down()) {
             return;
         }
@@ -1814,7 +1953,7 @@ impl AmalithApp {
         if let Some(target) = target {
             ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::new("artboards_drop_target"),
+                egui::Id::new(id),
             ))
             .rect_filled(target, 0.0, Color32::from_rgb(45, 139, 242));
         }
