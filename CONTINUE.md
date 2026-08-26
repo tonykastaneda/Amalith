@@ -3,7 +3,10 @@
 Read this first after `/compact` or `/new`. Product spec: `amalith-project-brief.md`. Do not resurrect the name Vextor.
 
 **Repo:** `~/Documents/GitHub/Amalith`  
-**GitHub:** `tonykastaneda/Amalith` (`main` @ `f47d985` plus large **uncommitted** app work)  
+**GitHub:** `tonykastaneda/Amalith`  
+**Working branch:** `main` only.  
+**`dev-test`:** reference material only. Read it. Do not merge it, cherry-pick it, `checkout` its files onto `main`, or make `main` look like the spike. Implement new work on `main` from scratch, using `dev-test` the same way we use Graphite: a *how* example, not a source tree to copy.
+
 **Run:**
 
 ```bash
@@ -80,6 +83,8 @@ Do **not** spawn parallel feature worktrees until that loop works.
 
 ## Orchestrator rules
 
+- Product work is **`main`**. **`dev-test` is not a feature branch to land.** It is extra reference, like Graphite.
+- Never dump, merge, or file-checkout the `dev-test` tree onto `main`. If a tool from the spike is needed, re-implement it on `main` through the command engine.
 - One specialist at a time on `main.rs` when possible (ARTBOARDS vs UI-INTERACTION collide there).
 - Do not launch the GUI unless asked. Do not double-open `amalith-app`.
 - After compact: read this file, then `git status` and `amalith-project-brief.md`.
