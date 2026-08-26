@@ -38,7 +38,9 @@ pub use error::CommandError;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use amalith_core::{Affine, Document, ObjectParent, Rect, Vec2};
+    use amalith_core::{
+        Affine, Document, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Rect, Vec2,
+    };
 
     fn new_editor() -> Editor {
         Editor::new(Document::new("Test"))
@@ -510,6 +512,232 @@ mod tests {
         assert!(editor.document().artboard(copy_artboard).is_none());
         assert_eq!(editor.document().objects().count(), 1);
         assert_eq!(editor.document().bounds_of(original), Some(object_rect));
+    }
+
+    #[test]
+    fn stack_nudge_swaps_paint_order_and_undo_restores_it() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut create = |name: &str| {
+            let CommandOutcome::Object(id) = editor
+                .execute(Command::CreateRect {
+                    layer,
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    name: Some(name.into()),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            id
+        };
+        let bottom = create("Bottom");
+        let top = create("Top");
+        let parent = ObjectParent::Layer(layer);
+
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![bottom],
+                steps: 1,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[top, bottom]);
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(parent), &[bottom, top]);
+
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![top],
+                steps: -1,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[top, bottom]);
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(parent), &[bottom, top]);
+    }
+
+    #[test]
+    fn stack_nudge_at_front_is_a_no_op() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(top) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: Some("Top".into()),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![top],
+                steps: 1,
+            })
+            .unwrap();
+        assert_eq!(
+            editor.document().children_of(ObjectParent::Layer(layer)),
+            &[top]
+        );
+        editor.undo().unwrap();
+        assert!(editor.document().object(top).is_none());
+    }
+
+    #[test]
+    fn stack_nudge_reorders_within_a_group_not_just_layers() {
+        // `NudgeStack` must key off each selected object's *actual* parent
+        // (layer or group), not just walk `Document::layers()` — otherwise
+        // nudging objects nested in a group is a silent no-op.
+        let mut document = Document::new("Test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+
+        let group = Object::new(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            ObjectKind::Group(Default::default()),
+        );
+        let group_id = group.id;
+        document.insert_object(group, 0).unwrap();
+
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let bottom = Object::rectangle(ObjectId::new(), ObjectParent::Group(group_id), rect);
+        let bottom_id = bottom.id;
+        document.insert_object(bottom, 0).unwrap();
+        let top = Object::rectangle(ObjectId::new(), ObjectParent::Group(group_id), rect);
+        let top_id = top.id;
+        document.insert_object(top, 1).unwrap();
+
+        let mut editor = Editor::new(document);
+        let parent = ObjectParent::Group(group_id);
+        assert_eq!(editor.document().children_of(parent), &[bottom_id, top_id]);
+
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![bottom_id],
+                steps: 1,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[top_id, bottom_id]);
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(parent), &[bottom_id, top_id]);
+    }
+
+    #[test]
+    fn stack_nudge_moves_multiple_ids_together_preserving_relative_order() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut create = |editor: &mut Editor, name: &str| {
+            let CommandOutcome::Object(id) = editor
+                .execute(Command::CreateRect {
+                    layer,
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    name: Some(name.into()),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            id
+        };
+        // Bottom to top: A, B, C, D.
+        let a = create(&mut editor, "A");
+        let b = create(&mut editor, "B");
+        let c = create(&mut editor, "C");
+        let d = create(&mut editor, "D");
+        let parent = ObjectParent::Layer(layer);
+        assert_eq!(editor.document().children_of(parent), &[a, b, c, d]);
+
+        // Bring A and C forward together: each hops over its non-selected
+        // neighbor, landing as [B, A, D, C] — order between A and C
+        // preserved, and they don't leapfrog each other.
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![a, c],
+                steps: 1,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[b, a, d, c]);
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(parent), &[a, b, c, d]);
+    }
+
+    #[test]
+    fn stack_nudge_clamps_at_the_end_instead_of_wrapping() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut create = |editor: &mut Editor, name: &str| {
+            let CommandOutcome::Object(id) = editor
+                .execute(Command::CreateRect {
+                    layer,
+                    rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                    name: Some(name.into()),
+                })
+                .unwrap()
+            else {
+                panic!()
+            };
+            id
+        };
+        let bottom = create(&mut editor, "Bottom");
+        let top = create(&mut editor, "Top");
+        let parent = ObjectParent::Layer(layer);
+
+        // Sending the bottom object back by more steps than there are
+        // positions must clamp at index 0, not wrap around to the front.
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![bottom],
+                steps: -50,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[bottom, top]);
+
+        // Bringing it forward by more steps than there are positions must
+        // clamp at the front, not wrap to the back.
+        editor
+            .execute(Command::NudgeStack {
+                ids: vec![bottom],
+                steps: 50,
+            })
+            .unwrap();
+        assert_eq!(editor.document().children_of(parent), &[top, bottom]);
     }
 
     #[test]

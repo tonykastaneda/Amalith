@@ -75,6 +75,9 @@ impl Editor {
     /// Executes `command`, recording it so it can be undone.
     pub fn execute(&mut self, command: Command) -> Result<CommandOutcome, CommandError> {
         let edits = self.compile(command)?;
+        if edits.is_empty() {
+            return Ok(CommandOutcome::None);
+        }
         let mut inverses = Vec::with_capacity(edits.len());
         let mut new_id = None;
         for edit in edits {
@@ -262,6 +265,49 @@ impl Editor {
                     transform,
                 })
                 .collect(),
+            Command::NudgeStack { ids, steps } => {
+                let selected: std::collections::HashSet<_> = ids.iter().copied().collect();
+                let mut parents: Vec<ObjectParent> = Vec::new();
+                for &id in &ids {
+                    let object = self
+                        .document
+                        .object(id)
+                        .ok_or(CommandError::ObjectNotFound(id))?;
+                    if !parents.contains(&object.parent) {
+                        parents.push(object.parent);
+                    }
+                }
+                let mut edits = Vec::new();
+                if steps != 0 {
+                    for parent in parents {
+                        let original = self.document.children_of(parent);
+                        let mut order = original.to_vec();
+                        for _ in 0..steps.unsigned_abs() {
+                            if steps > 0 {
+                                for index in (0..order.len().saturating_sub(1)).rev() {
+                                    if selected.contains(&order[index])
+                                        && !selected.contains(&order[index + 1])
+                                    {
+                                        order.swap(index, index + 1);
+                                    }
+                                }
+                            } else {
+                                for index in 1..order.len() {
+                                    if selected.contains(&order[index])
+                                        && !selected.contains(&order[index - 1])
+                                    {
+                                        order.swap(index, index - 1);
+                                    }
+                                }
+                            }
+                        }
+                        if order != original {
+                            edits.push(Edit::SetChildOrder { parent, order });
+                        }
+                    }
+                }
+                edits
+            }
         };
         Ok(edits)
     }

@@ -321,15 +321,24 @@ impl SelectionTool {
     pub(crate) fn selected_intersects(&self, document: &Document, visible: Rect) -> bool {
         self.selected
             .iter()
-            .filter_map(|id| document.bounds_of(*id))
+            .filter_map(|id| self.display_bounds(document, *id))
             .any(|bounds| rects_intersect(bounds, visible))
     }
 
     pub(crate) fn selected_union_bounds(&self, document: &Document) -> Option<Rect> {
         self.selected
             .iter()
-            .filter_map(|id| document.bounds_of(*id))
+            .filter_map(|id| self.display_bounds(document, *id))
             .reduce(|a, b| a.union(b))
+    }
+
+    fn display_bounds(&self, document: &Document, id: ObjectId) -> Option<Rect> {
+        let object = document.object(id)?;
+        let local = object.kind.own_local_bounds()?;
+        Some(
+            self.display_transform(document, id)?
+                .transform_rect_bbox(local),
+        )
     }
 
     pub(crate) fn display_quad(&self, document: &Document, id: ObjectId) -> Option<[Point; 4]> {
@@ -892,6 +901,10 @@ mod tests {
             false,
         );
         selection.drag(Point::new(15.0, 10.0), false, false);
+        assert_eq!(
+            selection.selected_union_bounds(editor.document()),
+            Some(Rect::new(10.0, 5.0, 60.0, 25.0))
+        );
         assert!(selection.finish_drag(&mut editor).unwrap());
         assert_eq!(selection.selected.len(), 2);
         assert_eq!(
@@ -977,6 +990,10 @@ mod tests {
 
         selection.begin_scale(editor.document(), Handle::East);
         selection.drag(Point::new(100.0, 10.0), false, false);
+        assert_eq!(
+            selection.selected_union_bounds(editor.document()),
+            Some(Rect::new(0.0, 0.0, 100.0, 20.0))
+        );
         assert!(selection.finish_drag(&mut editor).unwrap());
         assert_eq!(
             editor.document().bounds_of(first),
@@ -989,6 +1006,10 @@ mod tests {
 
         selection.begin_rotate(editor.document(), Point::new(75.0, 10.0));
         selection.drag(Point::new(50.0, 35.0), false, false);
+        assert_ne!(
+            selection.selected_union_bounds(editor.document()),
+            Some(Rect::new(0.0, 0.0, 100.0, 20.0))
+        );
         assert!(selection.finish_drag(&mut editor).unwrap());
         assert_ne!(
             editor.document().object(first).unwrap().transform,

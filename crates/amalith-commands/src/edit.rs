@@ -15,7 +15,9 @@
 //! the original ID, exactly as Inkscape's `DocumentUndo` logs low-level
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
-use amalith_core::{Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId};
+use amalith_core::{
+    Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId, ObjectParent,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Edit {
@@ -51,6 +53,10 @@ pub(crate) enum Edit {
     SetTransform {
         id: ObjectId,
         transform: Affine,
+    },
+    SetChildOrder {
+        parent: ObjectParent,
+        order: Vec<ObjectId>,
     },
 }
 
@@ -118,6 +124,21 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 Edit::SetTransform {
                     id,
                     transform: old_transform,
+                },
+                None,
+            ))
+        }
+        Edit::SetChildOrder { parent, order } => {
+            let old_order = doc
+                .replace_child_order(parent, order)
+                .ok_or_else(|| match parent {
+                    ObjectParent::Layer(id) => CommandError::LayerNotFound(id),
+                    ObjectParent::Group(id) => CommandError::ObjectNotFound(id),
+                })?;
+            Ok((
+                Edit::SetChildOrder {
+                    parent,
+                    order: old_order,
                 },
                 None,
             ))

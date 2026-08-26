@@ -6,8 +6,8 @@ mod selection;
 
 use amalith_commands::{Command, CommandOutcome, Editor};
 use amalith_core::{
-    ArtboardId, Bleed, ColorMode, Document, Length, ObjectKind, ObjectParent, PathData, Point,
-    PreviewMode, RasterEffects, Rect, Unit,
+    ArtboardId, Bleed, ColorMode, Document, LayerId, Length, ObjectKind, ObjectParent, PathData,
+    Point, PreviewMode, RasterEffects, Rect, Unit,
 };
 use artboard_tool::{next_artboard_name, ArtboardTool, DragKind, Handle};
 use camera::Camera;
@@ -56,6 +56,7 @@ struct ArtboardsPanelState {
     hidden: bool,
     drag_offset: Vec2,
     dragging: bool,
+    selected_layer: Option<LayerId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,6 +76,7 @@ impl Default for ArtboardsPanelState {
             hidden: false,
             drag_offset: Vec2::ZERO,
             dragging: false,
+            selected_layer: None,
         }
     }
 }
@@ -599,7 +601,14 @@ impl AmalithApp {
         panel_state: &mut ArtboardsPanelState,
         error: &mut Option<String>,
     ) {
-        Self::artboards_panel_ui(ctx, editor, artboard_tool, panel_state, error);
+        Self::artboards_panel_ui(
+            ctx,
+            editor,
+            artboard_tool,
+            selection_tool,
+            panel_state,
+            error,
+        );
         Self::tools_bar_ui(
             ctx,
             editor,
@@ -749,6 +758,38 @@ impl AmalithApp {
                                 selection_tool.selected.clear();
                                 selection_tool.cancel_drag();
                             }
+                        }
+                    }
+                }
+
+                if canvas_shortcuts_enabled
+                    && !artboard_tool.active
+                    && selection_tool.active
+                    && !selection_tool.selected.is_empty()
+                {
+                    let stack_step = ctx.input_mut(|input| {
+                        if input
+                            .count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::OpenBracket)
+                            > 0
+                        {
+                            -1
+                        } else if input.count_and_consume_key(
+                            egui::Modifiers::COMMAND,
+                            egui::Key::CloseBracket,
+                        ) > 0
+                        {
+                            1
+                        } else {
+                            0
+                        }
+                    });
+                    if stack_step != 0 {
+                        let ids = selection_tool.selected.iter().copied().collect();
+                        if let Err(err) = editor.execute(Command::NudgeStack {
+                            ids,
+                            steps: stack_step,
+                        }) {
+                            *error = Some(err.to_string());
                         }
                     }
                 }
@@ -1497,10 +1538,127 @@ impl AmalithApp {
         });
     }
 
+    fn layers_panel_body(
+        ui: &mut egui::Ui,
+        editor: &mut Editor,
+        selection_tool: &mut SelectionTool,
+        state: &mut ArtboardsPanelState,
+        error: &mut Option<String>,
+    ) {
+        let layers = editor.document().layers().to_vec();
+        let rows_height = (ui.available_height() - 34.0).max(0.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height(rows_height)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for layer in &layers {
+                    let layer_selected = state.selected_layer == Some(layer.id);
+                    let layer_response = egui::Frame::NONE
+                        .fill(if layer_selected {
+                            Color32::from_rgb(62, 82, 103)
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .inner_margin(egui::Margin::symmetric(10, 5))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&layer.name)
+                                        .strong()
+                                        .color(Color32::from_gray(225)),
+                                )
+                                .sense(egui::Sense::click()),
+                            )
+                        })
+                        .inner;
+                    if layer_response.clicked() {
+                        state.selected_layer = Some(layer.id);
+                    }
+
+                    for &id in layer.children.iter().rev() {
+                        let Some(object) = editor.document().object(id) else {
+                            continue;
+                        };
+                        let selected = selection_tool.selected.contains(&id);
+                        let response = egui::Frame::NONE
+                            .fill(if selected {
+                                Color32::from_rgb(62, 82, 103)
+                            } else {
+                                Color32::TRANSPARENT
+                            })
+                            .inner_margin(egui::Margin {
+                                left: 28,
+                                right: 10,
+                                top: 4,
+                                bottom: 4,
+                            })
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(
+                                            object.name.as_deref().unwrap_or("Object"),
+                                        )
+                                        .color(Color32::from_gray(210)),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                            })
+                            .inner;
+                        if response.clicked() {
+                            let add = ui.input(|input| input.modifiers.shift);
+                            if add {
+                                if !selection_tool.selected.insert(id) {
+                                    selection_tool.selected.remove(&id);
+                                }
+                            } else {
+                                selection_tool.selected.clear();
+                                selection_tool.selected.insert(id);
+                            }
+                            state.selected_layer = Some(layer.id);
+                        }
+                    }
+                }
+            });
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            ui.separator();
+            if ui
+                .add_sized(
+                    [32.0, 28.0],
+                    egui::Button::new(egui::RichText::new("+").size(20.0)).frame(false),
+                )
+                .on_hover_text("New layer")
+                .clicked()
+            {
+                let next = editor
+                    .document()
+                    .layers()
+                    .iter()
+                    .filter_map(|layer| layer.name.strip_prefix("Layer "))
+                    .filter_map(|suffix| suffix.parse::<usize>().ok())
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                match editor.execute(Command::CreateLayer {
+                    name: format!("Layer {next}"),
+                    index: None,
+                }) {
+                    Ok(CommandOutcome::Layer(id)) => state.selected_layer = Some(id),
+                    Ok(_) => {}
+                    Err(err) => *error = Some(err.to_string()),
+                }
+            }
+        });
+    }
+
     fn artboards_panel_ui(
         ctx: &egui::Context,
         editor: &mut Editor,
         artboard_tool: &mut ArtboardTool,
+        selection_tool: &mut SelectionTool,
         state: &mut ArtboardsPanelState,
         error: &mut Option<String>,
     ) {
@@ -1511,6 +1669,7 @@ impl AmalithApp {
         let show_panel = |ui: &mut egui::Ui,
                           editor: &mut Editor,
                           artboard_tool: &mut ArtboardTool,
+                          selection_tool: &mut SelectionTool,
                           state: &mut ArtboardsPanelState,
                           error: &mut Option<String>| {
             let header = ui
@@ -1528,7 +1687,21 @@ impl AmalithApp {
                 .inner
                 .on_hover_cursor(egui::CursorIcon::Grab);
             ui.separator();
-            Self::artboards_panel_body(ui, editor, artboard_tool, state, error);
+            let artboards_height = (ui.available_height() * 0.48).max(120.0);
+            ui.allocate_ui(Vec2::new(ui.available_width(), artboards_height), |ui| {
+                Self::artboards_panel_body(ui, editor, artboard_tool, state, error)
+            });
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("Layers")
+                        .strong()
+                        .color(Color32::from_gray(226)),
+                );
+            });
+            ui.separator();
+            Self::layers_panel_body(ui, editor, selection_tool, state, error);
             header
         };
 
@@ -1539,7 +1712,7 @@ impl AmalithApp {
                     .resizable(false)
                     .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
                     .show(ctx, |ui| {
-                        show_panel(ui, editor, artboard_tool, state, error)
+                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
                     })
                     .inner
             }
@@ -1549,7 +1722,7 @@ impl AmalithApp {
                     .resizable(false)
                     .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
                     .show(ctx, |ui| {
-                        show_panel(ui, editor, artboard_tool, state, error)
+                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
                     })
                     .inner
             }
@@ -1563,7 +1736,7 @@ impl AmalithApp {
                     .open(&mut open)
                     .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
                     .show(ctx, |ui| {
-                        Self::artboards_panel_body(ui, editor, artboard_tool, state, error)
+                        show_panel(ui, editor, artboard_tool, selection_tool, state, error)
                     });
                 if !open {
                     state.hidden = true;

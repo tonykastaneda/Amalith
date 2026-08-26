@@ -87,6 +87,12 @@ pub enum Command {
     SetTransforms {
         items: Vec<(ObjectId, Affine)>,
     },
+    /// Nudges selected siblings in paint order. Positive steps move toward
+    /// the front; negative steps move toward the back.
+    NudgeStack {
+        ids: Vec<ObjectId>,
+        steps: i32,
+    },
 }
 
 /// What a successfully executed command produced, when relevant to the

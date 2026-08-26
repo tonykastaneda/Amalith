@@ -187,6 +187,20 @@ impl Document {
         }
     }
 
+    /// Raw command-engine primitive: replaces a parent's complete paint order,
+    /// returning the previous order. Callers must preserve the same child ids.
+    pub fn replace_child_order(
+        &mut self,
+        parent: ObjectParent,
+        order: Vec<ObjectId>,
+    ) -> Option<Vec<ObjectId>> {
+        let children = self.children_vec_mut(parent)?;
+        if children.len() != order.len() || !children.iter().all(|id| order.contains(id)) {
+            return None;
+        }
+        Some(std::mem::replace(children, order))
+    }
+
     /// Raw: inserts `object` into the arena and into its parent's child
     /// list at `index` (clamped). Fails if `object.parent` doesn't exist,
     /// or (for a group parent) isn't a group.
