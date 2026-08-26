@@ -57,6 +57,12 @@ pub enum Command {
         rect: Rect,
         name: Option<String>,
     },
+    /// Creates a closed ellipse path as the top-most child of `layer`.
+    CreateEllipse {
+        layer: LayerId,
+        rect: Rect,
+        name: Option<String>,
+    },
     /// Translates an object by `delta`, in the coordinate space of the
     /// object's parent (document space for a layer-level object).
     MoveObject {

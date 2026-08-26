@@ -1,16 +1,18 @@
 mod artboard_tool;
 mod camera;
+mod ellipse_tool;
 mod rectangle_tool;
 mod selection;
 
 use amalith_commands::{Command, CommandOutcome, Editor};
 use amalith_core::{
-    ArtboardId, Bleed, ColorMode, Document, Length, ObjectKind, ObjectParent, Point, PreviewMode,
-    RasterEffects, Rect, Unit,
+    ArtboardId, Bleed, ColorMode, Document, Length, ObjectKind, ObjectParent, PathData, Point,
+    PreviewMode, RasterEffects, Rect, Unit,
 };
 use artboard_tool::{next_artboard_name, ArtboardTool, DragKind, Handle};
 use camera::Camera;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect as EguiRect, Stroke, Vec2};
+use ellipse_tool::EllipseTool;
 use rectangle_tool::RectangleTool;
 use selection::SelectionTool;
 
@@ -42,6 +44,7 @@ struct DocumentTab {
     camera: Camera,
     artboard_tool: ArtboardTool,
     rectangle_tool: RectangleTool,
+    ellipse_tool: EllipseTool,
     selection_tool: SelectionTool,
 }
 
@@ -94,6 +97,7 @@ enum CanvasNavigation {
 enum ToolKind {
     Selection,
     Rectangle,
+    Ellipse,
     Artboard,
 }
 
@@ -101,11 +105,13 @@ fn activate_tool(
     tool: ToolKind,
     artboard_tool: &mut ArtboardTool,
     rectangle_tool: &mut RectangleTool,
+    ellipse_tool: &mut EllipseTool,
     selection_tool: &mut SelectionTool,
     first_artboard: Option<ArtboardId>,
 ) {
     artboard_tool.set_active(tool == ToolKind::Artboard, first_artboard);
     rectangle_tool.set_active(tool == ToolKind::Rectangle);
+    ellipse_tool.set_active(tool == ToolKind::Ellipse);
     selection_tool.set_active(tool == ToolKind::Selection);
 }
 
@@ -251,6 +257,7 @@ impl AmalithApp {
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
+            ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
         });
         self.active = self.open.len() - 1;
@@ -572,6 +579,7 @@ impl AmalithApp {
                     &mut tab.camera,
                     &mut tab.artboard_tool,
                     &mut tab.rectangle_tool,
+                    &mut tab.ellipse_tool,
                     &mut tab.selection_tool,
                     &mut self.artboards_panel,
                     &mut self.error,
@@ -586,12 +594,20 @@ impl AmalithApp {
         camera: &mut Camera,
         artboard_tool: &mut ArtboardTool,
         rectangle_tool: &mut RectangleTool,
+        ellipse_tool: &mut EllipseTool,
         selection_tool: &mut SelectionTool,
         panel_state: &mut ArtboardsPanelState,
         error: &mut Option<String>,
     ) {
         Self::artboards_panel_ui(ctx, editor, artboard_tool, panel_state, error);
-        Self::tools_bar_ui(ctx, editor, artboard_tool, rectangle_tool, selection_tool);
+        Self::tools_bar_ui(
+            ctx,
+            editor,
+            artboard_tool,
+            rectangle_tool,
+            ellipse_tool,
+            selection_tool,
+        );
         let pasteboard = if artboard_tool.active {
             Color32::from_rgb(115, 115, 115)
         } else {
@@ -646,17 +662,24 @@ impl AmalithApp {
                     && ctx.input_mut(|input| {
                         input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::M) > 0
                     });
+                let ellipse_pressed = !navigation_key_down
+                    && canvas_shortcuts_enabled
+                    && ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::L) > 0
+                    });
                 let first_artboard = boards.first().map(|board| board.id);
                 if shift_o_pressed {
                     if artboard_tool.active {
                         artboard_tool.set_active(false, first_artboard);
                         rectangle_tool.set_active(false);
+                        ellipse_tool.set_active(false);
                         selection_tool.set_active(false);
                     } else {
                         activate_tool(
                             ToolKind::Artboard,
                             artboard_tool,
                             rectangle_tool,
+                            ellipse_tool,
                             selection_tool,
                             first_artboard,
                         );
@@ -666,6 +689,7 @@ impl AmalithApp {
                         ToolKind::Selection,
                         artboard_tool,
                         rectangle_tool,
+                        ellipse_tool,
                         selection_tool,
                         first_artboard,
                     );
@@ -674,12 +698,23 @@ impl AmalithApp {
                         ToolKind::Rectangle,
                         artboard_tool,
                         rectangle_tool,
+                        ellipse_tool,
+                        selection_tool,
+                        first_artboard,
+                    );
+                } else if ellipse_pressed {
+                    activate_tool(
+                        ToolKind::Ellipse,
+                        artboard_tool,
+                        rectangle_tool,
+                        ellipse_tool,
                         selection_tool,
                         first_artboard,
                     );
                 } else if escape_pressed {
                     artboard_tool.set_active(false, first_artboard);
                     rectangle_tool.set_active(false);
+                    ellipse_tool.set_active(false);
                     selection_tool.set_active(false);
                 }
 
@@ -782,6 +817,7 @@ impl AmalithApp {
                 match canvas_navigation(space_down, command_down) {
                     CanvasNavigation::ScrubbyZoom => {
                         rectangle_tool.cancel_drag();
+                        ellipse_tool.cancel_drag();
                         selection_tool.cancel_drag();
                         camera.end_pan();
                         if primary_pressed {
@@ -807,6 +843,7 @@ impl AmalithApp {
                     }
                     CanvasNavigation::HandPan => {
                         rectangle_tool.cancel_drag();
+                        ellipse_tool.cancel_drag();
                         selection_tool.cancel_drag();
                         camera.end_scrub();
                         if primary_pressed {
@@ -848,6 +885,7 @@ impl AmalithApp {
                         }
                         if gesture_on_canvas {
                             rectangle_tool.cancel_drag();
+                            ellipse_tool.cancel_drag();
                             selection_tool.cancel_drag();
                         } else if rectangle_tool.active {
                             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -865,6 +903,25 @@ impl AmalithApp {
                             }
                             if primary_released {
                                 if let Err(err) = rectangle_tool.finish_drag(editor) {
+                                    *error = Some(err.to_string());
+                                }
+                            }
+                        } else if ellipse_tool.active {
+                            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                            if let Some(pointer) = pointer_position {
+                                let pointer_doc = camera.screen_to_document(pointer, available);
+                                let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                if primary_pressed
+                                    && available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    ellipse_tool.begin_drag(point);
+                                } else if primary_down {
+                                    ellipse_tool.update_drag(point, shift_down);
+                                }
+                            }
+                            if primary_released {
+                                if let Err(err) = ellipse_tool.finish_drag(editor) {
                                     *error = Some(err.to_string());
                                 }
                             }
@@ -1077,21 +1134,38 @@ impl AmalithApp {
                         if !rects_intersect(bounds, visible_document) {
                             continue;
                         }
-                        if let Some(mut quad) = selection_tool.display_quad(editor.document(), id) {
-                            if !selection_tool.active {
-                                if let Some((_, delta)) = artboard_tool
-                                    .move_preview()
-                                    .filter(|(source, _)| rects_intersect(bounds, *source))
-                                {
-                                    quad = quad.map(|point| point + delta);
+                        let move_delta = (!selection_tool.active)
+                            .then(|| artboard_tool.move_preview())
+                            .flatten()
+                            .filter(|(source, _)| rects_intersect(bounds, *source))
+                            .map(|(_, delta)| delta)
+                            .unwrap_or_default();
+                        if let (Some(object), Some(transform)) = (
+                            editor.document().object(id),
+                            selection_tool.display_transform(editor.document(), id),
+                        ) {
+                            if let ObjectKind::Path(path) = &object.kind {
+                                for local_points in path.flattened_points(0.5) {
+                                    let points = local_points
+                                        .into_iter()
+                                        .map(|point| {
+                                            let point = transform * point + move_delta;
+                                            let screen = camera.document_to_screen(
+                                                Pos2::new(point.x as f32, point.y as f32),
+                                                available,
+                                            );
+                                            screen
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if points.len() >= 3 {
+                                        painter.add(egui::Shape::convex_polygon(
+                                            points,
+                                            Color32::from_gray(225),
+                                            Stroke::new(1.0_f32, Color32::from_gray(45)),
+                                        ));
+                                    }
                                 }
                             }
-                            let points = document_quad_to_screen(quad, camera, available).to_vec();
-                            painter.add(egui::Shape::convex_polygon(
-                                points,
-                                Color32::from_gray(225),
-                                Stroke::new(1.0_f32, Color32::from_gray(45)),
-                            ));
                         }
                         if let Some((_, delta)) = artboard_tool
                             .duplicate_artwork_preview()
@@ -1186,6 +1260,27 @@ impl AmalithApp {
                         egui::StrokeKind::Inside,
                     );
                 }
+                if let Some(preview) = ellipse_tool.preview_rect {
+                    let path = PathData::ellipse(preview);
+                    for local_points in path.flattened_points(0.5) {
+                        let points = local_points
+                            .into_iter()
+                            .map(|point| {
+                                camera.document_to_screen(
+                                    Pos2::new(point.x as f32, point.y as f32),
+                                    available,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        if points.len() >= 3 {
+                            painter.add(egui::Shape::convex_polygon(
+                                points,
+                                Color32::from_white_alpha(80),
+                                Stroke::new(1.0_f32, Color32::from_gray(35)),
+                            ));
+                        }
+                    }
+                }
                 if let Some(preview) = artboard_tool.duplicate_preview() {
                     if !rects_intersect(preview, visible_document) {
                         return;
@@ -1224,6 +1319,7 @@ impl AmalithApp {
         editor: &Editor,
         artboard_tool: &mut ArtboardTool,
         rectangle_tool: &mut RectangleTool,
+        ellipse_tool: &mut EllipseTool,
         selection_tool: &mut SelectionTool,
     ) {
         let first_artboard = editor.document().artboards().first().map(|board| board.id);
@@ -1255,6 +1351,7 @@ impl AmalithApp {
                             ToolKind::Selection,
                             artboard_tool,
                             rectangle_tool,
+                            ellipse_tool,
                             selection_tool,
                             first_artboard,
                         );
@@ -1264,6 +1361,17 @@ impl AmalithApp {
                             ToolKind::Rectangle,
                             artboard_tool,
                             rectangle_tool,
+                            ellipse_tool,
+                            selection_tool,
+                            first_artboard,
+                        );
+                    }
+                    if button(ui, "L", "Ellipse (L)", ellipse_tool.active) {
+                        activate_tool(
+                            ToolKind::Ellipse,
+                            artboard_tool,
+                            rectangle_tool,
+                            ellipse_tool,
                             selection_tool,
                             first_artboard,
                         );
@@ -1273,6 +1381,7 @@ impl AmalithApp {
                             ToolKind::Artboard,
                             artboard_tool,
                             rectangle_tool,
+                            ellipse_tool,
                             selection_tool,
                             first_artboard,
                         );
@@ -1896,12 +2005,14 @@ mod canvas_input_tests {
     fn tool_switch_is_exclusive() {
         let mut artboard = ArtboardTool::default();
         let mut rectangle = RectangleTool::default();
+        let mut ellipse = EllipseTool::default();
         let mut selection = SelectionTool::default();
 
         activate_tool(
             ToolKind::Rectangle,
             &mut artboard,
             &mut rectangle,
+            &mut ellipse,
             &mut selection,
             None,
         );
@@ -1913,6 +2024,7 @@ mod canvas_input_tests {
             ToolKind::Artboard,
             &mut artboard,
             &mut rectangle,
+            &mut ellipse,
             &mut selection,
             None,
         );
@@ -2001,6 +2113,7 @@ mod canvas_input_tests {
             camera,
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
+            ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
         };
 
@@ -2016,6 +2129,7 @@ mod canvas_input_tests {
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
+            ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
         };
         assert_eq!(tab_label(&tab, 4), "Untitled-4 @ 100.00 % (CMYK/Preview)");
@@ -2029,6 +2143,7 @@ mod canvas_input_tests {
                 camera: Camera::default(),
                 artboard_tool: ArtboardTool::default(),
                 rectangle_tool: RectangleTool::default(),
+                ellipse_tool: EllipseTool::default(),
                 selection_tool: SelectionTool::default(),
             }
         }

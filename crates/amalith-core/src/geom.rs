@@ -15,7 +15,7 @@
 //! derived view (`object position - artboard origin`), computed on demand,
 //! so they can never drift out of sync with the canonical document-space
 //! values.
-pub use kurbo::{Affine, BezPath, Point, Rect, Shape, Size, Vec2};
+pub use kurbo::{flatten, Affine, BezPath, PathEl, Point, Rect, Shape, Size, Vec2};
 
 /// Bounding box of a Bezier path, in the path's own coordinate space.
 ///

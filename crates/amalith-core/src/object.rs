@@ -7,7 +7,7 @@
 //! in sync. That sync problem is a large fraction of `SPObject`'s
 //! complexity in Inkscape; Amalith has no reason to take it on, since the
 //! native format is not "serialized DOM" (see `DESIGN.md`).
-use crate::geom::{Affine, BezPath, Rect};
+use crate::geom::{Affine, BezPath, PathEl, Rect};
 use crate::ids::{AssetId, LayerId, ObjectId};
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +49,63 @@ impl PathData {
         Self { geometry: path }
     }
 
+    /// Builds a closed ellipse path in local space using four cubic Bézier
+    /// segments (the standard kappa approximation).
+    pub fn ellipse(rect: Rect) -> Self {
+        let cx = (rect.x0 + rect.x1) * 0.5;
+        let cy = (rect.y0 + rect.y1) * 0.5;
+        let rx = (rect.x1 - rect.x0) * 0.5;
+        let ry = (rect.y1 - rect.y0) * 0.5;
+        let k = 0.552_284_749_830_793_6;
+        let kx = rx * k;
+        let ky = ry * k;
+        let mut path = BezPath::new();
+        path.move_to((cx + rx, cy));
+        path.curve_to((cx + rx, cy + ky), (cx + kx, cy + ry), (cx, cy + ry));
+        path.curve_to((cx - kx, cy + ry), (cx - rx, cy + ky), (cx - rx, cy));
+        path.curve_to((cx - rx, cy - ky), (cx - kx, cy - ry), (cx, cy - ry));
+        path.curve_to((cx + kx, cy - ry), (cx + rx, cy - ky), (cx + rx, cy));
+        path.close_path();
+        Self { geometry: path }
+    }
+
     pub fn local_bounds(&self) -> Rect {
         crate::geom::bez_path_bounds(&self.geometry)
+    }
+
+    /// Returns a polyline approximation of every subpath in local space.
+    pub fn flattened_points(&self, tolerance: f64) -> Vec<Vec<crate::geom::Point>> {
+        let mut paths: Vec<Vec<crate::geom::Point>> = Vec::new();
+        let mut current: Option<Vec<crate::geom::Point>> = None;
+        crate::geom::flatten(&self.geometry, tolerance, |element| match element {
+            PathEl::MoveTo(point) => {
+                if let Some(points) = current.take() {
+                    if points.len() >= 2 {
+                        paths.push(points);
+                    }
+                }
+                current = Some(vec![point]);
+            }
+            PathEl::LineTo(point) => {
+                if let Some(points) = current.as_mut() {
+                    points.push(point);
+                }
+            }
+            PathEl::ClosePath => {
+                if let Some(points) = current.take() {
+                    if points.len() >= 2 {
+                        paths.push(points);
+                    }
+                }
+            }
+            PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _) => {}
+        });
+        if let Some(points) = current {
+            if points.len() >= 2 {
+                paths.push(points);
+            }
+        }
+        paths
     }
 }
 

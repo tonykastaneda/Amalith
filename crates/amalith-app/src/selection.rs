@@ -71,8 +71,13 @@ impl SelectionTool {
                 }
                 self.drag = None;
             } else {
-                self.selected.clear();
-                self.selected.insert(id);
+                // Clicking an already-selected object moves the complete
+                // selection.  Only replace the selection when the hit object
+                // was not selected (Alt duplication remains single-source).
+                if duplicate || !self.selected.contains(&id) {
+                    self.selected.clear();
+                    self.selected.insert(id);
+                }
                 self.drag = Some(if duplicate {
                     Drag::Duplicate { start: point }
                 } else {
@@ -80,14 +85,26 @@ impl SelectionTool {
                 });
             }
         } else {
-            if !add {
-                self.selected.clear();
+            // The union/oriented selection box is also draggable between
+            // objects.  Main's handle/rotation hit tests run first, so this
+            // path only handles its interior.
+            let inside_selection_box = !add
+                && !duplicate
+                && self
+                    .selected_quad(document)
+                    .is_some_and(|quad| point_in_convex_quad(point, quad));
+            if inside_selection_box {
+                self.drag = Some(Drag::Move { start: point });
+            } else {
+                if !add {
+                    self.selected.clear();
+                }
+                self.drag = Some(Drag::Marquee {
+                    start: point,
+                    add,
+                    current: point,
+                });
             }
-            self.drag = Some(Drag::Marquee {
-                start: point,
-                add,
-                current: point,
-            });
         }
         self.preview_delta = Vec2::ZERO;
     }
@@ -526,6 +543,19 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
 }
 
+fn point_in_convex_quad(point: Point, quad: [Point; 4]) -> bool {
+    let mut has_positive = false;
+    let mut has_negative = false;
+    for index in 0..4 {
+        let edge = quad[(index + 1) % 4] - quad[index];
+        let to_point = point - quad[index];
+        let cross = edge.x * to_point.y - edge.y * to_point.x;
+        has_positive |= cross > 0.0;
+        has_negative |= cross < 0.0;
+    }
+    !(has_positive && has_negative)
+}
+
 fn normalized_rect(a: Point, b: Point) -> Rect {
     Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
 }
@@ -825,6 +855,95 @@ mod tests {
         assert_eq!(selection.selected.len(), 1);
         assert!(selection.selected.contains(&second));
         assert!(!selection.selected.contains(&first));
+    }
+
+    #[test]
+    fn moving_selected_object_keeps_multi_selection() {
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(30.0, 0.0, 50.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let visible = Rect::new(-100.0, -100.0, 100.0, 100.0);
+        let mut selection = SelectionTool::default();
+        selection.selected.extend([first, second]);
+
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            false,
+            false,
+        );
+        selection.drag(Point::new(15.0, 10.0), false, false);
+        assert!(selection.finish_drag(&mut editor).unwrap());
+        assert_eq!(selection.selected.len(), 2);
+        assert_eq!(
+            editor.document().bounds_of(first),
+            Some(Rect::new(10.0, 5.0, 30.0, 25.0))
+        );
+        assert_eq!(
+            editor.document().bounds_of(second),
+            Some(Rect::new(40.0, 5.0, 60.0, 25.0))
+        );
+
+        // Empty space between selected objects is still inside the union box.
+        selection.press(
+            editor.document(),
+            Point::new(35.0, 15.0),
+            visible,
+            false,
+            false,
+        );
+        assert!(matches!(selection.drag, Some(Drag::Move { .. })));
+    }
+
+    #[test]
+    fn clicking_unselected_object_replaces_selection_before_move() {
+        let (mut editor, layer) = editor_with_layer();
+        let make = |editor: &mut Editor, rect| {
+            let CommandOutcome::Object(id) = editor
+                .execute(Command::CreateRect {
+                    layer,
+                    rect,
+                    name: None,
+                })
+                .unwrap()
+            else {
+                unreachable!()
+            };
+            id
+        };
+        let first = make(&mut editor, Rect::new(0.0, 0.0, 20.0, 20.0));
+        let second = make(&mut editor, Rect::new(30.0, 0.0, 50.0, 20.0));
+        let third = make(&mut editor, Rect::new(60.0, 0.0, 80.0, 20.0));
+        let mut selection = SelectionTool::default();
+        selection.selected.extend([first, second]);
+        selection.press(
+            editor.document(),
+            Point::new(65.0, 5.0),
+            Rect::new(-100.0, -100.0, 100.0, 100.0),
+            false,
+            false,
+        );
+        assert_eq!(selection.selected.len(), 1);
+        assert!(selection.selected.contains(&third));
     }
 
     #[test]
