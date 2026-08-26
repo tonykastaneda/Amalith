@@ -1,13 +1,18 @@
 mod artboard_tool;
 mod camera;
+mod rectangle_tool;
+mod selection;
 
-use artboard_tool::{mode_after_keys, next_artboard_name, ArtboardTool, DragKind, Handle};
+use amalith_commands::{Command, CommandOutcome, Editor};
+use amalith_core::{
+    ArtboardId, Bleed, ColorMode, Document, Length, ObjectKind, ObjectParent, Point, PreviewMode,
+    RasterEffects, Rect, Unit,
+};
+use artboard_tool::{next_artboard_name, ArtboardTool, DragKind, Handle};
 use camera::Camera;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect as EguiRect, Stroke, Vec2};
-use amalith_commands::{Command, Editor};
-use amalith_core::{
-    Bleed, ColorMode, Document, Length, Point, PreviewMode, RasterEffects, Rect, Unit,
-};
+use rectangle_tool::RectangleTool;
+use selection::SelectionTool;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
@@ -29,12 +34,46 @@ struct AmalithApp {
     active: usize,
     creating: Option<NewDocumentForm>,
     error: Option<String>,
+    artboards_panel: ArtboardsPanelState,
 }
 
 struct DocumentTab {
     editor: Box<Editor>,
     camera: Camera,
     artboard_tool: ArtboardTool,
+    rectangle_tool: RectangleTool,
+    selection_tool: SelectionTool,
+}
+
+struct ArtboardsPanelState {
+    renaming: Option<ArtboardId>,
+    rename_text: String,
+    focus_rename: bool,
+    dock: PanelDock,
+    hidden: bool,
+    drag_offset: Vec2,
+    dragging: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PanelDock {
+    Left,
+    Right,
+    Floating { pos: Pos2 },
+}
+
+impl Default for ArtboardsPanelState {
+    fn default() -> Self {
+        Self {
+            renaming: None,
+            rename_text: String::new(),
+            focus_rename: false,
+            dock: PanelDock::Right,
+            hidden: false,
+            drag_offset: Vec2::ZERO,
+            dragging: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,6 +90,29 @@ enum CanvasNavigation {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolKind {
+    Selection,
+    Rectangle,
+    Artboard,
+}
+
+fn activate_tool(
+    tool: ToolKind,
+    artboard_tool: &mut ArtboardTool,
+    rectangle_tool: &mut RectangleTool,
+    selection_tool: &mut SelectionTool,
+    first_artboard: Option<ArtboardId>,
+) {
+    artboard_tool.set_active(tool == ToolKind::Artboard, first_artboard);
+    rectangle_tool.set_active(tool == ToolKind::Rectangle);
+    selection_tool.set_active(tool == ToolKind::Selection);
+}
+
+fn delete_shortcut_allowed(canvas_shortcuts_enabled: bool, navigation_key_down: bool) -> bool {
+    canvas_shortcuts_enabled && !navigation_key_down
+}
+
 fn canvas_navigation(space_down: bool, command_down: bool) -> CanvasNavigation {
     if space_down && command_down {
         CanvasNavigation::ScrubbyZoom
@@ -58,6 +120,20 @@ fn canvas_navigation(space_down: bool, command_down: bool) -> CanvasNavigation {
         CanvasNavigation::HandPan
     } else {
         CanvasNavigation::None
+    }
+}
+
+fn apply_canvas_gesture(
+    camera: &mut Camera,
+    scroll_delta: Vec2,
+    zoom_delta: f32,
+    anchor: Pos2,
+    viewport: EguiRect,
+) {
+    if (zoom_delta - 1.0).abs() > f32::EPSILON {
+        camera.zoom_at(anchor, zoom_delta, viewport);
+    } else {
+        camera.pan_by(scroll_delta);
     }
 }
 
@@ -120,6 +196,7 @@ impl AmalithApp {
             active: 0,
             creating: Some(NewDocumentForm::default()),
             error: None,
+            artboards_panel: ArtboardsPanelState::default(),
         }
     }
 
@@ -173,6 +250,8 @@ impl AmalithApp {
             editor: Box::new(editor),
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
+            rectangle_tool: RectangleTool::default(),
+            selection_tool: SelectionTool::default(),
         });
         self.active = self.open.len() - 1;
         self.creating = None;
@@ -492,6 +571,9 @@ impl AmalithApp {
                     &mut tab.editor,
                     &mut tab.camera,
                     &mut tab.artboard_tool,
+                    &mut tab.rectangle_tool,
+                    &mut tab.selection_tool,
+                    &mut self.artboards_panel,
                     &mut self.error,
                 );
             }
@@ -503,8 +585,13 @@ impl AmalithApp {
         editor: &mut Editor,
         camera: &mut Camera,
         artboard_tool: &mut ArtboardTool,
+        rectangle_tool: &mut RectangleTool,
+        selection_tool: &mut SelectionTool,
+        panel_state: &mut ArtboardsPanelState,
         error: &mut Option<String>,
     ) {
+        Self::artboards_panel_ui(ctx, editor, artboard_tool, panel_state, error);
+        Self::tools_bar_ui(ctx, editor, artboard_tool, rectangle_tool, selection_tool);
         let pasteboard = if artboard_tool.active {
             Color32::from_rgb(115, 115, 115)
         } else {
@@ -539,6 +626,7 @@ impl AmalithApp {
                     Pos2::new(max_x as f32, max_y as f32),
                 );
                 camera.initialize_fit(available, document_bounds);
+                let visible_document = camera.visible_document_rect(available);
 
                 let shift_o_pressed = ctx.input_mut(|input| {
                     input.count_and_consume_key(egui::Modifiers::SHIFT, egui::Key::O) > 0
@@ -547,18 +635,86 @@ impl AmalithApp {
                     input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::Escape) > 0
                 });
                 let navigation_key_down = ctx.input(|input| input.key_down(egui::Key::Space));
+                let canvas_shortcuts_enabled = !ctx.wants_keyboard_input();
                 let selection_pressed = !navigation_key_down
+                    && canvas_shortcuts_enabled
                     && ctx.input_mut(|input| {
                         input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::V) > 0
                     });
-                let next_mode = mode_after_keys(
-                    artboard_tool.active,
-                    shift_o_pressed,
-                    escape_pressed,
-                    selection_pressed,
-                );
-                if next_mode != artboard_tool.active {
-                    artboard_tool.set_active(next_mode, boards.first().map(|board| board.id));
+                let rectangle_pressed = !navigation_key_down
+                    && canvas_shortcuts_enabled
+                    && ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::M) > 0
+                    });
+                let first_artboard = boards.first().map(|board| board.id);
+                if shift_o_pressed {
+                    if artboard_tool.active {
+                        artboard_tool.set_active(false, first_artboard);
+                        rectangle_tool.set_active(false);
+                        selection_tool.set_active(false);
+                    } else {
+                        activate_tool(
+                            ToolKind::Artboard,
+                            artboard_tool,
+                            rectangle_tool,
+                            selection_tool,
+                            first_artboard,
+                        );
+                    }
+                } else if selection_pressed {
+                    activate_tool(
+                        ToolKind::Selection,
+                        artboard_tool,
+                        rectangle_tool,
+                        selection_tool,
+                        first_artboard,
+                    );
+                } else if rectangle_pressed {
+                    activate_tool(
+                        ToolKind::Rectangle,
+                        artboard_tool,
+                        rectangle_tool,
+                        selection_tool,
+                        first_artboard,
+                    );
+                } else if escape_pressed {
+                    artboard_tool.set_active(false, first_artboard);
+                    rectangle_tool.set_active(false);
+                    selection_tool.set_active(false);
+                }
+
+                let delete_pressed =
+                    delete_shortcut_allowed(canvas_shortcuts_enabled, navigation_key_down)
+                        && ctx.input_mut(|input| {
+                            input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                                + input
+                                    .count_and_consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                                > 0
+                        });
+                if delete_pressed {
+                    if artboard_tool.active && !artboard_tool.is_dragging() {
+                        if let Some(id) = artboard_tool.selected {
+                            if let Err(err) = editor.execute(Command::DeleteArtboard { id }) {
+                                *error = Some(err.to_string());
+                            } else {
+                                artboard_tool.preview_rect = None;
+                                artboard_tool.selected = editor
+                                    .document()
+                                    .artboards()
+                                    .last()
+                                    .map(|artboard| artboard.id);
+                            }
+                        }
+                    } else if selection_tool.active && !selection_tool.is_dragging() {
+                        if let Some(id) = selection_tool.selected {
+                            if let Err(err) = editor.execute(Command::DeleteObject { id }) {
+                                *error = Some(err.to_string());
+                            } else {
+                                selection_tool.selected = None;
+                                selection_tool.cancel_drag();
+                            }
+                        }
+                    }
                 }
 
                 let undo_pressed = ctx.input_mut(|input| {
@@ -567,27 +723,44 @@ impl AmalithApp {
                 if undo_pressed {
                     let _ = editor.undo();
                     artboard_tool.preview_rect = None;
+                    if artboard_tool
+                        .selected
+                        .is_some_and(|id| editor.document().artboard(id).is_none())
+                    {
+                        artboard_tool.selected = editor
+                            .document()
+                            .artboards()
+                            .last()
+                            .map(|artboard| artboard.id);
+                    }
+                    selection_tool.retain_existing(editor.document());
                 }
 
                 let (
                     space_down,
                     command_down,
+                    shift_down,
                     alt_down,
                     primary_down,
                     primary_pressed,
                     primary_released,
                     pointer_position,
                     pointer_delta,
+                    smooth_scroll_delta,
+                    zoom_delta,
                 ) = ctx.input(|input| {
                     (
                         input.key_down(egui::Key::Space),
                         input.modifiers.command,
+                        input.modifiers.shift,
                         input.modifiers.alt,
                         input.pointer.primary_down(),
                         input.pointer.primary_pressed(),
                         input.pointer.primary_released(),
                         input.pointer.interact_pos(),
                         input.pointer.delta(),
+                        input.smooth_scroll_delta,
+                        input.zoom_delta(),
                     )
                 });
 
@@ -607,6 +780,8 @@ impl AmalithApp {
 
                 match canvas_navigation(space_down, command_down) {
                     CanvasNavigation::ScrubbyZoom => {
+                        rectangle_tool.cancel_drag();
+                        selection_tool.cancel_drag();
                         camera.end_pan();
                         if primary_pressed {
                             if let Some(anchor) = pointer_position {
@@ -630,6 +805,8 @@ impl AmalithApp {
                         });
                     }
                     CanvasNavigation::HandPan => {
+                        rectangle_tool.cancel_drag();
+                        selection_tool.cancel_drag();
                         camera.end_scrub();
                         if primary_pressed {
                             camera.begin_pan();
@@ -652,7 +829,45 @@ impl AmalithApp {
                     CanvasNavigation::None => {
                         camera.end_scrub();
                         camera.end_pan();
-                        if artboard_tool.active {
+                        let gesture_on_canvas = (smooth_scroll_delta != Vec2::ZERO
+                            || (zoom_delta - 1.0).abs() > f32::EPSILON)
+                            && pointer_position.is_some_and(|pointer| {
+                                available.contains(pointer) && ui.rect_contains_pointer(available)
+                            });
+                        if let Some(pointer) = pointer_position.filter(|pointer| {
+                            available.contains(*pointer) && ui.rect_contains_pointer(available)
+                        }) {
+                            apply_canvas_gesture(
+                                camera,
+                                smooth_scroll_delta,
+                                zoom_delta,
+                                pointer,
+                                available,
+                            );
+                        }
+                        if gesture_on_canvas {
+                            rectangle_tool.cancel_drag();
+                            selection_tool.cancel_drag();
+                        } else if rectangle_tool.active {
+                            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                            if let Some(pointer) = pointer_position {
+                                let pointer_doc = camera.screen_to_document(pointer, available);
+                                let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                if primary_pressed
+                                    && available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    rectangle_tool.begin_drag(point);
+                                } else if primary_down {
+                                    rectangle_tool.update_drag(point, shift_down);
+                                }
+                            }
+                            if primary_released {
+                                if let Err(err) = rectangle_tool.finish_drag(editor) {
+                                    *error = Some(err.to_string());
+                                }
+                            }
+                        } else if artboard_tool.active {
                             if let Some(pointer) = pointer_position {
                                 let selected = artboard_tool
                                     .selected
@@ -730,6 +945,50 @@ impl AmalithApp {
                                     ctx.set_cursor_icon(cursor);
                                 }
                             }
+                        } else if selection_tool.active {
+                            if let Some(pointer) = pointer_position {
+                                let selected_quad = selection_tool
+                                    .selected_quad(editor.document())
+                                    .map(|quad| document_quad_to_screen(quad, camera, available));
+                                let hovered_handle = selected_quad
+                                    .and_then(|quad| hit_oriented_handle(pointer, quad));
+                                let hovered_rotate = hovered_handle.is_none()
+                                    && selected_quad
+                                        .is_some_and(|quad| hit_rotation_halo(pointer, quad));
+                                let pointer_doc = camera.screen_to_document(pointer, available);
+                                let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                if primary_pressed
+                                    && available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    if let Some(handle) = hovered_handle {
+                                        selection_tool.begin_scale(editor.document(), handle);
+                                    } else if hovered_rotate {
+                                        selection_tool.begin_rotate(editor.document(), point);
+                                    } else {
+                                        selection_tool.press(
+                                            editor.document(),
+                                            point,
+                                            visible_document,
+                                            alt_down,
+                                        );
+                                    }
+                                } else if primary_down {
+                                    selection_tool.drag(point, shift_down, alt_down);
+                                }
+                                if selection_tool.is_duplicate_drag() {
+                                    ctx.set_cursor_icon(egui::CursorIcon::Copy);
+                                } else if let Some(handle) = hovered_handle {
+                                    ctx.set_cursor_icon(handle_cursor(handle));
+                                } else if hovered_rotate {
+                                    ctx.set_cursor_icon(egui::CursorIcon::Alias);
+                                }
+                            }
+                            if primary_released {
+                                if let Err(err) = selection_tool.finish_drag(editor) {
+                                    *error = Some(err.to_string());
+                                }
+                            }
                         }
                     }
                 }
@@ -742,6 +1001,9 @@ impl AmalithApp {
                 let painter = ui.painter();
                 for (index, artboard) in boards.iter().enumerate() {
                     let document_rect = artboard_tool.display_rect(artboard.id, artboard.rect);
+                    if !rects_intersect(document_rect, visible_document) {
+                        continue;
+                    }
                     let rect = document_rect_to_screen(document_rect, camera, available);
                     let min = rect.min;
                     painter.rect_filled(rect, 0.0, Color32::WHITE);
@@ -783,7 +1045,107 @@ impl AmalithApp {
                         }
                     }
                 }
+                for layer in editor.document().layers() {
+                    for &id in editor.document().children_of(ObjectParent::Layer(layer.id)) {
+                        let Some(object) = editor.document().object(id) else {
+                            continue;
+                        };
+                        if !object.visible || !matches!(object.kind, ObjectKind::Path(_)) {
+                            continue;
+                        }
+                        let Some(bounds) = editor.document().bounds_of(id) else {
+                            continue;
+                        };
+                        if !rects_intersect(bounds, visible_document) {
+                            continue;
+                        }
+                        if let Some(mut quad) = selection_tool.display_quad(editor.document(), id) {
+                            if !selection_tool.active {
+                                if let Some((_, delta)) = artboard_tool
+                                    .move_preview()
+                                    .filter(|(source, _)| rects_intersect(bounds, *source))
+                                {
+                                    quad = quad.map(|point| point + delta);
+                                }
+                            }
+                            let points = document_quad_to_screen(quad, camera, available).to_vec();
+                            painter.add(egui::Shape::convex_polygon(
+                                points,
+                                Color32::from_gray(225),
+                                Stroke::new(1.0_f32, Color32::from_gray(45)),
+                            ));
+                        }
+                        if let Some((_, delta)) = artboard_tool
+                            .duplicate_artwork_preview()
+                            .filter(|(source, _)| rects_intersect(bounds, *source))
+                        {
+                            let copy_rect =
+                                document_rect_to_screen(bounds + delta, camera, available);
+                            painter.rect_filled(copy_rect, 0.0, Color32::from_gray(225));
+                            painter.rect_stroke(
+                                copy_rect,
+                                0.0,
+                                Stroke::new(1.0_f32, Color32::from_gray(45)),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                    }
+                }
+                if let Some(bounds) = selection_tool.duplicate_preview_bounds(editor.document()) {
+                    if rects_intersect(bounds, visible_document) {
+                        if let Some(quad) = selection_tool.duplicate_preview_quad(editor.document())
+                        {
+                            let points = document_quad_to_screen(quad, camera, available).to_vec();
+                            painter.add(egui::Shape::convex_polygon(
+                                points,
+                                Color32::from_gray(225),
+                                Stroke::new(1.0_f32, Color32::from_gray(45)),
+                            ));
+                        }
+                    }
+                }
+                if selection_tool.active {
+                    if selection_tool.selected_intersects(editor.document(), visible_document) {
+                        if let Some(quad) = selection_tool.selected_quad(editor.document()) {
+                            let quad = document_quad_to_screen(quad, camera, available);
+                            let blue = Color32::from_rgb(59, 155, 255);
+                            painter.add(egui::Shape::closed_line(
+                                quad.to_vec(),
+                                Stroke::new(1.25_f32, blue),
+                            ));
+                            for handle in Handle::ALL {
+                                let handle_rect = EguiRect::from_center_size(
+                                    oriented_handle_position(quad, handle),
+                                    Vec2::splat(8.0),
+                                );
+                                painter.rect_filled(handle_rect, 0.0, Color32::WHITE);
+                                painter.rect_stroke(
+                                    handle_rect,
+                                    0.0,
+                                    Stroke::new(1.25_f32, blue),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
+                            let center =
+                                EguiRect::from_center_size(quad_center(quad), Vec2::splat(6.0));
+                            painter.rect_filled(center, 0.0, blue);
+                        }
+                    }
+                }
+                if let Some(preview) = rectangle_tool.preview_rect {
+                    let rect = document_rect_to_screen(preview, camera, available);
+                    painter.rect_filled(rect, 0.0, Color32::from_white_alpha(80));
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(1.0_f32, Color32::from_gray(35)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
                 if let Some(preview) = artboard_tool.duplicate_preview() {
+                    if !rects_intersect(preview, visible_document) {
+                        return;
+                    }
                     let rect = document_rect_to_screen(preview, camera, available);
                     painter.rect_filled(rect, 0.0, Color32::WHITE);
                     paint_dashed_rect(
@@ -811,6 +1173,325 @@ impl AmalithApp {
                     }
                 }
             });
+    }
+
+    fn tools_bar_ui(
+        ctx: &egui::Context,
+        editor: &Editor,
+        artboard_tool: &mut ArtboardTool,
+        rectangle_tool: &mut RectangleTool,
+        selection_tool: &mut SelectionTool,
+    ) {
+        let first_artboard = editor.document().artboards().first().map(|board| board.id);
+        egui::SidePanel::left("tools_bar")
+            .exact_width(46.0)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    let button =
+                        |ui: &mut egui::Ui, label: &str, tooltip: &str, active: bool| -> bool {
+                            ui.add_sized(
+                                [34.0, 34.0],
+                                egui::Button::new(label)
+                                    .fill(if active {
+                                        Color32::from_rgb(68, 100, 132)
+                                    } else {
+                                        Color32::TRANSPARENT
+                                    })
+                                    .frame(false),
+                            )
+                            .on_hover_text(tooltip)
+                            .clicked()
+                        };
+
+                    if button(ui, "V", "Selection (V)", selection_tool.active) {
+                        activate_tool(
+                            ToolKind::Selection,
+                            artboard_tool,
+                            rectangle_tool,
+                            selection_tool,
+                            first_artboard,
+                        );
+                    }
+                    if button(ui, "M", "Rectangle (M)", rectangle_tool.active) {
+                        activate_tool(
+                            ToolKind::Rectangle,
+                            artboard_tool,
+                            rectangle_tool,
+                            selection_tool,
+                            first_artboard,
+                        );
+                    }
+                    if button(ui, "Art", "Artboard (Shift+O)", artboard_tool.active) {
+                        activate_tool(
+                            ToolKind::Artboard,
+                            artboard_tool,
+                            rectangle_tool,
+                            selection_tool,
+                            first_artboard,
+                        );
+                    }
+                });
+            });
+    }
+
+    fn artboards_panel_body(
+        ui: &mut egui::Ui,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
+        state: &mut ArtboardsPanelState,
+        error: &mut Option<String>,
+    ) {
+        let boards = editor.document().artboards().to_vec();
+        let rows_height = (ui.available_height() - 34.0).max(0.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height(rows_height)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (index, board) in boards.iter().enumerate() {
+                    let selected = artboard_tool.selected == Some(board.id);
+                    let fill = if selected {
+                        Color32::from_rgb(62, 82, 103)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    egui::Frame::NONE
+                        .fill(fill)
+                        .inner_margin(egui::Margin::symmetric(10, 5))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                let index_response = ui.add_sized(
+                                    [25.0, 22.0],
+                                    egui::Label::new(
+                                        egui::RichText::new((index + 1).to_string())
+                                            .color(Color32::from_gray(155)),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                );
+
+                                if state.renaming == Some(board.id) {
+                                    let response = ui.add_sized(
+                                        [ui.available_width(), 22.0],
+                                        egui::TextEdit::singleline(&mut state.rename_text)
+                                            .id_salt(("artboard_rename", board.id)),
+                                    );
+                                    if state.focus_rename {
+                                        response.request_focus();
+                                        state.focus_rename = false;
+                                    }
+                                    let enter = response.has_focus()
+                                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                                    if enter || response.lost_focus() {
+                                        let name = state.rename_text.trim();
+                                        if !name.is_empty() && name != board.name {
+                                            if let Err(err) =
+                                                editor.execute(Command::RenameArtboard {
+                                                    id: board.id,
+                                                    name: name.to_owned(),
+                                                })
+                                            {
+                                                *error = Some(err.to_string());
+                                            }
+                                        }
+                                        state.renaming = None;
+                                    }
+                                } else {
+                                    let name_response = ui.add_sized(
+                                        [ui.available_width(), 22.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(&board.name)
+                                                .color(Color32::from_gray(225)),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if name_response.double_clicked() {
+                                        state.renaming = Some(board.id);
+                                        state.rename_text = board.name.clone();
+                                        state.focus_rename = true;
+                                    }
+                                    if name_response.clicked() {
+                                        artboard_tool.select(board.id);
+                                    }
+                                }
+                                if index_response.clicked() {
+                                    artboard_tool.select(board.id);
+                                }
+                            });
+                        });
+                }
+            });
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            ui.separator();
+            if ui
+                .add_sized(
+                    [32.0, 28.0],
+                    egui::Button::new(egui::RichText::new("+").size(20.0)).frame(false),
+                )
+                .on_hover_text("New artboard")
+                .clicked()
+            {
+                match artboard_tool.create_to_right(editor) {
+                    Ok(CommandOutcome::Artboard(id)) => artboard_tool.select(id),
+                    Ok(_) => {}
+                    Err(err) => *error = Some(err.to_string()),
+                }
+            }
+        });
+    }
+
+    fn artboards_panel_ui(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
+        state: &mut ArtboardsPanelState,
+        error: &mut Option<String>,
+    ) {
+        if state.hidden {
+            return;
+        }
+        let dock = state.dock;
+        let show_panel = |ui: &mut egui::Ui,
+                          editor: &mut Editor,
+                          artboard_tool: &mut ArtboardTool,
+                          state: &mut ArtboardsPanelState,
+                          error: &mut Option<String>| {
+            let header = ui
+                .horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Artboards")
+                                .strong()
+                                .color(Color32::from_gray(226)),
+                        )
+                        .sense(egui::Sense::drag()),
+                    )
+                })
+                .inner
+                .on_hover_cursor(egui::CursorIcon::Grab);
+            ui.separator();
+            Self::artboards_panel_body(ui, editor, artboard_tool, state, error);
+            header
+        };
+
+        let response = match dock {
+            PanelDock::Left => {
+                egui::SidePanel::left("artboards_panel")
+                    .exact_width(220.0)
+                    .resizable(false)
+                    .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                    .show(ctx, |ui| {
+                        show_panel(ui, editor, artboard_tool, state, error)
+                    })
+                    .inner
+            }
+            PanelDock::Right => {
+                egui::SidePanel::right("artboards_panel")
+                    .exact_width(220.0)
+                    .resizable(false)
+                    .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                    .show(ctx, |ui| {
+                        show_panel(ui, editor, artboard_tool, state, error)
+                    })
+                    .inner
+            }
+            PanelDock::Floating { pos } => {
+                let mut open = true;
+                let response = egui::Window::new("Artboards")
+                    .default_width(220.0)
+                    .min_width(180.0)
+                    .min_height(180.0)
+                    .current_pos(pos)
+                    .open(&mut open)
+                    .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
+                    .show(ctx, |ui| {
+                        Self::artboards_panel_body(ui, editor, artboard_tool, state, error)
+                    });
+                if !open {
+                    state.hidden = true;
+                }
+                if let Some(window) = response {
+                    let actual_pos = window.response.rect.min;
+                    let pointer_down = ctx.input(|input| input.pointer.primary_down());
+                    if pointer_down && actual_pos.distance(pos) > 0.1 {
+                        state.dragging = true;
+                    }
+                    state.dock = PanelDock::Floating { pos: actual_pos };
+                    if state.dragging && ctx.input(|input| input.pointer.primary_released()) {
+                        if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
+                            if let Some(target) = Self::dock_target(pointer, ctx) {
+                                state.dock = target;
+                            }
+                        }
+                        state.dragging = false;
+                    }
+                }
+                return Self::paint_panel_drop_target(ctx, state);
+            }
+        };
+
+        if let Some(pointer) = response.interact_pointer_pos() {
+            if response.drag_started() {
+                state.drag_offset = pointer - response.rect.min;
+                state.dragging = true;
+            }
+            if response.dragged() || response.drag_stopped() {
+                state.dock = Self::dock_target(pointer, ctx).unwrap_or(PanelDock::Floating {
+                    pos: pointer - state.drag_offset,
+                });
+                ctx.request_repaint();
+            }
+            if response.drag_stopped() && !matches!(state.dock, PanelDock::Floating { .. }) {
+                state.dragging = false;
+            }
+        }
+        Self::paint_panel_drop_target(ctx, state);
+    }
+
+    fn dock_target(pointer: Pos2, ctx: &egui::Context) -> Option<PanelDock> {
+        let rect = ctx.input(|input| input.screen_rect());
+        if pointer.x <= rect.left() + 40.0 {
+            Some(PanelDock::Left)
+        } else if pointer.x >= rect.right() - 40.0 {
+            Some(PanelDock::Right)
+        } else {
+            None
+        }
+    }
+
+    fn paint_panel_drop_target(ctx: &egui::Context, state: &ArtboardsPanelState) {
+        if !state.dragging || !ctx.input(|input| input.pointer.primary_down()) {
+            return;
+        }
+        let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) else {
+            return;
+        };
+        let rect = ctx.input(|input| input.screen_rect());
+        let target = if pointer.x <= rect.left() + 40.0 {
+            Some(EguiRect::from_min_max(
+                rect.min,
+                Pos2::new(rect.left() + 4.0, rect.bottom()),
+            ))
+        } else if pointer.x >= rect.right() - 40.0 {
+            Some(EguiRect::from_min_max(
+                Pos2::new(rect.right() - 4.0, rect.top()),
+                rect.max,
+            ))
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("artboards_drop_target"),
+            ))
+            .rect_filled(target, 0.0, Color32::from_rgb(45, 139, 242));
+        }
     }
 }
 
@@ -912,6 +1593,71 @@ fn handle_cursor(handle: Handle) -> egui::CursorIcon {
         Handle::East | Handle::West => egui::CursorIcon::ResizeHorizontal,
         Handle::North | Handle::South => egui::CursorIcon::ResizeVertical,
     }
+}
+
+fn document_quad_to_screen(quad: [Point; 4], camera: &Camera, viewport: EguiRect) -> [Pos2; 4] {
+    quad.map(|point| camera.document_to_screen(Pos2::new(point.x as f32, point.y as f32), viewport))
+}
+
+fn quad_center(quad: [Pos2; 4]) -> Pos2 {
+    Pos2::new(
+        quad.iter().map(|point| point.x).sum::<f32>() / 4.0,
+        quad.iter().map(|point| point.y).sum::<f32>() / 4.0,
+    )
+}
+
+fn oriented_handle_position(quad: [Pos2; 4], handle: Handle) -> Pos2 {
+    let midpoint = |a: Pos2, b: Pos2| a + (b - a) * 0.5;
+    match handle {
+        Handle::NorthWest => quad[0],
+        Handle::North => midpoint(quad[0], quad[1]),
+        Handle::NorthEast => quad[1],
+        Handle::East => midpoint(quad[1], quad[2]),
+        Handle::SouthEast => quad[2],
+        Handle::South => midpoint(quad[2], quad[3]),
+        Handle::SouthWest => quad[3],
+        Handle::West => midpoint(quad[3], quad[0]),
+    }
+}
+
+fn hit_oriented_handle(pointer: Pos2, quad: [Pos2; 4]) -> Option<Handle> {
+    Handle::ALL.into_iter().find(|&handle| {
+        EguiRect::from_center_size(oriented_handle_position(quad, handle), Vec2::splat(14.0))
+            .contains(pointer)
+    })
+}
+
+fn hit_rotation_halo(pointer: Pos2, quad: [Pos2; 4]) -> bool {
+    if point_in_convex_quad(pointer, quad) {
+        return false;
+    }
+    let center = quad_center(quad);
+    [quad[0], quad[1], quad[2], quad[3]]
+        .into_iter()
+        .any(|corner| {
+            let outward = corner - center;
+            let length = outward.length();
+            if length <= f32::EPSILON {
+                return false;
+            }
+            let offset = pointer - corner;
+            let distance = offset.length();
+            let points_outward = offset.dot(outward / length) > 0.0;
+            points_outward && (8.0..=32.0).contains(&distance)
+        })
+}
+
+fn point_in_convex_quad(pointer: Pos2, quad: [Pos2; 4]) -> bool {
+    let mut has_positive = false;
+    let mut has_negative = false;
+    for index in 0..4 {
+        let edge = quad[(index + 1) % 4] - quad[index];
+        let to_pointer = pointer - quad[index];
+        let cross = edge.x * to_pointer.y - edge.y * to_pointer.x;
+        has_positive |= cross > 0.0;
+        has_negative |= cross < 0.0;
+    }
+    !(has_positive && has_negative)
 }
 
 fn tab_label(tab: &DocumentTab, fallback_number: usize) -> String {
@@ -1087,6 +1833,10 @@ fn format_number(value: f64) -> String {
     }
 }
 
+fn rects_intersect(a: Rect, b: Rect) -> bool {
+    a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
+}
+
 #[cfg(test)]
 mod canvas_input_tests {
     use super::*;
@@ -1096,6 +1846,96 @@ mod canvas_input_tests {
     fn command_space_takes_precedence_over_hand_pan() {
         assert_eq!(canvas_navigation(true, true), CanvasNavigation::ScrubbyZoom);
         assert_ne!(canvas_navigation(true, true), CanvasNavigation::HandPan);
+    }
+
+    #[test]
+    fn tool_switch_is_exclusive() {
+        let mut artboard = ArtboardTool::default();
+        let mut rectangle = RectangleTool::default();
+        let mut selection = SelectionTool::default();
+
+        activate_tool(
+            ToolKind::Rectangle,
+            &mut artboard,
+            &mut rectangle,
+            &mut selection,
+            None,
+        );
+        assert!(rectangle.active);
+        assert!(!selection.active);
+        assert!(!artboard.active);
+
+        activate_tool(
+            ToolKind::Artboard,
+            &mut artboard,
+            &mut rectangle,
+            &mut selection,
+            None,
+        );
+        assert!(artboard.active);
+        assert!(!rectangle.active);
+        assert!(!selection.active);
+    }
+
+    #[test]
+    fn delete_shortcut_is_blocked_while_text_field_has_focus() {
+        assert!(!delete_shortcut_allowed(false, false));
+        assert!(!delete_shortcut_allowed(true, true));
+        assert!(delete_shortcut_allowed(true, false));
+    }
+
+    #[test]
+    fn corner_square_is_scale_not_rotate() {
+        let quad = [
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(300.0, 250.0),
+            Pos2::new(100.0, 250.0),
+        ];
+        let pointer = quad[0];
+
+        assert_eq!(hit_oriented_handle(pointer, quad), Some(Handle::NorthWest));
+        assert!(!hit_rotation_halo(pointer, quad));
+    }
+
+    #[test]
+    fn outside_corner_diagonal_has_generous_rotate_target() {
+        let quad = [
+            Pos2::new(100.0, 100.0),
+            Pos2::new(300.0, 100.0),
+            Pos2::new(300.0, 250.0),
+            Pos2::new(100.0, 250.0),
+        ];
+        let outward = (quad[0] - quad_center(quad)).normalized();
+        let pointer = quad[0] + outward * 20.0;
+
+        assert_eq!(hit_oriented_handle(pointer, quad), None);
+        assert!(hit_rotation_halo(pointer, quad));
+    }
+
+    #[test]
+    fn scroll_delta_pans_canvas_one_for_one() {
+        let mut camera = Camera::default();
+        let viewport = EguiRect::from_min_size(Pos2::new(30.0, 50.0), Vec2::new(500.0, 400.0));
+        let delta = Vec2::new(17.0, -9.0);
+
+        apply_canvas_gesture(&mut camera, delta, 1.0, viewport.center(), viewport);
+
+        assert_eq!(camera.pan, delta);
+    }
+
+    #[test]
+    fn pinch_keeps_document_point_under_cursor() {
+        let mut camera = Camera::default();
+        let viewport = EguiRect::from_min_size(Pos2::new(30.0, 50.0), Vec2::new(500.0, 400.0));
+        let document = EguiRect::from_min_size(Pos2::ZERO, Vec2::new(100.0, 100.0));
+        camera.initialize_fit(viewport, document);
+        let document_point = Pos2::new(37.0, 62.0);
+        let anchor = camera.document_to_screen(document_point, viewport);
+
+        apply_canvas_gesture(&mut camera, Vec2::new(5.0, 8.0), 1.5, anchor, viewport);
+
+        assert!((camera.document_to_screen(document_point, viewport) - anchor).length() < 0.001);
     }
 
     #[test]
@@ -1116,6 +1956,8 @@ mod canvas_input_tests {
             editor: Box::new(editor),
             camera,
             artboard_tool: ArtboardTool::default(),
+            rectangle_tool: RectangleTool::default(),
+            selection_tool: SelectionTool::default(),
         };
 
         assert_eq!(tab_label(&tab, 3), "Untitled-3* @ 343.77 % (RGB/Preview)");
@@ -1129,6 +1971,8 @@ mod canvas_input_tests {
             editor: Box::new(Editor::new(document)),
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
+            rectangle_tool: RectangleTool::default(),
+            selection_tool: SelectionTool::default(),
         };
         assert_eq!(tab_label(&tab, 4), "Untitled-4 @ 100.00 % (CMYK/Preview)");
     }
@@ -1140,6 +1984,8 @@ mod canvas_input_tests {
                 editor: Box::new(Editor::new(Document::new(title))),
                 camera: Camera::default(),
                 artboard_tool: ArtboardTool::default(),
+                rectangle_tool: RectangleTool::default(),
+                selection_tool: SelectionTool::default(),
             }
         }
         assert_eq!(

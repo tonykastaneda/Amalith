@@ -87,6 +87,12 @@ invalidate-on-write cache built on top of the command engine's mutation
 points (`amalith-commands`), not a field threaded through `amalith-core`'s
 raw mutators.
 
+That cache now exists: `amalith-commands::Editor::bounds_of` memoizes
+`Document::bounds_of` results and wipes the whole cache after every
+successful `execute` / `undo` / `redo`. `Document::bounds_of` is unchanged
+and remains the source of truth. See `PERFORMANCE.md` at the repo root for
+the full policy and what comes next (viewport cull, spatial index).
+
 ## kurbo instead of a bespoke 2geom port
 
 The brief suggests `kurbo` as Rust's analogue to 2geom. It already

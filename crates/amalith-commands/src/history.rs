@@ -1,10 +1,8 @@
 //! Undo/redo stacks of edit groups.
 //!
-//! A "group" is the (usually single) [`crate::edit::Edit`] a `Command`
-//! compiled down to. Grouping exists so a future multi-edit command (e.g.
-//! "delete objects" touching several ids) still undoes/redoes as one user
-//! action, even though today every command in the vocabulary compiles to
-//! exactly one `Edit`.
+//! A "group" is the one or more [`crate::edit::Edit`] values a `Command`
+//! compiled down to. For example, moving an artboard records its rectangle
+//! and the transforms of intersecting artwork as one user action.
 use crate::edit::Edit;
 
 #[derive(Debug, Default)]

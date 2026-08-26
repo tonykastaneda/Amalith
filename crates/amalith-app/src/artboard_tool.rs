@@ -3,6 +3,7 @@ use amalith_core::{ArtboardId, Point, Rect};
 
 const MIN_SIZE: f64 = 1.0;
 const DUPLICATE_MIN_DISTANCE: f64 = 0.5;
+const NEW_ARTBOARD_GAP: f64 = 48.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Handle {
@@ -68,6 +69,39 @@ pub(crate) fn mode_after_keys(
 }
 
 impl ArtboardTool {
+    pub(crate) fn create_to_right(
+        &mut self,
+        editor: &mut Editor,
+    ) -> Result<CommandOutcome, CommandError> {
+        let boards = editor.document().artboards();
+        let Some(source) = self
+            .selected
+            .and_then(|id| boards.iter().find(|board| board.id == id))
+            .or_else(|| boards.last())
+        else {
+            return Ok(CommandOutcome::None);
+        };
+        let rightmost = boards
+            .iter()
+            .map(|board| board.rect.x1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let rect = Rect::new(
+            rightmost + NEW_ARTBOARD_GAP,
+            source.rect.y0,
+            rightmost + NEW_ARTBOARD_GAP + source.rect.width(),
+            source.rect.y0 + source.rect.height(),
+        );
+        let outcome = editor.execute(Command::CreateArtboard {
+            name: next_artboard_name(editor),
+            rect,
+            index: None,
+        })?;
+        if let CommandOutcome::Artboard(id) = outcome {
+            self.selected = Some(id);
+        }
+        Ok(outcome)
+    }
+
     pub(crate) fn set_active(&mut self, active: bool, first_artboard: Option<ArtboardId>) {
         self.active = active;
         self.drag = None;
@@ -130,18 +164,21 @@ impl ArtboardTool {
                 if moved < DUPLICATE_MIN_DISTANCE {
                     return Ok(false);
                 }
-                // Artboards are regions, not object parents: duplicate only the rect.
-                let name = next_artboard_name(editor);
-                let outcome = editor.execute(Command::CreateArtboard {
-                    name,
-                    rect: preview,
-                    index: None,
+                let outcome = editor.execute(Command::DuplicateArtboard {
+                    id: drag.id,
+                    delta: preview.origin().to_vec2() - drag.start_rect.origin().to_vec2(),
                 })?;
                 if let CommandOutcome::Artboard(id) = outcome {
                     self.selected = Some(id);
                 }
             }
-            DragKind::Move | DragKind::Resize(_) => {
+            DragKind::Move => {
+                editor.execute(Command::MoveArtboard {
+                    id: drag.id,
+                    delta: preview.origin().to_vec2() - drag.start_rect.origin().to_vec2(),
+                })?;
+            }
+            DragKind::Resize(_) => {
                 editor.execute(Command::ResizeArtboard {
                     id: drag.id,
                     rect: preview,
@@ -164,10 +201,32 @@ impl ArtboardTool {
             .is_some_and(|drag| drag.kind == DragKind::Duplicate)
     }
 
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     pub(crate) fn duplicate_preview(&self) -> Option<Rect> {
         self.is_duplicate_drag()
             .then_some(self.preview_rect)
             .flatten()
+    }
+
+    pub(crate) fn move_preview(&self) -> Option<(Rect, amalith_core::Vec2)> {
+        let drag = self.drag.filter(|drag| drag.kind == DragKind::Move)?;
+        let preview = self.preview_rect?;
+        Some((
+            drag.start_rect,
+            preview.origin().to_vec2() - drag.start_rect.origin().to_vec2(),
+        ))
+    }
+
+    pub(crate) fn duplicate_artwork_preview(&self) -> Option<(Rect, amalith_core::Vec2)> {
+        let drag = self.drag.filter(|drag| drag.kind == DragKind::Duplicate)?;
+        let preview = self.preview_rect?;
+        Some((
+            drag.start_rect,
+            preview.origin().to_vec2() - drag.start_rect.origin().to_vec2(),
+        ))
     }
 }
 
@@ -365,6 +424,58 @@ mod tests {
         assert_eq!(
             editor.document().artboard(id).unwrap().rect,
             Rect::new(20.0, 35.0, 120.0, 235.0)
+        );
+    }
+
+    #[test]
+    fn panel_create_uses_selected_size_and_rightmost_edge() {
+        let (mut editor, first_id) = editor_with_board();
+        let CommandOutcome::Artboard(second_id) = editor
+            .execute(Command::CreateArtboard {
+                name: "Artboard 4".into(),
+                rect: Rect::new(200.0, 40.0, 500.0, 190.0),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let mut tool = ArtboardTool::default();
+        tool.select(first_id);
+
+        let CommandOutcome::Artboard(created_id) = tool.create_to_right(&mut editor).unwrap()
+        else {
+            panic!()
+        };
+        let created = editor.document().artboard(created_id).unwrap();
+        assert_eq!(created.name, "Artboard 5");
+        assert_eq!(created.rect, Rect::new(548.0, 20.0, 648.0, 220.0));
+        assert_eq!(tool.selected, Some(created_id));
+        assert_ne!(created_id, second_id);
+
+        editor.undo().unwrap();
+        assert!(editor.document().artboard(created_id).is_none());
+        assert_eq!(editor.document().artboards().len(), 2);
+    }
+
+    #[test]
+    fn panel_create_falls_back_to_last_artboard_size() {
+        let (mut editor, _) = editor_with_board();
+        editor
+            .execute(Command::CreateArtboard {
+                name: "Custom".into(),
+                rect: Rect::new(160.0, 75.0, 360.0, 175.0),
+                index: None,
+            })
+            .unwrap();
+        let mut tool = ArtboardTool::default();
+
+        let CommandOutcome::Artboard(id) = tool.create_to_right(&mut editor).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            editor.document().artboard(id).unwrap().rect,
+            Rect::new(408.0, 75.0, 608.0, 175.0)
         );
     }
 }

@@ -1,5 +1,5 @@
-use thiserror::Error;
 use amalith_core::{ArtboardId, DocumentError, LayerId, ObjectId};
+use thiserror::Error;
 
 /// Errors from executing a [`crate::Command`] or from `undo`/`redo`.
 #[derive(Debug, Error, Clone, PartialEq)]

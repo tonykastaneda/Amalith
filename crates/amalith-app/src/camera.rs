@@ -1,3 +1,4 @@
+use amalith_core::Rect as DocumentRect;
 use eframe::egui::{Pos2, Rect, Vec2};
 
 pub(crate) const MIN_SCALE: f32 = 0.02;
@@ -106,6 +107,28 @@ impl Camera {
         let point = (screen - viewport.min - self.pan) / self.scale.max(f32::MIN_POSITIVE);
         Pos2::new(point.x, point.y)
     }
+
+    pub(crate) fn visible_document_rect(&self, viewport: Rect) -> DocumentRect {
+        let corners = [
+            self.screen_to_document(viewport.left_top(), viewport),
+            self.screen_to_document(viewport.right_top(), viewport),
+            self.screen_to_document(viewport.right_bottom(), viewport),
+            self.screen_to_document(viewport.left_bottom(), viewport),
+        ];
+        let (min_x, max_x) = corners
+            .iter()
+            .map(|point| point.x as f64)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), x| {
+                (min.min(x), max.max(x))
+            });
+        let (min_y, max_y) = corners
+            .iter()
+            .map(|point| point.y as f64)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), y| {
+                (min.min(y), max.max(y))
+            });
+        DocumentRect::new(min_x, min_y, max_x, max_y)
+    }
 }
 
 #[cfg(test)]
@@ -176,5 +199,18 @@ mod tests {
         let roundtrip =
             camera.screen_to_document(camera.document_to_screen(document, viewport), viewport);
         assert!((roundtrip - document).length() < 0.001);
+    }
+
+    #[test]
+    fn visible_document_rect_is_camera_view_aabb() {
+        let mut camera = Camera::default();
+        camera.scale = 2.0;
+        camera.pan = Vec2::new(10.0, -20.0);
+        let viewport = Rect::from_min_size(Pos2::new(30.0, 50.0), Vec2::new(100.0, 80.0));
+
+        assert_eq!(
+            camera.visible_document_rect(viewport),
+            DocumentRect::new(-5.0, 10.0, 45.0, 50.0)
+        );
     }
 }

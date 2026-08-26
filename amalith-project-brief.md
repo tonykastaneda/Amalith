@@ -106,6 +106,27 @@ Inkscape can help inform areas such as:
 
 Amalith should **not simply become Inkscape rewritten in Rust**.
 
+## Graphite Strategy
+
+[Graphite](https://github.com/GraphiteEditor/Graphite) is a modern **Rust** 2D editor. It is an excellent implementation reference for tools, viewport navigation, selection, and message/command plumbing.
+
+Graphite is **not** the product Amalith is building. Graphite’s core is a **node graph / procedural engine**; tools wrap that graph. Amalith’s core is an Illustrator-class **document + command engine** with a familiar GUI. Do not import Graphite’s node network as the document model.
+
+The model is:
+
+```text
+GRAPHITE
+Rust editor / tool / viewport / select code
+        ↓
+study / adapt (Apache 2.0 — keep provenance)
+        ↓
+     AMALITH
+        ↑
+Illustrator workflow (UX, shortcuts, artboards)
+```
+
+Useful to steal *ideas* from, not identity: tool exclusivity, transform box, pan/zoom, hit targets, wgpu later. License Graphite code carefully (Apache 2.0) if anything is copied rather than reimplemented.
+
 The model is:
 
 ```text

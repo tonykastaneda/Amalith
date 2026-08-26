@@ -277,6 +277,242 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_object_preserves_original_and_undo_removes_copy() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer_id) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let rect = Rect::new(0.0, 0.0, 20.0, 10.0);
+        let CommandOutcome::Object(original) = editor
+            .execute(Command::CreateRect {
+                layer: layer_id,
+                rect,
+                name: Some("Rectangle 1".into()),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let original_transform = editor.document().object(original).unwrap().transform;
+
+        let CommandOutcome::Object(copy) = editor
+            .execute(Command::DuplicateObject {
+                object: original,
+                delta: Vec2::new(30.0, 7.0),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        assert_ne!(copy, original);
+        assert_eq!(
+            editor.document().object(original).unwrap().transform,
+            original_transform
+        );
+        assert_eq!(
+            editor.document().bounds_of(copy),
+            Some(Rect::new(30.0, 7.0, 50.0, 17.0))
+        );
+
+        editor.undo().unwrap();
+        assert!(editor.document().object(copy).is_none());
+        assert!(editor.document().object(original).is_some());
+    }
+
+    #[test]
+    fn delete_object_undo_restores_id_and_geometry() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer_id) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let rect = Rect::new(3.0, 4.0, 23.0, 14.0);
+        let CommandOutcome::Object(object) = editor
+            .execute(Command::CreateRect {
+                layer: layer_id,
+                rect,
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        editor
+            .execute(Command::DeleteObject { id: object })
+            .unwrap();
+        assert!(editor.document().object(object).is_none());
+        editor.undo().unwrap();
+        assert_eq!(editor.document().bounds_of(object), Some(rect));
+    }
+
+    #[test]
+    fn delete_artboard_undo_restores_selection_target() {
+        let mut editor = new_editor();
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let CommandOutcome::Artboard(id) = editor
+            .execute(Command::CreateArtboard {
+                name: "Artboard 1".into(),
+                rect,
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        editor.execute(Command::DeleteArtboard { id }).unwrap();
+        assert!(editor.document().artboard(id).is_none());
+        editor.undo().unwrap();
+        assert_eq!(editor.document().artboard(id).unwrap().rect, rect);
+    }
+
+    fn editor_with_artboard_and_rect(
+        object_rect: Rect,
+    ) -> (Editor, amalith_core::ArtboardId, amalith_core::ObjectId) {
+        let mut editor = new_editor();
+        let CommandOutcome::Artboard(artboard) = editor
+            .execute(Command::CreateArtboard {
+                name: "Artboard 1".into(),
+                rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(object) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: object_rect,
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        (editor, artboard, object)
+    }
+
+    #[test]
+    fn move_artboard_moves_intersecting_artwork_and_undo_restores_both() {
+        let object_rect = Rect::new(10.0, 20.0, 40.0, 50.0);
+        let (mut editor, artboard, object) = editor_with_artboard_and_rect(object_rect);
+        let delta = Vec2::new(120.0, 35.0);
+
+        editor
+            .execute(Command::MoveArtboard {
+                id: artboard,
+                delta,
+            })
+            .unwrap();
+        assert_eq!(
+            editor.document().artboard(artboard).unwrap().rect,
+            Rect::new(120.0, 35.0, 220.0, 135.0)
+        );
+        assert_eq!(
+            editor.document().bounds_of(object),
+            Some(object_rect + delta)
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().artboard(artboard).unwrap().rect,
+            Rect::new(0.0, 0.0, 100.0, 100.0)
+        );
+        assert_eq!(editor.document().bounds_of(object), Some(object_rect));
+    }
+
+    #[test]
+    fn move_artboard_leaves_outside_artwork_behind() {
+        let object_rect = Rect::new(150.0, 20.0, 180.0, 50.0);
+        let (mut editor, artboard, object) = editor_with_artboard_and_rect(object_rect);
+
+        editor
+            .execute(Command::MoveArtboard {
+                id: artboard,
+                delta: Vec2::new(40.0, 10.0),
+            })
+            .unwrap();
+        assert_eq!(editor.document().bounds_of(object), Some(object_rect));
+    }
+
+    #[test]
+    fn resize_artboard_does_not_move_artwork() {
+        let object_rect = Rect::new(10.0, 20.0, 40.0, 50.0);
+        let (mut editor, artboard, object) = editor_with_artboard_and_rect(object_rect);
+
+        editor
+            .execute(Command::ResizeArtboard {
+                id: artboard,
+                rect: Rect::new(0.0, 0.0, 180.0, 140.0),
+            })
+            .unwrap();
+        assert_eq!(editor.document().bounds_of(object), Some(object_rect));
+    }
+
+    #[test]
+    fn duplicate_artboard_copies_intersecting_artwork_and_undo_removes_only_copies() {
+        let object_rect = Rect::new(10.0, 20.0, 40.0, 50.0);
+        let (mut editor, artboard, original) = editor_with_artboard_and_rect(object_rect);
+        let delta = Vec2::new(120.0, 35.0);
+
+        let CommandOutcome::Artboard(copy_artboard) = editor
+            .execute(Command::DuplicateArtboard {
+                id: artboard,
+                delta,
+            })
+            .unwrap()
+        else {
+            panic!("duplicate should return its new artboard id")
+        };
+        assert_eq!(editor.document().artboards().len(), 2);
+        assert_eq!(
+            editor.document().artboard(copy_artboard).unwrap().rect,
+            Rect::new(120.0, 35.0, 220.0, 135.0)
+        );
+        assert_eq!(editor.document().bounds_of(original), Some(object_rect));
+
+        let copied_objects: Vec<_> = editor
+            .document()
+            .objects()
+            .filter(|object| object.id != original)
+            .collect();
+        assert_eq!(copied_objects.len(), 1);
+        assert_eq!(
+            editor.document().bounds_of(copied_objects[0].id),
+            Some(object_rect + delta)
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().artboards().len(), 1);
+        assert!(editor.document().artboard(copy_artboard).is_none());
+        assert_eq!(editor.document().objects().count(), 1);
+        assert_eq!(editor.document().bounds_of(original), Some(object_rect));
+    }
+
+    #[test]
     fn undo_with_empty_history_errors() {
         let mut editor = new_editor();
         assert_eq!(editor.undo().unwrap_err(), CommandError::NothingToUndo);
@@ -304,5 +540,112 @@ mod tests {
             })
             .unwrap();
         assert!(!editor.can_redo());
+    }
+
+    #[test]
+    fn editor_bounds_of_agrees_with_document_bounds_of() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer_id) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+        let CommandOutcome::Object(object_id) = editor
+            .execute(Command::CreateRect {
+                layer: layer_id,
+                rect,
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        assert_eq!(editor.document().bounds_of(object_id), Some(rect));
+        assert_eq!(editor.bounds_of(object_id), Some(rect));
+    }
+
+    #[test]
+    fn editor_bounds_of_is_not_stale_after_move() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer_id) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+        let CommandOutcome::Object(object_id) = editor
+            .execute(Command::CreateRect {
+                layer: layer_id,
+                rect,
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        // Populate the cache before the move, so this actually exercises
+        // invalidation rather than a lucky first read.
+        assert_eq!(editor.bounds_of(object_id), Some(rect));
+
+        editor
+            .execute(Command::MoveObject {
+                object: object_id,
+                delta: Vec2::new(30.0, 10.0),
+            })
+            .unwrap();
+        let moved = Rect::new(30.0, 10.0, 130.0, 60.0);
+        assert_eq!(editor.bounds_of(object_id), Some(moved));
+        assert_eq!(editor.document().bounds_of(object_id), Some(moved));
+    }
+
+    #[test]
+    fn editor_bounds_of_restored_by_undo() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer_id) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
+        let CommandOutcome::Object(object_id) = editor
+            .execute(Command::CreateRect {
+                layer: layer_id,
+                rect,
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        editor
+            .execute(Command::MoveObject {
+                object: object_id,
+                delta: Vec2::new(30.0, 10.0),
+            })
+            .unwrap();
+        let moved = Rect::new(30.0, 10.0, 130.0, 60.0);
+        assert_eq!(editor.bounds_of(object_id), Some(moved));
+
+        editor.undo().unwrap();
+        assert_eq!(editor.bounds_of(object_id), Some(rect));
+
+        editor.redo().unwrap();
+        assert_eq!(editor.bounds_of(object_id), Some(moved));
     }
 }

@@ -20,6 +20,9 @@ pub enum Command {
     DeleteArtboard {
         id: ArtboardId,
     },
+    DeleteObject {
+        id: ObjectId,
+    },
     RenameArtboard {
         id: ArtboardId,
         name: String,
@@ -27,6 +30,17 @@ pub enum Command {
     ResizeArtboard {
         id: ArtboardId,
         rect: Rect,
+    },
+    /// Translates an artboard and every object intersecting its pre-move
+    /// bounds as one undoable action.
+    MoveArtboard {
+        id: ArtboardId,
+        delta: Vec2,
+    },
+    /// Duplicates an artboard and intersecting top-level artwork.
+    DuplicateArtboard {
+        id: ArtboardId,
+        delta: Vec2,
     },
     /// Creates a new, empty layer. `index` is the position among existing
     /// layers (`None` appends at the end / top).
@@ -43,6 +57,12 @@ pub enum Command {
     /// Translates an object by `delta`, in the coordinate space of the
     /// object's parent (document space for a layer-level object).
     MoveObject {
+        object: ObjectId,
+        delta: Vec2,
+    },
+    /// Duplicates one object as a top child of its existing parent and moves
+    /// only the copy by `delta`.
+    DuplicateObject {
         object: ObjectId,
         delta: Vec2,
     },
