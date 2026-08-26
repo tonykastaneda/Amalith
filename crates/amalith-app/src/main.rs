@@ -706,11 +706,12 @@ impl AmalithApp {
                             }
                         }
                     } else if selection_tool.active && !selection_tool.is_dragging() {
-                        if let Some(id) = selection_tool.selected {
-                            if let Err(err) = editor.execute(Command::DeleteObject { id }) {
+                        if !selection_tool.selected.is_empty() {
+                            let ids = selection_tool.selected.iter().copied().collect();
+                            if let Err(err) = editor.execute(Command::DeleteObjects { ids }) {
                                 *error = Some(err.to_string());
                             } else {
-                                selection_tool.selected = None;
+                                selection_tool.selected.clear();
                                 selection_tool.cancel_drag();
                             }
                         }
@@ -949,7 +950,23 @@ impl AmalithApp {
                             if let Some(pointer) = pointer_position {
                                 let selected_quad = selection_tool
                                     .selected_quad(editor.document())
-                                    .map(|quad| document_quad_to_screen(quad, camera, available));
+                                    .map(|quad| document_quad_to_screen(quad, camera, available))
+                                    .or_else(|| {
+                                        selection_tool.selected_union_bounds(editor.document()).map(
+                                            |bounds| {
+                                                document_quad_to_screen(
+                                                    [
+                                                        Point::new(bounds.x0, bounds.y0),
+                                                        Point::new(bounds.x1, bounds.y0),
+                                                        Point::new(bounds.x1, bounds.y1),
+                                                        Point::new(bounds.x0, bounds.y1),
+                                                    ],
+                                                    camera,
+                                                    available,
+                                                )
+                                            },
+                                        )
+                                    });
                                 let hovered_handle = selected_quad
                                     .and_then(|quad| hit_oriented_handle(pointer, quad));
                                 let hovered_rotate = hovered_handle.is_none()
@@ -971,6 +988,7 @@ impl AmalithApp {
                                             point,
                                             visible_document,
                                             alt_down,
+                                            shift_down,
                                         );
                                     }
                                 } else if primary_down {
@@ -1104,9 +1122,35 @@ impl AmalithApp {
                         }
                     }
                 }
+                if let Some(marquee) = selection_tool.marquee_rect() {
+                    let rect = document_rect_to_screen(marquee, camera, available);
+                    painter.rect_filled(
+                        rect,
+                        0.0,
+                        Color32::from_rgba_unmultiplied(90, 165, 255, 26),
+                    );
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(1.0_f32, Color32::from_rgb(59, 155, 255)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
                 if selection_tool.active {
                     if selection_tool.selected_intersects(editor.document(), visible_document) {
-                        if let Some(quad) = selection_tool.selected_quad(editor.document()) {
+                        let quad = selection_tool.selected_quad(editor.document()).or_else(|| {
+                            selection_tool
+                                .selected_union_bounds(editor.document())
+                                .map(|bounds| {
+                                    [
+                                        Point::new(bounds.x0, bounds.y0),
+                                        Point::new(bounds.x1, bounds.y0),
+                                        Point::new(bounds.x1, bounds.y1),
+                                        Point::new(bounds.x0, bounds.y1),
+                                    ]
+                                })
+                        });
+                        if let Some(quad) = quad {
                             let quad = document_quad_to_screen(quad, camera, available);
                             let blue = Color32::from_rgb(59, 155, 255);
                             painter.add(egui::Shape::closed_line(

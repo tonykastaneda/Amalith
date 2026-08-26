@@ -2,6 +2,7 @@ use amalith_commands::{Command, CommandError, Editor};
 use amalith_core::{Affine, Document, ObjectId, ObjectKind, ObjectParent, Point, Rect, Vec2};
 
 use crate::artboard_tool::Handle;
+use std::collections::HashSet;
 
 const MIN_SIZE: f64 = 1.0;
 
@@ -11,6 +12,11 @@ enum Drag {
     },
     Duplicate {
         start: Point,
+    },
+    Marquee {
+        start: Point,
+        add: bool,
+        current: Point,
     },
     Scale {
         handle: Handle,
@@ -28,7 +34,7 @@ enum Drag {
 
 pub(crate) struct SelectionTool {
     pub(crate) active: bool,
-    pub(crate) selected: Option<ObjectId>,
+    pub(crate) selected: HashSet<ObjectId>,
     drag: Option<Drag>,
     preview_delta: Vec2,
 }
@@ -37,7 +43,7 @@ impl Default for SelectionTool {
     fn default() -> Self {
         Self {
             active: true,
-            selected: None,
+            selected: HashSet::new(),
             drag: None,
             preview_delta: Vec2::ZERO,
         }
@@ -56,20 +62,39 @@ impl SelectionTool {
         point: Point,
         visible: Rect,
         duplicate: bool,
+        add: bool,
     ) {
-        self.selected = topmost_path_at(document, point, visible);
-        self.drag = self.selected.map(|_| {
-            if duplicate {
+        if let Some(id) = topmost_path_at(document, point, visible) {
+            if !self.selected.contains(&id) {
+                self.selected.clear();
+                self.selected.insert(id);
+            }
+            self.drag = Some(if duplicate {
                 Drag::Duplicate { start: point }
             } else {
                 Drag::Move { start: point }
+            });
+        } else {
+            if !add {
+                self.selected.clear();
             }
-        });
+            self.drag = Some(Drag::Marquee {
+                start: point,
+                add,
+                current: point,
+            });
+        }
         self.preview_delta = Vec2::ZERO;
     }
 
     pub(crate) fn begin_scale(&mut self, document: &Document, handle: Handle) {
-        let Some(object) = self.selected.and_then(|id| document.object(id)) else {
+        let Some(id) = (self.selected.len() == 1)
+            .then(|| self.selected.iter().next().copied())
+            .flatten()
+        else {
+            return;
+        };
+        let Some(object) = document.object(id) else {
             return;
         };
         let Some(start_bounds) = document.bounds_of(object.id) else {
@@ -85,7 +110,13 @@ impl SelectionTool {
     }
 
     pub(crate) fn begin_rotate(&mut self, document: &Document, pointer: Point) {
-        let Some(object) = self.selected.and_then(|id| document.object(id)) else {
+        let Some(id) = (self.selected.len() == 1)
+            .then(|| self.selected.iter().next().copied())
+            .flatten()
+        else {
+            return;
+        };
+        let Some(object) = document.object(id) else {
             return;
         };
         let Some(quad) = object_quad(document, object.id, object.transform) else {
@@ -105,6 +136,7 @@ impl SelectionTool {
         match &mut self.drag {
             Some(Drag::Move { start }) => self.preview_delta = point - *start,
             Some(Drag::Duplicate { start }) => self.preview_delta = point - *start,
+            Some(Drag::Marquee { current, .. }) => *current = point,
             Some(Drag::Scale {
                 handle,
                 start_bounds,
@@ -150,18 +182,22 @@ impl SelectionTool {
     pub(crate) fn finish_drag(&mut self, editor: &mut Editor) -> Result<bool, CommandError> {
         let drag = self.drag.take();
         let delta = std::mem::replace(&mut self.preview_delta, Vec2::ZERO);
-        let Some(object) = self.selected else {
+        let object = self.selected.iter().next().copied();
+        if object.is_none() && !matches!(drag, Some(Drag::Marquee { .. })) {
             return Ok(false);
-        };
+        }
+        let object = object.unwrap_or_default();
         match drag {
             Some(Drag::Move { .. }) if delta != Vec2::ZERO => {
-                editor.execute(Command::MoveObject { object, delta })?;
+                let objects = self.selected.iter().copied().collect();
+                editor.execute(Command::MoveObjects { objects, delta })?;
                 Ok(true)
             }
             Some(Drag::Duplicate { .. }) if delta != Vec2::ZERO => {
                 let outcome = editor.execute(Command::DuplicateObject { object, delta })?;
                 if let amalith_commands::CommandOutcome::Object(copy) = outcome {
-                    self.selected = Some(copy);
+                    self.selected.clear();
+                    self.selected.insert(copy);
                 }
                 Ok(true)
             }
@@ -187,13 +223,43 @@ impl SelectionTool {
                 })?;
                 Ok(true)
             }
+            Some(Drag::Marquee {
+                start,
+                add,
+                current,
+            }) => {
+                let marquee = normalized_rect(start, current);
+                if marquee.width() <= 0.0 || marquee.height() <= 0.0 {
+                    self.selected.clear();
+                } else {
+                    if !add {
+                        self.selected.clear();
+                    }
+                    for layer in editor.document().layers() {
+                        for &id in editor.document().children_of(ObjectParent::Layer(layer.id)) {
+                            let is_path = editor
+                                .document()
+                                .object(id)
+                                .is_some_and(|object| matches!(object.kind, ObjectKind::Path(_)));
+                            if editor
+                                .document()
+                                .bounds_of(id)
+                                .is_some_and(|bounds| is_path && rects_intersect(bounds, marquee))
+                            {
+                                self.selected.insert(id);
+                            }
+                        }
+                    }
+                }
+                Ok(false)
+            }
             _ => Ok(false),
         }
     }
 
     pub(crate) fn display_transform(&self, document: &Document, id: ObjectId) -> Option<Affine> {
         document.object(id)?;
-        if self.selected != Some(id) {
+        if !self.selected.contains(&id) {
             return Some(document.world_transform(id));
         }
         match &self.drag {
@@ -207,19 +273,30 @@ impl SelectionTool {
                 Some(Affine::translate(self.preview_delta) * document.world_transform(id))
             }
             Some(Drag::Duplicate { .. }) => Some(document.world_transform(id)),
+            Some(Drag::Marquee { .. }) => Some(document.world_transform(id)),
             None => Some(document.world_transform(id)),
         }
     }
 
     pub(crate) fn selected_quad(&self, document: &Document) -> Option<[Point; 4]> {
-        let id = self.selected?;
+        let id = (self.selected.len() == 1)
+            .then(|| self.selected.iter().next().copied())
+            .flatten()?;
         self.display_quad(document, id)
     }
 
     pub(crate) fn selected_intersects(&self, document: &Document, visible: Rect) -> bool {
         self.selected
-            .and_then(|id| document.bounds_of(id))
-            .is_some_and(|bounds| rects_intersect(bounds, visible))
+            .iter()
+            .filter_map(|id| document.bounds_of(*id))
+            .any(|bounds| rects_intersect(bounds, visible))
+    }
+
+    pub(crate) fn selected_union_bounds(&self, document: &Document) -> Option<Rect> {
+        self.selected
+            .iter()
+            .filter_map(|id| document.bounds_of(*id))
+            .reduce(|a, b| a.union(b))
     }
 
     pub(crate) fn display_quad(&self, document: &Document, id: ObjectId) -> Option<[Point; 4]> {
@@ -227,7 +304,9 @@ impl SelectionTool {
     }
 
     pub(crate) fn duplicate_preview_quad(&self, document: &Document) -> Option<[Point; 4]> {
-        let id = self.selected?;
+        let id = (self.selected.len() == 1)
+            .then(|| self.selected.iter().next().copied())
+            .flatten()?;
         if !matches!(&self.drag, Some(Drag::Duplicate { .. })) {
             return None;
         }
@@ -247,7 +326,9 @@ impl SelectionTool {
     }
 
     pub(crate) fn duplicate_preview_bounds(&self, document: &Document) -> Option<Rect> {
-        let id = self.selected?;
+        let id = (self.selected.len() == 1)
+            .then(|| self.selected.iter().next().copied())
+            .flatten()?;
         self.is_duplicate_drag().then_some(()).and_then(|_| {
             document
                 .bounds_of(id)
@@ -258,10 +339,20 @@ impl SelectionTool {
     pub(crate) fn retain_existing(&mut self, document: &Document) {
         if self
             .selected
-            .is_some_and(|id| document.object(id).is_none())
+            .iter()
+            .any(|id| document.object(*id).is_none())
         {
-            self.selected = None;
-            self.cancel_drag();
+            self.selected.retain(|id| document.object(*id).is_some());
+            if self.selected.is_empty() {
+                self.cancel_drag();
+            }
+        }
+    }
+
+    pub(crate) fn marquee_rect(&self) -> Option<Rect> {
+        match self.drag {
+            Some(Drag::Marquee { start, current, .. }) => Some(normalized_rect(start, current)),
+            _ => None,
         }
     }
 }
@@ -419,6 +510,10 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
 }
 
+fn normalized_rect(a: Point, b: Point) -> Rect {
+    Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +628,7 @@ mod tests {
             Point::new(10.0, 10.0),
             Rect::new(-100.0, -100.0, 100.0, 100.0),
             false,
+            false,
         );
         selection.drag(Point::new(25.0, 4.0), false, false);
 
@@ -565,11 +661,12 @@ mod tests {
             Point::new(10.0, 10.0),
             Rect::new(-100.0, -100.0, 100.0, 100.0),
             true,
+            false,
         );
         selection.drag(Point::new(25.0, 4.0), false, true);
 
         assert!(selection.finish_drag(&mut editor).unwrap());
-        let copy = selection.selected.unwrap();
+        let copy = *selection.selected.iter().next().unwrap();
         assert_ne!(copy, original);
         assert_eq!(
             editor.document().bounds_of(original),
@@ -582,6 +679,79 @@ mod tests {
 
         editor.undo().unwrap();
         assert!(editor.document().object(copy).is_none());
+    }
+
+    #[test]
+    fn marquee_selects_intersections_and_shift_adds() {
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(30.0, 0.0, 50.0, 20.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let visible = Rect::new(-100.0, -100.0, 100.0, 100.0);
+        let mut selection = SelectionTool::default();
+        selection.press(
+            editor.document(),
+            Point::new(-10.0, -10.0),
+            visible,
+            false,
+            false,
+        );
+        selection.drag(Point::new(35.0, 25.0), false, false);
+        selection.finish_drag(&mut editor).unwrap();
+        assert_eq!(selection.selected.len(), 2);
+        assert!(selection.selected.contains(&first));
+        assert!(selection.selected.contains(&second));
+
+        selection.press(
+            editor.document(),
+            Point::new(70.0, 70.0),
+            visible,
+            false,
+            false,
+        );
+        selection.drag(Point::new(80.0, 80.0), false, false);
+        selection.finish_drag(&mut editor).unwrap();
+        assert!(selection.selected.is_empty());
+
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            false,
+            false,
+        );
+        selection.finish_drag(&mut editor).unwrap();
+        assert_eq!(selection.selected.len(), 1);
+        assert!(selection.selected.contains(&first));
+
+        selection.press(
+            editor.document(),
+            Point::new(25.0, -5.0),
+            visible,
+            false,
+            true,
+        );
+        selection.drag(Point::new(55.0, 25.0), false, false);
+        selection.finish_drag(&mut editor).unwrap();
+        assert!(selection.selected.contains(&first));
+        assert!(selection.selected.contains(&second));
     }
 
     #[test]
@@ -649,7 +819,7 @@ mod tests {
         };
         let original = editor.document().object(object).unwrap().transform;
         let mut selection = SelectionTool::default();
-        selection.selected = Some(object);
+        selection.selected.insert(object);
         selection.begin_scale(editor.document(), Handle::East);
         selection.drag(Point::new(100.0, 15.0), false, false);
 
@@ -680,7 +850,7 @@ mod tests {
             unreachable!()
         };
         let mut selection = SelectionTool::default();
-        selection.selected = Some(object);
+        selection.selected.insert(object);
         selection.begin_rotate(editor.document(), Point::new(50.0, 15.0));
         selection.drag(Point::new(25.0, 40.0), false, false);
 
@@ -706,7 +876,7 @@ mod tests {
             unreachable!()
         };
         let mut selection = SelectionTool::default();
-        selection.selected = Some(object);
+        selection.selected.insert(object);
         let center = Point::new(25.0, 15.0);
         selection.begin_rotate(editor.document(), Point::new(50.0, 15.0));
         let angle = 60_f64.to_radians();
@@ -742,7 +912,7 @@ mod tests {
         };
         let original = editor.document().object(object).unwrap().transform;
         let mut selection = SelectionTool::default();
-        selection.selected = Some(object);
+        selection.selected.insert(object);
         selection.begin_rotate(editor.document(), Point::new(50.0, 15.0));
         selection.drag(Point::new(25.0, 40.0), false, false);
 

@@ -120,6 +120,10 @@ impl Editor {
             }
             Command::DeleteArtboard { id } => vec![Edit::RemoveArtboard { id }],
             Command::DeleteObject { id } => vec![Edit::RemoveObject { id }],
+            Command::DeleteObjects { ids } => ids
+                .into_iter()
+                .map(|id| Edit::RemoveObject { id })
+                .collect(),
             Command::RenameArtboard { id, name } => vec![Edit::RenameArtboard { id, name }],
             Command::ResizeArtboard { id, rect } => vec![Edit::ResizeArtboard { id, rect }],
             Command::MoveArtboard { id, delta } => {
@@ -207,6 +211,19 @@ impl Editor {
                     transform,
                 }]
             }
+            Command::MoveObjects { objects, delta } => objects
+                .into_iter()
+                .map(|object| {
+                    let current = self
+                        .document
+                        .object(object)
+                        .ok_or(CommandError::ObjectNotFound(object))?;
+                    Ok(Edit::SetTransform {
+                        id: object,
+                        transform: Affine::translate(delta) * current.transform,
+                    })
+                })
+                .collect::<Result<Vec<_>, CommandError>>()?,
             Command::DuplicateObject { object, delta } => {
                 let source = self
                     .document

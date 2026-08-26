@@ -23,6 +23,9 @@ pub enum Command {
     DeleteObject {
         id: ObjectId,
     },
+    DeleteObjects {
+        ids: Vec<ObjectId>,
+    },
     RenameArtboard {
         id: ArtboardId,
         name: String,
@@ -58,6 +61,10 @@ pub enum Command {
     /// object's parent (document space for a layer-level object).
     MoveObject {
         object: ObjectId,
+        delta: Vec2,
+    },
+    MoveObjects {
+        objects: Vec<ObjectId>,
         delta: Vec2,
     },
     /// Duplicates one object as a top child of its existing parent and moves
