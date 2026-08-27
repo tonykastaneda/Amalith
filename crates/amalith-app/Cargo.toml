@@ -5,7 +5,17 @@ edition.workspace = true
 license.workspace = true
 description = "Amalith desktop application."
 
+[[bin]]
+name = "Amalith"
+path = "src/main.rs"
+
 [dependencies]
 eframe.workspace = true
 amalith-core = { path = "../amalith-core" }
 amalith-commands = { path = "../amalith-commands" }
+amalith-io = { path = "../amalith-io" }
+rfd.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.19"
+lyon_tessellation.workspace = true

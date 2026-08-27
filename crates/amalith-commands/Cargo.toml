@@ -7,5 +7,6 @@ description = "Command engine and undo/redo history for Amalith documents."
 
 [dependencies]
 amalith-core = { path = "../amalith-core" }
+amalith-io = { path = "../amalith-io" }
 kurbo.workspace = true
 thiserror.workspace = true

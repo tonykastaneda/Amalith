@@ -1,5 +1,5 @@
 use amalith_commands::{Command, CommandError, Editor};
-use amalith_core::{Affine, Document, ObjectId, ObjectKind, ObjectParent, Point, Rect, Vec2};
+use amalith_core::{Affine, Document, ObjectId, ObjectParent, Point, Rect, Vec2};
 
 use crate::artboard_tool::Handle;
 use std::collections::{HashMap, HashSet};
@@ -64,17 +64,20 @@ impl SelectionTool {
         duplicate: bool,
         add: bool,
     ) {
-        if let Some(id) = topmost_path_at(document, point, visible) {
+        if let Some(id) = topmost_selectable_at(document, point, visible) {
             if add {
                 if !self.selected.insert(id) {
                     self.selected.remove(&id);
                 }
                 self.drag = None;
             } else {
-                // Clicking an already-selected object moves the complete
-                // selection.  Only replace the selection when the hit object
-                // was not selected (Alt duplication remains single-source).
-                if duplicate || !self.selected.contains(&id) {
+                // Clicking an already-selected object moves (or, with Alt,
+                // duplicates) the complete selection. Only replace the
+                // selection when the hit object was not already part of
+                // it — this applies symmetrically to Move and Duplicate,
+                // so Alt-dragging a multi-selection duplicates the whole
+                // thing, not just the one object under the pointer.
+                if !self.selected.contains(&id) {
                     self.selected.clear();
                     self.selected.insert(id);
                 }
@@ -89,12 +92,15 @@ impl SelectionTool {
             // objects.  Main's handle/rotation hit tests run first, so this
             // path only handles its interior.
             let inside_selection_box = !add
-                && !duplicate
                 && self
                     .selected_quad(document)
                     .is_some_and(|quad| point_in_convex_quad(point, quad));
             if inside_selection_box {
-                self.drag = Some(Drag::Move { start: point });
+                self.drag = Some(if duplicate {
+                    Drag::Duplicate { start: point }
+                } else {
+                    Drag::Move { start: point }
+                });
             } else {
                 if !add {
                     self.selected.clear();
@@ -206,11 +212,9 @@ impl SelectionTool {
     pub(crate) fn finish_drag(&mut self, editor: &mut Editor) -> Result<bool, CommandError> {
         let drag = self.drag.take();
         let delta = std::mem::replace(&mut self.preview_delta, Vec2::ZERO);
-        let object = self.selected.iter().next().copied();
-        if object.is_none() && !matches!(drag, Some(Drag::Marquee { .. })) {
+        if self.selected.is_empty() && !matches!(drag, Some(Drag::Marquee { .. })) {
             return Ok(false);
         }
-        let object = object.unwrap_or_default();
         match drag {
             Some(Drag::Move { .. }) if delta != Vec2::ZERO => {
                 let objects = self.selected.iter().copied().collect();
@@ -218,11 +222,10 @@ impl SelectionTool {
                 Ok(true)
             }
             Some(Drag::Duplicate { .. }) if delta != Vec2::ZERO => {
-                let outcome = editor.execute(Command::DuplicateObject { object, delta })?;
-                if let amalith_commands::CommandOutcome::Object(copy) = outcome {
-                    self.selected.clear();
-                    self.selected.insert(copy);
-                }
+                let objects = self.selected_in_paint_order(editor.document());
+                let new_ids = editor.duplicate_objects(&objects, delta)?;
+                self.selected.clear();
+                self.selected.extend(new_ids);
                 Ok(true)
             }
             Some(Drag::Scale {
@@ -259,16 +262,16 @@ impl SelectionTool {
                     if !add {
                         self.selected.clear();
                     }
+                    // A layer's direct children only — a `Group` caught by
+                    // the marquee is selected as one unit (its `bounds_of`
+                    // already unions its descendants), matching plain-click
+                    // selection instead of reaching into its members.
                     for layer in editor.document().layers() {
                         for &id in editor.document().children_of(ObjectParent::Layer(layer.id)) {
-                            let is_path = editor
-                                .document()
-                                .object(id)
-                                .is_some_and(|object| matches!(object.kind, ObjectKind::Path(_)));
                             if editor
                                 .document()
                                 .bounds_of(id)
-                                .is_some_and(|bounds| is_path && rects_intersect(bounds, marquee))
+                                .is_some_and(|bounds| rects_intersect(bounds, marquee))
                             {
                                 self.selected.insert(id);
                             }
@@ -333,8 +336,7 @@ impl SelectionTool {
     }
 
     fn display_bounds(&self, document: &Document, id: ObjectId) -> Option<Rect> {
-        let object = document.object(id)?;
-        let local = object.kind.own_local_bounds()?;
+        let local = document.local_bounds_of(id)?;
         Some(
             self.display_transform(document, id)?
                 .transform_rect_bbox(local),
@@ -345,37 +347,59 @@ impl SelectionTool {
         object_quad(document, id, self.display_transform(document, id)?)
     }
 
-    pub(crate) fn duplicate_preview_quad(&self, document: &Document) -> Option<[Point; 4]> {
-        let id = (self.selected.len() == 1)
-            .then(|| self.selected.iter().next().copied())
-            .flatten()?;
-        if !matches!(&self.drag, Some(Drag::Duplicate { .. })) {
+    /// The transform a live duplicate-drag ghost of `id` should render at
+    /// — `None` unless `id` is part of the selection *and* a duplicate
+    /// drag is active. Every selected object gets one (not just a lone
+    /// selection), so the whole multi-selection previews live while
+    /// dragging, matching `display_transform`'s `Drag::Move` case (which
+    /// intentionally leaves the *original* untransformed during a
+    /// duplicate drag — this is the copy's preview, drawn separately).
+    pub(crate) fn duplicate_preview_transform(
+        &self,
+        document: &Document,
+        id: ObjectId,
+    ) -> Option<Affine> {
+        if !self.is_duplicate_drag() || !self.selected.contains(&id) {
             return None;
         }
-        object_quad(
-            document,
-            id,
-            Affine::translate(self.preview_delta) * document.world_transform(id),
-        )
+        Some(Affine::translate(self.preview_delta) * document.world_transform(id))
     }
 
     pub(crate) fn is_duplicate_drag(&self) -> bool {
         matches!(&self.drag, Some(Drag::Duplicate { .. }))
     }
 
-    pub(crate) fn is_dragging(&self) -> bool {
-        self.drag.is_some()
+    /// `self.selected`, ordered by each object's current position in its
+    /// parent's paint order (bottom to top) instead of `HashSet`'s
+    /// unspecified iteration order. Use this — not `self.selected.iter()`
+    /// directly — anywhere the *relative* order of several ids matters,
+    /// e.g. `Editor::copy`/`duplicate_objects`, which both hand back new
+    /// objects in the same relative order the source ids were given.
+    /// Feeding them raw hash order instead is exactly what made repeated
+    /// alt-drag-duplicates on a multi-selection shuffle their stacking
+    /// unpredictably from one duplicate to the next.
+    pub(crate) fn selected_in_paint_order(&self, document: &Document) -> Vec<ObjectId> {
+        let mut parents: Vec<ObjectParent> = Vec::new();
+        for &id in &self.selected {
+            if let Some(object) = document.object(id) {
+                if !parents.contains(&object.parent) {
+                    parents.push(object.parent);
+                }
+            }
+        }
+        let mut ordered = Vec::with_capacity(self.selected.len());
+        for parent in parents {
+            for &id in document.children_of(parent) {
+                if self.selected.contains(&id) {
+                    ordered.push(id);
+                }
+            }
+        }
+        ordered
     }
 
-    pub(crate) fn duplicate_preview_bounds(&self, document: &Document) -> Option<Rect> {
-        let id = (self.selected.len() == 1)
-            .then(|| self.selected.iter().next().copied())
-            .flatten()?;
-        self.is_duplicate_drag().then_some(()).and_then(|_| {
-            document
-                .bounds_of(id)
-                .map(|bounds| bounds + self.preview_delta)
-        })
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.drag.is_some()
     }
 
     pub(crate) fn retain_existing(&mut self, document: &Document) {
@@ -400,7 +424,7 @@ impl SelectionTool {
 }
 
 fn object_quad(document: &Document, id: ObjectId, transform: Affine) -> Option<[Point; 4]> {
-    let local = document.object(id)?.kind.own_local_bounds()?;
+    let local = document.local_bounds_of(id)?;
     Some([
         transform * Point::new(local.x0, local.y0),
         transform * Point::new(local.x1, local.y0),
@@ -523,7 +547,13 @@ fn scaled_transform(
     )
 }
 
-pub(crate) fn topmost_path_at(
+/// The topmost selectable object at `point`, in world/document space — a
+/// direct child of some layer (a plain `Path`, or a `Group`, selected as
+/// one whole unit the same way Illustrator's black-arrow tool never
+/// reaches into a group on a plain click). `bounds_of` already unions a
+/// group's descendants into one document-space box, so no `ObjectKind`
+/// filter is needed here: every kind that has bounds is selectable.
+pub(crate) fn topmost_selectable_at(
     document: &Document,
     point: Point,
     visible: Rect,
@@ -539,7 +569,6 @@ pub(crate) fn topmost_path_at(
             .find_map(|&id| {
                 let object = document.object(id)?;
                 (object.visible
-                    && matches!(object.kind, ObjectKind::Path(_))
                     && document.bounds_of(id).is_some_and(|bounds| {
                         rects_intersect(bounds, visible) && bounds.contains(point)
                     }))
@@ -614,7 +643,7 @@ mod tests {
         };
 
         assert_eq!(
-            topmost_path_at(
+            topmost_selectable_at(
                 editor.document(),
                 Point::new(20.0, 20.0),
                 Rect::new(-100.0, -100.0, 100.0, 100.0),
@@ -622,12 +651,88 @@ mod tests {
             Some(second)
         );
         assert_ne!(
-            topmost_path_at(
+            topmost_selectable_at(
                 editor.document(),
                 Point::new(20.0, 20.0),
                 Rect::new(-100.0, -100.0, 100.0, 100.0),
             ),
             Some(first)
+        );
+    }
+
+    #[test]
+    fn a_group_is_click_selectable_and_movable_as_one_unit() {
+        // Regression test: selecting/moving/transforming used to silently
+        // no-op on a Group — `topmost_selectable_at` and `object_quad`
+        // both special-cased `ObjectKind::Path`, and a Group has no
+        // `own_local_bounds` of its own, so a click never hit it and its
+        // selection box never rendered (nothing to drag "inside"). Fixed
+        // by `Document::local_bounds_of`, the group-aware counterpart to
+        // `ObjectKind::own_local_bounds`.
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(20.0, 0.0, 30.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::Group {
+                ids: vec![a, b],
+                name: Some("Group 1".into()),
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let visible = Rect::new(-100.0, -100.0, 100.0, 100.0);
+
+        // A click on `a`'s old on-screen position must hit the group, not
+        // `a` directly — `a` is no longer a layer's direct child.
+        assert_eq!(
+            topmost_selectable_at(editor.document(), Point::new(5.0, 5.0), visible),
+            Some(group)
+        );
+
+        let mut selection = SelectionTool::default();
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            false,
+            false,
+        );
+        assert_eq!(selection.selected.len(), 1);
+        assert!(selection.selected.contains(&group));
+        // A selection quad must exist so the handles render and "click
+        // inside the box" drags actually engage.
+        assert!(selection.selected_quad(editor.document()).is_some());
+
+        let delta = Vec2::new(3.0, 4.0);
+        selection.drag(Point::new(5.0, 5.0) + delta, false, false);
+        assert!(selection.finish_drag(&mut editor).unwrap());
+
+        assert_eq!(
+            editor.document().bounds_of(a),
+            Some(Rect::new(0.0, 0.0, 10.0, 10.0) + delta)
+        );
+        assert_eq!(
+            editor.document().bounds_of(b),
+            Some(Rect::new(20.0, 0.0, 30.0, 10.0) + delta)
         );
     }
 
@@ -646,7 +751,7 @@ mod tests {
         };
 
         assert_eq!(
-            topmost_path_at(
+            topmost_selectable_at(
                 editor.document(),
                 Point::new(525.0, 525.0),
                 Rect::new(0.0, 0.0, 100.0, 100.0),
@@ -654,7 +759,7 @@ mod tests {
             None
         );
         assert_eq!(
-            topmost_path_at(
+            topmost_selectable_at(
                 editor.document(),
                 Point::new(525.0, 525.0),
                 Rect::new(450.0, 450.0, 600.0, 600.0),
@@ -734,6 +839,108 @@ mod tests {
 
         editor.undo().unwrap();
         assert!(editor.document().object(copy).is_none());
+    }
+
+    #[test]
+    fn alt_drag_on_a_multi_selection_duplicates_all_of_it() {
+        // Regression test: alt-dragging used to collapse a multi-selection
+        // down to whichever one object `HashSet` iteration happened to
+        // land on first, silently dropping the rest of the selection
+        // instead of duplicating it.
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(20.0, 0.0, 30.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let visible = Rect::new(-100.0, -100.0, 100.0, 100.0);
+
+        let mut selection = SelectionTool::default();
+        // Marquee-select both.
+        selection.press(
+            editor.document(),
+            Point::new(-5.0, -5.0),
+            visible,
+            false,
+            false,
+        );
+        selection.drag(Point::new(35.0, 15.0), false, false);
+        assert!(!selection.finish_drag(&mut editor).unwrap());
+        assert_eq!(selection.selected.len(), 2);
+
+        // Alt-click-drag one of the already-selected objects.
+        selection.press(
+            editor.document(),
+            Point::new(5.0, 5.0),
+            visible,
+            true,
+            false,
+        );
+        assert_eq!(
+            selection.selected.len(),
+            2,
+            "alt-clicking an already-selected object must not collapse the selection"
+        );
+        selection.drag(Point::new(15.0, 15.0), false, false);
+        assert!(selection.finish_drag(&mut editor).unwrap());
+
+        // Both originals still exist, untouched, plus two new duplicates.
+        assert_eq!(
+            editor.document().bounds_of(a),
+            Some(Rect::new(0.0, 0.0, 10.0, 10.0))
+        );
+        assert_eq!(
+            editor.document().bounds_of(b),
+            Some(Rect::new(20.0, 0.0, 30.0, 10.0))
+        );
+        assert_eq!(selection.selected.len(), 2);
+        assert!(!selection.selected.contains(&a));
+        assert!(!selection.selected.contains(&b));
+
+        // Regression: the duplicates' relative stacking must match the
+        // originals' (a below b), not the arbitrary order `HashSet`
+        // iteration happened to hand back for `self.selected`.
+        let children = editor
+            .document()
+            .children_of(ObjectParent::Layer(layer))
+            .to_vec();
+        assert_eq!(children[0], a);
+        assert_eq!(children[1], b);
+        let delta = Vec2::new(10.0, 10.0);
+        assert_eq!(
+            editor.document().bounds_of(children[2]),
+            Some(Rect::new(0.0, 0.0, 10.0, 10.0) + delta),
+            "duplicate of `a` (bottom) must land directly above the originals, before `b`'s duplicate"
+        );
+        assert_eq!(
+            editor.document().bounds_of(children[3]),
+            Some(Rect::new(20.0, 0.0, 30.0, 10.0) + delta),
+            "duplicate of `b` (top) must land above `a`'s duplicate"
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(
+            editor
+                .document()
+                .children_of(ObjectParent::Layer(layer))
+                .len(),
+            2
+        );
     }
 
     #[test]

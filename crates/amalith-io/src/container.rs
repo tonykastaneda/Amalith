@@ -6,10 +6,10 @@ use crate::error::IoError;
 use crate::manifest::{
     artwork_container_path, ArtworkFile, DocumentManifest, LayerManifest, FORMAT_VERSION,
 };
+use amalith_core::{AssetSource, Document, Layer, Object, ObjectKind};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use amalith_core::{AssetSource, Document, Layer, Object, ObjectKind};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 

@@ -17,19 +17,21 @@ mod assets;
 mod container;
 mod error;
 mod manifest;
+mod svg;
 
 pub use assets::AssetStore;
 pub use container::{load, save};
 pub use error::IoError;
+pub use svg::{export_svg, import_svg, ImportedSvg, SvgError};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use amalith_core::{
         Affine, Artboard, ArtboardId, Color, Document, Layer, LayerId, Object, ObjectId,
         ObjectKind, ObjectParent, Rect, Swatch, Vec2,
     };
+    use tempfile::tempdir;
 
     #[test]
     fn roundtrip_empty_document() {

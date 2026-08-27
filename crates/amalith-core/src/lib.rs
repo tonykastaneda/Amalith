@@ -8,6 +8,7 @@
 //! top of the primitives exported here. See `document.rs` for the
 //! coordinate-system and ownership-tree writeup, and `DESIGN.md` for why
 //! this crate does not model an XML/SVG repr tree.
+pub mod appearance;
 pub mod artboard;
 pub mod asset;
 pub mod document;
@@ -20,6 +21,7 @@ pub mod object;
 pub mod swatch;
 pub mod units;
 
+pub use appearance::{Appearance, Paint};
 pub use artboard::Artboard;
 pub use asset::{Asset, AssetKind, AssetSource};
 pub use document::Document;

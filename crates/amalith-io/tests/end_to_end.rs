@@ -2,10 +2,10 @@
 //! acceptance flow from the top-level task: create document -> add
 //! artboard -> add a rectangle object -> move it via a command -> undo ->
 //! save -> load -> identical state.
-use tempfile::tempdir;
 use amalith_commands::{Command, CommandOutcome, Editor};
 use amalith_core::{Document, Rect, Vec2};
 use amalith_io::{load, save, AssetStore};
+use tempfile::tempdir;
 
 #[test]
 fn create_move_undo_save_load_roundtrip() {

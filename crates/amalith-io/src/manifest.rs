@@ -15,8 +15,8 @@
 //!    `Document`'s internal fields change shape, the on-disk schema
 //!    doesn't silently change with it — `DocumentManifest` is the explicit,
 //!    versioned contract external tools/plugins read.
-use serde::{Deserialize, Serialize};
 use amalith_core::{Artboard, Asset, LayerId, Metadata, Object, Settings, Swatch};
+use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
 /// or `ArtworkFile` change shape in a way older readers can't tolerate.

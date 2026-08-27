@@ -1,25 +1,30 @@
 mod artboard_tool;
 mod camera;
+mod direct_selection;
 mod ellipse_tool;
+mod fill_mesh;
 mod rectangle_tool;
 mod selection;
 
-use amalith_commands::{Command, CommandOutcome, Editor};
+use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 use amalith_core::{
-    ArtboardId, Bleed, ColorMode, Document, LayerId, Length, ObjectKind, ObjectParent, PathData,
-    Point, PreviewMode, RasterEffects, Rect, Unit,
+    ArtboardId, Bleed, ColorMode, Document, LayerId, Length, ObjectId, ObjectKind, ObjectParent,
+    PathData, Point, PreviewMode, RasterEffects, Rect, Unit,
 };
 use artboard_tool::{next_artboard_name, ArtboardTool, DragKind, Handle};
 use camera::Camera;
+use direct_selection::DirectSelectionTool;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect as EguiRect, Stroke, Vec2};
 use ellipse_tool::EllipseTool;
 use rectangle_tool::RectangleTool;
 use selection::SelectionTool;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 800.0])
+            .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([620.0, 620.0])
             .with_title("Amalith"),
         ..Default::default()
@@ -38,15 +43,50 @@ struct AmalithApp {
     error: Option<String>,
     artboards_panel: ArtboardsPanelState,
     layers_panel: LayersPanelState,
+    fill_stroke_panel: FillStrokePanelState,
+    #[cfg(target_os = "macos")]
+    native_menu: Option<NativeMenu>,
+}
+
+/// Which color-picker popup (if either) the fill/stroke swatch widget has
+/// open. See `Self::fill_stroke_widget_ui`.
+#[derive(Default)]
+struct FillStrokePanelState {
+    /// Which slot's picker is open, plus its *working* color — a copy the
+    /// dialog edits freely and only commits to the document on OK
+    /// (Cancel, or closing the window, discards it). Seeded from the
+    /// current selection's color exactly once, at the moment the dialog
+    /// opens — never re-derived from the live selection on later frames,
+    /// or every edit would immediately get overwritten back to the
+    /// unchanged document value.
+    open: Option<(PaintSlot, egui::ecolor::Hsva)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PaintSlot {
+    Fill,
+    Stroke,
 }
 
 struct DocumentTab {
     editor: Box<Editor>,
+    asset_store: amalith_io::AssetStore,
+    file_path: Option<PathBuf>,
     camera: Camera,
     artboard_tool: ArtboardTool,
     rectangle_tool: RectangleTool,
     ellipse_tool: EllipseTool,
     selection_tool: SelectionTool,
+    direct_selection_tool: DirectSelectionTool,
+}
+
+#[cfg(target_os = "macos")]
+struct NativeMenu {
+    _menu: muda::Menu,
+    new_item: muda::MenuItem,
+    open_item: muda::MenuItem,
+    save_item: muda::MenuItem,
+    save_as_item: muda::MenuItem,
 }
 
 struct ArtboardsPanelState {
@@ -59,6 +99,19 @@ struct ArtboardsPanelState {
 struct LayersPanelState {
     selected_layer: Option<LayerId>,
     chrome: PanelChromeState,
+    renaming: Option<LayersRenameTarget>,
+    rename_text: String,
+    focus_rename: bool,
+    /// Groups collapsed in the panel tree. Absence means expanded, so a
+    /// newly-created group (nothing in this set yet) shows its contents
+    /// immediately.
+    collapsed_groups: HashSet<ObjectId>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayersRenameTarget {
+    Layer(LayerId),
+    Object(ObjectId),
 }
 
 struct PanelChromeState {
@@ -91,6 +144,10 @@ impl Default for LayersPanelState {
         Self {
             selected_layer: None,
             chrome: PanelChromeState::default(),
+            renaming: None,
+            rename_text: String::new(),
+            focus_rename: false,
+            collapsed_groups: HashSet::new(),
         }
     }
 }
@@ -123,6 +180,7 @@ enum CanvasNavigation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolKind {
     Selection,
+    DirectSelection,
     Rectangle,
     Ellipse,
     Artboard,
@@ -134,12 +192,14 @@ fn activate_tool(
     rectangle_tool: &mut RectangleTool,
     ellipse_tool: &mut EllipseTool,
     selection_tool: &mut SelectionTool,
+    direct_selection_tool: &mut DirectSelectionTool,
     first_artboard: Option<ArtboardId>,
 ) {
     artboard_tool.set_active(tool == ToolKind::Artboard, first_artboard);
     rectangle_tool.set_active(tool == ToolKind::Rectangle);
     ellipse_tool.set_active(tool == ToolKind::Ellipse);
     selection_tool.set_active(tool == ToolKind::Selection);
+    direct_selection_tool.set_active(tool == ToolKind::DirectSelection);
 }
 
 fn delete_shortcut_allowed(canvas_shortcuts_enabled: bool, navigation_key_down: bool) -> bool {
@@ -224,6 +284,8 @@ impl AmalithApp {
         visuals.widgets.hovered.bg_fill = Color32::from_rgb(55, 55, 55);
         visuals.selection.bg_fill = Color32::from_rgb(42, 112, 196);
         cc.egui_ctx.set_visuals(visuals);
+        #[cfg(target_os = "macos")]
+        let native_menu = Some(Self::build_native_menu());
         Self {
             open: Vec::new(),
             active: 0,
@@ -231,6 +293,74 @@ impl AmalithApp {
             error: None,
             artboards_panel: ArtboardsPanelState::default(),
             layers_panel: LayersPanelState::default(),
+            fill_stroke_panel: FillStrokePanelState::default(),
+            #[cfg(target_os = "macos")]
+            native_menu,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn build_native_menu() -> NativeMenu {
+        use muda::{
+            accelerator::{Accelerator, Code, Modifiers},
+            Menu, MenuItem, PredefinedMenuItem, Submenu,
+        };
+        let menu = Menu::new();
+        let file = Submenu::new("File", true);
+        let command = Some(Modifiers::SUPER);
+        let new_item = MenuItem::new("New", true, Some(Accelerator::new(command, Code::KeyN)));
+        let open_item = MenuItem::new("Open", true, Some(Accelerator::new(command, Code::KeyO)));
+        let save_item = MenuItem::new("Save", true, Some(Accelerator::new(command, Code::KeyS)));
+        let save_as_item = MenuItem::new(
+            "Save As…",
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyS,
+            )),
+        );
+        let quit_item = PredefinedMenuItem::quit(Some("Quit Amalith"));
+        file.append_items(&[&new_item, &open_item, &save_item, &save_as_item])
+            .expect("append File menu items");
+        let app =
+            Submenu::with_items("Amalith", true, &[&quit_item]).expect("build application menu");
+        menu.append(&app).expect("append application menu");
+        menu.append(&file).expect("append File menu");
+        menu.init_for_nsapp();
+        NativeMenu {
+            _menu: menu,
+            new_item,
+            open_item,
+            save_item,
+            save_as_item,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn process_native_menu_events(&mut self) {
+        let Some(native_menu) = &self.native_menu else {
+            return;
+        };
+        let mut actions = Vec::new();
+        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+            if event.id == *native_menu.new_item.id() {
+                actions.push(0);
+            } else if event.id == *native_menu.open_item.id() {
+                actions.push(1);
+            } else if event.id == *native_menu.save_item.id() {
+                actions.push(2);
+            } else if event.id == *native_menu.save_as_item.id() {
+                actions.push(3);
+            }
+        }
+        for action in actions {
+            match action {
+                0 => self.open_new_document(),
+                1 => self.open_document_from_disk(),
+                2 => self.save_active_document(false),
+                3 => self.save_active_document(true),
+                _ => unreachable!(),
+            }
         }
     }
 
@@ -282,14 +412,71 @@ impl AmalithApp {
         self.error = None;
         self.open.push(DocumentTab {
             editor: Box::new(editor),
+            asset_store: amalith_io::AssetStore::new(),
+            file_path: None,
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
+            direct_selection_tool: DirectSelectionTool::default(),
         });
         self.active = self.open.len() - 1;
         self.creating = None;
+    }
+
+    fn open_document_from_disk(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Amalith document", &["amalith"])
+            .pick_file()
+        else {
+            return;
+        };
+        match amalith_io::load(&path) {
+            Ok((document, asset_store)) => {
+                self.open.push(DocumentTab {
+                    editor: Box::new(Editor::new(document)),
+                    asset_store,
+                    file_path: Some(path),
+                    camera: Camera::default(),
+                    artboard_tool: ArtboardTool::default(),
+                    rectangle_tool: RectangleTool::default(),
+                    ellipse_tool: EllipseTool::default(),
+                    selection_tool: SelectionTool::default(),
+                    direct_selection_tool: DirectSelectionTool::default(),
+                });
+                self.active = self.open.len() - 1;
+                self.creating = None;
+                self.error = None;
+            }
+            Err(err) => self.error = Some(format!("Could not open document: {err}")),
+        }
+    }
+
+    fn save_active_document(&mut self, save_as: bool) {
+        let Some(index) = (!self.open.is_empty()).then_some(self.active) else {
+            return;
+        };
+        let path = if !save_as {
+            self.open[index].file_path.clone()
+        } else {
+            None
+        };
+        let path = path.or_else(|| {
+            rfd::FileDialog::new()
+                .add_filter("Amalith document", &["amalith"])
+                .set_file_name("Untitled.amalith")
+                .save_file()
+        });
+        let Some(path) = path else { return };
+        let result = {
+            let tab = &self.open[index];
+            amalith_io::save(tab.editor.document(), &tab.asset_store, &path)
+        };
+        match result {
+            Ok(()) => self.open[index].file_path = Some(path),
+            Err(err) => self.error = Some(format!("Could not save document: {err}")),
+        }
     }
 
     fn new_document_ui(
@@ -528,6 +715,8 @@ impl AmalithApp {
     }
 
     fn workspace_ui(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_os = "macos"))]
+        self.app_menu_ui(ctx);
         let mut select = None;
         let mut close = None;
         let mut create = false;
@@ -609,11 +798,87 @@ impl AmalithApp {
                     &mut tab.rectangle_tool,
                     &mut tab.ellipse_tool,
                     &mut tab.selection_tool,
+                    &mut tab.direct_selection_tool,
                     &mut self.artboards_panel,
                     &mut self.layers_panel,
+                    &mut self.fill_stroke_panel,
                     &mut self.error,
                 );
             }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn app_menu_ui(&mut self, ctx: &egui::Context) {
+        let mut action = None;
+        egui::TopBottomPanel::top("app_menu")
+            .exact_height(26.0)
+            .frame(egui::Frame::NONE.fill(Color32::from_rgb(39, 39, 39)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New").clicked() {
+                            action = Some(0);
+                            ui.close();
+                        }
+                        if ui.button("Open…").clicked() {
+                            action = Some(1);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Save").clicked() {
+                            action = Some(2);
+                            ui.close();
+                        }
+                        if ui.button("Save As…").clicked() {
+                            action = Some(3);
+                            ui.close();
+                        }
+                    });
+                });
+            });
+        match action {
+            Some(0) => self.open_new_document(),
+            Some(1) => self.open_document_from_disk(),
+            Some(2) => self.save_active_document(false),
+            Some(3) => self.save_active_document(true),
+            None => {}
+            _ => unreachable!(),
+        }
+    }
+
+    /// A dismissible toast for `self.error`, which `canvas_ui` and friends
+    /// write into on every failed command — without this, those failures
+    /// (an empty-clipboard paste, a stale-id delete, ...) were completely
+    /// silent during normal editing: the only place that ever *read*
+    /// `self.error` was the New Document dialog.
+    fn error_toast_ui(ctx: &egui::Context, error: &mut Option<String>) {
+        let Some(message) = error.clone() else {
+            return;
+        };
+        let mut dismiss = false;
+        egui::Area::new(egui::Id::new("error_toast"))
+            .anchor(egui::Align2::LEFT_BOTTOM, Vec2::new(12.0, -12.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::NONE
+                    .fill(Color32::from_rgb(120, 30, 30))
+                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(Color32::WHITE, message);
+                            if ui
+                                .add(egui::Button::new("×").frame(false))
+                                .on_hover_text("Dismiss")
+                                .clicked()
+                            {
+                                dismiss = true;
+                            }
+                        });
+                    });
+            });
+        if dismiss {
+            *error = None;
         }
     }
 
@@ -625,8 +890,10 @@ impl AmalithApp {
         rectangle_tool: &mut RectangleTool,
         ellipse_tool: &mut EllipseTool,
         selection_tool: &mut SelectionTool,
+        direct_selection_tool: &mut DirectSelectionTool,
         artboards_panel: &mut ArtboardsPanelState,
         layers_panel: &mut LayersPanelState,
+        fill_stroke_panel: &mut FillStrokePanelState,
         error: &mut Option<String>,
     ) {
         Self::panels_ui(
@@ -645,6 +912,9 @@ impl AmalithApp {
             rectangle_tool,
             ellipse_tool,
             selection_tool,
+            direct_selection_tool,
+            fill_stroke_panel,
+            error,
         );
         let pasteboard = if artboard_tool.active {
             Color32::from_rgb(115, 115, 115)
@@ -695,6 +965,11 @@ impl AmalithApp {
                     && ctx.input_mut(|input| {
                         input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::V) > 0
                     });
+                let direct_selection_pressed = !navigation_key_down
+                    && canvas_shortcuts_enabled
+                    && ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::A) > 0
+                    });
                 let rectangle_pressed = !navigation_key_down
                     && canvas_shortcuts_enabled
                     && ctx.input_mut(|input| {
@@ -712,6 +987,7 @@ impl AmalithApp {
                         rectangle_tool.set_active(false);
                         ellipse_tool.set_active(false);
                         selection_tool.set_active(false);
+                        direct_selection_tool.set_active(false);
                     } else {
                         activate_tool(
                             ToolKind::Artboard,
@@ -719,6 +995,7 @@ impl AmalithApp {
                             rectangle_tool,
                             ellipse_tool,
                             selection_tool,
+                            direct_selection_tool,
                             first_artboard,
                         );
                     }
@@ -729,6 +1006,17 @@ impl AmalithApp {
                         rectangle_tool,
                         ellipse_tool,
                         selection_tool,
+                        direct_selection_tool,
+                        first_artboard,
+                    );
+                } else if direct_selection_pressed {
+                    activate_tool(
+                        ToolKind::DirectSelection,
+                        artboard_tool,
+                        rectangle_tool,
+                        ellipse_tool,
+                        selection_tool,
+                        direct_selection_tool,
                         first_artboard,
                     );
                 } else if rectangle_pressed {
@@ -738,6 +1026,7 @@ impl AmalithApp {
                         rectangle_tool,
                         ellipse_tool,
                         selection_tool,
+                        direct_selection_tool,
                         first_artboard,
                     );
                 } else if ellipse_pressed {
@@ -747,6 +1036,7 @@ impl AmalithApp {
                         rectangle_tool,
                         ellipse_tool,
                         selection_tool,
+                        direct_selection_tool,
                         first_artboard,
                     );
                 } else if escape_pressed {
@@ -754,6 +1044,7 @@ impl AmalithApp {
                     rectangle_tool.set_active(false);
                     ellipse_tool.set_active(false);
                     selection_tool.set_active(false);
+                    direct_selection_tool.set_active(false);
                 }
 
                 let delete_pressed =
@@ -823,6 +1114,169 @@ impl AmalithApp {
                     }
                 }
 
+                if canvas_shortcuts_enabled && !artboard_tool.active && selection_tool.active {
+                    // egui-winit intercepts Cmd+C/Cmd+X/Cmd+V at the
+                    // platform layer and turns them into `Event::Copy` /
+                    // `Event::Cut` / `Event::Paste(String)` — it never
+                    // emits a plain `Event::Key{key: C/V, modifiers:
+                    // COMMAND}` for those, on any platform (see
+                    // `is_copy_command`/`is_paste_command` in egui-winit).
+                    // So these must be read as those events, not via
+                    // `count_and_consume_key`. `Event::Paste` additionally
+                    // only fires when the OS clipboard already holds
+                    // non-empty text, which is why `copy_pressed` always
+                    // primes it below (real SVG when we have it, a
+                    // placeholder otherwise) — that also means the OS
+                    // clipboard now holds real, portable SVG a paste into
+                    // *any other app* can render, not just an Amalith
+                    // marker string.
+                    let (copy_pressed, paste_text) = ctx.input_mut(|input| {
+                        let mut copy = false;
+                        let mut paste = None;
+                        input.events.retain(|event| match event {
+                            egui::Event::Copy => {
+                                copy = true;
+                                false
+                            }
+                            egui::Event::Paste(text) => {
+                                paste = Some(text.clone());
+                                false
+                            }
+                            _ => true,
+                        });
+                        (copy, paste)
+                    });
+                    if copy_pressed && !selection_tool.selected.is_empty() {
+                        let ids = selection_tool.selected_in_paint_order(editor.document());
+                        if let Err(err) = editor.copy(&ids) {
+                            *error = Some(err.to_string());
+                        } else {
+                            let svg = amalith_io::export_svg(editor.document(), &ids)
+                                .unwrap_or_else(|| "amalith-object-clipboard".to_string());
+                            ctx.copy_text(svg);
+                        }
+                    }
+
+                    let paste_in_front_pressed = ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::F) > 0
+                    });
+                    let paste_in_back_pressed = ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::B) > 0
+                    });
+
+                    // If the OS clipboard's current text parses as SVG,
+                    // that always wins over whatever `Editor` already had
+                    // internally — it covers both round-tripping our own
+                    // last export (identical result either way) and
+                    // pasting content actually copied from another app
+                    // since. If it *doesn't* parse (arbitrary unrelated
+                    // clipboard text), silently keep using whatever's
+                    // already in `Editor`'s own clipboard instead of
+                    // erroring the paste over it.
+                    if let Some(text) = &paste_text {
+                        let _ = editor.copy_from_svg(text);
+                    }
+
+                    // `Event::Paste` doesn't carry whether Shift was also
+                    // held (egui-winit's `is_paste_command` ignores it), so
+                    // Plain Paste vs. Paste in Place is disambiguated from
+                    // the live modifier state instead. Plain Paste lands
+                    // the selection's bounds-center on the visible view's
+                    // center (Illustrator's "you copied it to put it
+                    // somewhere new" behavior); the other three keep exact
+                    // X/Y (zero delta).
+                    let paste_fired = paste_text.is_some();
+                    let paste = if paste_fired && ctx.input(|i| i.modifiers.shift) {
+                        Some((amalith_core::Vec2::ZERO, PasteStack::Top))
+                    } else if paste_fired {
+                        let delta = editor
+                            .clipboard_bounds()
+                            .map(|bounds| visible_document.center() - bounds.center())
+                            .unwrap_or(amalith_core::Vec2::ZERO);
+                        Some((delta, PasteStack::Top))
+                    } else if paste_in_front_pressed {
+                        Some((amalith_core::Vec2::ZERO, PasteStack::InFront))
+                    } else if paste_in_back_pressed {
+                        Some((amalith_core::Vec2::ZERO, PasteStack::Behind))
+                    } else {
+                        None
+                    };
+                    if let Some((delta, stack)) = paste {
+                        match editor.paste(delta, stack) {
+                            Ok(new_ids) => {
+                                selection_tool.cancel_drag();
+                                selection_tool.selected.clear();
+                                selection_tool.selected.extend(new_ids);
+                            }
+                            Err(err) => *error = Some(err.to_string()),
+                        }
+                    }
+                }
+
+                if canvas_shortcuts_enabled
+                    && !artboard_tool.active
+                    && selection_tool.active
+                    && !selection_tool.selected.is_empty()
+                {
+                    // Cmd+Shift+G (Ungroup) must be checked *before* plain
+                    // Cmd+G: `count_and_consume_key` matches modifiers
+                    // logically, so a bare `COMMAND` pattern also matches
+                    // while an extra Shift is held (same gotcha as
+                    // Paste/Paste-in-Place above).
+                    let ungroup_pressed = ctx.input_mut(|input| {
+                        input.count_and_consume_key(
+                            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                            egui::Key::G,
+                        ) > 0
+                    });
+                    let group_pressed = !ungroup_pressed
+                        && ctx.input_mut(|input| {
+                            input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::G) > 0
+                        });
+                    if group_pressed {
+                        let ids = selection_tool.selected_in_paint_order(editor.document());
+                        let name = next_group_name(editor);
+                        match editor.execute(Command::Group {
+                            ids,
+                            name: Some(name),
+                        }) {
+                            Ok(CommandOutcome::Object(group_id)) => {
+                                selection_tool.cancel_drag();
+                                selection_tool.selected.clear();
+                                selection_tool.selected.insert(group_id);
+                            }
+                            Ok(_) => {}
+                            Err(err) => *error = Some(err.to_string()),
+                        }
+                    }
+                    if ungroup_pressed {
+                        // Only the groups actually in the selection get
+                        // dissolved; a non-group in the same selection is
+                        // simply left alone rather than failing the whole
+                        // command.
+                        let groups: Vec<_> = selection_tool
+                            .selected_in_paint_order(editor.document())
+                            .into_iter()
+                            .filter(|&id| {
+                                editor
+                                    .document()
+                                    .object(id)
+                                    .is_some_and(|object| object.is_group())
+                            })
+                            .collect();
+                        if !groups.is_empty() {
+                            match editor.ungroup(&groups) {
+                                Ok(freed_ids) => {
+                                    selection_tool.cancel_drag();
+                                    selection_tool.selected.clear();
+                                    selection_tool.selected.extend(freed_ids);
+                                }
+                                Err(err) => *error = Some(err.to_string()),
+                            }
+                        }
+                    }
+                }
+
                 let undo_pressed = ctx.input_mut(|input| {
                     input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::Z) > 0
                 });
@@ -840,6 +1294,7 @@ impl AmalithApp {
                             .map(|artboard| artboard.id);
                     }
                     selection_tool.retain_existing(editor.document());
+                    direct_selection_tool.retain_existing(editor.document());
                 }
 
                 let (
@@ -889,6 +1344,7 @@ impl AmalithApp {
                         rectangle_tool.cancel_drag();
                         ellipse_tool.cancel_drag();
                         selection_tool.cancel_drag();
+                        direct_selection_tool.cancel_drag();
                         camera.end_pan();
                         if primary_pressed {
                             if let Some(anchor) = pointer_position {
@@ -915,6 +1371,7 @@ impl AmalithApp {
                         rectangle_tool.cancel_drag();
                         ellipse_tool.cancel_drag();
                         selection_tool.cancel_drag();
+                        direct_selection_tool.cancel_drag();
                         camera.end_scrub();
                         if primary_pressed {
                             camera.begin_pan();
@@ -957,6 +1414,7 @@ impl AmalithApp {
                             rectangle_tool.cancel_drag();
                             ellipse_tool.cancel_drag();
                             selection_tool.cancel_drag();
+                            direct_selection_tool.cancel_drag();
                         } else if rectangle_tool.active {
                             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
                             if let Some(pointer) = pointer_position {
@@ -1071,6 +1529,29 @@ impl AmalithApp {
                                 });
                                 if let Some(cursor) = cursor {
                                     ctx.set_cursor_icon(cursor);
+                                }
+                            }
+                        } else if direct_selection_tool.active {
+                            if let Some(pointer) = pointer_position {
+                                let pointer_doc = camera.screen_to_document(pointer, available);
+                                let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                if primary_pressed
+                                    && available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    direct_selection_tool.press(
+                                        editor.document(),
+                                        point,
+                                        6.0 / camera.scale as f64,
+                                        shift_down,
+                                    );
+                                } else if primary_down {
+                                    direct_selection_tool.drag(point);
+                                }
+                            }
+                            if primary_released {
+                                if let Err(err) = direct_selection_tool.finish_drag(editor) {
+                                    *error = Some(err.to_string());
                                 }
                             }
                         } else if selection_tool.active {
@@ -1191,7 +1672,9 @@ impl AmalithApp {
                     }
                 }
                 for layer in editor.document().layers() {
-                    for &id in editor.document().children_of(ObjectParent::Layer(layer.id)) {
+                    let layer_paths =
+                        paint_order_paths(editor.document(), ObjectParent::Layer(layer.id));
+                    for id in layer_paths {
                         let Some(object) = editor.document().object(id) else {
                             continue;
                         };
@@ -1215,24 +1698,87 @@ impl AmalithApp {
                             selection_tool.display_transform(editor.document(), id),
                         ) {
                             if let ObjectKind::Path(path) = &object.kind {
-                                for local_points in path.flattened_points(0.5) {
-                                    let points = local_points
-                                        .into_iter()
-                                        .map(|point| {
-                                            let point = transform * point + move_delta;
-                                            let screen = camera.document_to_screen(
-                                                Pos2::new(point.x as f32, point.y as f32),
-                                                available,
-                                            );
-                                            screen
-                                        })
-                                        .collect::<Vec<_>>();
-                                    if points.len() >= 3 {
-                                        painter.add(egui::Shape::convex_polygon(
-                                            points,
-                                            Color32::from_gray(225),
-                                            Stroke::new(1.0_f32, Color32::from_gray(45)),
-                                        ));
+                                let fill = object
+                                    .appearance
+                                    .fill
+                                    .color()
+                                    .map(color32_from)
+                                    .unwrap_or(Color32::TRANSPARENT);
+                                let stroke = match object.appearance.stroke.color() {
+                                    Some(color) => Stroke::new(
+                                        (object.appearance.stroke_width * camera.scale as f64)
+                                            as f32,
+                                        color32_from(color),
+                                    ),
+                                    None => Stroke::NONE,
+                                };
+                                // All subpaths of this Path are filled as
+                                // one nonzero-winding tessellation (so holes
+                                // and self-intersections render right); the
+                                // stroke stays a per-subpath closed polyline.
+                                let screen_subpaths: Vec<Vec<Pos2>> = path
+                                    .flattened_points(0.5)
+                                    .into_iter()
+                                    .map(|local_points| {
+                                        local_points
+                                            .into_iter()
+                                            .map(|point| {
+                                                let point = transform * point + move_delta;
+                                                camera.document_to_screen(
+                                                    Pos2::new(point.x as f32, point.y as f32),
+                                                    available,
+                                                )
+                                            })
+                                            .collect()
+                                    })
+                                    .collect();
+                                if fill.a() > 0 {
+                                    if let Some(mesh) = fill_mesh::fill_mesh(&screen_subpaths, fill)
+                                    {
+                                        painter.add(egui::Shape::mesh(mesh));
+                                    }
+                                }
+                                if stroke != Stroke::NONE {
+                                    for points in &screen_subpaths {
+                                        if points.len() >= 2 {
+                                            painter.add(egui::Shape::closed_line(
+                                                points.clone(),
+                                                stroke,
+                                            ));
+                                        }
+                                    }
+                                }
+                                if direct_selection_tool.active {
+                                    for index in amalith_core::geom::anchor_indices(&path.geometry)
+                                    {
+                                        let Some(position) = direct_selection_tool
+                                            .display_anchor_position(editor.document(), id, index)
+                                        else {
+                                            continue;
+                                        };
+                                        let screen = camera.document_to_screen(
+                                            Pos2::new(position.x as f32, position.y as f32),
+                                            available,
+                                        );
+                                        let marker =
+                                            EguiRect::from_center_size(screen, Vec2::splat(7.0));
+                                        let selected =
+                                            direct_selection_tool.selected.contains(&(id, index));
+                                        painter.rect_filled(
+                                            marker,
+                                            0.0,
+                                            if selected {
+                                                Color32::from_rgb(59, 155, 255)
+                                            } else {
+                                                Color32::WHITE
+                                            },
+                                        );
+                                        painter.rect_stroke(
+                                            marker,
+                                            0.0,
+                                            Stroke::new(1.25_f32, Color32::from_rgb(59, 155, 255)),
+                                            egui::StrokeKind::Outside,
+                                        );
                                     }
                                 }
                             }
@@ -1251,22 +1797,62 @@ impl AmalithApp {
                                 egui::StrokeKind::Inside,
                             );
                         }
-                    }
-                }
-                if let Some(bounds) = selection_tool.duplicate_preview_bounds(editor.document()) {
-                    if rects_intersect(bounds, visible_document) {
-                        if let Some(quad) = selection_tool.duplicate_preview_quad(editor.document())
-                        {
-                            let points = document_quad_to_screen(quad, camera, available).to_vec();
-                            painter.add(egui::Shape::convex_polygon(
-                                points,
-                                Color32::from_gray(225),
-                                Stroke::new(1.0_f32, Color32::from_gray(45)),
-                            ));
+                        // Live duplicate-drag ghost: every selected object
+                        // gets one, not just a lone selection, so a
+                        // multi-select alt-drag previews the whole copy as
+                        // it moves instead of only appearing on release.
+                        if let (Some(transform), ObjectKind::Path(path)) = (
+                            selection_tool.duplicate_preview_transform(editor.document(), id),
+                            &object.kind,
+                        ) {
+                            let ghost_subpaths: Vec<Vec<Pos2>> = path
+                                .flattened_points(0.5)
+                                .into_iter()
+                                .map(|local_points| {
+                                    local_points
+                                        .into_iter()
+                                        .map(|point| {
+                                            let point = transform * point;
+                                            camera.document_to_screen(
+                                                Pos2::new(point.x as f32, point.y as f32),
+                                                available,
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .collect();
+                            if let Some(mesh) =
+                                fill_mesh::fill_mesh(&ghost_subpaths, Color32::from_gray(225))
+                            {
+                                painter.add(egui::Shape::mesh(mesh));
+                            }
+                            let ghost_stroke = Stroke::new(1.0_f32, Color32::from_gray(45));
+                            for points in &ghost_subpaths {
+                                if points.len() >= 2 {
+                                    painter.add(egui::Shape::closed_line(
+                                        points.clone(),
+                                        ghost_stroke,
+                                    ));
+                                }
+                            }
                         }
                     }
                 }
                 if let Some(marquee) = selection_tool.marquee_rect() {
+                    let rect = document_rect_to_screen(marquee, camera, available);
+                    painter.rect_filled(
+                        rect,
+                        0.0,
+                        Color32::from_rgba_unmultiplied(90, 165, 255, 26),
+                    );
+                    painter.rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(1.0_f32, Color32::from_rgb(59, 155, 255)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
+                if let Some(marquee) = direct_selection_tool.marquee_rect() {
                     let rect = document_rect_to_screen(marquee, camera, available);
                     painter.rect_filled(
                         rect,
@@ -1332,22 +1918,30 @@ impl AmalithApp {
                 }
                 if let Some(preview) = ellipse_tool.preview_rect {
                     let path = PathData::ellipse(preview);
-                    for local_points in path.flattened_points(0.5) {
-                        let points = local_points
-                            .into_iter()
-                            .map(|point| {
-                                camera.document_to_screen(
-                                    Pos2::new(point.x as f32, point.y as f32),
-                                    available,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        if points.len() >= 3 {
-                            painter.add(egui::Shape::convex_polygon(
-                                points,
-                                Color32::from_white_alpha(80),
-                                Stroke::new(1.0_f32, Color32::from_gray(35)),
-                            ));
+                    let preview_subpaths: Vec<Vec<Pos2>> = path
+                        .flattened_points(0.5)
+                        .into_iter()
+                        .map(|local_points| {
+                            local_points
+                                .into_iter()
+                                .map(|point| {
+                                    camera.document_to_screen(
+                                        Pos2::new(point.x as f32, point.y as f32),
+                                        available,
+                                    )
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    if let Some(mesh) =
+                        fill_mesh::fill_mesh(&preview_subpaths, Color32::from_white_alpha(80))
+                    {
+                        painter.add(egui::Shape::mesh(mesh));
+                    }
+                    let preview_stroke = Stroke::new(1.0_f32, Color32::from_gray(35));
+                    for points in &preview_subpaths {
+                        if points.len() >= 2 {
+                            painter.add(egui::Shape::closed_line(points.clone(), preview_stroke));
                         }
                     }
                 }
@@ -1386,78 +1980,284 @@ impl AmalithApp {
 
     fn tools_bar_ui(
         ctx: &egui::Context,
-        editor: &Editor,
+        editor: &mut Editor,
         artboard_tool: &mut ArtboardTool,
         rectangle_tool: &mut RectangleTool,
         ellipse_tool: &mut EllipseTool,
         selection_tool: &mut SelectionTool,
+        direct_selection_tool: &mut DirectSelectionTool,
+        fill_stroke_panel: &mut FillStrokePanelState,
+        error: &mut Option<String>,
     ) {
         let first_artboard = editor.document().artboards().first().map(|board| board.id);
+        // Two tool columns, Illustrator-style, rather than one — the panel
+        // width below is sized for exactly that (2 * 32px buttons + the
+        // gaps/margins around them), not just "wide enough for whatever's
+        // in it today".
         egui::SidePanel::left("tools_bar")
-            .exact_width(46.0)
+            .exact_width(76.0)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
             .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(8.0);
-                    let button =
-                        |ui: &mut egui::Ui, label: &str, tooltip: &str, active: bool| -> bool {
-                            ui.add_sized(
-                                [34.0, 34.0],
-                                egui::Button::new(label)
-                                    .fill(if active {
-                                        Color32::from_rgb(68, 100, 132)
-                                    } else {
-                                        Color32::TRANSPARENT
-                                    })
-                                    .frame(false),
-                            )
-                            .on_hover_text(tooltip)
-                            .clicked()
-                        };
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(8.0);
+                            let button = |ui: &mut egui::Ui,
+                                          label: &str,
+                                          tooltip: &str,
+                                          active: bool|
+                             -> bool {
+                                ui.add_sized(
+                                    [32.0, 32.0],
+                                    egui::Button::new(label)
+                                        .fill(if active {
+                                            Color32::from_rgb(68, 100, 132)
+                                        } else {
+                                            Color32::TRANSPARENT
+                                        })
+                                        .frame(false),
+                                )
+                                .on_hover_text(tooltip)
+                                .clicked()
+                            };
 
-                    if button(ui, "V", "Selection (V)", selection_tool.active) {
-                        activate_tool(
-                            ToolKind::Selection,
-                            artboard_tool,
-                            rectangle_tool,
-                            ellipse_tool,
-                            selection_tool,
-                            first_artboard,
-                        );
-                    }
-                    if button(ui, "M", "Rectangle (M)", rectangle_tool.active) {
-                        activate_tool(
-                            ToolKind::Rectangle,
-                            artboard_tool,
-                            rectangle_tool,
-                            ellipse_tool,
-                            selection_tool,
-                            first_artboard,
-                        );
-                    }
-                    if button(ui, "L", "Ellipse (L)", ellipse_tool.active) {
-                        activate_tool(
-                            ToolKind::Ellipse,
-                            artboard_tool,
-                            rectangle_tool,
-                            ellipse_tool,
-                            selection_tool,
-                            first_artboard,
-                        );
-                    }
-                    if button(ui, "Art", "Artboard (Shift+O)", artboard_tool.active) {
-                        activate_tool(
-                            ToolKind::Artboard,
-                            artboard_tool,
-                            rectangle_tool,
-                            ellipse_tool,
-                            selection_tool,
-                            first_artboard,
-                        );
-                    }
-                });
+                            egui::Grid::new("tool_grid")
+                                .num_columns(2)
+                                .min_col_width(32.0)
+                                .spacing([4.0, 4.0])
+                                .show(ui, |ui| {
+                                    if button(ui, "V", "Selection (V)", selection_tool.active) {
+                                        activate_tool(
+                                            ToolKind::Selection,
+                                            artboard_tool,
+                                            rectangle_tool,
+                                            ellipse_tool,
+                                            selection_tool,
+                                            direct_selection_tool,
+                                            first_artboard,
+                                        );
+                                    }
+                                    if button(
+                                        ui,
+                                        "A",
+                                        "Direct Selection (A)",
+                                        direct_selection_tool.active,
+                                    ) {
+                                        activate_tool(
+                                            ToolKind::DirectSelection,
+                                            artboard_tool,
+                                            rectangle_tool,
+                                            ellipse_tool,
+                                            selection_tool,
+                                            direct_selection_tool,
+                                            first_artboard,
+                                        );
+                                    }
+                                    ui.end_row();
+                                    if button(ui, "M", "Rectangle (M)", rectangle_tool.active) {
+                                        activate_tool(
+                                            ToolKind::Rectangle,
+                                            artboard_tool,
+                                            rectangle_tool,
+                                            ellipse_tool,
+                                            selection_tool,
+                                            direct_selection_tool,
+                                            first_artboard,
+                                        );
+                                    }
+                                    if button(ui, "L", "Ellipse (L)", ellipse_tool.active) {
+                                        activate_tool(
+                                            ToolKind::Ellipse,
+                                            artboard_tool,
+                                            rectangle_tool,
+                                            ellipse_tool,
+                                            selection_tool,
+                                            direct_selection_tool,
+                                            first_artboard,
+                                        );
+                                    }
+                                    ui.end_row();
+                                    if button(ui, "Art", "Artboard (Shift+O)", artboard_tool.active)
+                                    {
+                                        activate_tool(
+                                            ToolKind::Artboard,
+                                            artboard_tool,
+                                            rectangle_tool,
+                                            ellipse_tool,
+                                            selection_tool,
+                                            direct_selection_tool,
+                                            first_artboard,
+                                        );
+                                    }
+                                    ui.end_row();
+                                });
+                            ui.add_space(14.0);
+                            Self::fill_stroke_widget_ui(
+                                ui,
+                                editor,
+                                selection_tool,
+                                fill_stroke_panel,
+                                error,
+                            );
+                        });
+                    });
             });
+    }
+
+    /// Illustrator's fill/stroke swatch widget: two overlapping color
+    /// squares (fill in front, stroke behind), a swap button, a
+    /// reset-to-default button, and quick-pick presets (black / white /
+    /// none). Reflects (and edits) the fill/stroke of the *first* selected
+    /// object in paint order when the selection is non-uniform — same
+    /// simplification `Command::SetFill`/`SetStroke` already make by
+    /// applying one paint to every selected object at once. With nothing
+    /// selected, it shows the appearance new objects get but can't edit
+    /// anything (there's nothing to apply a change to).
+    fn fill_stroke_widget_ui(
+        ui: &mut egui::Ui,
+        editor: &mut Editor,
+        selection_tool: &mut SelectionTool,
+        state: &mut FillStrokePanelState,
+        error: &mut Option<String>,
+    ) {
+        let representative = selection_tool
+            .selected_in_paint_order(editor.document())
+            .first()
+            .and_then(|&id| editor.document().object(id))
+            .map(|object| object.appearance)
+            .unwrap_or_default();
+        let has_selection = !selection_tool.selected.is_empty();
+
+        let apply = |editor: &mut Editor,
+                     error: &mut Option<String>,
+                     slot: PaintSlot,
+                     paint: amalith_core::Paint| {
+            let objects: Vec<_> = selection_tool.selected.iter().copied().collect();
+            let command = match slot {
+                PaintSlot::Fill => Command::SetFill { objects, paint },
+                PaintSlot::Stroke => Command::SetStroke { objects, paint },
+            };
+            if let Err(err) = editor.execute(command) {
+                *error = Some(err.to_string());
+            }
+        };
+
+        let swatch_size = 24.0;
+        let offset = 10.0;
+        let (rect, _response) = ui.allocate_exact_size(
+            Vec2::new(swatch_size + offset, swatch_size + offset),
+            egui::Sense::hover(),
+        );
+        let stroke_rect = EguiRect::from_min_size(
+            rect.min + Vec2::new(offset, offset),
+            Vec2::splat(swatch_size),
+        );
+        let fill_rect = EguiRect::from_min_size(rect.min, Vec2::splat(swatch_size));
+
+        // Stroke first so the fill square (drawn on top) is the one that
+        // visually reads as "in front", matching the reference widget.
+        paint_swatch(ui.painter(), stroke_rect, representative.stroke.color());
+        paint_swatch(ui.painter(), fill_rect, representative.fill.color());
+        let stroke_response = ui.interact(
+            stroke_rect,
+            ui.id().with("stroke_swatch"),
+            egui::Sense::click(),
+        );
+        let fill_response =
+            ui.interact(fill_rect, ui.id().with("fill_swatch"), egui::Sense::click());
+
+        if fill_response.clicked() && has_selection {
+            state.open = Some((PaintSlot::Fill, hsva_from_paint(representative.fill)));
+        }
+        if stroke_response.clicked() && has_selection {
+            state.open = Some((PaintSlot::Stroke, hsva_from_paint(representative.stroke)));
+        }
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            // Swap fill and stroke on the current selection.
+            if ui
+                .add(egui::Button::new("\u{21C4}").small().frame(false))
+                .on_hover_text("Swap fill and stroke")
+                .clicked()
+                && has_selection
+            {
+                apply(editor, error, PaintSlot::Fill, representative.stroke);
+                apply(editor, error, PaintSlot::Stroke, representative.fill);
+            }
+            // Reset to the default appearance (light fill, dark stroke).
+            if ui
+                .add(egui::Button::new("\u{21BA}").small().frame(false))
+                .on_hover_text("Default fill and stroke")
+                .clicked()
+                && has_selection
+            {
+                let default = amalith_core::Appearance::default();
+                apply(editor, error, PaintSlot::Fill, default.fill);
+                apply(editor, error, PaintSlot::Stroke, default.stroke);
+            }
+        });
+
+        // Quick-pick presets: black fill, white fill, no fill.
+        ui.horizontal(|ui| {
+            for (color, tooltip) in [
+                (Some(amalith_core::Color::rgb(0.0, 0.0, 0.0)), "Black fill"),
+                (Some(amalith_core::Color::rgb(1.0, 1.0, 1.0)), "White fill"),
+                (None, "No fill"),
+            ] {
+                let (preset_rect, response) =
+                    ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::click());
+                paint_swatch(ui.painter(), preset_rect, color);
+                if response.on_hover_text(tooltip).clicked() && has_selection {
+                    let paint = match color {
+                        Some(color) => amalith_core::Paint::Solid(color),
+                        None => amalith_core::Paint::None,
+                    };
+                    apply(editor, error, PaintSlot::Fill, paint);
+                }
+            }
+        });
+
+        if let Some((slot, mut working)) = state.open {
+            let mut still_open = true;
+            let mut action = ColorPickerAction::None;
+            egui::Window::new("Color Picker")
+                .id(egui::Id::new("fill_stroke_picker"))
+                .resizable(false)
+                .collapsible(false)
+                .open(&mut still_open)
+                .show(ui.ctx(), |ui| {
+                    action = color_picker_dialog_ui(ui, &mut working);
+                });
+            match action {
+                ColorPickerAction::None => {}
+                ColorPickerAction::Ok => {
+                    if has_selection {
+                        apply(
+                            editor,
+                            error,
+                            slot,
+                            amalith_core::Paint::Solid(color_from_color32(working.into())),
+                        );
+                    }
+                    still_open = false;
+                }
+                ColorPickerAction::Cancel => still_open = false,
+                ColorPickerAction::SetNone => {
+                    if has_selection {
+                        apply(editor, error, slot, amalith_core::Paint::None);
+                    }
+                    still_open = false;
+                }
+            }
+            state.open = if still_open {
+                Some((slot, working))
+            } else {
+                None
+            };
+        }
     }
 
     fn artboards_panel_body(
@@ -1583,71 +2383,87 @@ impl AmalithApp {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for layer in &layers {
                     let layer_selected = state.selected_layer == Some(layer.id);
-                    let layer_response = egui::Frame::NONE
-                        .fill(if layer_selected {
-                            Color32::from_rgb(62, 82, 103)
-                        } else {
-                            Color32::TRANSPARENT
-                        })
+                    let renaming_layer =
+                        state.renaming == Some(LayersRenameTarget::Layer(layer.id));
+                    egui::Frame::NONE
+                        .fill(Color32::TRANSPARENT)
                         .inner_margin(egui::Margin::symmetric(10, 5))
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&layer.name)
-                                        .strong()
-                                        .color(Color32::from_gray(225)),
-                                )
-                                .sense(egui::Sense::click()),
-                            )
-                        })
-                        .inner;
-                    if layer_response.clicked() {
-                        state.selected_layer = Some(layer.id);
-                    }
+                            ui.horizontal(|ui| {
+                                let content_width = (ui.available_width() - 20.0).max(0.0);
+                                if renaming_layer {
+                                    let response = ui.add_sized(
+                                        [content_width, 20.0],
+                                        egui::TextEdit::singleline(&mut state.rename_text)
+                                            .id_salt(("layer_rename", layer.id)),
+                                    );
+                                    if state.focus_rename {
+                                        response.request_focus();
+                                        state.focus_rename = false;
+                                    }
+                                    let enter = response.has_focus()
+                                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                                    if enter || response.lost_focus() {
+                                        let name = state.rename_text.trim();
+                                        if !name.is_empty() && name != layer.name {
+                                            if let Err(err) = editor.execute(Command::RenameLayer {
+                                                id: layer.id,
+                                                name: name.to_owned(),
+                                            }) {
+                                                *error = Some(err.to_string());
+                                            }
+                                        }
+                                        state.renaming = None;
+                                    }
+                                } else {
+                                    let response = ui.add_sized(
+                                        [content_width, 20.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(&layer.name)
+                                                .strong()
+                                                .color(Color32::from_gray(225)),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if response.double_clicked() {
+                                        state.renaming = Some(LayersRenameTarget::Layer(layer.id));
+                                        state.rename_text = layer.name.clone();
+                                        state.focus_rename = true;
+                                    }
+                                    if response.clicked() {
+                                        state.selected_layer = Some(layer.id);
+                                    }
+                                }
+
+                                // The active layer's indicator: a small
+                                // filled square at the row's right edge,
+                                // instead of highlighting the whole row.
+                                let (indicator_rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(10.0, 10.0),
+                                    egui::Sense::hover(),
+                                );
+                                if layer_selected {
+                                    ui.painter().rect_filled(
+                                        indicator_rect,
+                                        1.0,
+                                        Color32::from_rgb(66, 133, 244),
+                                    );
+                                }
+                            });
+                        });
 
                     for &id in layer.children.iter().rev() {
-                        let Some(object) = editor.document().object(id) else {
-                            continue;
-                        };
-                        let selected = selection_tool.selected.contains(&id);
-                        let response = egui::Frame::NONE
-                            .fill(if selected {
-                                Color32::from_rgb(62, 82, 103)
-                            } else {
-                                Color32::TRANSPARENT
-                            })
-                            .inner_margin(egui::Margin {
-                                left: 28,
-                                right: 10,
-                                top: 4,
-                                bottom: 4,
-                            })
-                            .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(
-                                            object.name.as_deref().unwrap_or("Object"),
-                                        )
-                                        .color(Color32::from_gray(210)),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                )
-                            })
-                            .inner;
-                        if response.clicked() {
-                            let add = ui.input(|input| input.modifiers.shift);
-                            if add {
-                                if !selection_tool.selected.insert(id) {
-                                    selection_tool.selected.remove(&id);
-                                }
-                            } else {
-                                selection_tool.selected.clear();
-                                selection_tool.selected.insert(id);
-                            }
-                            state.selected_layer = Some(layer.id);
-                        }
+                        Self::object_row_ui(
+                            ui,
+                            editor,
+                            selection_tool,
+                            state,
+                            error,
+                            layer.id,
+                            id,
+                            1,
+                        );
                     }
                 }
             });
@@ -1681,6 +2497,138 @@ impl AmalithApp {
                 }
             }
         });
+    }
+
+    /// One row in the Layers panel tree: a plain object, or a group with
+    /// an expand/collapse arrow that recurses into its own children
+    /// (indented one level further) when expanded. Both plain objects and
+    /// groups share the same click-to-select / double-click-to-rename
+    /// behavior as the top-level layer row above.
+    fn object_row_ui(
+        ui: &mut egui::Ui,
+        editor: &mut Editor,
+        selection_tool: &mut SelectionTool,
+        state: &mut LayersPanelState,
+        error: &mut Option<String>,
+        layer_id: LayerId,
+        id: ObjectId,
+        depth: u8,
+    ) {
+        let Some(object) = editor.document().object(id) else {
+            return;
+        };
+        let name = object.name.clone();
+        let children: Vec<ObjectId> = match &object.kind {
+            ObjectKind::Group(group) => group.children.clone(),
+            _ => Vec::new(),
+        };
+        let is_group = matches!(object.kind, ObjectKind::Group(_));
+        let selected = selection_tool.selected.contains(&id);
+        let renaming = state.renaming == Some(LayersRenameTarget::Object(id));
+
+        egui::Frame::NONE
+            .fill(if selected {
+                Color32::from_rgb(62, 82, 103)
+            } else {
+                Color32::TRANSPARENT
+            })
+            .inner_margin(egui::Margin {
+                left: (depth as i8).saturating_mul(16).saturating_add(12),
+                right: 10,
+                top: 4,
+                bottom: 4,
+            })
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    if !children.is_empty() {
+                        let collapsed = state.collapsed_groups.contains(&id);
+                        let arrow = if collapsed { "\u{25B8}" } else { "\u{25BE}" };
+                        let arrow_response = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(arrow).color(Color32::from_gray(160)),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if arrow_response.clicked() {
+                            if collapsed {
+                                state.collapsed_groups.remove(&id);
+                            } else {
+                                state.collapsed_groups.insert(id);
+                            }
+                        }
+                    } else {
+                        ui.add_space(14.0);
+                    }
+
+                    if renaming {
+                        let response = ui.add_sized(
+                            [ui.available_width(), 20.0],
+                            egui::TextEdit::singleline(&mut state.rename_text)
+                                .id_salt(("object_rename", id)),
+                        );
+                        if state.focus_rename {
+                            response.request_focus();
+                            state.focus_rename = false;
+                        }
+                        let enter = response.has_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                        if enter || response.lost_focus() {
+                            let trimmed = state.rename_text.trim();
+                            let new_name = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+                            if new_name != name {
+                                if let Err(err) =
+                                    editor.execute(Command::RenameObject { id, name: new_name })
+                                {
+                                    *error = Some(err.to_string());
+                                }
+                            }
+                            state.renaming = None;
+                        }
+                    } else {
+                        let fallback = if is_group { "Group" } else { "Object" };
+                        let response = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(name.as_deref().unwrap_or(fallback))
+                                    .color(Color32::from_gray(210)),
+                            )
+                            .sense(egui::Sense::click()),
+                        );
+                        if response.double_clicked() {
+                            state.renaming = Some(LayersRenameTarget::Object(id));
+                            state.rename_text = name.clone().unwrap_or_default();
+                            state.focus_rename = true;
+                        }
+                        if response.clicked() {
+                            let add = ui.input(|input| input.modifiers.shift);
+                            if add {
+                                if !selection_tool.selected.insert(id) {
+                                    selection_tool.selected.remove(&id);
+                                }
+                            } else {
+                                selection_tool.selected.clear();
+                                selection_tool.selected.insert(id);
+                            }
+                            state.selected_layer = Some(layer_id);
+                        }
+                    }
+                });
+            });
+
+        if is_group && !children.is_empty() && !state.collapsed_groups.contains(&id) {
+            for &child_id in children.iter().rev() {
+                Self::object_row_ui(
+                    ui,
+                    editor,
+                    selection_tool,
+                    state,
+                    error,
+                    layer_id,
+                    child_id,
+                    depth + 1,
+                );
+            }
+        }
     }
 
     fn panels_ui(
@@ -1962,6 +2910,34 @@ impl AmalithApp {
 
 impl eframe::App for AmalithApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        self.process_native_menu_events();
+        // File commands belong to the document workspace; never let a
+        // focused New Document/editor field consume them.
+        let shortcuts_enabled = self.creating.is_none() && !ctx.wants_keyboard_input();
+        let save_as_pressed = shortcuts_enabled
+            && ctx.input_mut(|input| {
+                input.count_and_consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::S,
+                ) > 0
+            });
+        let save_pressed = shortcuts_enabled
+            && !save_as_pressed
+            && ctx.input_mut(|input| {
+                input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::S) > 0
+            });
+        let open_pressed = shortcuts_enabled
+            && ctx.input_mut(|input| {
+                input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::O) > 0
+            });
+        if save_as_pressed {
+            self.save_active_document(true);
+        } else if save_pressed {
+            self.save_active_document(false);
+        } else if open_pressed {
+            self.open_document_from_disk();
+        }
         let new_pressed = ctx.input_mut(|input| {
             input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::N) > 0
         });
@@ -1993,8 +2969,317 @@ impl eframe::App for AmalithApp {
             }
         } else {
             self.workspace_ui(ctx);
+            Self::error_toast_ui(ctx, &mut self.error);
         }
     }
+}
+
+/// Paints one fill/stroke swatch at `rect`: a solid square for `Some`, or a
+/// white square with a diagonal red slash for `None` (Illustrator's "no
+/// paint" glyph) — then allocates that rect as a clickable widget.
+fn paint_swatch(painter: &egui::Painter, rect: EguiRect, color: Option<amalith_core::Color>) {
+    match color {
+        Some(color) => {
+            painter.rect_filled(rect, 2.0, color32_from(color));
+        }
+        None => {
+            painter.rect_filled(rect, 2.0, Color32::WHITE);
+            painter.line_segment(
+                [rect.left_top(), rect.right_bottom()],
+                Stroke::new(1.5_f32, Color32::from_rgb(214, 48, 48)),
+            );
+        }
+    }
+    painter.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0_f32, Color32::from_gray(90)),
+        egui::StrokeKind::Outside,
+    );
+}
+
+fn color32_from(color: amalith_core::Color) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+fn color_from_color32(color: Color32) -> amalith_core::Color {
+    amalith_core::Color::rgba(
+        color.r() as f32 / 255.0,
+        color.g() as f32 / 255.0,
+        color.b() as f32 / 255.0,
+        color.a() as f32 / 255.0,
+    )
+}
+
+fn hsva_from_paint(paint: amalith_core::Paint) -> egui::ecolor::Hsva {
+    let color32 = paint.color().map(color32_from).unwrap_or(Color32::WHITE);
+    egui::ecolor::Hsva::from(color32)
+}
+
+/// What the standalone Color Picker dialog (`color_picker_dialog_ui`) did
+/// this frame — `None` on every frame except the one where a button was
+/// actually clicked.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ColorPickerAction {
+    None,
+    Ok,
+    Cancel,
+    SetNone,
+}
+
+/// A from-scratch HSB color picker matching the classic macOS/Illustrator
+/// "Color Picker" dialog: a saturation/brightness square, a hue strip, a
+/// preview swatch, OK/Cancel/None buttons, and H/S/B, R/G/B, and hex
+/// fields, all kept in sync through `hsva` (the working color the caller
+/// owns — see `FillStrokePanelState::open`). Deliberately omits the
+/// original's eyedropper (needs OS-level screen color picking, which
+/// nothing here has access to), CMYK fields (Amalith's `Color` has no
+/// CMYK model to convert through), "Only Web Colors", and "Color
+/// Swatches" (would need real integration with the swatches panel) — pure
+/// decoration with nothing behind it isn't worth adding.
+fn color_picker_dialog_ui(ui: &mut egui::Ui, hsva: &mut egui::ecolor::Hsva) -> ColorPickerAction {
+    let mut action = ColorPickerAction::None;
+
+    ui.label("Select Color:");
+    ui.add_space(4.0);
+
+    ui.horizontal(|ui| {
+        sv_square_ui(ui, hsva, 160.0);
+        ui.add_space(6.0);
+        hue_strip_ui(ui, hsva, 160.0);
+        ui.add_space(12.0);
+
+        ui.vertical(|ui| {
+            let (preview_rect, _) =
+                ui.allocate_exact_size(Vec2::new(70.0, 70.0), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(preview_rect, 2.0, Color32::from(*hsva));
+            ui.painter().rect_stroke(
+                preview_rect,
+                2.0,
+                Stroke::new(1.0_f32, Color32::from_gray(90)),
+                egui::StrokeKind::Outside,
+            );
+            ui.add_space(8.0);
+            if ui.button("OK").clicked() {
+                action = ColorPickerAction::Ok;
+            }
+            if ui.button("Cancel").clicked() {
+                action = ColorPickerAction::Cancel;
+            }
+            if ui.button("None").clicked() {
+                action = ColorPickerAction::SetNone;
+            }
+        });
+    });
+
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(6.0);
+
+    let mut h_deg = hsva.h * 360.0;
+    let mut s_pct = hsva.s * 100.0;
+    let mut v_pct = hsva.v * 100.0;
+    ui.horizontal(|ui| {
+        ui.label("H:");
+        if ui
+            .add(
+                egui::DragValue::new(&mut h_deg)
+                    .range(0.0..=360.0)
+                    .suffix("\u{b0}"),
+            )
+            .changed()
+        {
+            hsva.h = (h_deg / 360.0).rem_euclid(1.0);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("S:");
+        if ui
+            .add(
+                egui::DragValue::new(&mut s_pct)
+                    .range(0.0..=100.0)
+                    .suffix("%"),
+            )
+            .changed()
+        {
+            hsva.s = (s_pct / 100.0).clamp(0.0, 1.0);
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label("B:");
+        if ui
+            .add(
+                egui::DragValue::new(&mut v_pct)
+                    .range(0.0..=100.0)
+                    .suffix("%"),
+            )
+            .changed()
+        {
+            hsva.v = (v_pct / 100.0).clamp(0.0, 1.0);
+        }
+    });
+
+    ui.add_space(6.0);
+
+    let color32 = Color32::from(*hsva);
+    let mut r = color32.r();
+    let mut g = color32.g();
+    let mut b = color32.b();
+    let mut rgb_changed = false;
+    ui.horizontal(|ui| {
+        ui.label("R:");
+        rgb_changed |= ui
+            .add(egui::DragValue::new(&mut r).range(0..=255))
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("G:");
+        rgb_changed |= ui
+            .add(egui::DragValue::new(&mut g).range(0..=255))
+            .changed();
+    });
+    ui.horizontal(|ui| {
+        ui.label("B:");
+        rgb_changed |= ui
+            .add(egui::DragValue::new(&mut b).range(0..=255))
+            .changed();
+    });
+    if rgb_changed {
+        *hsva = egui::ecolor::Hsva::from(Color32::from_rgb(r, g, b));
+    }
+
+    ui.add_space(6.0);
+
+    let mut hex = format!("{:02X}{:02X}{:02X}", color32.r(), color32.g(), color32.b());
+    ui.horizontal(|ui| {
+        ui.label("#");
+        if ui
+            .add(egui::TextEdit::singleline(&mut hex).desired_width(70.0))
+            .changed()
+        {
+            if let Some(parsed) = parse_hex6(&hex) {
+                *hsva = egui::ecolor::Hsva::from(parsed);
+            }
+        }
+    });
+
+    action
+}
+
+/// The saturation/brightness square: horizontal = saturation (0 at left),
+/// vertical = brightness (0 at bottom), at the picker's current hue.
+/// Painted as a grid of flat-filled cells rather than a single gradient
+/// mesh — simple, and `Hsva -> Color32` (via `egui::ecolor`) is already
+/// exact, so there's no interpolation error to worry about, just
+/// resolution (24 cells is smooth enough at this widget's size).
+fn sv_square_ui(ui: &mut egui::Ui, hsva: &mut egui::ecolor::Hsva, size: f32) {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::click_and_drag());
+    if let Some(pos) = response.interact_pointer_pos() {
+        hsva.s = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        hsva.v = (1.0 - (pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+    }
+
+    let painter = ui.painter();
+    const CELLS: i32 = 24;
+    let cell_w = rect.width() / CELLS as f32;
+    let cell_h = rect.height() / CELLS as f32;
+    for i in 0..CELLS {
+        for j in 0..CELLS {
+            let s = (i as f32 + 0.5) / CELLS as f32;
+            let v = 1.0 - (j as f32 + 0.5) / CELLS as f32;
+            let color = Color32::from(egui::ecolor::Hsva::new(hsva.h, s, v, 1.0));
+            let cell_rect = EguiRect::from_min_size(
+                rect.min + Vec2::new(i as f32 * cell_w, j as f32 * cell_h),
+                Vec2::new(cell_w + 0.5, cell_h + 0.5),
+            );
+            painter.rect_filled(cell_rect, 0.0, color);
+        }
+    }
+    painter.rect_stroke(
+        rect,
+        0.0,
+        Stroke::new(1.0_f32, Color32::from_gray(90)),
+        egui::StrokeKind::Outside,
+    );
+
+    let marker = rect.min + Vec2::new(hsva.s * rect.width(), (1.0 - hsva.v) * rect.height());
+    painter.circle_stroke(marker, 4.0, Stroke::new(1.5_f32, Color32::WHITE));
+    painter.circle_stroke(marker, 4.0, Stroke::new(1.0_f32, Color32::BLACK));
+}
+
+/// The vertical hue strip: a full rainbow, top (h=0) to bottom (h=1).
+fn hue_strip_ui(ui: &mut egui::Ui, hsva: &mut egui::ecolor::Hsva, height: f32) {
+    let width = 20.0;
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click_and_drag());
+    if let Some(pos) = response.interact_pointer_pos() {
+        hsva.h = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
+    }
+
+    let painter = ui.painter();
+    const CELLS: i32 = 48;
+    let cell_h = rect.height() / CELLS as f32;
+    for j in 0..CELLS {
+        let h = (j as f32 + 0.5) / CELLS as f32;
+        let color = Color32::from(egui::ecolor::Hsva::new(h, 1.0, 1.0, 1.0));
+        let cell_rect = EguiRect::from_min_size(
+            rect.min + Vec2::new(0.0, j as f32 * cell_h),
+            Vec2::new(rect.width(), cell_h + 0.5),
+        );
+        painter.rect_filled(cell_rect, 0.0, color);
+    }
+    painter.rect_stroke(
+        rect,
+        0.0,
+        Stroke::new(1.0_f32, Color32::from_gray(90)),
+        egui::StrokeKind::Outside,
+    );
+
+    let marker_y = rect.top() + hsva.h * rect.height();
+    painter.line_segment(
+        [
+            Pos2::new(rect.left() - 3.0, marker_y),
+            Pos2::new(rect.left(), marker_y),
+        ],
+        Stroke::new(2.0_f32, Color32::WHITE),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(rect.right(), marker_y),
+            Pos2::new(rect.right() + 3.0, marker_y),
+        ],
+        Stroke::new(2.0_f32, Color32::WHITE),
+    );
+}
+
+fn parse_hex6(hex: &str) -> Option<Color32> {
+    let hex = hex.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color32::from_rgb(r, g, b))
+}
+
+fn next_group_name(editor: &Editor) -> String {
+    let highest = editor
+        .document()
+        .objects()
+        .filter(|object| matches!(object.kind, ObjectKind::Group(_)))
+        .filter_map(|object| object.name.as_deref())
+        .filter_map(|name| name.strip_prefix("Group "))
+        .filter_map(|suffix| suffix.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("Group {}", highest + 1)
 }
 
 fn document_rect_to_screen(rect: Rect, camera: &Camera, viewport: EguiRect) -> EguiRect {
@@ -2302,6 +3587,29 @@ fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
 }
 
+/// Every `Path` object under `parent`, in paint order (bottom to top),
+/// with any `Group` expanded in place rather than rendered itself — a
+/// group has no geometry of its own, only its descendants do, so the
+/// canvas render loop needs the fully flattened leaf list, not just a
+/// layer's direct children (which would silently skip everything inside
+/// a group, exactly the "grouped objects vanish" bug this fixes).
+fn paint_order_paths(document: &Document, parent: ObjectParent) -> Vec<ObjectId> {
+    let mut ids = Vec::new();
+    for &id in document.children_of(parent) {
+        let Some(object) = document.object(id) else {
+            continue;
+        };
+        match &object.kind {
+            ObjectKind::Group(_) => {
+                ids.extend(paint_order_paths(document, ObjectParent::Group(id)));
+            }
+            ObjectKind::Path(_) => ids.push(id),
+            _ => {}
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod canvas_input_tests {
     use super::*;
@@ -2319,6 +3627,7 @@ mod canvas_input_tests {
         let mut rectangle = RectangleTool::default();
         let mut ellipse = EllipseTool::default();
         let mut selection = SelectionTool::default();
+        let mut direct_selection = DirectSelectionTool::default();
 
         activate_tool(
             ToolKind::Rectangle,
@@ -2326,6 +3635,7 @@ mod canvas_input_tests {
             &mut rectangle,
             &mut ellipse,
             &mut selection,
+            &mut direct_selection,
             None,
         );
         assert!(rectangle.active);
@@ -2338,6 +3648,7 @@ mod canvas_input_tests {
             &mut rectangle,
             &mut ellipse,
             &mut selection,
+            &mut direct_selection,
             None,
         );
         assert!(artboard.active);
@@ -2422,11 +3733,14 @@ mod canvas_input_tests {
         camera.scale = 3.4377;
         let tab = DocumentTab {
             editor: Box::new(editor),
+            asset_store: amalith_io::AssetStore::new(),
+            file_path: None,
             camera,
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
+            direct_selection_tool: DirectSelectionTool::default(),
         };
 
         assert_eq!(tab_label(&tab, 3), "Untitled-3* @ 343.77 % (RGB/Preview)");
@@ -2438,11 +3752,14 @@ mod canvas_input_tests {
         document.metadata.title = None;
         let tab = DocumentTab {
             editor: Box::new(Editor::new(document)),
+            asset_store: amalith_io::AssetStore::new(),
+            file_path: None,
             camera: Camera::default(),
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
             selection_tool: SelectionTool::default(),
+            direct_selection_tool: DirectSelectionTool::default(),
         };
         assert_eq!(tab_label(&tab, 4), "Untitled-4 @ 100.00 % (CMYK/Preview)");
     }
@@ -2452,16 +3769,86 @@ mod canvas_input_tests {
         fn tab(title: &str) -> DocumentTab {
             DocumentTab {
                 editor: Box::new(Editor::new(Document::new(title))),
+                asset_store: amalith_io::AssetStore::new(),
+                file_path: None,
                 camera: Camera::default(),
                 artboard_tool: ArtboardTool::default(),
                 rectangle_tool: RectangleTool::default(),
                 ellipse_tool: EllipseTool::default(),
                 selection_tool: SelectionTool::default(),
+                direct_selection_tool: DirectSelectionTool::default(),
             }
         }
         assert_eq!(
             next_untitled_name(&[tab("Untitled-2"), tab("Logo")]),
             "Untitled-3"
         );
+    }
+
+    #[test]
+    fn paint_order_paths_expands_groups_instead_of_skipping_them() {
+        // Regression test: the canvas render loop used to iterate a
+        // layer's direct children only, so grouping an object (which
+        // reparents it under the new Group, off the layer) made it
+        // vanish from the canvas even though the Layers panel still
+        // showed it as grouped.
+        let document = Document::new("Untitled");
+        let mut editor = Editor::new(document);
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(ungrouped) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(20.0, 0.0, 30.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(40.0, 0.0, 50.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::Group {
+                ids: vec![a, b],
+                name: Some("Group 1".into()),
+            })
+            .unwrap();
+
+        let ids = paint_order_paths(editor.document(), ObjectParent::Layer(layer));
+
+        assert_eq!(ids.len(), 3, "the grouped objects must still be listed");
+        assert!(ids.contains(&ungrouped));
+        assert!(ids.contains(&a));
+        assert!(ids.contains(&b));
+        // The group replaced its members at their old stacking position
+        // (see Command::Group's docs), so paint order stays: ungrouped,
+        // then the group's own children in their relative order.
+        assert_eq!(ids, vec![ungrouped, a, b]);
     }
 }

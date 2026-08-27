@@ -7,6 +7,7 @@
 //! in sync. That sync problem is a large fraction of `SPObject`'s
 //! complexity in Inkscape; Amalith has no reason to take it on, since the
 //! native format is not "serialized DOM" (see `DESIGN.md`).
+use crate::appearance::Appearance;
 use crate::geom::{Affine, BezPath, PathEl, Rect};
 use crate::ids::{AssetId, LayerId, ObjectId};
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 /// exists so callers can answer "who owns this object" and "what is this
 /// object's world transform" in O(depth) instead of a full tree scan.
 /// Kept in sync exclusively by the raw mutation methods on [`crate::Document`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ObjectParent {
     Layer(LayerId),
     Group(ObjectId),
@@ -206,6 +207,11 @@ pub struct Object {
     pub locked: bool,
     pub parent: ObjectParent,
     pub kind: ObjectKind,
+    /// Fill and stroke. `#[serde(default)]` so a `.amalith` file saved
+    /// before this field existed still loads (with the default
+    /// appearance) instead of failing to parse.
+    #[serde(default)]
+    pub appearance: Appearance,
 }
 
 impl Object {
@@ -218,6 +224,7 @@ impl Object {
             locked: false,
             parent,
             kind,
+            appearance: Appearance::default(),
         }
     }
 

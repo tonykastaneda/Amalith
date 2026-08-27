@@ -300,6 +300,39 @@ impl Document {
             }
         }
     }
+
+    /// `id`'s own bounds in *its own* local space, ignoring `id`'s own
+    /// `transform` — the recursive, group-aware counterpart to
+    /// [`ObjectKind::own_local_bounds`], which stops at `Group` because a
+    /// group's own bounds can only be computed by looking at its children
+    /// (which `ObjectKind` alone can't reach; only a `Document` can).
+    ///
+    /// This is what `object_quad`/selection-handle code needs so a Group
+    /// gets an oriented bounding quad the same way a Path does, instead of
+    /// selection/move/scale/rotate silently no-oping on it — the two are
+    /// meant to satisfy `bounds_of(id) == world_transform(id).transform_rect_bbox(local_bounds_of(id))`
+    /// for every kind, the same relationship `bounds_of` already has with
+    /// [`ObjectKind::own_local_bounds`] for a non-group. For a group, each
+    /// child contributes `child.transform` (its own local-to-group-space
+    /// transform, not the child's full `world_transform`) applied to that
+    /// child's own `local_bounds_of`, recursing through nested subgroups.
+    /// `None` for an unknown id or no contributing geometry (e.g. an empty
+    /// group), same as `bounds_of`.
+    pub fn local_bounds_of(&self, id: ObjectId) -> Option<Rect> {
+        let object = self.objects.get(&id)?;
+        match &object.kind {
+            ObjectKind::Group(group) => group
+                .children
+                .iter()
+                .filter_map(|&child| {
+                    let child_object = self.objects.get(&child)?;
+                    let child_local = self.local_bounds_of(child)?;
+                    Some(child_object.transform.transform_rect_bbox(child_local))
+                })
+                .reduce(|a, b| a.union(b)),
+            _ => object.kind.own_local_bounds(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +426,17 @@ mod tests {
 
         let bounds = doc.bounds_of(group_id).unwrap();
         assert_eq!(bounds, Rect::new(10.0, 5.0, 20.0, 15.0));
+
+        // `local_bounds_of` is `bounds_of` one level short: it folds in
+        // the rect's own transform (relative to the group) but not the
+        // group's own transform — so it must equal `bounds_of(group_id)`
+        // translated back by the group's own (x+10) offset.
+        let local = doc.local_bounds_of(group_id).unwrap();
+        assert_eq!(local, Rect::new(0.0, 5.0, 10.0, 15.0));
+        assert_eq!(
+            doc.world_transform(group_id).transform_rect_bbox(local),
+            bounds
+        );
     }
 
     // Small helper to avoid importing kurbo::Point directly in the test above.

@@ -16,7 +16,8 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId, ObjectParent,
+    geom::BezPath, Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId,
+    ObjectKind, ObjectParent, Paint,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,6 +44,10 @@ pub(crate) enum Edit {
     RemoveLayer {
         id: LayerId,
     },
+    RenameLayer {
+        id: LayerId,
+        name: String,
+    },
     InsertObject {
         object: Box<Object>,
         index: usize,
@@ -50,13 +55,29 @@ pub(crate) enum Edit {
     RemoveObject {
         id: ObjectId,
     },
+    RenameObject {
+        id: ObjectId,
+        name: Option<String>,
+    },
     SetTransform {
         id: ObjectId,
         transform: Affine,
     },
+    SetPathGeometry {
+        id: ObjectId,
+        geometry: BezPath,
+    },
     SetChildOrder {
         parent: ObjectParent,
         order: Vec<ObjectId>,
+    },
+    SetFill {
+        id: ObjectId,
+        paint: Paint,
+    },
+    SetStroke {
+        id: ObjectId,
+        paint: Paint,
     },
 }
 
@@ -100,6 +121,11 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or(CommandError::LayerNotFound(id))?;
             Ok((Edit::InsertLayer { layer, index }, None))
         }
+        Edit::RenameLayer { id, name } => {
+            let layer = doc.layer_mut(id).ok_or(CommandError::LayerNotFound(id))?;
+            let old_name = std::mem::replace(&mut layer.name, name);
+            Ok((Edit::RenameLayer { id, name: old_name }, None))
+        }
         Edit::InsertObject { object, index } => {
             let id = object.id;
             doc.insert_object(*object, index)?;
@@ -117,6 +143,11 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 None,
             ))
         }
+        Edit::RenameObject { id, name } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_name = std::mem::replace(&mut object.name, name);
+            Ok((Edit::RenameObject { id, name: old_name }, None))
+        }
         Edit::SetTransform { id, transform } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
             let old_transform = std::mem::replace(&mut object.transform, transform);
@@ -124,6 +155,20 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 Edit::SetTransform {
                     id,
                     transform: old_transform,
+                },
+                None,
+            ))
+        }
+        Edit::SetPathGeometry { id, geometry } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let ObjectKind::Path(path) = &mut object.kind else {
+                return Err(CommandError::NotAPath(id));
+            };
+            let old_geometry = std::mem::replace(&mut path.geometry, geometry);
+            Ok((
+                Edit::SetPathGeometry {
+                    id,
+                    geometry: old_geometry,
                 },
                 None,
             ))
@@ -139,6 +184,28 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 Edit::SetChildOrder {
                     parent,
                     order: old_order,
+                },
+                None,
+            ))
+        }
+        Edit::SetFill { id, paint } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_paint = std::mem::replace(&mut object.appearance.fill, paint);
+            Ok((
+                Edit::SetFill {
+                    id,
+                    paint: old_paint,
+                },
+                None,
+            ))
+        }
+        Edit::SetStroke { id, paint } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_paint = std::mem::replace(&mut object.appearance.stroke, paint);
+            Ok((
+                Edit::SetStroke {
+                    id,
+                    paint: old_paint,
                 },
                 None,
             ))
