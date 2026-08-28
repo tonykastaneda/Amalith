@@ -19,15 +19,20 @@ impl Paint {
     }
 }
 
-/// An object's fill and stroke. `stroke_width` exists so a stroke has a
-/// visible size the moment it's turned on, but isn't user-adjustable yet —
-/// every object gets [`Appearance::DEFAULT_STROKE_WIDTH`], full stop; a
-/// dedicated stroke-weight control is future work.
+/// An object's fill, stroke, and compositing opacity.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Appearance {
     pub fill: Paint,
     pub stroke: Paint,
     pub stroke_width: f64,
+    /// Per-object compositing multiplier applied after each paint's own
+    /// alpha. Defaults when reading documents written before opacity existed.
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+}
+
+fn default_opacity() -> f32 {
+    1.0
 }
 
 impl Appearance {
@@ -44,6 +49,7 @@ impl Default for Appearance {
             fill: Paint::Solid(Color::rgb(0.87, 0.87, 0.87)),
             stroke: Paint::Solid(Color::rgb(0.18, 0.18, 0.18)),
             stroke_width: Self::DEFAULT_STROKE_WIDTH,
+            opacity: default_opacity(),
         }
     }
 }
@@ -60,10 +66,19 @@ mod tests {
             Some(Color::rgb(0.18, 0.18, 0.18))
         );
         assert_eq!(appearance.stroke_width, 10.0);
+        assert_eq!(appearance.opacity, 1.0);
     }
 
     #[test]
     fn none_paint_has_no_color() {
         assert_eq!(Paint::None.color(), None);
+    }
+
+    #[test]
+    fn old_serialized_appearance_defaults_opacity_to_one() {
+        let mut value = serde_json::to_value(Appearance::default()).unwrap();
+        value.as_object_mut().unwrap().remove("opacity");
+        let appearance: Appearance = serde_json::from_value(value).unwrap();
+        assert_eq!(appearance.opacity, 1.0);
     }
 }

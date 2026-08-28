@@ -25,6 +25,47 @@ pub fn bez_path_bounds(path: &BezPath) -> Rect {
     path.bounding_box()
 }
 
+/// A polyline approximation of every subpath in `path`, in `path`'s own
+/// coordinate space. A free function (not just [`PathData::flattened_
+/// points`](crate::object::PathData::flattened_points), which delegates
+/// here) so callers with a `BezPath` that didn't come from a `PathData` —
+/// e.g. a live edit preview, cloned and nudged but not yet committed —
+/// can flatten it the same way, without needing a whole `PathData` to
+/// wrap it in first.
+pub fn flattened_points(path: &BezPath, tolerance: f64) -> Vec<Vec<Point>> {
+    let mut paths: Vec<Vec<Point>> = Vec::new();
+    let mut current: Option<Vec<Point>> = None;
+    flatten(path, tolerance, |element| match element {
+        PathEl::MoveTo(point) => {
+            if let Some(points) = current.take() {
+                if points.len() >= 2 {
+                    paths.push(points);
+                }
+            }
+            current = Some(vec![point]);
+        }
+        PathEl::LineTo(point) => {
+            if let Some(points) = current.as_mut() {
+                points.push(point);
+            }
+        }
+        PathEl::ClosePath => {
+            if let Some(points) = current.take() {
+                if points.len() >= 2 {
+                    paths.push(points);
+                }
+            }
+        }
+        PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _) => {}
+    });
+    if let Some(points) = current {
+        if points.len() >= 2 {
+            paths.push(points);
+        }
+    }
+    paths
+}
+
 /// Returns the element indices that represent editable anchor points.
 ///
 /// A `MoveTo` is the first anchor of a subpath; `LineTo`, `QuadTo`, and

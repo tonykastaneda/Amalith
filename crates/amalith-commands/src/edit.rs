@@ -79,6 +79,14 @@ pub(crate) enum Edit {
         id: ObjectId,
         paint: Paint,
     },
+    SetStrokeWidth {
+        id: ObjectId,
+        width: f64,
+    },
+    SetOpacity {
+        id: ObjectId,
+        opacity: f32,
+    },
 }
 
 /// Applies `edit` to `doc`, returning its inverse (to file for undo/redo)
@@ -206,6 +214,28 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 Edit::SetStroke {
                     id,
                     paint: old_paint,
+                },
+                None,
+            ))
+        }
+        Edit::SetStrokeWidth { id, width } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_width = std::mem::replace(&mut object.appearance.stroke_width, width);
+            Ok((
+                Edit::SetStrokeWidth {
+                    id,
+                    width: old_width,
+                },
+                None,
+            ))
+        }
+        Edit::SetOpacity { id, opacity } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_opacity = std::mem::replace(&mut object.appearance.opacity, opacity);
+            Ok((
+                Edit::SetOpacity {
+                    id,
+                    opacity: old_opacity,
                 },
                 None,
             ))

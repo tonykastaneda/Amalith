@@ -8,7 +8,7 @@
 //! complexity in Inkscape; Amalith has no reason to take it on, since the
 //! native format is not "serialized DOM" (see `DESIGN.md`).
 use crate::appearance::Appearance;
-use crate::geom::{Affine, BezPath, PathEl, Rect};
+use crate::geom::{Affine, BezPath, Rect};
 use crate::ids::{AssetId, LayerId, ObjectId};
 use serde::{Deserialize, Serialize};
 
@@ -76,37 +76,7 @@ impl PathData {
 
     /// Returns a polyline approximation of every subpath in local space.
     pub fn flattened_points(&self, tolerance: f64) -> Vec<Vec<crate::geom::Point>> {
-        let mut paths: Vec<Vec<crate::geom::Point>> = Vec::new();
-        let mut current: Option<Vec<crate::geom::Point>> = None;
-        crate::geom::flatten(&self.geometry, tolerance, |element| match element {
-            PathEl::MoveTo(point) => {
-                if let Some(points) = current.take() {
-                    if points.len() >= 2 {
-                        paths.push(points);
-                    }
-                }
-                current = Some(vec![point]);
-            }
-            PathEl::LineTo(point) => {
-                if let Some(points) = current.as_mut() {
-                    points.push(point);
-                }
-            }
-            PathEl::ClosePath => {
-                if let Some(points) = current.take() {
-                    if points.len() >= 2 {
-                        paths.push(points);
-                    }
-                }
-            }
-            PathEl::QuadTo(_, _) | PathEl::CurveTo(_, _, _) => {}
-        });
-        if let Some(points) = current {
-            if points.len() >= 2 {
-                paths.push(points);
-            }
-        }
-        paths
+        crate::geom::flattened_points(&self.geometry, tolerance)
     }
 }
 

@@ -1929,4 +1929,85 @@ mod tests {
             Paint::None
         );
     }
+
+    #[test]
+    fn set_stroke_width_and_opacity_apply_to_every_object_and_undo_redo() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let create = |editor: &mut Editor| match editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        {
+            CommandOutcome::Object(id) => id,
+            _ => panic!(),
+        };
+        let a = create(&mut editor);
+        let b = create(&mut editor);
+        let original_width = editor.document().object(a).unwrap().appearance.stroke_width;
+        let original_opacity = editor.document().object(a).unwrap().appearance.opacity;
+
+        editor
+            .execute(Command::SetStrokeWidth {
+                objects: vec![a, b],
+                width: 3.5,
+            })
+            .unwrap();
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.stroke_width,
+            3.5
+        );
+        assert_eq!(
+            editor.document().object(b).unwrap().appearance.stroke_width,
+            3.5
+        );
+
+        editor
+            .execute(Command::SetOpacity {
+                objects: vec![a, b],
+                opacity: 0.35,
+            })
+            .unwrap();
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.opacity,
+            0.35
+        );
+        assert_eq!(
+            editor.document().object(b).unwrap().appearance.opacity,
+            0.35
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.opacity,
+            original_opacity
+        );
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.stroke_width,
+            original_width
+        );
+
+        editor.redo().unwrap();
+        editor.redo().unwrap();
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.stroke_width,
+            3.5
+        );
+        assert_eq!(
+            editor.document().object(a).unwrap().appearance.opacity,
+            0.35
+        );
+    }
 }

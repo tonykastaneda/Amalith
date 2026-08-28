@@ -630,6 +630,14 @@ impl Editor {
                 .into_iter()
                 .map(|id| Edit::SetStroke { id, paint })
                 .collect(),
+            Command::SetStrokeWidth { objects, width } => objects
+                .into_iter()
+                .map(|id| Edit::SetStrokeWidth { id, width })
+                .collect(),
+            Command::SetOpacity { objects, opacity } => objects
+                .into_iter()
+                .map(|id| Edit::SetOpacity { id, opacity })
+                .collect(),
             Command::Paste { .. } => {
                 unreachable!("Editor::execute intercepts Command::Paste before calling compile")
             }

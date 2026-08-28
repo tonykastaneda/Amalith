@@ -1,5 +1,8 @@
 use amalith_commands::{Command, CommandError, Editor};
-use amalith_core::{geom, Affine, Document, ObjectId, ObjectKind, ObjectParent, Point, Rect, Vec2};
+use amalith_core::{
+    geom, geom::BezPath, Affine, Document, ObjectId, ObjectKind, ObjectParent, Point, Rect, Vec2,
+};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 enum Drag {
@@ -153,6 +156,40 @@ impl DirectSelectionTool {
             .or(Some(position))
     }
 
+    /// The geometry `id`'s path should actually render with right now —
+    /// `geometry` itself, live-deformed by whichever of its anchors are
+    /// selected and mid-drag, so the shape reacts in real time instead of
+    /// staying frozen until the drag commits (only the little anchor
+    /// marker used to move live; the fill/stroke didn't). Mirrors
+    /// `Command::MoveAnchors`'s compile step exactly — one shared delta
+    /// applied to every selected anchor on this object — just computed
+    /// for display instead of for the command engine. Borrows `geometry`
+    /// unchanged (no clone) whenever there's nothing to preview, which is
+    /// every path on every frame except the one actually being dragged.
+    pub(crate) fn preview_geometry<'a>(
+        &self,
+        id: ObjectId,
+        geometry: &'a BezPath,
+    ) -> Cow<'a, BezPath> {
+        if !matches!(self.drag, Some(Drag::Move { .. })) || self.preview_delta == Vec2::ZERO {
+            return Cow::Borrowed(geometry);
+        }
+        let indices: Vec<usize> = self
+            .selected
+            .iter()
+            .filter(|&&(object_id, _)| object_id == id)
+            .map(|&(_, index)| index)
+            .collect();
+        if indices.is_empty() {
+            return Cow::Borrowed(geometry);
+        }
+        let mut preview = geometry.clone();
+        for index in indices {
+            geom::translate_anchor(&mut preview, index, self.preview_delta);
+        }
+        Cow::Owned(preview)
+    }
+
     pub(crate) fn retain_existing(&mut self, document: &Document) {
         self.selected.retain(|&(id, index)| {
             document.object(id).is_some_and(|object| {
@@ -207,4 +244,87 @@ pub(crate) fn topmost_anchor_at(
 
 fn normalized_rect(a: Point, b: Point) -> Rect {
     Rect::new(a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use amalith_commands::{Command, CommandOutcome};
+    use amalith_core::{Document, ObjectKind};
+
+    fn editor_with_rect() -> (Editor, ObjectId) {
+        let mut editor = Editor::new(Document::new("Test"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(object) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        (editor, object)
+    }
+
+    #[test]
+    fn preview_geometry_deforms_live_while_dragging_a_selected_anchor() {
+        // Regression test: only the little anchor marker used to move
+        // live during a node drag — the shape's actual fill/stroke kept
+        // rendering the committed geometry until the drag committed, so
+        // the shape looked frozen and then snapped instead of reacting
+        // in real time.
+        let (editor, object) = editor_with_rect();
+        let ObjectKind::Path(path) = &editor.document().object(object).unwrap().kind else {
+            unreachable!()
+        };
+        let committed = path.geometry.clone();
+
+        let mut tool = DirectSelectionTool::default();
+        let moved_index = geom::anchor_indices(&committed)[0];
+        tool.selected.insert((object, moved_index));
+        let delta = Vec2::new(3.0, -4.0);
+        // Set drag state directly rather than through `press`'s hit-test
+        // — this test is about `preview_geometry`'s math, not hit-testing.
+        tool.drag = Some(Drag::Move {
+            start: Point::new(0.0, 0.0),
+        });
+        tool.preview_delta = delta;
+
+        let preview = tool.preview_geometry(object, &committed);
+        assert_ne!(preview.as_ref(), &committed);
+
+        let original_anchor = geom::anchor_position(&committed, moved_index).unwrap();
+        let preview_anchor = geom::anchor_position(&preview, moved_index).unwrap();
+        assert_eq!(preview_anchor, original_anchor + delta);
+
+        // A different, unselected anchor on the same path must not move.
+        let other_index = geom::anchor_indices(&committed)[2];
+        assert_eq!(
+            geom::anchor_position(&preview, other_index),
+            geom::anchor_position(&committed, other_index)
+        );
+    }
+
+    #[test]
+    fn preview_geometry_borrows_unchanged_when_nothing_is_being_dragged() {
+        let (editor, object) = editor_with_rect();
+        let ObjectKind::Path(path) = &editor.document().object(object).unwrap().kind else {
+            unreachable!()
+        };
+        let geometry = path.geometry.clone();
+
+        let tool = DirectSelectionTool::default();
+        let preview = tool.preview_geometry(object, &geometry);
+        assert!(matches!(preview, Cow::Borrowed(_)));
+    }
 }

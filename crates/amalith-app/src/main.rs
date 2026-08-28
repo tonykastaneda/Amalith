@@ -52,6 +52,10 @@ struct AmalithApp {
 /// open. See `Self::fill_stroke_widget_ui`.
 #[derive(Default)]
 struct FillStrokePanelState {
+    /// The slot currently in front and controlled by the compact widget's
+    /// Color/Gradient/None buttons. This persists independently of whether
+    /// the full color picker is open.
+    active: PaintSlot,
     /// Which slot's picker is open, plus its *working* color — a copy the
     /// dialog edits freely and only commits to the document on OK
     /// (Cancel, or closing the window, discards it). Seeded from the
@@ -62,10 +66,16 @@ struct FillStrokePanelState {
     open: Option<(PaintSlot, egui::ecolor::Hsva)>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PaintSlot {
     Fill,
     Stroke,
+}
+
+impl Default for PaintSlot {
+    fn default() -> Self {
+        Self::Fill
+    }
 }
 
 struct DocumentTab {
@@ -905,6 +915,7 @@ impl AmalithApp {
             layers_panel,
             error,
         );
+        Self::options_bar_ui(ctx, editor, selection_tool, fill_stroke_panel, error);
         Self::tools_bar_ui(
             ctx,
             editor,
@@ -1702,13 +1713,15 @@ impl AmalithApp {
                                     .appearance
                                     .fill
                                     .color()
-                                    .map(color32_from)
+                                    .map(|color| {
+                                        color32_with_opacity(color, object.appearance.opacity)
+                                    })
                                     .unwrap_or(Color32::TRANSPARENT);
                                 let stroke = match object.appearance.stroke.color() {
                                     Some(color) => Stroke::new(
                                         (object.appearance.stroke_width * camera.scale as f64)
                                             as f32,
-                                        color32_from(color),
+                                        color32_with_opacity(color, object.appearance.opacity),
                                     ),
                                     None => Stroke::NONE,
                                 };
@@ -1716,22 +1729,28 @@ impl AmalithApp {
                                 // one nonzero-winding tessellation (so holes
                                 // and self-intersections render right); the
                                 // stroke stays a per-subpath closed polyline.
-                                let screen_subpaths: Vec<Vec<Pos2>> = path
-                                    .flattened_points(0.5)
-                                    .into_iter()
-                                    .map(|local_points| {
-                                        local_points
-                                            .into_iter()
-                                            .map(|point| {
-                                                let point = transform * point + move_delta;
-                                                camera.document_to_screen(
-                                                    Pos2::new(point.x as f32, point.y as f32),
-                                                    available,
-                                                )
-                                            })
-                                            .collect()
-                                    })
-                                    .collect();
+                                // Deformed live by any of this path's
+                                // anchors currently being node-dragged, so
+                                // the shape reacts in real time instead of
+                                // only snapping to its new form on release.
+                                let preview_geometry =
+                                    direct_selection_tool.preview_geometry(id, &path.geometry);
+                                let screen_subpaths: Vec<Vec<Pos2>> =
+                                    amalith_core::geom::flattened_points(&preview_geometry, 0.5)
+                                        .into_iter()
+                                        .map(|local_points| {
+                                            local_points
+                                                .into_iter()
+                                                .map(|point| {
+                                                    let point = transform * point + move_delta;
+                                                    camera.document_to_screen(
+                                                        Pos2::new(point.x as f32, point.y as f32),
+                                                        available,
+                                                    )
+                                                })
+                                                .collect()
+                                        })
+                                        .collect();
                                 if fill.a() > 0 {
                                     if let Some(mesh) = fill_mesh::fill_mesh(&screen_subpaths, fill)
                                     {
@@ -1801,10 +1820,27 @@ impl AmalithApp {
                         // gets one, not just a lone selection, so a
                         // multi-select alt-drag previews the whole copy as
                         // it moves instead of only appearing on release.
+                        // Rendered with the object's *real* fill/stroke —
+                        // not a flat gray placeholder — so a copy looks
+                        // live the whole drag instead of its appearance
+                        // disappearing and popping back on release.
                         if let (Some(transform), ObjectKind::Path(path)) = (
                             selection_tool.duplicate_preview_transform(editor.document(), id),
                             &object.kind,
                         ) {
+                            let ghost_fill = object
+                                .appearance
+                                .fill
+                                .color()
+                                .map(|color| color32_with_opacity(color, object.appearance.opacity))
+                                .unwrap_or(Color32::TRANSPARENT);
+                            let ghost_stroke = match object.appearance.stroke.color() {
+                                Some(color) => Stroke::new(
+                                    (object.appearance.stroke_width * camera.scale as f64) as f32,
+                                    color32_with_opacity(color, object.appearance.opacity),
+                                ),
+                                None => Stroke::NONE,
+                            };
                             let ghost_subpaths: Vec<Vec<Pos2>> = path
                                 .flattened_points(0.5)
                                 .into_iter()
@@ -1821,18 +1857,21 @@ impl AmalithApp {
                                         .collect()
                                 })
                                 .collect();
-                            if let Some(mesh) =
-                                fill_mesh::fill_mesh(&ghost_subpaths, Color32::from_gray(225))
-                            {
-                                painter.add(egui::Shape::mesh(mesh));
+                            if ghost_fill.a() > 0 {
+                                if let Some(mesh) =
+                                    fill_mesh::fill_mesh(&ghost_subpaths, ghost_fill)
+                                {
+                                    painter.add(egui::Shape::mesh(mesh));
+                                }
                             }
-                            let ghost_stroke = Stroke::new(1.0_f32, Color32::from_gray(45));
-                            for points in &ghost_subpaths {
-                                if points.len() >= 2 {
-                                    painter.add(egui::Shape::closed_line(
-                                        points.clone(),
-                                        ghost_stroke,
-                                    ));
+                            if ghost_stroke != Stroke::NONE {
+                                for points in &ghost_subpaths {
+                                    if points.len() >= 2 {
+                                        painter.add(egui::Shape::closed_line(
+                                            points.clone(),
+                                            ghost_stroke,
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -1975,6 +2014,102 @@ impl AmalithApp {
                         );
                     }
                 }
+            });
+    }
+
+    /// A compact, Illustrator-style control bar for the currently selected
+    /// objects. It intentionally favors the same first-leaf appearance and
+    /// one-command-to-all-targets behavior as the existing swatch widget.
+    fn options_bar_ui(
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        selection_tool: &SelectionTool,
+        state: &mut FillStrokePanelState,
+        error: &mut Option<String>,
+    ) {
+        let selected = selection_tool.selected_in_paint_order(editor.document());
+        let representative = representative_appearance(editor.document(), &selected);
+        let targets = selected_path_targets(editor.document(), &selected);
+        let has_targets = !targets.is_empty();
+        let label = selection_label(editor.document(), &selected);
+
+        egui::TopBottomPanel::top("options_bar")
+            .exact_height(36.0)
+            .frame(egui::Frame::NONE.fill(Color32::from_rgb(47, 47, 47)))
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new(label).color(Color32::from_gray(220)));
+                    ui.separator();
+
+                    ui.label("Fill:");
+                    if swatch_with_dropdown(
+                        ui,
+                        ui.id().with("options_fill_swatch"),
+                        PaintSlot::Fill,
+                        representative.fill.color(),
+                        state.active == PaintSlot::Fill,
+                    ) && has_targets
+                    {
+                        select_or_open_swatch(state, PaintSlot::Fill, representative.fill);
+                    }
+
+                    ui.label("Stroke:");
+                    if swatch_with_dropdown(
+                        ui,
+                        ui.id().with("options_stroke_swatch"),
+                        PaintSlot::Stroke,
+                        representative.stroke.color(),
+                        state.active == PaintSlot::Stroke,
+                    ) && has_targets
+                    {
+                        select_or_open_swatch(state, PaintSlot::Stroke, representative.stroke);
+                    }
+
+                    ui.separator();
+                    ui.label("Stroke:");
+                    let mut width = representative.stroke_width;
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut width)
+                                .speed(0.25)
+                                .range(0.0..=10_000.0)
+                                .suffix(" px"),
+                        )
+                        .changed()
+                        && has_targets
+                    {
+                        if let Err(err) = editor.execute(Command::SetStrokeWidth {
+                            objects: targets.clone(),
+                            width,
+                        }) {
+                            *error = Some(err.to_string());
+                        }
+                    }
+                    ui.label("▾");
+
+                    ui.separator();
+                    ui.label("Opacity:");
+                    let mut opacity_percent = (representative.opacity * 100.0).clamp(0.0, 100.0);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut opacity_percent)
+                                .speed(1.0)
+                                .range(0.0..=100.0)
+                                .suffix("%"),
+                        )
+                        .changed()
+                        && has_targets
+                    {
+                        if let Err(err) = editor.execute(Command::SetOpacity {
+                            objects: targets,
+                            opacity: (opacity_percent / 100.0).clamp(0.0, 1.0),
+                        }) {
+                            *error = Some(err.to_string());
+                        }
+                    }
+                    ui.label("›");
+                });
             });
     }
 
@@ -2122,24 +2257,15 @@ impl AmalithApp {
         state: &mut FillStrokePanelState,
         error: &mut Option<String>,
     ) {
-        let representative = selection_tool
-            .selected_in_paint_order(editor.document())
-            .first()
-            .and_then(|&id| editor.document().object(id))
-            .map(|object| object.appearance)
-            .unwrap_or_default();
-        let has_selection = !selection_tool.selected.is_empty();
+        let selected = selection_tool.selected_in_paint_order(editor.document());
+        let representative = representative_appearance(editor.document(), &selected);
+        let has_selection = !selected_path_targets(editor.document(), &selected).is_empty();
 
         let apply = |editor: &mut Editor,
                      error: &mut Option<String>,
                      slot: PaintSlot,
                      paint: amalith_core::Paint| {
-            let objects: Vec<_> = selection_tool.selected.iter().copied().collect();
-            let command = match slot {
-                PaintSlot::Fill => Command::SetFill { objects, paint },
-                PaintSlot::Stroke => Command::SetStroke { objects, paint },
-            };
-            if let Err(err) = editor.execute(command) {
+            if let Err(err) = apply_paint_to_selection(editor, &selected, slot, paint) {
                 *error = Some(err.to_string());
             }
         };
@@ -2150,29 +2276,77 @@ impl AmalithApp {
             Vec2::new(swatch_size + offset, swatch_size + offset),
             egui::Sense::hover(),
         );
-        let stroke_rect = EguiRect::from_min_size(
-            rect.min + Vec2::new(offset, offset),
+        let front_at = rect.min;
+        let back_at = rect.min + Vec2::new(offset, offset);
+        let fill_rect = EguiRect::from_min_size(
+            if state.active == PaintSlot::Fill {
+                front_at
+            } else {
+                back_at
+            },
             Vec2::splat(swatch_size),
         );
-        let fill_rect = EguiRect::from_min_size(rect.min, Vec2::splat(swatch_size));
+        let stroke_rect = EguiRect::from_min_size(
+            if state.active == PaintSlot::Stroke {
+                front_at
+            } else {
+                back_at
+            },
+            Vec2::splat(swatch_size),
+        );
 
-        // Stroke first so the fill square (drawn on top) is the one that
-        // visually reads as "in front", matching the reference widget.
-        paint_swatch(ui.painter(), stroke_rect, representative.stroke.color());
-        paint_swatch(ui.painter(), fill_rect, representative.fill.color());
-        let stroke_response = ui.interact(
-            stroke_rect,
-            ui.id().with("stroke_swatch"),
+        // Paint and interact with the back slot first, then the active slot,
+        // so the front swatch visibly and interactively owns the overlap.
+        let (back_slot, back_rect, back_paint, front_slot, front_rect, front_paint) =
+            if state.active == PaintSlot::Fill {
+                (
+                    PaintSlot::Stroke,
+                    stroke_rect,
+                    representative.stroke,
+                    PaintSlot::Fill,
+                    fill_rect,
+                    representative.fill,
+                )
+            } else {
+                (
+                    PaintSlot::Fill,
+                    fill_rect,
+                    representative.fill,
+                    PaintSlot::Stroke,
+                    stroke_rect,
+                    representative.stroke,
+                )
+            };
+        paint_slot_swatch(
+            ui.painter(),
+            back_rect,
+            back_slot,
+            back_paint.color(),
+            false,
+        );
+        let back_response = ui.interact(
+            back_rect,
+            ui.id().with("inactive_swatch"),
             egui::Sense::click(),
         );
-        let fill_response =
-            ui.interact(fill_rect, ui.id().with("fill_swatch"), egui::Sense::click());
-
-        if fill_response.clicked() && has_selection {
-            state.open = Some((PaintSlot::Fill, hsva_from_paint(representative.fill)));
-        }
-        if stroke_response.clicked() && has_selection {
-            state.open = Some((PaintSlot::Stroke, hsva_from_paint(representative.stroke)));
+        paint_slot_swatch(
+            ui.painter(),
+            front_rect,
+            front_slot,
+            front_paint.color(),
+            true,
+        );
+        let front_response = ui.interact(
+            front_rect,
+            ui.id().with("active_swatch"),
+            egui::Sense::click(),
+        );
+        if has_selection {
+            if front_response.clicked() {
+                select_or_open_swatch(state, front_slot, front_paint);
+            } else if back_response.clicked() {
+                select_or_open_swatch(state, back_slot, back_paint);
+            }
         }
 
         ui.add_space(4.0);
@@ -2200,23 +2374,62 @@ impl AmalithApp {
             }
         });
 
-        // Quick-pick presets: black fill, white fill, no fill.
+        // Color / Gradient / None mode icons for the active slot, drawn as
+        // small (~16px) square swatch icons — Illustrator's compact row, not
+        // text-label buttons. Anything wider here grows the panel's layout
+        // past the 76px column that its frame is clipped to and leaves an
+        // unpainted black gap between the sidebar and the canvas.
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
-            for (color, tooltip) in [
-                (Some(amalith_core::Color::rgb(0.0, 0.0, 0.0)), "Black fill"),
-                (Some(amalith_core::Color::rgb(1.0, 1.0, 1.0)), "White fill"),
-                (None, "No fill"),
-            ] {
-                let (preset_rect, response) =
-                    ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::click());
-                paint_swatch(ui.painter(), preset_rect, color);
-                if response.on_hover_text(tooltip).clicked() && has_selection {
-                    let paint = match color {
-                        Some(color) => amalith_core::Paint::Solid(color),
-                        None => amalith_core::Paint::None,
-                    };
-                    apply(editor, error, PaintSlot::Fill, paint);
-                }
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let active_paint = paint_for_slot(representative, state.active);
+            let icon = Vec2::splat(16.0);
+
+            // Solid color: a plain filled swatch, highlighted when the active
+            // slot is currently a solid paint.
+            let (solid_rect, solid_response) = ui.allocate_exact_size(icon, egui::Sense::click());
+            paint_slot_swatch(
+                ui.painter(),
+                solid_rect,
+                PaintSlot::Fill,
+                Some(
+                    active_paint
+                        .color()
+                        .unwrap_or(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
+                ),
+                matches!(active_paint, amalith_core::Paint::Solid(_)),
+            );
+            if solid_response.on_hover_text("Solid color").clicked()
+                && has_selection
+                && matches!(active_paint, amalith_core::Paint::None)
+            {
+                apply(
+                    editor,
+                    error,
+                    state.active,
+                    amalith_core::Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
+                );
+            }
+
+            // Gradient: inert until gradients exist, but shown so the row
+            // matches the reference layout.
+            let (gradient_rect, gradient_response) =
+                ui.allocate_exact_size(icon, egui::Sense::hover());
+            paint_gradient_icon(ui.painter(), gradient_rect);
+            gradient_response.on_hover_text("Gradients aren't implemented yet");
+
+            // No paint: reuse the swatch's own white-square / red-slash
+            // rendering, highlighted when the active slot has no paint.
+            let (none_rect, none_response) = ui.allocate_exact_size(icon, egui::Sense::click());
+            paint_slot_swatch(
+                ui.painter(),
+                none_rect,
+                state.active,
+                None,
+                matches!(active_paint, amalith_core::Paint::None),
+            );
+            if none_response.on_hover_text("No paint").clicked() && has_selection {
+                apply(editor, error, state.active, amalith_core::Paint::None);
             }
         });
 
@@ -2974,13 +3187,30 @@ impl eframe::App for AmalithApp {
     }
 }
 
-/// Paints one fill/stroke swatch at `rect`: a solid square for `Some`, or a
-/// white square with a diagonal red slash for `None` (Illustrator's "no
-/// paint" glyph) — then allocates that rect as a clickable widget.
-fn paint_swatch(painter: &egui::Painter, rect: EguiRect, color: Option<amalith_core::Color>) {
+fn paint_slot_swatch(
+    painter: &egui::Painter,
+    rect: EguiRect,
+    slot: PaintSlot,
+    color: Option<amalith_core::Color>,
+    active: bool,
+) {
     match color {
         Some(color) => {
-            painter.rect_filled(rect, 2.0, color32_from(color));
+            let color = color32_from(color);
+            match slot {
+                PaintSlot::Fill => {
+                    painter.rect_filled(rect, 2.0, color);
+                }
+                PaintSlot::Stroke => {
+                    painter.rect_filled(rect, 2.0, Color32::from_rgb(47, 47, 47));
+                    painter.rect_stroke(
+                        rect.shrink(1.5),
+                        1.0,
+                        Stroke::new(3.0_f32, color),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
         }
         None => {
             painter.rect_filled(rect, 2.0, Color32::WHITE);
@@ -2996,6 +3226,79 @@ fn paint_swatch(painter: &egui::Painter, rect: EguiRect, color: Option<amalith_c
         Stroke::new(1.0_f32, Color32::from_gray(90)),
         egui::StrokeKind::Outside,
     );
+    if active {
+        painter.rect_stroke(
+            rect.expand(1.0),
+            3.0,
+            Stroke::new(2.0_f32, Color32::from_gray(235)),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
+/// A compact swatch plus the dropdown affordance used by the options bar.
+/// The swatch deliberately renders the paint's native alpha, never an
+/// object's compositing opacity: it represents the paint color itself.
+fn swatch_with_dropdown(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    slot: PaintSlot,
+    color: Option<amalith_core::Color>,
+    active: bool,
+) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
+        paint_slot_swatch(ui.painter(), rect, slot, color, active);
+        clicked |= response.clicked();
+        clicked |= ui
+            .push_id(id, |ui| ui.add(egui::Button::new("▾").small().frame(false)))
+            .inner
+            .clicked();
+    });
+    clicked
+}
+
+fn select_or_open_swatch(
+    state: &mut FillStrokePanelState,
+    slot: PaintSlot,
+    paint: amalith_core::Paint,
+) {
+    if state.active == slot {
+        state.open = Some((slot, hsva_from_paint(paint)));
+    } else {
+        state.active = slot;
+    }
+}
+
+fn paint_for_slot(appearance: amalith_core::Appearance, slot: PaintSlot) -> amalith_core::Paint {
+    match slot {
+        PaintSlot::Fill => appearance.fill,
+        PaintSlot::Stroke => appearance.stroke,
+    }
+}
+
+/// Draws a small diagonal light→dark gradient swatch icon (two triangles
+/// plus a border) into `rect`, matching `paint_slot_swatch`'s border style.
+/// Used for the inert "gradient" paint mode in the fill/stroke widget.
+fn paint_gradient_icon(painter: &egui::Painter, rect: EguiRect) {
+    painter.rect_filled(rect, 2.0, Color32::from_gray(58));
+    painter.add(egui::Shape::convex_polygon(
+        vec![rect.left_top(), rect.right_top(), rect.left_bottom()],
+        Color32::from_gray(212),
+        Stroke::NONE,
+    ));
+    painter.add(egui::Shape::convex_polygon(
+        vec![rect.right_top(), rect.right_bottom(), rect.left_bottom()],
+        Color32::from_gray(70),
+        Stroke::NONE,
+    ));
+    painter.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0_f32, Color32::from_gray(90)),
+        egui::StrokeKind::Outside,
+    );
 }
 
 fn color32_from(color: amalith_core::Color) -> Color32 {
@@ -3004,6 +3307,15 @@ fn color32_from(color: amalith_core::Color) -> Color32 {
         (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
         (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
         (color.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+fn color32_with_opacity(color: amalith_core::Color, opacity: f32) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        (color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (color.a.clamp(0.0, 1.0) * opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
     )
 }
 
@@ -3610,10 +3922,133 @@ fn paint_order_paths(document: &Document, parent: ObjectParent) -> Vec<ObjectId>
     ids
 }
 
+/// Expands selected groups into their recursive leaf paths while preserving
+/// each selected root's paint order. This makes appearance commands visible
+/// for group selections without pretending groups have rendered paint of
+/// their own.
+fn selected_path_targets(document: &Document, selected: &[ObjectId]) -> Vec<ObjectId> {
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
+    for &id in selected {
+        let Some(object) = document.object(id) else {
+            continue;
+        };
+        let paths = match object.kind {
+            ObjectKind::Group(_) => paint_order_paths(document, ObjectParent::Group(id)),
+            ObjectKind::Path(_) => vec![id],
+            _ => Vec::new(),
+        };
+        for path in paths {
+            if seen.insert(path) {
+                targets.push(path);
+            }
+        }
+    }
+    targets
+}
+
+/// The first selected path leaf is the representative for mixed selection
+/// controls. For a selected group, that means its first descendant path.
+fn representative_appearance(
+    document: &Document,
+    selected: &[ObjectId],
+) -> amalith_core::Appearance {
+    selected_path_targets(document, selected)
+        .into_iter()
+        .find_map(|id| document.object(id).map(|object| object.appearance))
+        .unwrap_or_default()
+}
+
+fn apply_paint_to_selection(
+    editor: &mut Editor,
+    selected: &[ObjectId],
+    slot: PaintSlot,
+    paint: amalith_core::Paint,
+) -> Result<(), amalith_commands::CommandError> {
+    let objects = selected_path_targets(editor.document(), selected);
+    let command = match slot {
+        PaintSlot::Fill => Command::SetFill { objects, paint },
+        PaintSlot::Stroke => Command::SetStroke { objects, paint },
+    };
+    editor.execute(command)?;
+    Ok(())
+}
+
+/// UI-only selection name heuristic for the options bar. Paths carry no
+/// stored primitive kind, so rectangle/ellipse labels intentionally infer
+/// from their current Bezier structure rather than adding document-model
+/// state solely for presentation text.
+fn selection_label(document: &Document, selected: &[ObjectId]) -> String {
+    match selected {
+        [] => "No Selection".to_string(),
+        [id] => document
+            .object(*id)
+            .map(object_label)
+            .unwrap_or_else(|| "No Selection".to_string()),
+        _ => format!("{} objects", selected.len()),
+    }
+}
+
+fn object_label(object: &amalith_core::Object) -> String {
+    if let Some(name) = &object.name {
+        return name.clone();
+    }
+    match &object.kind {
+        ObjectKind::Group(_) => "Group".to_string(),
+        ObjectKind::Path(path) => path_label(path),
+        _ => "Object".to_string(),
+    }
+}
+
+fn path_label(path: &PathData) -> String {
+    use amalith_core::geom::PathEl;
+
+    let elements = path.geometry.elements();
+    let closed = matches!(elements.last(), Some(PathEl::ClosePath));
+    let rectangle = closed
+        && amalith_core::geom::anchor_indices(&path.geometry).len() == 4
+        && elements.iter().all(|element| {
+            matches!(
+                element,
+                PathEl::MoveTo(_) | PathEl::LineTo(_) | PathEl::ClosePath
+            )
+        });
+    if rectangle {
+        return "Rectangle".to_string();
+    }
+    let ellipse = closed
+        && elements.iter().all(|element| {
+            matches!(
+                element,
+                PathEl::MoveTo(_) | PathEl::CurveTo(_, _, _) | PathEl::ClosePath
+            )
+        });
+    if ellipse {
+        "Ellipse".to_string()
+    } else {
+        "Path".to_string()
+    }
+}
+
 #[cfg(test)]
 mod canvas_input_tests {
     use super::*;
     use amalith_commands::Command;
+
+    #[test]
+    fn inactive_swatch_selects_and_active_swatch_opens_its_picker() {
+        let mut state = FillStrokePanelState::default();
+        let red = amalith_core::Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0));
+        assert_eq!(state.active, PaintSlot::Fill);
+        assert!(state.open.is_none());
+
+        select_or_open_swatch(&mut state, PaintSlot::Stroke, red);
+        assert_eq!(state.active, PaintSlot::Stroke);
+        assert!(state.open.is_none());
+
+        select_or_open_swatch(&mut state, PaintSlot::Stroke, red);
+        assert!(matches!(state.open, Some((PaintSlot::Stroke, _))));
+    }
 
     #[test]
     fn command_space_takes_precedence_over_hand_pan() {
@@ -3850,5 +4285,100 @@ mod canvas_input_tests {
         // (see Command::Group's docs), so paint order stays: ungrouped,
         // then the group's own children in their relative order.
         assert_eq!(ids, vec![ungrouped, a, b]);
+    }
+
+    #[test]
+    fn options_label_classifies_paths_and_custom_group_names() {
+        let mut editor = Editor::new(Document::new("Untitled"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(rectangle) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(ellipse) = editor
+            .execute(Command::CreateEllipse {
+                layer,
+                rect: Rect::new(20.0, 0.0, 30.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            selection_label(editor.document(), &[rectangle]),
+            "Rectangle"
+        );
+        assert_eq!(selection_label(editor.document(), &[ellipse]), "Ellipse");
+        assert_eq!(
+            selection_label(editor.document(), &[rectangle, ellipse]),
+            "2 objects"
+        );
+
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::Group {
+                ids: vec![rectangle, ellipse],
+                name: Some("Logo Mark".into()),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(selection_label(editor.document(), &[group]), "Logo Mark");
+    }
+
+    #[test]
+    fn selected_path_targets_expands_group_to_leaf_paths() {
+        let mut editor = Editor::new(Document::new("Untitled"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let create = |editor: &mut Editor, x| match editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(x, 0.0, x + 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        {
+            CommandOutcome::Object(id) => id,
+            _ => panic!(),
+        };
+        let first = create(&mut editor, 0.0);
+        let second = create(&mut editor, 20.0);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::Group {
+                ids: vec![first, second],
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        assert_eq!(
+            selected_path_targets(editor.document(), &[group]),
+            vec![first, second]
+        );
     }
 }

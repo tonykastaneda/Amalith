@@ -159,13 +159,20 @@ pub enum Command {
         objects: Vec<ObjectId>,
         paint: Paint,
     },
-    /// Sets every listed object's stroke paint, one undo group. Stroke
-    /// *width* isn't user-controllable yet (see
-    /// [`amalith_core::Appearance::DEFAULT_STROKE_WIDTH`]) — this only
-    /// ever changes the color/None-ness of the stroke.
+    /// Sets every listed object's stroke paint, one undo group.
     SetStroke {
         objects: Vec<ObjectId>,
         paint: Paint,
+    },
+    /// Sets every listed object's stroke width, one undo group.
+    SetStrokeWidth {
+        objects: Vec<ObjectId>,
+        width: f64,
+    },
+    /// Sets every listed object's compositing opacity, one undo group.
+    SetOpacity {
+        objects: Vec<ObjectId>,
+        opacity: f32,
     },
 }
 

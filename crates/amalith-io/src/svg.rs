@@ -112,7 +112,7 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String) {
     }
 }
 
-/// The `fill`/`stroke`/`stroke-width` attribute string for `appearance`,
+/// The `fill`/`stroke`/`stroke-width`/`opacity` attribute string for `appearance`,
 /// e.g. ` fill="#e0e0e0" stroke="#2e2e2e" stroke-width="10"`. Without this,
 /// an exported `<path>` carries no paint attributes at all, and SVG's own
 /// spec default (fill: black, stroke: none) silently wins over whatever
@@ -124,6 +124,12 @@ fn paint_attrs(appearance: &Appearance) -> String {
     attrs.push_str(&paint_attr("stroke", appearance.stroke));
     if appearance.stroke.color().is_some() {
         attrs.push_str(&format!(" stroke-width=\"{}\"", appearance.stroke_width));
+    }
+    if appearance.opacity != 1.0 {
+        attrs.push_str(&format!(
+            " opacity=\"{}\"",
+            appearance.opacity.clamp(0.0, 1.0)
+        ));
     }
     attrs
 }
@@ -268,6 +274,7 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
         fill: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
         stroke: Paint::None,
         stroke_width: Appearance::DEFAULT_STROKE_WIDTH,
+        opacity: 1.0,
     };
     let inline_style = node
         .attribute("style")
@@ -278,6 +285,7 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     let stroke = resolve_property(node, &inline_style, class_styles, "stroke");
     let stroke_opacity = resolve_property(node, &inline_style, class_styles, "stroke-opacity");
     let stroke_width = resolve_property(node, &inline_style, class_styles, "stroke-width");
+    let opacity = resolve_property(node, &inline_style, class_styles, "opacity");
 
     if let Some(fill) = fill.as_deref() {
         appearance.fill = parse_paint(fill, fill_opacity.as_deref());
@@ -287,6 +295,9 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     }
     if let Some(width) = stroke_width.and_then(|width| width.trim().parse().ok()) {
         appearance.stroke_width = width;
+    }
+    if let Some(opacity) = opacity.and_then(|opacity| opacity.trim().parse().ok()) {
+        appearance.opacity = opacity;
     }
     appearance
 }
@@ -344,7 +355,7 @@ fn parse_declarations(value: &str) -> Declarations {
             let value = value.trim();
             matches!(
                 property,
-                "fill" | "stroke" | "stroke-width" | "fill-opacity" | "stroke-opacity"
+                "fill" | "stroke" | "stroke-width" | "fill-opacity" | "stroke-opacity" | "opacity"
             )
             .then(|| (property.to_string(), value.to_string()))
         })
@@ -613,6 +624,7 @@ mod tests {
             fill: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
             stroke: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)),
             stroke_width: 10.0,
+            opacity: 1.0,
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();
@@ -639,6 +651,7 @@ mod tests {
             fill: Paint::None,
             stroke: Paint::None,
             stroke_width: 10.0,
+            opacity: 1.0,
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();
@@ -666,6 +679,7 @@ mod tests {
             fill: Paint::Solid(Color::rgb(0.2, 0.4, 0.6)),
             stroke: Paint::None,
             stroke_width: 10.0,
+            opacity: 1.0,
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();
@@ -858,7 +872,11 @@ mod tests {
 
         // Flattening recovers exactly the four subpaths (the renderer walks
         // this list; a dropped subpath here would drop part of the shape).
-        assert_eq!(path.flattened_points(0.5).len(), 4, "four flattened subpaths");
+        assert_eq!(
+            path.flattened_points(0.5).len(),
+            4,
+            "four flattened subpaths"
+        );
 
         // The per-subpath anchor walk added for direct selection must cope
         // with a 1400+ element, 4-subpath path: every reported anchor index
@@ -888,5 +906,41 @@ mod tests {
             elements.len(),
             "translating anchors must not add or drop elements"
         );
+    }
+
+    #[test]
+    fn import_resolves_object_opacity_from_class_and_inline_style() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg">
+            <defs><style>.cls-1 { opacity: 0.25; }</style></defs>
+            <path class="cls-1" d="M0,0 L10,0 L10,10 Z"/>
+            <path class="cls-1" style="opacity: 0.6" d="M20,0 L30,0 L30,10 Z"/>
+        </svg>"##;
+        let imported = import_svg(svg).unwrap();
+        assert_eq!(
+            imported.objects[&imported.roots[0]].appearance.opacity,
+            0.25
+        );
+        assert_eq!(imported.objects[&imported.roots[1]].appearance.opacity, 0.6);
+    }
+
+    #[test]
+    fn export_writes_and_round_trips_object_opacity() {
+        let mut document = Document::new("Test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        object.appearance.opacity = 0.4;
+        let id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[id]).unwrap();
+        assert!(svg.contains("opacity=\"0.4\""), "svg was: {svg}");
+        let imported = import_svg(&svg).unwrap();
+        assert_eq!(imported.objects[&imported.roots[0]].appearance.opacity, 0.4);
     }
 }

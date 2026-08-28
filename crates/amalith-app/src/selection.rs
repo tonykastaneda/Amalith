@@ -286,7 +286,7 @@ impl SelectionTool {
 
     pub(crate) fn display_transform(&self, document: &Document, id: ObjectId) -> Option<Affine> {
         document.object(id)?;
-        if !self.selected.contains(&id) {
+        if !self.is_or_descends_from_selected(document, id) {
             return Some(document.world_transform(id));
         }
         match &self.drag {
@@ -295,13 +295,48 @@ impl SelectionTool {
             })
             | Some(Drag::Rotate {
                 preview_transforms, ..
-            }) => preview_transforms.get(&id).copied(),
+            }) => Some(
+                // A leaf whose *ancestor* group is the directly-selected,
+                // scaled/rotated id has no entry of its own here (scale
+                // and rotate preview per-object local transforms, which
+                // don't compose through nesting the simple way a Move's
+                // shared world-space delta does — see `is_or_descends_
+                // from_selected`) — freeze it at its current transform
+                // rather than let it vanish; it still snaps correctly on
+                // release, same as before this whole preview existed.
+                preview_transforms
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_else(|| document.world_transform(id)),
+            ),
             Some(Drag::Move { .. }) => {
+                // A shared world-space translation applies identically to
+                // a group and everything nested inside it, however deep,
+                // so this is correct whether `id` itself is selected or
+                // it's a descendant of a selected group being dragged.
                 Some(Affine::translate(self.preview_delta) * document.world_transform(id))
             }
             Some(Drag::Duplicate { .. }) => Some(document.world_transform(id)),
             Some(Drag::Marquee { .. }) => Some(document.world_transform(id)),
             None => Some(document.world_transform(id)),
+        }
+    }
+
+    /// Whether `id` is directly selected, or is nested (at any depth)
+    /// inside a selected `Group` — the render loop walks leaf `Path`
+    /// objects, not selection roots, so a grouped object being dragged
+    /// via its ancestor group still needs to know it's part of a live
+    /// drag to preview correctly instead of freezing until release.
+    fn is_or_descends_from_selected(&self, document: &Document, id: ObjectId) -> bool {
+        let mut current = id;
+        loop {
+            if self.selected.contains(&current) {
+                return true;
+            }
+            match document.object(current).map(|object| object.parent) {
+                Some(ObjectParent::Group(parent_id)) => current = parent_id,
+                _ => return false,
+            }
         }
     }
 
@@ -348,18 +383,19 @@ impl SelectionTool {
     }
 
     /// The transform a live duplicate-drag ghost of `id` should render at
-    /// — `None` unless `id` is part of the selection *and* a duplicate
-    /// drag is active. Every selected object gets one (not just a lone
-    /// selection), so the whole multi-selection previews live while
-    /// dragging, matching `display_transform`'s `Drag::Move` case (which
-    /// intentionally leaves the *original* untransformed during a
-    /// duplicate drag — this is the copy's preview, drawn separately).
+    /// — `None` unless `id` is selected (or nested inside a selected
+    /// group) *and* a duplicate drag is active. Every selected object
+    /// gets one (not just a lone selection), so the whole multi-selection
+    /// previews live while dragging, matching `display_transform`'s
+    /// `Drag::Move` case (which intentionally leaves the *original*
+    /// untransformed during a duplicate drag — this is the copy's
+    /// preview, drawn separately).
     pub(crate) fn duplicate_preview_transform(
         &self,
         document: &Document,
         id: ObjectId,
     ) -> Option<Affine> {
-        if !self.is_duplicate_drag() || !self.selected.contains(&id) {
+        if !self.is_duplicate_drag() || !self.is_or_descends_from_selected(document, id) {
             return None;
         }
         Some(Affine::translate(self.preview_delta) * document.world_transform(id))
@@ -1418,6 +1454,105 @@ mod tests {
         assert_eq!(
             editor.document().object(object).unwrap().transform,
             original
+        );
+    }
+
+    #[test]
+    fn moving_a_group_live_previews_its_children_not_just_the_group() {
+        // Regression test: the render loop walks leaf Path objects (a
+        // group has no geometry of its own), so `display_transform`
+        // checking only direct selection meant a grouped child rendered
+        // frozen at its old position for the whole drag, only snapping
+        // to the right place once the command actually committed on
+        // release — the "appearance disappears, then reappears" the
+        // user reported. A shared world-space translation applies the
+        // same to a group and its descendants at any depth, so this only
+        // needed `display_transform` to know a leaf's *ancestor* is what
+        // got selected and dragged.
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(child) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::Group {
+                ids: vec![child],
+                name: Some("Group 1".into()),
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+
+        let mut selection = SelectionTool::default();
+        selection.selected.insert(group);
+        selection.drag = Some(Drag::Move {
+            start: Point::new(0.0, 0.0),
+        });
+        let delta = Vec2::new(7.0, -3.0);
+        selection.drag(Point::new(delta.x, delta.y), false, false);
+
+        let previewed = selection
+            .display_transform(editor.document(), child)
+            .unwrap();
+        let committed = editor.document().world_transform(child);
+        assert_eq!(previewed, Affine::translate(delta) * committed);
+    }
+
+    #[test]
+    fn duplicate_dragging_a_group_previews_a_ghost_for_its_children() {
+        // Same bug, the alt-drag-duplicate ghost: without an ancestor
+        // check, `duplicate_preview_transform` returned `None` for every
+        // child of a dragged group, so the copy was fully invisible for
+        // the whole drag and only appeared once released.
+        let (mut editor, layer) = editor_with_layer();
+        let CommandOutcome::Object(child) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::Group {
+                ids: vec![child],
+                name: Some("Group 1".into()),
+            })
+            .unwrap()
+        else {
+            unreachable!()
+        };
+
+        let mut selection = SelectionTool::default();
+        selection.selected.insert(group);
+        selection.drag = Some(Drag::Duplicate {
+            start: Point::new(0.0, 0.0),
+        });
+        let delta = Vec2::new(5.0, 5.0);
+        selection.drag(Point::new(delta.x, delta.y), false, false);
+
+        let ghost = selection
+            .duplicate_preview_transform(editor.document(), child)
+            .expect("a grouped child must still get a live ghost");
+        let committed = editor.document().world_transform(child);
+        assert_eq!(ghost, Affine::translate(delta) * committed);
+
+        // The original, unmoved child must still render at its real
+        // position throughout the drag (only the ghost moves).
+        assert_eq!(
+            selection
+                .display_transform(editor.document(), child)
+                .unwrap(),
+            committed
         );
     }
 }
