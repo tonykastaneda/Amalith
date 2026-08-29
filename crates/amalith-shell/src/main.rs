@@ -747,6 +747,15 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    /// Fires every loop iteration. Requesting redraws here guarantees the
+    /// first frame paints even if the post-`resumed` `request_redraw` was
+    /// dropped; once running it just tops up the vsync-throttled loop.
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        for host in self.hosts.values() {
+            host.window.request_redraw();
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.main_id.is_some() {
             return;
