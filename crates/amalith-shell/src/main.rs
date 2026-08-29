@@ -149,8 +149,13 @@ enum Drag {
         last_doc: Point,
         moved: bool,
     },
-    /// Direct Selection: rubber-banding to select anchors.
-    AnchorMarquee { start: Point },
+    /// Direct Selection: rubber-banding to select anchors. `candidate` is
+    /// the object under the press — selected on release if the pointer
+    /// never moved far enough to count as a marquee.
+    AnchorMarquee {
+        start: Point,
+        candidate: Option<ObjectId>,
+    },
 }
 
 struct App {
@@ -366,6 +371,17 @@ impl App {
             });
     }
 
+    /// The tool pointer input actually routes to. Holding ⌘ while the
+    /// black arrow is active is Illustrator's temporary white-arrow
+    /// gesture (⌘+Space stays reserved for zoom).
+    fn effective_tool(&self) -> Tool {
+        if self.active_tool == Tool::Select && self.cmd_down && !self.space_down {
+            Tool::DirectSelect
+        } else {
+            self.active_tool
+        }
+    }
+
     /// Paths whose anchors are currently on screen for Direct Selection:
     /// the object selection, plus anything with a live anchor selection.
     /// Illustrator's white arrow shows nodes only after you've picked an
@@ -391,7 +407,7 @@ impl App {
     fn nudge(&mut self, dx: f64, dy: f64) {
         let step = if self.shift_down { 10.0 } else { 1.0 };
         let delta = amalith_core::Vec2::new(dx * step, dy * step);
-        if self.active_tool == Tool::DirectSelect && !self.anchor_sel.is_empty() {
+        if self.effective_tool() == Tool::DirectSelect && !self.anchor_sel.is_empty() {
             let _ = self.editor.execute(Command::MoveAnchors {
                 anchors: self.anchor_sel.clone(),
                 delta,
@@ -799,9 +815,10 @@ impl App {
 
                 // Direct Selection (Illustrator white arrow): nodes show
                 // only for objects you've already picked. A click grabs a
-                // node of such an object, else selects the object under the
-                // cursor (its nodes then appear), else clears + marquees.
-                if self.active_tool == Tool::DirectSelect {
+                // node of such an object; otherwise it starts a marquee
+                // that either selects the object under the press (if the
+                // pointer never moves) or rubber-bands its nodes.
+                if self.effective_tool() == Tool::DirectSelect {
                     let hit_r = 6.0 / self.view.zoom;
                     let shown = self.node_paths();
                     if let Some(a) =
@@ -828,27 +845,11 @@ impl App {
                     }
 
                     let visible = self.visible_doc_rect();
-                    if let Some(id) =
-                        select::topmost_selectable_at(self.editor.document(), dp, visible)
-                    {
-                        if self.shift_down {
-                            if !self.selection.contains(&id) {
-                                self.selection.push(id);
-                            }
-                        } else {
-                            self.selection = vec![id];
-                        }
-                        self.anchor_sel.clear();
-                        self.request_main_redraw();
-                        return;
-                    }
-
-                    if !self.shift_down {
-                        self.selection.clear();
-                        self.anchor_sel.clear();
-                    }
+                    let candidate =
+                        select::topmost_selectable_at(self.editor.document(), dp, visible);
                     self.drag = Drag::AnchorMarquee {
                         start: self.pointer,
+                        candidate,
                     };
                     self.request_main_redraw();
                     return;
@@ -1025,7 +1026,7 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::Marquee { start } | Drag::AnchorMarquee { start } => {
+            Drag::Marquee { start } | Drag::AnchorMarquee { start, .. } => {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
                 self.request_main_redraw();
             }
@@ -1274,22 +1275,41 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::AnchorMarquee { start } => {
-                let r_doc = self
-                    .view
-                    .to_screen()
-                    .inverse()
-                    .transform_rect_bbox(Rect::from_points(start, self.pointer));
-                let shown = self.node_paths();
-                let hits = anchors::within_of(self.editor.document(), &shown, r_doc);
-                if self.shift_down {
-                    for a in hits {
-                        if !self.anchor_sel.contains(&a) {
-                            self.anchor_sel.push(a);
+            Drag::AnchorMarquee { start, candidate } => {
+                let moved = (self.pointer - start).hypot() > 3.0;
+                if moved {
+                    // A real drag: rubber-band the nodes of whatever
+                    // objects are already showing them.
+                    let r_doc = self
+                        .view
+                        .to_screen()
+                        .inverse()
+                        .transform_rect_bbox(Rect::from_points(start, self.pointer));
+                    let shown = self.node_paths();
+                    let hits = anchors::within_of(self.editor.document(), &shown, r_doc);
+                    if self.shift_down {
+                        for a in hits {
+                            if !self.anchor_sel.contains(&a) {
+                                self.anchor_sel.push(a);
+                            }
                         }
+                    } else {
+                        self.anchor_sel = hits;
                     }
-                } else {
-                    self.anchor_sel = hits;
+                } else if let Some(id) = candidate {
+                    // A click on an object: select it, revealing its nodes.
+                    if self.shift_down {
+                        if !self.selection.contains(&id) {
+                            self.selection.push(id);
+                        }
+                    } else {
+                        self.selection = vec![id];
+                    }
+                    self.anchor_sel.clear();
+                } else if !self.shift_down {
+                    // A click on empty canvas: clear everything.
+                    self.selection.clear();
+                    self.anchor_sel.clear();
                 }
                 self.marquee = None;
                 self.request_main_redraw();
@@ -1435,12 +1455,13 @@ impl App {
         };
         // Direct Selection shows anchors only for objects that have been
         // selected (Illustrator's white arrow), not every path.
-        let anchor_paths: Vec<ObjectId> = if self.active_tool == Tool::DirectSelect {
+        let direct = self.effective_tool() == Tool::DirectSelect;
+        let anchor_paths: Vec<ObjectId> = if direct {
             self.node_paths()
         } else {
             Vec::new()
         };
-        let anchor_view = (self.active_tool == Tool::DirectSelect).then_some(AnchorView {
+        let anchor_view = direct.then_some(AnchorView {
             selected: &self.anchor_sel,
             paths: &anchor_paths,
         });
@@ -1644,9 +1665,15 @@ impl ApplicationHandler for App {
             } => self.on_release(),
             WindowEvent::ModifiersChanged(m) => {
                 if Some(id) == self.main_id {
+                    let was_direct = self.effective_tool() == Tool::DirectSelect;
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
                     self.alt_down = m.state().alt_key();
+                    // Toggling the temporary white-arrow gesture shows or
+                    // hides the node overlay.
+                    if (self.effective_tool() == Tool::DirectSelect) != was_direct {
+                        self.request_main_redraw();
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
