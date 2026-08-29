@@ -1278,15 +1278,16 @@ impl App {
             Drag::AnchorMarquee { start, candidate } => {
                 let moved = (self.pointer - start).hypot() > 3.0;
                 if moved {
-                    // A real drag: rubber-band the nodes of whatever
-                    // objects are already showing them.
+                    // A real drag: rubber-band every node inside the box,
+                    // across all paths — Illustrator's white-arrow marquee
+                    // reaches objects that weren't selected first. The
+                    // objects it catches then show their contour + nodes.
                     let r_doc = self
                         .view
                         .to_screen()
                         .inverse()
                         .transform_rect_bbox(Rect::from_points(start, self.pointer));
-                    let shown = self.node_paths();
-                    let hits = anchors::within_of(self.editor.document(), &shown, r_doc);
+                    let hits = anchors::within(self.editor.document(), r_doc);
                     if self.shift_down {
                         for a in hits {
                             if !self.anchor_sel.contains(&a) {
