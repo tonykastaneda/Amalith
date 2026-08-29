@@ -452,6 +452,19 @@ impl App {
                     index: None,
                 });
             }
+            panels::Action::LayerRestack(dir) => self.restack(dir),
+            panels::Action::DeleteObjects => {
+                if !self.selection.is_empty() {
+                    let _ = self.editor.execute(Command::DeleteObjects {
+                        ids: std::mem::take(&mut self.selection),
+                    });
+                }
+            }
+            panels::Action::DeleteArtboard => {
+                if let Some(id) = self.selected_artboard.take() {
+                    let _ = self.editor.execute(Command::DeleteArtboard { id });
+                }
+            }
             panels::Action::NewArtboard => {
                 let boards = self.editor.document().artboards();
                 let n = boards.len() + 1;

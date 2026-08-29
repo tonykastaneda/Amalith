@@ -85,10 +85,15 @@ pub enum Action {
     ToggleLocked(ObjectId),
     /// Layers panel: expand / collapse a group row.
     ToggleExpand(ObjectId),
-    /// Layers panel: the "+" button.
+    /// Panel footer buttons.
     NewLayer,
-    /// Artboards panel: the "+" button.
     NewArtboard,
+    /// Layers footer: restack the selection (+1 up / −1 down).
+    LayerRestack(i32),
+    /// Layers footer: delete the object selection.
+    DeleteObjects,
+    /// Artboards footer: delete the selected artboard.
+    DeleteArtboard,
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -138,13 +143,17 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         return layers_hit(body, local, ctx);
     }
     if id.0 == "artboards" {
-        let last = ctx.doc.artboards().len();
-        let row = ((local.y - body.y0) / ROW_H).floor();
-        return if row as usize == last && row >= 0.0 {
-            Action::NewArtboard
-        } else {
-            Action::None
-        };
+        if local.y >= body.y1 - FOOTER_H {
+            let [_, _, add, del] = panel_footer_rects(body);
+            return if add.contains(local) {
+                Action::NewArtboard
+            } else if del.contains(local) {
+                Action::DeleteArtboard
+            } else {
+                Action::None
+            };
+        }
+        return Action::None;
     }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
     let row = ((local.y - body.y0) / unit).floor();
@@ -161,9 +170,23 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     }
 }
 
-/// Resolve a click in the Layers panel: the "+" button, a disclosure
+/// Resolve a click in the Layers panel: the footer buttons, a disclosure
 /// triangle, the eye / lock columns, or the name (select).
 fn layers_hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
+    if local.y >= body.y1 - FOOTER_H {
+        let [up, down, add, del] = panel_footer_rects(body);
+        return if up.contains(local) {
+            Action::LayerRestack(1)
+        } else if down.contains(local) {
+            Action::LayerRestack(-1)
+        } else if add.contains(local) {
+            Action::NewLayer
+        } else if del.contains(local) {
+            Action::DeleteObjects
+        } else {
+            Action::None
+        };
+    }
     let rows = layer_rows(ctx.doc, ctx.expanded);
     let i = ((local.y - body.y0) / ROW_H).floor();
     if i < 0.0 {
@@ -173,7 +196,6 @@ fn layers_hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::None;
     };
     match row.kind {
-        RowKind::NewButton => Action::NewLayer,
         RowKind::Layer => Action::None,
         RowKind::Object { id, is_group } => {
             let indent = PAD + row.depth as f64 * INDENT;
@@ -194,6 +216,120 @@ fn layers_hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
 fn row_rect(body: Rect, i: usize) -> Rect {
     let y = body.y0 + i as f64 * ROW_H;
     Rect::new(body.x0, y, body.x1, y + ROW_H)
+}
+
+/// Height of a panel's bottom button strip.
+const FOOTER_H: f64 = 30.0;
+
+/// The four footer button rects, left→right: move-up, move-down, add,
+/// delete — right-aligned in the strip along `body`'s bottom edge.
+fn panel_footer_rects(body: Rect) -> [Rect; 4] {
+    let sz = 20.0;
+    let gap = 10.0;
+    let cy = body.y1 - FOOTER_H * 0.5;
+    std::array::from_fn(|k| {
+        let cx = body.x1 - PAD - (3 - k) as f64 * (sz + gap) - sz * 0.5;
+        Rect::from_center_size(Point::new(cx, cy), (sz, sz))
+    })
+}
+
+fn footer_color(theme: &Theme, enabled: bool, hot: bool) -> Color {
+    if !enabled {
+        theme.border
+    } else if hot {
+        theme.text
+    } else {
+        theme.text_dim
+    }
+}
+
+/// Draws the footer strip and its four icons. `enabled` gates each of
+/// [up, down, add, delete].
+fn paint_panel_footer(
+    scene: &mut Scene,
+    body: Rect,
+    theme: &Theme,
+    pointer: Point,
+    enabled: [bool; 4],
+) {
+    let strip = Rect::new(body.x0, body.y1 - FOOTER_H, body.x1, body.y1);
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &strip);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(strip.x0, strip.y0, strip.x1, strip.y0 + 1.0),
+    );
+    let rects = panel_footer_rects(body);
+    for (k, r) in rects.iter().enumerate() {
+        let c = footer_color(theme, enabled[k], r.contains(pointer));
+        match k {
+            0 => draw_footer_arrow(scene, *r, true, c),
+            1 => draw_footer_arrow(scene, *r, false, c),
+            2 => draw_footer_plus(scene, *r, c),
+            _ => draw_footer_trash(scene, *r, c),
+        }
+    }
+}
+
+fn draw_footer_arrow(scene: &mut Scene, r: Rect, up: bool, color: Color) {
+    let cx = r.center().x;
+    let (y_head, y_tail, y_tip) = if up {
+        (r.y0 + 6.0, r.y1 - 3.0, r.y0 + 2.0)
+    } else {
+        (r.y1 - 6.0, r.y0 + 3.0, r.y1 - 2.0)
+    };
+    scene.stroke(
+        &Stroke::new(1.6),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Line::new((cx, y_tail), (cx, y_tip)),
+    );
+    let mut head = BezPath::new();
+    head.move_to((cx - 4.0, y_head));
+    head.line_to((cx, y_tip));
+    head.line_to((cx + 4.0, y_head));
+    scene.stroke(&Stroke::new(1.6), ID, color, None, &head);
+}
+
+fn draw_footer_plus(scene: &mut Scene, r: Rect, color: Color) {
+    let c = r.center();
+    scene.stroke(
+        &Stroke::new(1.6),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Line::new((c.x - 5.0, c.y), (c.x + 5.0, c.y)),
+    );
+    scene.stroke(
+        &Stroke::new(1.6),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Line::new((c.x, c.y - 5.0), (c.x, c.y + 5.0)),
+    );
+}
+
+fn draw_footer_trash(scene: &mut Scene, r: Rect, color: Color) {
+    let c = r.center();
+    let can = Rect::new(c.x - 4.5, c.y - 2.5, c.x + 4.5, c.y + 6.0);
+    scene.stroke(&Stroke::new(1.4), ID, color, None, &can);
+    scene.stroke(
+        &Stroke::new(1.4),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Line::new((c.x - 7.0, c.y - 2.5), (c.x + 7.0, c.y - 2.5)),
+    );
+    scene.stroke(
+        &Stroke::new(1.4),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Line::new((c.x - 2.0, c.y - 5.0), (c.x + 2.0, c.y - 5.0)),
+    );
 }
 
 /// The overlapping fill / stroke chips at the bottom of the tool strip.
@@ -261,7 +397,6 @@ const COL: f64 = 16.0;
 enum RowKind {
     Layer,
     Object { id: ObjectId, is_group: bool },
-    NewButton,
 }
 
 struct LayerRow {
@@ -313,14 +448,6 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
         });
         walk(doc, ObjectParent::Layer(layer.id), 1, expanded, &mut rows);
     }
-    rows.push(LayerRow {
-        label: "+  New Layer".into(),
-        kind: RowKind::NewButton,
-        depth: 0,
-        visible: true,
-        locked: false,
-        expanded: false,
-    });
     rows
 }
 
@@ -349,25 +476,6 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
         let indent = body.x0 + PAD + row.depth as f64 * INDENT;
 
         match row.kind {
-            RowKind::NewButton => {
-                if hot_row == Some(i as i64) {
-                    scene.fill(
-                        Fill::NonZero,
-                        ID,
-                        ctx.theme.select_blue.with_alpha(0.14),
-                        None,
-                        &r,
-                    );
-                }
-                text.draw(
-                    scene,
-                    &row.label,
-                    12.0,
-                    ctx.theme.select_blue,
-                    body.x0 + PAD,
-                    baseline,
-                );
-            }
             RowKind::Layer => {
                 scene.fill(Fill::NonZero, ID, ctx.theme.strip_bg, None, &r);
                 text.draw(
@@ -416,6 +524,15 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
             }
         }
     }
+
+    let has_sel = !ctx.selection.is_empty();
+    paint_panel_footer(
+        scene,
+        body,
+        ctx.theme,
+        ctx.pointer,
+        [has_sel, has_sel, true, has_sel],
+    );
 }
 
 /// A disclosure triangle centred at `(cx, cy)`: pointing right when
@@ -500,24 +617,14 @@ fn paint_artboards(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &
         );
     }
 
-    // "+ New Artboard" button, like the Layers panel.
-    let plus = row_rect(body, ctx.doc.artboards().len());
-    if plus.contains(ctx.pointer) {
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            ctx.theme.select_blue.with_alpha(0.14),
-            None,
-            &plus,
-        );
-    }
-    text.draw(
+    // Footer: reordering artboards isn't wired yet, so up/down are
+    // disabled; add and delete are always live.
+    paint_panel_footer(
         scene,
-        "+  New Artboard",
-        12.0,
-        ctx.theme.select_blue,
-        body.x0 + PAD,
-        plus.y0 + ROW_H * 0.5 + 4.0,
+        body,
+        ctx.theme,
+        ctx.pointer,
+        [false, false, true, true],
     );
 }
 
