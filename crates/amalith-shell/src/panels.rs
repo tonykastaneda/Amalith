@@ -541,7 +541,7 @@ fn swatch_layout(body: Rect) -> SwatchLayout {
     }
 }
 
-fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint, active: bool) {
+pub fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint, active: bool) {
     match paint {
         Paint::None => {
             scene.fill(

@@ -45,6 +45,11 @@ use winit::window::{Window, WindowId};
 
 /// Height of the top app bar, logical points.
 const APP_BAR_H: f64 = 30.0;
+/// The tool options strip, between the app bar and the canvas.
+const OPT_BAR_H: f64 = 30.0;
+/// Total fixed chrome above the canvas / below the top of the window.
+const CHROME_TOP: f64 = APP_BAR_H + OPT_BAR_H;
+const OPT_WIDTHS: [f64; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
 /// When a rail is empty, the strip of canvas along that edge that still
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
@@ -703,7 +708,7 @@ impl App {
         self.view
             .to_screen()
             .inverse()
-            .transform_rect_bbox(Rect::new(left, APP_BAR_H, right.max(left), h))
+            .transform_rect_bbox(Rect::new(left, CHROME_TOP, right.max(left), h))
     }
 
     /// Logical size of the main window's client area.
@@ -831,6 +836,46 @@ impl App {
 
                 // The app bar swallows clicks (unless the picker is up).
                 if self.picker.is_none() && self.pointer.y < APP_BAR_H {
+                    return;
+                }
+
+                // The tool options strip: fill/stroke chips + width buttons.
+                if self.picker.is_none()
+                    && self.pointer.y >= APP_BAR_H
+                    && self.pointer.y < CHROME_TOP
+                {
+                    let left_x = if self.dock.left.is_empty() {
+                        0.0
+                    } else {
+                        rail_rect_for(RailSide::Left, self.dock.left.width as f64, w, h).x1
+                    };
+                    let right_x = if self.dock.right.is_empty() {
+                        w
+                    } else {
+                        rail_rect_for(RailSide::Right, self.dock.right.width as f64, w, h).x0
+                    };
+                    let bar = opt_bar_rect(left_x, right_x);
+                    if opt_bar_has_paint(self.active_tool, !self.selection.is_empty()) {
+                        let (fr, sr, widths) = opt_bar_chips(bar);
+                        if fr.contains(self.pointer) {
+                            self.apply_panel_action(
+                                panels::Action::OpenPicker(panels::PaintSlot::Fill),
+                                double,
+                            );
+                        } else if sr.contains(self.pointer) {
+                            self.apply_panel_action(
+                                panels::Action::OpenPicker(panels::PaintSlot::Stroke),
+                                double,
+                            );
+                        } else if let Some((wv, _)) =
+                            widths.iter().find(|(_, r)| r.contains(self.pointer))
+                        {
+                            self.apply_panel_action(
+                                panels::Action::SetStrokeWidth(*wv),
+                                double,
+                            );
+                        }
+                    }
                     return;
                 }
 
@@ -2266,6 +2311,115 @@ fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: R
     }
 }
 
+/// The options-bar strip rect for a given canvas x-span.
+fn opt_bar_rect(left_x: f64, right_x: f64) -> Rect {
+    Rect::new(left_x, APP_BAR_H, right_x.max(left_x), CHROME_TOP)
+}
+
+/// Fill chip, stroke chip, and the five stroke-width buttons, laid out
+/// along the left of the options bar.
+fn opt_bar_chips(bar: Rect) -> (Rect, Rect, Vec<(f64, Rect)>) {
+    let cy = bar.y0 + bar.height() * 0.5;
+    let fill = Rect::from_center_size(Point::new(bar.x0 + 20.0, cy - 3.0), (17.0, 17.0));
+    let stroke = fill.with_origin(Point::new(fill.x0 + 9.0, fill.y0 + 9.0));
+    let mut widths = Vec::new();
+    let x0 = stroke.x1 + 20.0;
+    for (i, w) in OPT_WIDTHS.iter().enumerate() {
+        let x = x0 + i as f64 * 22.0;
+        widths.push((*w, Rect::new(x, cy - 9.0, x + 18.0, cy + 9.0)));
+    }
+    (fill, stroke, widths)
+}
+
+/// Whether the paint / width controls are relevant right now.
+fn opt_bar_has_paint(active_tool: Tool, has_selection: bool) -> bool {
+    has_selection || active_tool.is_shape() || active_tool == Tool::Pen
+}
+
+fn tool_hint(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Select => "Drag to move · Alt-drag to copy · handles scale, halo rotates",
+        Tool::DirectSelect => "Click a shape to edit its nodes · drag a box to grab several",
+        Tool::Pen => "Click to place anchors · click the first to close · Enter to finish",
+        Tool::Rectangle | Tool::Ellipse | Tool::RoundedRect | Tool::Polygon | Tool::Star => {
+            "Drag to draw · Shift constrains · Alt draws from the centre"
+        }
+        Tool::Artboard => "Drag empty canvas to create · drag an artboard to move it",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_options_bar(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    bar: Rect,
+    theme: &Theme,
+    active_tool: Tool,
+    representative: Option<amalith_core::Appearance>,
+    active_slot: panels::PaintSlot,
+    has_selection: bool,
+) {
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &bar);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(bar.x0, bar.y1 - 1.0, bar.x1, bar.y1),
+    );
+
+    if opt_bar_has_paint(active_tool, has_selection) {
+        let (fr, sr, widths) = opt_bar_chips(bar);
+        panels::draw_paint_swatch(
+            scene,
+            theme,
+            sr,
+            representative.map(|a| a.stroke).unwrap_or(amalith_core::Paint::None),
+            active_slot == panels::PaintSlot::Stroke,
+        );
+        panels::draw_paint_swatch(
+            scene,
+            theme,
+            fr,
+            representative
+                .map(|a| a.fill)
+                .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
+            active_slot == panels::PaintSlot::Fill,
+        );
+        let cur_w = representative.map(|a| a.stroke_width);
+        let white = vello::peniko::Color::from_rgb8(0xff, 0xff, 0xff);
+        for (w, r) in &widths {
+            let on = cur_w.is_some_and(|c| (c - *w).abs() < 0.01);
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                if on { theme.select_blue } else { theme.app_bar },
+                None,
+                r,
+            );
+            text.draw(
+                scene,
+                &format!("{}", *w as i64),
+                11.0,
+                if on { white } else { theme.text_dim },
+                r.x0 + 5.0,
+                r.y0 + 14.0,
+            );
+        }
+    }
+
+    let hint = tool_hint(active_tool);
+    let hw = text.measure(hint, 11.5);
+    text.draw(
+        scene,
+        hint,
+        11.5,
+        theme.text_dim,
+        (bar.x1 - hw - 12.0).max(bar.x0 + 8.0),
+        bar.y0 + bar.height() * 0.5 + 4.0,
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_main(
     scene: &mut Scene,
@@ -2310,7 +2464,7 @@ fn paint_main(
     } else {
         rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
     };
-    let viewport = Rect::new(left_x, APP_BAR_H, right_x.max(left_x), height);
+    let viewport = Rect::new(left_x, CHROME_TOP, right_x.max(left_x), height);
     canvas::paint(
         scene,
         doc,
@@ -2330,6 +2484,17 @@ fn paint_main(
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &m);
     }
+
+    paint_options_bar(
+        scene,
+        text,
+        opt_bar_rect(left_x, right_x),
+        theme,
+        active_tool,
+        representative,
+        active_slot,
+        !selection.is_empty(),
+    );
 
     for side in [RailSide::Left, RailSide::Right] {
         let rail = dock.rail(side);
