@@ -350,6 +350,9 @@ struct App {
     pending_tearoff: Option<(PanelId, Point)>,
     /// What the pointer looks like right now (see [`CanvasCursor`]).
     cursor_mode: CanvasCursor,
+    /// Which of our windows currently hold OS focus. Non-empty ⇒ Amalith
+    /// is the active app, and floating panels stay above the main window.
+    focused: std::collections::HashSet<WindowId>,
     /// The macOS application menu bar, once the app has resumed.
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
@@ -407,6 +410,7 @@ impl App {
             redock_preview: None,
             pending_tearoff: None,
             cursor_mode: CanvasCursor::Default,
+            focused: std::collections::HashSet::new(),
             #[cfg(target_os = "macos")]
             native_menu: None,
         }
@@ -1510,6 +1514,7 @@ impl App {
             .with_title(tab_label(panel))
             .with_decorations(false)
             .with_resizable(true)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_inner_size(LogicalSize::new(FLOAT_W, FLOAT_H))
             .with_position(LogicalPosition::new(pos.x, pos.y));
         let window = Arc::new(
@@ -2815,7 +2820,31 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         match event {
+            WindowEvent::Focused(focused) => {
+                let was_active = !self.focused.is_empty();
+                if focused {
+                    self.focused.insert(id);
+                } else {
+                    self.focused.remove(&id);
+                }
+                let now_active = !self.focused.is_empty();
+                if now_active != was_active {
+                    // Panels ride above the main window only while Amalith
+                    // is the frontmost app.
+                    let level = if now_active {
+                        winit::window::WindowLevel::AlwaysOnTop
+                    } else {
+                        winit::window::WindowLevel::Normal
+                    };
+                    for host in self.hosts.values() {
+                        if matches!(host.role, Role::Floating(_)) {
+                            host.window.set_window_level(level);
+                        }
+                    }
+                }
+            }
             WindowEvent::CloseRequested => {
+                self.focused.remove(&id);
                 if Some(id) == self.main_id {
                     event_loop.exit();
                 } else if let Some(host) = self.hosts.remove(&id) {

@@ -100,6 +100,10 @@ pub enum RailSide {
 /// Default rail width, logical points.
 pub const RAIL_DEFAULT_W: f32 = 320.0;
 
+/// Assumed splitter thickness when the model reasons about column pixel
+/// widths (the renderer's exact value comes from the theme).
+const SPLIT_GAP: f32 = 6.0;
+
 /// One docked column: a single [`Node`] tree (or empty) plus how wide the
 /// whole rail is. All the tree mechanics live here so every rail — left,
 /// right, and any future one — behaves identically.
@@ -141,14 +145,68 @@ impl Rail {
     }
 
     /// Removes `panel`, pruning empty tab groups and collapsing single-child
-    /// splits; empties the rail if that was the last panel.
+    /// splits; empties the rail if that was the last panel. If a whole
+    /// column disappears, the rail shrinks by that column's width so the
+    /// survivors keep their size.
     pub fn remove(&mut self, panel: PanelId) -> bool {
         let Some(t) = &mut self.tree else {
             return false;
         };
+
+        // Column pixel widths + which one holds `panel`, before removal.
+        let cols_before: Option<(Vec<f32>, usize)> = match &*t {
+            Node::Split {
+                axis: Axis::Horizontal,
+                children,
+            } if children.len() >= 2 => {
+                let wsum: f32 = children
+                    .iter()
+                    .map(|c| c.weight.max(0.0))
+                    .sum::<f32>()
+                    .max(1e-3);
+                let avail =
+                    (self.width - SPLIT_GAP * (children.len() as f32 - 1.0)).max(1.0);
+                let px: Vec<f32> = children
+                    .iter()
+                    .map(|c| avail * c.weight.max(0.0) / wsum)
+                    .collect();
+                children
+                    .iter()
+                    .position(|c| {
+                        let mut v = Vec::new();
+                        collect(&c.node, &mut v);
+                        v.contains(&panel)
+                    })
+                    .map(|i| (px, i))
+            }
+            _ => None,
+        };
+
         let hit = remove_in(t, panel);
         if node_is_empty(t) {
             self.tree = None;
+        }
+
+        if hit {
+            if let Some((px, removed_i)) = cols_before {
+                let n_surv = px.len() - 1;
+                let surviving: f32 = px
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != removed_i)
+                    .map(|(_, v)| *v)
+                    .sum();
+                match &self.tree {
+                    Some(Node::Split {
+                        axis: Axis::Horizontal,
+                        children,
+                    }) if children.len() == n_surv && n_surv >= 2 => {
+                        self.width = surviving + SPLIT_GAP * (n_surv as f32 - 1.0);
+                    }
+                    Some(_) if n_surv == 1 => self.width = surviving,
+                    _ => {}
+                }
+            }
         }
         hit
     }
@@ -414,7 +472,6 @@ impl DockModel {
         // just adopts that column's width for visual consistency.
         let float_w = f.rect[2].max(1.0);
         let adds_column = matches!(target, DropTarget::Split { .. });
-        const GAP: f32 = 6.0;
         let mut panels = Vec::new();
         collect(&f.node, &mut panels);
         if let Node::Tabs { active, .. } = &f.node {
@@ -435,7 +492,7 @@ impl DockModel {
                     .map(|c| c.weight.max(0.0))
                     .sum::<f32>()
                     .max(1e-3);
-                let avail = (rail.width - GAP * (children.len() as f32 - 1.0)).max(1.0);
+                let avail = (rail.width - SPLIT_GAP * (children.len() as f32 - 1.0)).max(1.0);
                 children
                     .iter()
                     .map(|c| (avail * c.weight.max(0.0) / wsum).max(48.0))
@@ -486,7 +543,7 @@ impl DockModel {
                         };
                     }
                     rail.width =
-                        float_w + existing_px.iter().sum::<f32>() + GAP * (n as f32 - 1.0);
+                        float_w + existing_px.iter().sum::<f32>() + SPLIT_GAP * (n as f32 - 1.0);
                 }
             }
         }
