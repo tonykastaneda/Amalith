@@ -203,6 +203,15 @@ enum MenuAction {
     SendToBack,
 }
 
+/// An inline panel rename: what's being renamed, the edit buffer, and
+/// whether the buffer is still the untouched original (so the first
+/// keystroke replaces it, like Illustrator's select-all-on-focus).
+struct Rename {
+    target: panels::RenameId,
+    buf: String,
+    fresh: bool,
+}
+
 struct App {
     context: RenderContext,
     hosts: HashMap<WindowId, WindowHost>,
@@ -227,6 +236,8 @@ struct App {
     expanded_groups: std::collections::HashSet<ObjectId>,
     /// The artboard the Artboard tool is currently editing (shows handles).
     selected_artboard: Option<ArtboardId>,
+    /// An in-progress inline rename in a panel.
+    rename: Option<Rename>,
     active_tool: Tool,
     /// The tool that was active when the Artboard tool was entered, so
     /// Escape can drop straight back to it.
@@ -298,6 +309,7 @@ impl App {
             anchor_sel: Vec::new(),
             expanded_groups: std::collections::HashSet::new(),
             selected_artboard: None,
+            rename: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
@@ -380,7 +392,23 @@ impl App {
         match action {
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
-            panels::Action::Select(id) => self.selection = vec![id],
+            panels::Action::Select(id) => {
+                self.selection = vec![id];
+                if double {
+                    self.begin_rename(panels::RenameId::Object(id));
+                }
+            }
+            panels::Action::SelectLayer(id) => {
+                if double {
+                    self.begin_rename(panels::RenameId::Layer(id));
+                }
+            }
+            panels::Action::SelectArtboard(id) => {
+                self.selected_artboard = Some(id);
+                if double {
+                    self.begin_rename(panels::RenameId::Artboard(id));
+                }
+            }
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
             // Single click just picks the slot; double click opens the
             // colour picker (Illustrator behaviour).
@@ -490,6 +518,84 @@ impl App {
             }
         }
         self.request_main_redraw();
+    }
+
+    /// Start an inline rename, seeding the buffer with the current name.
+    fn begin_rename(&mut self, target: panels::RenameId) {
+        let doc = self.editor.document();
+        let buf = match target {
+            panels::RenameId::Layer(id) => doc
+                .layers()
+                .iter()
+                .find(|l| l.id == id)
+                .map(|l| l.name.clone()),
+            panels::RenameId::Object(id) => {
+                Some(doc.object(id).and_then(|o| o.name.clone()).unwrap_or_default())
+            }
+            panels::RenameId::Artboard(id) => doc.artboard(id).map(|a| a.name.clone()),
+        };
+        if let Some(buf) = buf {
+            self.rename = Some(Rename {
+                target,
+                buf,
+                fresh: true,
+            });
+            self.request_main_redraw();
+        }
+    }
+
+    /// Commit the inline rename (empty name = cancel).
+    fn commit_rename(&mut self) {
+        let Some(r) = self.rename.take() else {
+            return;
+        };
+        let name = r.buf.trim().to_string();
+        if !name.is_empty() {
+            let cmd = match r.target {
+                panels::RenameId::Layer(id) => Command::RenameLayer { id, name },
+                panels::RenameId::Object(id) => Command::RenameObject {
+                    id,
+                    name: Some(name),
+                },
+                panels::RenameId::Artboard(id) => Command::RenameArtboard { id, name },
+            };
+            let _ = self.editor.execute(cmd);
+        }
+        self.request_main_redraw();
+    }
+
+    /// A key while an inline rename is active. Returns `true` if consumed.
+    fn rename_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.rename.is_none() || !event.state.is_pressed() {
+            return self.rename.is_some();
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => self.commit_rename(),
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.rename = None;
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some(r) = &mut self.rename {
+                    r.fresh = false;
+                    r.buf.pop();
+                }
+                self.request_main_redraw();
+            }
+            _ => {
+                if let (Some(r), Some(txt)) = (&mut self.rename, event.text.as_ref()) {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if r.fresh {
+                            r.buf.clear();
+                            r.fresh = false;
+                        }
+                        r.buf.push(ch);
+                    }
+                    self.request_main_redraw();
+                }
+            }
+        }
+        true
     }
 
     /// Appearance of the first selected object, for the Swatches panel.
@@ -1065,6 +1171,11 @@ impl App {
         };
         // Any press ends the "⌘Z re-opens the last pen path" window.
         self.last_pen = None;
+        // A press anywhere commits an in-progress rename (unless it's the
+        // double-click that's about to start one).
+        if self.rename.is_some() && !double {
+            self.commit_rename();
+        }
         match role {
             Role::Main => {
                 let Some((w, h)) = self.main_logical_size() else {
@@ -1204,6 +1315,10 @@ impl App {
                                         representative: rep,
                                         active_slot: self.active_slot,
                                         expanded: &self.expanded_groups,
+                                        renaming: self
+                                            .rename
+                                            .as_ref()
+                                            .map(|r| (r.target, r.buf.as_str())),
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -2143,6 +2258,7 @@ impl App {
                 &self.expanded_groups,
                 self.stroke_w,
                 self.opacity,
+                self.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2346,6 +2462,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
+                // An inline rename swallows all keyboard input.
+                if self.rename.is_some() {
+                    self.rename_key(&event);
+                    return;
+                }
                 let pressed = event.state.is_pressed();
                 // Any key other than ⌘Z ends the pen re-open window.
                 if pressed && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyZ)) {
@@ -2983,6 +3104,7 @@ fn paint_main(
     expanded: &std::collections::HashSet<ObjectId>,
     cur_weight: f64,
     cur_opacity: f32,
+    renaming: Option<(panels::RenameId, &str)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3057,6 +3179,7 @@ fn paint_main(
                 representative,
                 active_slot,
                 expanded,
+                renaming,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

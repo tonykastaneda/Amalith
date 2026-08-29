@@ -7,7 +7,8 @@
 use std::collections::HashSet;
 
 use amalith_core::{
-    Appearance, Color as CoreColor, Document, ObjectId, ObjectKind, ObjectParent, Paint,
+    Appearance, ArtboardId, Color as CoreColor, Document, LayerId, ObjectId, ObjectKind,
+    ObjectParent, Paint,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -31,6 +32,14 @@ const SWATCH: f64 = 22.0;
 pub enum PaintSlot {
     Fill,
     Stroke,
+}
+
+/// A renameable entity — the target of an inline panel edit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RenameId {
+    Layer(LayerId),
+    Object(ObjectId),
+    Artboard(ArtboardId),
 }
 
 /// The preset palette (plus a leading `Paint::None`).
@@ -67,6 +76,8 @@ pub struct Ctx<'a> {
     pub active_slot: PaintSlot,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
+    /// The row being inline-renamed, and its current edit buffer.
+    pub renaming: Option<(RenameId, &'a str)>,
 }
 
 /// What a click in a panel body asks the app to do.
@@ -75,6 +86,10 @@ pub enum Action {
     None,
     SetTool(Tool),
     Select(ObjectId),
+    /// Layers panel: a layer-header row was clicked.
+    SelectLayer(LayerId),
+    /// Artboards panel: an artboard row was clicked.
+    SelectArtboard(ArtboardId),
     SetActiveSlot(PaintSlot),
     /// Open the colour picker for this slot.
     OpenPicker(PaintSlot),
@@ -153,6 +168,12 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
                 Action::None
             };
         }
+        let row = ((local.y - body.y0) / ROW_H).floor();
+        if row >= 0.0 {
+            if let Some(ab) = ctx.doc.artboards().get(row as usize) {
+                return Action::SelectArtboard(ab.id);
+            }
+        }
         return Action::None;
     }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
@@ -196,7 +217,7 @@ fn layers_hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::None;
     };
     match row.kind {
-        RowKind::Layer => Action::None,
+        RowKind::Layer(id) => Action::SelectLayer(id),
         RowKind::Object { id, is_group } => {
             let indent = PAD + row.depth as f64 * INDENT;
             let x = local.x - body.x0;
@@ -395,7 +416,7 @@ const INDENT: f64 = 14.0;
 const COL: f64 = 16.0;
 
 enum RowKind {
-    Layer,
+    Layer(LayerId),
     Object { id: ObjectId, is_group: bool },
 }
 
@@ -440,7 +461,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
     for layer in doc.layers() {
         rows.push(LayerRow {
             label: format!("{}  ({})", layer.name, layer.children.len()),
-            kind: RowKind::Layer,
+            kind: RowKind::Layer(layer.id),
             depth: 0,
             visible: layer.visible,
             locked: layer.locked,
@@ -464,6 +485,41 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
     .to_string()
 }
 
+/// Draw a row's name: either the plain `label`, or — when `editing` is
+/// `Some(buffer)` — an inline text field with the buffer and a caret.
+fn draw_name_field(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    x: f64,
+    row: Rect,
+    label: &str,
+    color: Color,
+    editing: Option<&str>,
+) {
+    let baseline = row.y0 + row.height() * 0.5 + 4.0;
+    match editing {
+        None => text.draw(scene, label, 12.0, color, x, baseline),
+        Some(buf) => {
+            let field = Rect::new(x - 4.0, row.y0 + 3.0, row.x1 - PAD, row.y1 - 3.0);
+            scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
+            scene.stroke(&Stroke::new(1.25), ID, theme.select_blue, None, &field);
+            text.draw(scene, buf, 12.0, theme.text, x, baseline);
+            let caret_x = x + text.measure(buf, 12.0) + 1.0;
+            scene.stroke(
+                &Stroke::new(1.0),
+                ID,
+                theme.text,
+                None,
+                &vello::kurbo::Line::new(
+                    (caret_x, row.y0 + 5.0),
+                    (caret_x, row.y1 - 5.0),
+                ),
+            );
+        }
+    }
+}
+
 fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let hot_row = if body.contains(ctx.pointer) {
         Some(((ctx.pointer.y - body.y0) / ROW_H).floor() as i64)
@@ -472,19 +528,24 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
     };
     for (i, row) in layer_rows(ctx.doc, ctx.expanded).into_iter().enumerate() {
         let r = row_rect(body, i);
-        let baseline = r.y0 + ROW_H * 0.5 + 4.0;
         let indent = body.x0 + PAD + row.depth as f64 * INDENT;
 
         match row.kind {
-            RowKind::Layer => {
+            RowKind::Layer(lid) => {
                 scene.fill(Fill::NonZero, ID, ctx.theme.strip_bg, None, &r);
-                text.draw(
+                let editing = match ctx.renaming {
+                    Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
+                    _ => None,
+                };
+                draw_name_field(
                     scene,
-                    &row.label,
-                    12.0,
-                    ctx.theme.text,
+                    text,
+                    ctx.theme,
                     body.x0 + PAD,
-                    baseline,
+                    r,
+                    &row.label,
+                    ctx.theme.text,
+                    editing,
                 );
             }
             RowKind::Object { id, is_group } => {
@@ -520,7 +581,20 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
                 } else {
                     ctx.theme.text_dim
                 };
-                text.draw(scene, &row.label, 12.0, name_c, indent + COL * 3.0, baseline);
+                let editing = match ctx.renaming {
+                    Some((RenameId::Object(o), buf)) if o == id => Some(buf),
+                    _ => None,
+                };
+                draw_name_field(
+                    scene,
+                    text,
+                    ctx.theme,
+                    indent + COL * 3.0,
+                    r,
+                    &row.label,
+                    name_c,
+                    editing,
+                );
             }
         }
     }
@@ -585,25 +659,40 @@ fn draw_lock(scene: &mut Scene, cx: f64, cy: f64, color: Color) {
 fn paint_artboards(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     for (i, ab) in ctx.doc.artboards().iter().enumerate() {
         let r = row_rect(body, i);
-        let _ = &r;
         let w = ab.rect.width().round() as i64;
         let h = ab.rect.height().round() as i64;
         text.draw(
             scene,
-            &format!("{:02}  {}", i + 1, ab.name),
+            &format!("{:02}", i + 1),
             12.0,
-            ctx.theme.text,
-            body.x0 + PAD,
-            body.y0 + i as f64 * ROW_H + ROW_H * 0.5 + 4.0,
-        );
-        text.draw(
-            scene,
-            &format!("{w} × {h}"),
-            11.0,
             ctx.theme.text_dim,
-            body.x1 - PAD - 90.0,
-            body.y0 + i as f64 * ROW_H + ROW_H * 0.5 + 4.0,
+            body.x0 + PAD,
+            r.y0 + ROW_H * 0.5 + 4.0,
         );
+        let editing = match ctx.renaming {
+            Some((RenameId::Artboard(a), buf)) if a == ab.id => Some(buf),
+            _ => None,
+        };
+        draw_name_field(
+            scene,
+            text,
+            ctx.theme,
+            body.x0 + PAD + 34.0,
+            r,
+            &ab.name,
+            ctx.theme.text,
+            editing,
+        );
+        if editing.is_none() {
+            text.draw(
+                scene,
+                &format!("{w} × {h}"),
+                11.0,
+                ctx.theme.text_dim,
+                body.x1 - PAD - 90.0,
+                r.y0 + ROW_H * 0.5 + 4.0,
+            );
+        }
     }
     // Hairline separators.
     for i in 1..ctx.doc.artboards().len() {
