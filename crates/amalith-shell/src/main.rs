@@ -48,8 +48,8 @@ const EMPTY_ZONE: f64 = 48.0;
 const GRAB_SLOP: f64 = 5.0;
 /// Visible thickness of the bar on a rail's inner edge.
 const RAIL_EDGE: f64 = 4.0;
-/// Min / max rail width as a fraction of the window, logical points.
-const RAIL_MIN_W: f64 = 160.0;
+/// Min rail width, logical points (a narrow icon-only rail is allowed).
+const RAIL_MIN_W: f64 = 48.0;
 /// Pointer travel before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 5.0;
 /// Default size of a torn-off panel window, logical points.
@@ -186,7 +186,7 @@ impl App {
             dock: {
                 let mut d = DockModel::new(demo_right_dock());
                 d.left = Rail::with(demo_left_dock());
-                d.left.width = 190.0;
+                d.left.width = 52.0;
                 d
             },
             editor: Editor::new(sample::document()),
@@ -454,6 +454,7 @@ impl App {
                                         doc: self.editor.document(),
                                         selection: &self.selection,
                                         active_tool: self.active_tool,
+                                        pointer: self.pointer,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -975,6 +976,7 @@ impl App {
                 &self.theme,
                 &self.selection,
                 self.active_tool,
+                self.pointer,
                 preview,
                 draw_shape,
                 self.marquee,
@@ -1285,6 +1287,7 @@ fn paint_main(
     theme: &Theme,
     selection: &[ObjectId],
     active_tool: Tool,
+    pointer: Point,
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     marquee: Option<Rect>,
@@ -1344,6 +1347,7 @@ fn paint_main(
                 doc,
                 selection,
                 active_tool,
+                pointer,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

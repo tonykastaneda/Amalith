@@ -5,17 +5,19 @@
 //! settles.
 
 use amalith_core::{Document, ObjectId, ObjectKind};
-use vello::kurbo::{Affine, Rect, Stroke};
-use vello::peniko::Fill;
+use vello::kurbo::{Affine, Point, Rect, Stroke};
+use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 use crate::dock::PanelId;
+use crate::icons;
 use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
 
 const ID: Affine = Affine::IDENTITY;
 const ROW_H: f64 = 26.0;
+const TOOL_BTN: f64 = 40.0;
 const PAD: f64 = 10.0;
 
 /// Read-only context a panel body draws from.
@@ -24,6 +26,8 @@ pub struct Ctx<'a> {
     pub doc: &'a Document,
     pub selection: &'a [ObjectId],
     pub active_tool: Tool,
+    /// Cursor position in screen px, for hover styling.
+    pub pointer: Point,
 }
 
 /// What a click in a panel body asks the app to do.
@@ -46,9 +50,10 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
 
 /// Resolve a click at `local` (panel-body coordinates, same space as
 /// `body`) into an [`Action`].
-pub fn hit(id: PanelId, body: Rect, local: vello::kurbo::Point, ctx: &Ctx) -> Action {
-    let row = ((local.y - body.y0) / ROW_H).floor() as i64;
-    if row < 0 {
+pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
+    let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
+    let row = ((local.y - body.y0) / unit).floor();
+    if row < 0.0 {
         return Action::None;
     }
     let row = row as usize;
@@ -71,20 +76,30 @@ fn row_rect(body: Rect, i: usize) -> Rect {
     Rect::new(body.x0, y, body.x1, y + ROW_H)
 }
 
-fn paint_tools(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
+fn paint_tools(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx) {
+    let white = Color::from_rgb8(0xff, 0xff, 0xff);
     for (i, tool) in Tool::ALL.into_iter().enumerate() {
-        let r = row_rect(body, i);
-        if tool == ctx.active_tool {
+        let r = Rect::new(
+            body.x0,
+            body.y0 + i as f64 * TOOL_BTN,
+            body.x1,
+            body.y0 + (i + 1) as f64 * TOOL_BTN,
+        );
+        let active = tool == ctx.active_tool;
+        if active {
             scene.fill(Fill::NonZero, ID, ctx.theme.select_blue, None, &r);
+        } else if r.contains(ctx.pointer) {
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                ctx.theme.select_blue.with_alpha(0.14),
+                None,
+                &r,
+            );
         }
-        let fg = if tool == ctx.active_tool {
-            vello::peniko::Color::from_rgb8(0xff, 0xff, 0xff)
-        } else {
-            ctx.theme.text
-        };
-        let base = r.y0 + ROW_H * 0.5 + 4.0;
-        text.draw(scene, tool.key(), 11.0, fg, body.x0 + PAD, base);
-        text.draw(scene, tool.label(), 12.5, fg, body.x0 + PAD + 20.0, base);
+        let color = if active { white } else { ctx.theme.text_dim };
+        let icon_box = Rect::from_center_size(r.center(), (22.0, 22.0));
+        icons::draw(scene, tool.icon(), icon_box, color);
     }
 }
 

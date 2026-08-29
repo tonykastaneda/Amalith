@@ -23,6 +23,7 @@ pub mod chrome;
 pub mod convert;
 pub mod dock;
 pub mod handles;
+pub mod icons;
 pub mod layout;
 pub mod panel;
 pub mod panels;
