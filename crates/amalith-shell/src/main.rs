@@ -236,6 +236,8 @@ struct App {
     expanded_groups: std::collections::HashSet<ObjectId>,
     /// The artboard the Artboard tool is currently editing (shows handles).
     selected_artboard: Option<ArtboardId>,
+    /// The layer highlighted in the Layers panel.
+    selected_layer: Option<LayerId>,
     /// An in-progress inline rename in a panel.
     rename: Option<Rename>,
     active_tool: Tool,
@@ -309,6 +311,7 @@ impl App {
             anchor_sel: Vec::new(),
             expanded_groups: std::collections::HashSet::new(),
             selected_artboard: None,
+            selected_layer: None,
             rename: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
@@ -399,6 +402,7 @@ impl App {
                 }
             }
             panels::Action::SelectLayer(id) => {
+                self.selected_layer = Some(id);
                 if double {
                     self.begin_rename(panels::RenameId::Layer(id));
                 }
@@ -617,6 +621,18 @@ impl App {
                 }
                 _ => false,
             });
+        if self
+            .selected_layer
+            .is_some_and(|id| !doc.layers().iter().any(|l| l.id == id))
+        {
+            self.selected_layer = None;
+        }
+        if self
+            .selected_artboard
+            .is_some_and(|id| doc.artboard(id).is_none())
+        {
+            self.selected_artboard = None;
+        }
     }
 
     /// The tool pointer input actually routes to. Holding ⌘ while the
@@ -1319,6 +1335,8 @@ impl App {
                                             .rename
                                             .as_ref()
                                             .map(|r| (r.target, r.buf.as_str())),
+                                        selected_layer: self.selected_layer,
+                                        selected_artboard: self.selected_artboard,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -2259,6 +2277,8 @@ impl App {
                 self.stroke_w,
                 self.opacity,
                 self.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
+                self.selected_layer,
+                self.selected_artboard,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -3105,6 +3125,8 @@ fn paint_main(
     cur_weight: f64,
     cur_opacity: f32,
     renaming: Option<(panels::RenameId, &str)>,
+    selected_layer: Option<LayerId>,
+    selected_artboard: Option<ArtboardId>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3180,6 +3202,8 @@ fn paint_main(
                 active_slot,
                 expanded,
                 renaming,
+                selected_layer,
+                selected_artboard,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

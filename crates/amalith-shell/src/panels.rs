@@ -78,6 +78,9 @@ pub struct Ctx<'a> {
     pub expanded: &'a HashSet<ObjectId>,
     /// The row being inline-renamed, and its current edit buffer.
     pub renaming: Option<(RenameId, &'a str)>,
+    /// Panel-row selection highlights.
+    pub selected_layer: Option<LayerId>,
+    pub selected_artboard: Option<ArtboardId>,
 }
 
 /// What a click in a panel body asks the app to do.
@@ -532,7 +535,12 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
 
         match row.kind {
             RowKind::Layer(lid) => {
-                scene.fill(Fill::NonZero, ID, ctx.theme.strip_bg, None, &r);
+                let fill = if ctx.selected_layer == Some(lid) {
+                    ctx.theme.select_blue.with_alpha(0.22)
+                } else {
+                    ctx.theme.strip_bg
+                };
+                scene.fill(Fill::NonZero, ID, fill, None, &r);
                 let editing = match ctx.renaming {
                     Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
                     _ => None,
@@ -659,6 +667,15 @@ fn draw_lock(scene: &mut Scene, cx: f64, cy: f64, color: Color) {
 fn paint_artboards(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     for (i, ab) in ctx.doc.artboards().iter().enumerate() {
         let r = row_rect(body, i);
+        if ctx.selected_artboard == Some(ab.id) {
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                ctx.theme.select_blue.with_alpha(0.22),
+                None,
+                &r,
+            );
+        }
         let w = ab.rect.width().round() as i64;
         let h = ab.rect.height().round() as i64;
         text.draw(
