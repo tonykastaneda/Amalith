@@ -78,8 +78,6 @@ pub fn paint_drop(
             let Some(r) = rect_for_path(path, layout, root) else {
                 return;
             };
-            let wash = half(r, *side);
-            scene.fill(Fill::NonZero, ID, theme.drop_fill, None, &wash);
             scene.fill(
                 Fill::NonZero,
                 ID,
@@ -102,7 +100,6 @@ pub fn paint_drop(
                     .map(|t| t.rect.x1)
                     .unwrap_or(area.tab_strip.x0)
             };
-            scene.fill(Fill::NonZero, ID, theme.drop_fill, None, &area.body);
             let caret = Rect::new(x - 1.5, area.tab_strip.y0, x + 1.5, area.tab_strip.y1);
             scene.fill(Fill::NonZero, ID, theme.drop_line, None, &caret);
         }
@@ -127,14 +124,5 @@ fn edge_line(r: Rect, side: Side) -> Rect {
         Side::Right => Rect::new(r.x1 - t, r.y0, r.x1, r.y1),
         Side::Top => Rect::new(r.x0, r.y0, r.x1, r.y0 + t),
         Side::Bottom => Rect::new(r.x0, r.y1 - t, r.x1, r.y1),
-    }
-}
-
-fn half(r: Rect, side: Side) -> Rect {
-    match side {
-        Side::Left => Rect::new(r.x0, r.y0, r.x0 + r.width() * 0.5, r.y1),
-        Side::Right => Rect::new(r.x1 - r.width() * 0.5, r.y0, r.x1, r.y1),
-        Side::Top => Rect::new(r.x0, r.y0, r.x1, r.y0 + r.height() * 0.5),
-        Side::Bottom => Rect::new(r.x0, r.y1 - r.height() * 0.5, r.x1, r.y1),
     }
 }
