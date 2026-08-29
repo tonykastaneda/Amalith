@@ -3,6 +3,8 @@ mod camera;
 mod direct_selection;
 mod ellipse_tool;
 mod fill_mesh;
+mod pen_tool;
+mod primitive_tool;
 mod rectangle_tool;
 mod selection;
 
@@ -16,17 +18,62 @@ use camera::Camera;
 use direct_selection::DirectSelectionTool;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect as EguiRect, Stroke, Vec2};
 use ellipse_tool::EllipseTool;
+use pen_tool::PenTool;
+use primitive_tool::{PrimitiveKind, PrimitiveTool};
 use rectangle_tool::RectangleTool;
 use selection::SelectionTool;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+const APP_BAR: Color32 = Color32::from_rgb(48, 48, 48);
+const PANEL: Color32 = Color32::from_rgb(43, 43, 43);
+const PANEL_RAISED: Color32 = Color32::from_rgb(53, 53, 53);
+const PANEL_BORDER: Color32 = Color32::from_rgb(31, 31, 31);
+const CANVAS: Color32 = Color32::from_rgb(51, 51, 51);
+const ACCENT: Color32 = Color32::from_rgb(54, 132, 217);
+const TOOL_SELECTION_SVG: &str = include_str!("../../../branding/SVG/V-selection.svg");
+const TOOL_DIRECT_SELECTION_SVG: &str = include_str!("../../../branding/SVG/A-selection.svg");
+const TOOL_RECTANGLE_SVG: &str = include_str!("../../../branding/SVG/Square.svg");
+const TOOL_PEN_SVG: &str = include_str!("../../../branding/SVG/Pen.svg");
+const CURSOR_PEN_DRAWING_SVG: &str = include_str!("../../../branding/SVG/Pen-drawing.svg");
+const CURSOR_PEN_CLOSE_SVG: &str = include_str!("../../../branding/SVG/Pen-closeShape.svg");
+const CURSOR_SELECTION_SVG: &str = include_str!("../../../branding/SVG/V-selection.svg");
+const CURSOR_DIRECT_SELECTION_SVG: &str = include_str!("../../../branding/SVG/A-selection.svg");
+const TOOL_ARTBOARD_SVG: &str = include_str!("../../../branding/SVG/Artboard Tool.svg");
+
+#[derive(Clone, Copy)]
+enum ToolIcon {
+    Selection,
+    DirectSelection,
+    Pen,
+    Rectangle,
+    Artboard,
+}
+
+impl ToolIcon {
+    const fn svg(self) -> &'static str {
+        match self {
+            Self::Selection => TOOL_SELECTION_SVG,
+            Self::DirectSelection => TOOL_DIRECT_SELECTION_SVG,
+            Self::Pen => TOOL_PEN_SVG,
+            Self::Rectangle => TOOL_RECTANGLE_SVG,
+            Self::Artboard => TOOL_ARTBOARD_SVG,
+        }
+    }
+}
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([620.0, 620.0])
-            .with_title("Amalith"),
+            .with_title("Amalith Ver. Alpha")
+            // On macOS, let Amalith paint behind the title bar. The native
+            // traffic lights stay in place while the app supplies the same
+            // dark surface and a properly centered product name.
+            .with_fullsize_content_view(true)
+            .with_title_shown(false)
+            .with_titlebar_shown(false),
         ..Default::default()
     };
     eframe::run_native(
@@ -43,6 +90,7 @@ struct AmalithApp {
     error: Option<String>,
     artboards_panel: ArtboardsPanelState,
     layers_panel: LayersPanelState,
+    panel_layout: PanelLayout,
     fill_stroke_panel: FillStrokePanelState,
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
@@ -86,6 +134,8 @@ struct DocumentTab {
     artboard_tool: ArtboardTool,
     rectangle_tool: RectangleTool,
     ellipse_tool: EllipseTool,
+    pen_tool: PenTool,
+    primitive_tool: PrimitiveTool,
     selection_tool: SelectionTool,
     direct_selection_tool: DirectSelectionTool,
 }
@@ -97,6 +147,8 @@ struct NativeMenu {
     open_item: muda::MenuItem,
     save_item: muda::MenuItem,
     save_as_item: muda::MenuItem,
+    artboards_item: muda::CheckMenuItem,
+    layers_item: muda::CheckMenuItem,
 }
 
 struct ArtboardsPanelState {
@@ -127,8 +179,101 @@ enum LayersRenameTarget {
 struct PanelChromeState {
     dock: PanelDock,
     hidden: bool,
-    drag_offset: Vec2,
-    dragging: bool,
+    /// Size of this panel's floating window (an in-app, app-styled overlay,
+    /// not an OS window). `PanelDock::Floating`'s `pos` is its top-left in
+    /// app-frame-local coordinates.
+    float_size: Vec2,
+}
+
+const FLOAT_DEFAULT_SIZE: Vec2 = Vec2::new(248.0, 360.0);
+
+/// An in-progress panel drag. The dock layout is NOT mutated while a drag is
+/// live — a translucent ghost and a blue drop indicator preview where the
+/// panel will land, and the move is committed once on release. Held across
+/// frames on [`PanelLayout`].
+#[derive(Clone, Debug, PartialEq)]
+struct PanelDrag {
+    panel: PanelId,
+    /// Where the panel sat when the drag began (a docked panel previews with
+    /// a ghost; an already-floating panel is moved live).
+    origin: PanelDock,
+    /// Cursor position minus the dragged widget's top-left, so the ghost /
+    /// dropped window keeps the same grab point under the cursor.
+    grab_offset: Vec2,
+    cursor: Pos2,
+    /// Set the frame the pointer is released; `panels_ui` commits then.
+    released: bool,
+}
+
+/// Where a live [`PanelDrag`] would land if dropped now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DropTarget {
+    /// Insert as a new group on `side` at `index` (0 = above the top group,
+    /// `groups.len()` = below the bottom group).
+    Rail { side: PanelDock, index: usize },
+    /// Tab into the group already on `side` (or dock alone if it is empty).
+    TabInto { side: PanelDock },
+    /// Float at `pos` (app-frame-local top-left).
+    Float { pos: Pos2 },
+}
+
+/// A rail showing both panels stacked vertically instead of tabbed. `top`
+/// is the upper panel (the other visible panel takes the lower slot);
+/// `split` is the upper panel's share of the body height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StackedRail {
+    top: PanelId,
+    split: f32,
+    top_collapsed: bool,
+    bottom_collapsed: bool,
+}
+
+impl StackedRail {
+    const MIN_SPLIT: f32 = 0.2;
+    const MAX_SPLIT: f32 = 0.8;
+
+    fn bottom(&self) -> PanelId {
+        match self.top {
+            PanelId::Artboards => PanelId::Layers,
+            PanelId::Layers => PanelId::Artboards,
+        }
+    }
+}
+
+/// The small but extensible panel-dock model. Both Artboards and Layers can
+/// share a rail as tabs, while a panel dragged away keeps its own floating
+/// window. Keeping rail state separate from panel content state is what makes
+/// the dock behave as a system instead of two unrelated sidebars.
+struct PanelLayout {
+    left: PanelRail,
+    right: PanelRail,
+    /// The live drag, if any. Survives across frames until release.
+    drag: Option<PanelDrag>,
+    /// Per-frame scratch rebuilt by `panels_ui`: each rail's screen rect and
+    /// the screen rects of its group headers, top to bottom. The blue drop
+    /// indicator and `resolve_drop` are computed from these.
+    left_rect: Option<EguiRect>,
+    right_rect: Option<EguiRect>,
+    left_headers: Vec<EguiRect>,
+    right_headers: Vec<EguiRect>,
+    /// Label + size of the panel currently being dragged, for the ghost.
+    ghost: Option<(&'static str, Vec2)>,
+}
+
+struct PanelRail {
+    width: f32,
+    active: PanelId,
+    collapsed: bool,
+    /// `Some` when this rail shows both panels stacked vertically rather
+    /// than tabbed. Reconciled every frame by `panels_ui` from the panels
+    /// actually docked here plus any `drop_hint` a drag just produced.
+    stacked: Option<StackedRail>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelId {
+    Artboards,
+    Layers,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -167,8 +312,33 @@ impl Default for PanelChromeState {
         Self {
             dock: PanelDock::Right,
             hidden: false,
-            drag_offset: Vec2::ZERO,
-            dragging: false,
+            float_size: FLOAT_DEFAULT_SIZE,
+        }
+    }
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
+            left: PanelRail::default(),
+            right: PanelRail::default(),
+            drag: None,
+            left_rect: None,
+            right_rect: None,
+            left_headers: Vec::new(),
+            right_headers: Vec::new(),
+            ghost: None,
+        }
+    }
+}
+
+impl Default for PanelRail {
+    fn default() -> Self {
+        Self {
+            width: 220.0,
+            active: PanelId::Layers,
+            collapsed: false,
+            stacked: None,
         }
     }
 }
@@ -187,12 +357,21 @@ enum CanvasNavigation {
     None,
 }
 
+enum CanvasCursor {
+    Pen { pointer: Pos2, closing_path: bool },
+    Selection { pointer: Pos2, direct: bool },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolKind {
     Selection,
     DirectSelection,
+    Pen,
     Rectangle,
     Ellipse,
+    RoundedRectangle,
+    Polygon,
+    Star,
     Artboard,
 }
 
@@ -201,6 +380,8 @@ fn activate_tool(
     artboard_tool: &mut ArtboardTool,
     rectangle_tool: &mut RectangleTool,
     ellipse_tool: &mut EllipseTool,
+    pen_tool: &mut PenTool,
+    primitive_tool: &mut PrimitiveTool,
     selection_tool: &mut SelectionTool,
     direct_selection_tool: &mut DirectSelectionTool,
     first_artboard: Option<ArtboardId>,
@@ -208,6 +389,13 @@ fn activate_tool(
     artboard_tool.set_active(tool == ToolKind::Artboard, first_artboard);
     rectangle_tool.set_active(tool == ToolKind::Rectangle);
     ellipse_tool.set_active(tool == ToolKind::Ellipse);
+    pen_tool.set_active(tool == ToolKind::Pen);
+    primitive_tool.set_active(match tool {
+        ToolKind::RoundedRectangle => Some(PrimitiveKind::RoundedRectangle),
+        ToolKind::Polygon => Some(PrimitiveKind::Polygon),
+        ToolKind::Star => Some(PrimitiveKind::Star),
+        _ => None,
+    });
     selection_tool.set_active(tool == ToolKind::Selection);
     direct_selection_tool.set_active(tool == ToolKind::DirectSelection);
 }
@@ -224,6 +412,17 @@ fn canvas_navigation(space_down: bool, command_down: bool) -> CanvasNavigation {
     } else {
         CanvasNavigation::None
     }
+}
+
+/// Illustrator's temporary Direct Selection gesture: holding Command while
+/// the black arrow is active routes pointer work through the white arrow.
+/// Cmd+Space remains scrubby zoom, so it always takes precedence.
+fn temporary_direct_selection(
+    selection_active: bool,
+    command_down: bool,
+    space_down: bool,
+) -> bool {
+    selection_active && command_down && !space_down
 }
 
 fn apply_canvas_gesture(
@@ -288,11 +487,15 @@ impl NewDocumentForm {
 impl AmalithApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut visuals = egui::Visuals::dark();
-        visuals.panel_fill = Color32::from_rgb(49, 49, 49);
-        visuals.window_fill = Color32::from_rgb(49, 49, 49);
-        visuals.widgets.inactive.bg_fill = Color32::from_rgb(39, 39, 39);
-        visuals.widgets.hovered.bg_fill = Color32::from_rgb(55, 55, 55);
-        visuals.selection.bg_fill = Color32::from_rgb(42, 112, 196);
+        visuals.panel_fill = PANEL;
+        visuals.window_fill = PANEL_RAISED;
+        visuals.widgets.inactive.bg_fill = PANEL;
+        visuals.widgets.hovered.bg_fill = PANEL_RAISED;
+        visuals.widgets.active.bg_fill = Color32::from_rgb(62, 82, 103);
+        visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, PANEL_BORDER);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_gray(82));
+        visuals.selection.bg_fill = ACCENT;
+        visuals.selection.stroke = Stroke::new(1.0_f32, Color32::from_rgb(112, 178, 245));
         cc.egui_ctx.set_visuals(visuals);
         #[cfg(target_os = "macos")]
         let native_menu = Some(Self::build_native_menu());
@@ -303,6 +506,7 @@ impl AmalithApp {
             error: None,
             artboards_panel: ArtboardsPanelState::default(),
             layers_panel: LayersPanelState::default(),
+            panel_layout: PanelLayout::default(),
             fill_stroke_panel: FillStrokePanelState::default(),
             #[cfg(target_os = "macos")]
             native_menu,
@@ -313,7 +517,7 @@ impl AmalithApp {
     fn build_native_menu() -> NativeMenu {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
-            Menu, MenuItem, PredefinedMenuItem, Submenu,
+            CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
         };
         let menu = Menu::new();
         let file = Submenu::new("File", true);
@@ -330,12 +534,19 @@ impl AmalithApp {
             )),
         );
         let quit_item = PredefinedMenuItem::quit(Some("Quit Amalith"));
+        let window = Submenu::new("Window", true);
+        let artboards_item = CheckMenuItem::new("Artboards", true, true, None);
+        let layers_item = CheckMenuItem::new("Layers", true, true, None);
         file.append_items(&[&new_item, &open_item, &save_item, &save_as_item])
             .expect("append File menu items");
         let app =
             Submenu::with_items("Amalith", true, &[&quit_item]).expect("build application menu");
+        window
+            .append_items(&[&artboards_item, &layers_item])
+            .expect("append Window items");
         menu.append(&app).expect("append application menu");
         menu.append(&file).expect("append File menu");
+        menu.append(&window).expect("append Window menu");
         menu.init_for_nsapp();
         NativeMenu {
             _menu: menu,
@@ -343,35 +554,51 @@ impl AmalithApp {
             open_item,
             save_item,
             save_as_item,
+            artboards_item,
+            layers_item,
         }
     }
 
     #[cfg(target_os = "macos")]
     fn process_native_menu_events(&mut self) {
-        let Some(native_menu) = &self.native_menu else {
-            return;
-        };
         let mut actions = Vec::new();
-        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
-            if event.id == *native_menu.new_item.id() {
-                actions.push(0);
-            } else if event.id == *native_menu.open_item.id() {
-                actions.push(1);
-            } else if event.id == *native_menu.save_item.id() {
-                actions.push(2);
-            } else if event.id == *native_menu.save_as_item.id() {
-                actions.push(3);
+        let (artboards_item, layers_item) = {
+            let Some(native_menu) = &self.native_menu else {
+                return;
+            };
+            while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+                if event.id == *native_menu.new_item.id() {
+                    actions.push(0);
+                } else if event.id == *native_menu.open_item.id() {
+                    actions.push(1);
+                } else if event.id == *native_menu.save_item.id() {
+                    actions.push(2);
+                } else if event.id == *native_menu.save_as_item.id() {
+                    actions.push(3);
+                } else if event.id == *native_menu.artboards_item.id() {
+                    actions.push(4);
+                } else if event.id == *native_menu.layers_item.id() {
+                    actions.push(5);
+                }
             }
-        }
+            (
+                native_menu.artboards_item.clone(),
+                native_menu.layers_item.clone(),
+            )
+        };
         for action in actions {
             match action {
                 0 => self.open_new_document(),
                 1 => self.open_document_from_disk(),
                 2 => self.save_active_document(false),
                 3 => self.save_active_document(true),
+                4 => self.artboards_panel.chrome.hidden = !self.artboards_panel.chrome.hidden,
+                5 => self.layers_panel.chrome.hidden = !self.layers_panel.chrome.hidden,
                 _ => unreachable!(),
             }
         }
+        artboards_item.set_checked(!self.artboards_panel.chrome.hidden);
+        layers_item.set_checked(!self.layers_panel.chrome.hidden);
     }
 
     fn create_document(&mut self) {
@@ -428,6 +655,8 @@ impl AmalithApp {
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
+            pen_tool: PenTool::default(),
+            primitive_tool: PrimitiveTool::default(),
             selection_tool: SelectionTool::default(),
             direct_selection_tool: DirectSelectionTool::default(),
         });
@@ -452,6 +681,8 @@ impl AmalithApp {
                     artboard_tool: ArtboardTool::default(),
                     rectangle_tool: RectangleTool::default(),
                     ellipse_tool: EllipseTool::default(),
+                    pen_tool: PenTool::default(),
+                    primitive_tool: PrimitiveTool::default(),
                     selection_tool: SelectionTool::default(),
                     direct_selection_tool: DirectSelectionTool::default(),
                 });
@@ -496,26 +727,27 @@ impl AmalithApp {
     ) -> DialogAction {
         let mut action = DialogAction::None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(46, 46, 46)))
+            .frame(egui::Frame::NONE.fill(CANVAS))
             .show(ctx, |ui| {
-                let panel_width = 390.0_f32.min(ui.available_width() - 32.0);
+                let panel_width = 420.0_f32.min(ui.available_width() - 32.0);
                 ui.vertical_centered(|ui| {
-                    ui.add_space(24.0);
+                    ui.add_space(20.0);
                     ui.allocate_ui_with_layout(
                         Vec2::new(panel_width, ui.available_height() - 36.0),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.spacing_mut().item_spacing = Vec2::new(10.0, 8.0);
+                            ui.spacing_mut().item_spacing = Vec2::new(8.0, 6.0);
                             ui.label(
                                 egui::RichText::new("PRESET DETAILS")
                                     .strong()
+                                    .size(10.0)
                                     .color(Color32::from_gray(190)),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(2.0);
                             ui.add_sized(
-                                [panel_width, 34.0],
+                                [panel_width, 28.0],
                                 egui::TextEdit::singleline(&mut form.name)
-                                    .font(FontId::proportional(18.0)),
+                                    .font(FontId::proportional(16.0)),
                             );
                             ui.separator();
                             labeled(ui, "Width", |ui| {
@@ -665,18 +897,18 @@ impl AmalithApp {
                                     );
                                 },
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(6.0);
                             let _ = ui.button("More Settings");
                             if let Some(error) = error {
                                 ui.colored_label(Color32::from_rgb(245, 110, 110), error);
                             }
-                            ui.add_space((ui.available_height() - 58.0).max(8.0));
+                            ui.add_space((ui.available_height() - 42.0).max(8.0));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     if ui
                                         .add_sized(
-                                            [96.0, 40.0],
+                                            [82.0, 28.0],
                                             egui::Button::new(
                                                 egui::RichText::new("Create").strong(),
                                             )
@@ -687,7 +919,7 @@ impl AmalithApp {
                                         action = DialogAction::Create;
                                     }
                                     if ui
-                                        .add_sized([96.0, 40.0], egui::Button::new("Close"))
+                                        .add_sized([82.0, 28.0], egui::Button::new("Close"))
                                         .clicked()
                                     {
                                         action = DialogAction::Close;
@@ -731,8 +963,8 @@ impl AmalithApp {
         let mut close = None;
         let mut create = false;
         egui::TopBottomPanel::top("document_tabs")
-            .exact_height(34.0)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(39, 39, 39)))
+            .exact_height(30.0)
+            .frame(egui::Frame::NONE.fill(APP_BAR))
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
                 ui.horizontal(|ui| {
@@ -743,18 +975,19 @@ impl AmalithApp {
                             ui.horizontal(|ui| {
                                 for (index, tab) in self.open.iter().enumerate() {
                                     let active = index == self.active;
-                                    let fill = if active {
-                                        Color32::from_rgb(58, 58, 58)
-                                    } else {
-                                        Color32::from_rgb(43, 43, 43)
-                                    };
+                                    let fill = if active { PANEL_RAISED } else { APP_BAR };
                                     egui::Frame::NONE
                                         .fill(fill)
-                                        .inner_margin(egui::Margin::symmetric(7, 3))
+                                        .inner_margin(egui::Margin::symmetric(8, 2))
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
                                                 if ui
-                                                    .add(egui::Button::new("×").frame(false))
+                                                    .add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new("×").size(14.0),
+                                                        )
+                                                        .frame(false),
+                                                    )
                                                     .clicked()
                                                 {
                                                     close = Some(index);
@@ -762,6 +995,7 @@ impl AmalithApp {
                                                 let text =
                                                     egui::RichText::new(tab_label(tab, index + 1))
                                                         .strong()
+                                                        .size(12.0)
                                                         .color(if active {
                                                             Color32::from_gray(238)
                                                         } else {
@@ -774,13 +1008,23 @@ impl AmalithApp {
                                                     select = Some(index);
                                                 }
                                             });
+                                            if active {
+                                                let underline = EguiRect::from_min_size(
+                                                    Pos2::new(
+                                                        ui.min_rect().left(),
+                                                        ui.min_rect().bottom() - 2.0,
+                                                    ),
+                                                    Vec2::new(ui.min_rect().width(), 2.0),
+                                                );
+                                                ui.painter().rect_filled(underline, 0.0, ACCENT);
+                                            }
                                         });
                                 }
                             });
                         });
                     ui.add_space(12.0);
                     if ui
-                        .add(egui::Button::new("⊕").frame(false))
+                        .add(egui::Button::new(egui::RichText::new("+").size(18.0)).frame(false))
                         .on_hover_text("New document (⌘N)")
                         .clicked()
                     {
@@ -807,10 +1051,13 @@ impl AmalithApp {
                     &mut tab.artboard_tool,
                     &mut tab.rectangle_tool,
                     &mut tab.ellipse_tool,
+                    &mut tab.pen_tool,
+                    &mut tab.primitive_tool,
                     &mut tab.selection_tool,
                     &mut tab.direct_selection_tool,
                     &mut self.artboards_panel,
                     &mut self.layers_panel,
+                    &mut self.panel_layout,
                     &mut self.fill_stroke_panel,
                     &mut self.error,
                 );
@@ -818,12 +1065,29 @@ impl AmalithApp {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn title_bar_ui(ctx: &egui::Context) {
+        egui::TopBottomPanel::top("amalith_title_bar")
+            .exact_height(30.0)
+            .frame(egui::Frame::NONE.fill(APP_BAR))
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Amalith Ver. Alpha",
+                    FontId::proportional(13.0),
+                    Color32::from_gray(205),
+                );
+            });
+    }
+
     #[cfg(not(target_os = "macos"))]
     fn app_menu_ui(&mut self, ctx: &egui::Context) {
         let mut action = None;
         egui::TopBottomPanel::top("app_menu")
-            .exact_height(26.0)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(39, 39, 39)))
+            .exact_height(24.0)
+            .frame(egui::Frame::NONE.fill(APP_BAR))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.menu_button("File", |ui| {
@@ -843,6 +1107,16 @@ impl AmalithApp {
                         if ui.button("Save As…").clicked() {
                             action = Some(3);
                             ui.close();
+                        }
+                    });
+                    ui.menu_button("Window", |ui| {
+                        let mut artboards_visible = !self.artboards_panel.chrome.hidden;
+                        if ui.checkbox(&mut artboards_visible, "Artboards").changed() {
+                            self.artboards_panel.chrome.hidden = !artboards_visible;
+                        }
+                        let mut layers_visible = !self.layers_panel.chrome.hidden;
+                        if ui.checkbox(&mut layers_visible, "Layers").changed() {
+                            self.layers_panel.chrome.hidden = !layers_visible;
                         }
                     });
                 });
@@ -899,10 +1173,13 @@ impl AmalithApp {
         artboard_tool: &mut ArtboardTool,
         rectangle_tool: &mut RectangleTool,
         ellipse_tool: &mut EllipseTool,
+        pen_tool: &mut PenTool,
+        primitive_tool: &mut PrimitiveTool,
         selection_tool: &mut SelectionTool,
         direct_selection_tool: &mut DirectSelectionTool,
         artboards_panel: &mut ArtboardsPanelState,
         layers_panel: &mut LayersPanelState,
+        panel_layout: &mut PanelLayout,
         fill_stroke_panel: &mut FillStrokePanelState,
         error: &mut Option<String>,
     ) {
@@ -913,6 +1190,7 @@ impl AmalithApp {
             selection_tool,
             artboards_panel,
             layers_panel,
+            panel_layout,
             error,
         );
         Self::options_bar_ui(ctx, editor, selection_tool, fill_stroke_panel, error);
@@ -922,20 +1200,22 @@ impl AmalithApp {
             artboard_tool,
             rectangle_tool,
             ellipse_tool,
+            pen_tool,
+            primitive_tool,
             selection_tool,
             direct_selection_tool,
             fill_stroke_panel,
             error,
         );
         let pasteboard = if artboard_tool.active {
-            Color32::from_rgb(115, 115, 115)
+            Color32::from_rgb(91, 91, 91)
         } else {
-            Color32::from_rgb(56, 56, 56)
+            CANVAS
         };
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(pasteboard))
             .show(ctx, |ui| {
-                let available = ui.max_rect().shrink2(Vec2::new(52.0, 58.0));
+                let available = ui.max_rect().shrink2(Vec2::new(32.0, 36.0));
                 let boards = editor.document().artboards().to_vec();
                 if boards.is_empty() {
                     return;
@@ -991,12 +1271,23 @@ impl AmalithApp {
                     && ctx.input_mut(|input| {
                         input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::L) > 0
                     });
+                let pen_pressed = !navigation_key_down
+                    && canvas_shortcuts_enabled
+                    && ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::P) > 0
+                    });
+                let enter_pressed = canvas_shortcuts_enabled
+                    && ctx.input_mut(|input| {
+                        input.count_and_consume_key(egui::Modifiers::NONE, egui::Key::Enter) > 0
+                    });
                 let first_artboard = boards.first().map(|board| board.id);
                 if shift_o_pressed {
                     if artboard_tool.active {
                         artboard_tool.set_active(false, first_artboard);
                         rectangle_tool.set_active(false);
                         ellipse_tool.set_active(false);
+                        pen_tool.set_active(false);
+                        primitive_tool.set_active(None);
                         selection_tool.set_active(false);
                         direct_selection_tool.set_active(false);
                     } else {
@@ -1005,6 +1296,8 @@ impl AmalithApp {
                             artboard_tool,
                             rectangle_tool,
                             ellipse_tool,
+                            pen_tool,
+                            primitive_tool,
                             selection_tool,
                             direct_selection_tool,
                             first_artboard,
@@ -1016,6 +1309,8 @@ impl AmalithApp {
                         artboard_tool,
                         rectangle_tool,
                         ellipse_tool,
+                        pen_tool,
+                        primitive_tool,
                         selection_tool,
                         direct_selection_tool,
                         first_artboard,
@@ -1026,6 +1321,8 @@ impl AmalithApp {
                         artboard_tool,
                         rectangle_tool,
                         ellipse_tool,
+                        pen_tool,
+                        primitive_tool,
                         selection_tool,
                         direct_selection_tool,
                         first_artboard,
@@ -1036,6 +1333,8 @@ impl AmalithApp {
                         artboard_tool,
                         rectangle_tool,
                         ellipse_tool,
+                        pen_tool,
+                        primitive_tool,
                         selection_tool,
                         direct_selection_tool,
                         first_artboard,
@@ -1046,14 +1345,36 @@ impl AmalithApp {
                         artboard_tool,
                         rectangle_tool,
                         ellipse_tool,
+                        pen_tool,
+                        primitive_tool,
                         selection_tool,
                         direct_selection_tool,
                         first_artboard,
                     );
+                } else if pen_pressed {
+                    activate_tool(
+                        ToolKind::Pen,
+                        artboard_tool,
+                        rectangle_tool,
+                        ellipse_tool,
+                        pen_tool,
+                        primitive_tool,
+                        selection_tool,
+                        direct_selection_tool,
+                        first_artboard,
+                    );
+                } else if enter_pressed && pen_tool.active && pen_tool.is_drawing() {
+                    if let Err(err) = pen_tool.finish(editor) {
+                        *error = Some(err.to_string());
+                    }
+                } else if escape_pressed && pen_tool.active && pen_tool.is_drawing() {
+                    pen_tool.cancel();
                 } else if escape_pressed {
                     artboard_tool.set_active(false, first_artboard);
                     rectangle_tool.set_active(false);
                     ellipse_tool.set_active(false);
+                    pen_tool.set_active(false);
+                    primitive_tool.set_active(None);
                     selection_tool.set_active(false);
                     direct_selection_tool.set_active(false);
                 }
@@ -1335,6 +1656,11 @@ impl AmalithApp {
                         input.zoom_delta(),
                     )
                 });
+                let temporary_direct_selection =
+                    temporary_direct_selection(selection_tool.active, command_down, space_down);
+                let direct_selection_active =
+                    direct_selection_tool.active || temporary_direct_selection;
+                let mut canvas_cursor = None;
 
                 let zoom_in_presses = ctx.input_mut(|input| {
                     input.count_and_consume_key(egui::Modifiers::COMMAND, egui::Key::Equals)
@@ -1354,6 +1680,7 @@ impl AmalithApp {
                     CanvasNavigation::ScrubbyZoom => {
                         rectangle_tool.cancel_drag();
                         ellipse_tool.cancel_drag();
+                        pen_tool.cancel();
                         selection_tool.cancel_drag();
                         direct_selection_tool.cancel_drag();
                         camera.end_pan();
@@ -1381,6 +1708,7 @@ impl AmalithApp {
                     CanvasNavigation::HandPan => {
                         rectangle_tool.cancel_drag();
                         ellipse_tool.cancel_drag();
+                        pen_tool.cancel();
                         selection_tool.cancel_drag();
                         direct_selection_tool.cancel_drag();
                         camera.end_scrub();
@@ -1424,6 +1752,7 @@ impl AmalithApp {
                         if gesture_on_canvas {
                             rectangle_tool.cancel_drag();
                             ellipse_tool.cancel_drag();
+                            pen_tool.cancel();
                             selection_tool.cancel_drag();
                             direct_selection_tool.cancel_drag();
                         } else if rectangle_tool.active {
@@ -1461,6 +1790,55 @@ impl AmalithApp {
                             }
                             if primary_released {
                                 if let Err(err) = ellipse_tool.finish_drag(editor) {
+                                    *error = Some(err.to_string());
+                                }
+                            }
+                        } else if pen_tool.active {
+                            if let Some(pointer) = pointer_position {
+                                if available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    let pointer_doc = camera.screen_to_document(pointer, available);
+                                    let point =
+                                        Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                    let close_target =
+                                        pen_tool.can_close_at(point, 8.0 / camera.scale as f64);
+                                    ctx.set_cursor_icon(egui::CursorIcon::None);
+                                    canvas_cursor = Some(CanvasCursor::Pen {
+                                        pointer,
+                                        closing_path: close_target,
+                                    });
+                                    if primary_pressed {
+                                        if pen_tool.press(
+                                            point,
+                                            8.0 / camera.scale as f64,
+                                            shift_down,
+                                        ) {
+                                            if let Err(err) = pen_tool.finish(editor) {
+                                                *error = Some(err.to_string());
+                                            }
+                                        }
+                                    } else {
+                                        pen_tool.update_hover(point, shift_down);
+                                    }
+                                }
+                            }
+                        } else if primitive_tool.active.is_some() {
+                            ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                            if let Some(pointer) = pointer_position {
+                                let pointer_doc = camera.screen_to_document(pointer, available);
+                                let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
+                                if primary_pressed
+                                    && available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    primitive_tool.begin_drag(point);
+                                } else if primary_down {
+                                    primitive_tool.update_drag(point, shift_down);
+                                }
+                            }
+                            if primary_released {
+                                if let Err(err) = primitive_tool.finish_drag(editor) {
                                     *error = Some(err.to_string());
                                 }
                             }
@@ -1542,8 +1920,17 @@ impl AmalithApp {
                                     ctx.set_cursor_icon(cursor);
                                 }
                             }
-                        } else if direct_selection_tool.active {
+                        } else if direct_selection_active {
                             if let Some(pointer) = pointer_position {
+                                if available.contains(pointer)
+                                    && ui.rect_contains_pointer(available)
+                                {
+                                    ctx.set_cursor_icon(egui::CursorIcon::None);
+                                    canvas_cursor = Some(CanvasCursor::Selection {
+                                        pointer,
+                                        direct: true,
+                                    });
+                                }
                                 let pointer_doc = camera.screen_to_document(pointer, available);
                                 let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
                                 if primary_pressed
@@ -1591,6 +1978,19 @@ impl AmalithApp {
                                 let hovered_rotate = hovered_handle.is_none()
                                     && selected_quad
                                         .is_some_and(|quad| hit_rotation_halo(pointer, quad));
+                                let over_canvas = available.contains(pointer)
+                                    && ui.rect_contains_pointer(available);
+                                if over_canvas
+                                    && !selection_tool.is_duplicate_drag()
+                                    && hovered_handle.is_none()
+                                    && !hovered_rotate
+                                {
+                                    ctx.set_cursor_icon(egui::CursorIcon::None);
+                                    canvas_cursor = Some(CanvasCursor::Selection {
+                                        pointer,
+                                        direct: false,
+                                    });
+                                }
                                 let pointer_doc = camera.screen_to_document(pointer, available);
                                 let point = Point::new(pointer_doc.x as f64, pointer_doc.y as f64);
                                 if primary_pressed
@@ -1636,6 +2036,15 @@ impl AmalithApp {
                 }
 
                 let painter = ui.painter();
+                // Both arrow tools expose a selected path's actual geometry
+                // continuously. This is separate from the black-arrow
+                // bounding box and is intentionally present before any node
+                // movement, matching Illustrator/Inkscape behavior.
+                let selected_paths = selected_path_targets(
+                    editor.document(),
+                    &selection_tool.selected_in_paint_order(editor.document()),
+                );
+                let path_overlay_active = selection_tool.active || direct_selection_tool.active;
                 for (index, artboard) in boards.iter().enumerate() {
                     let document_rect = artboard_tool.display_rect(artboard.id, artboard.rect);
                     if !rects_intersect(document_rect, visible_document) {
@@ -1725,6 +2134,7 @@ impl AmalithApp {
                                     ),
                                     None => Stroke::NONE,
                                 };
+                                let path_closed = path_is_closed(path);
                                 // All subpaths of this Path are filled as
                                 // one nonzero-winding tessellation (so holes
                                 // and self-intersections render right); the
@@ -1751,7 +2161,7 @@ impl AmalithApp {
                                                 .collect()
                                         })
                                         .collect();
-                                if fill.a() > 0 {
+                                if path_closed && fill.a() > 0 {
                                     if let Some(mesh) = fill_mesh::fill_mesh(&screen_subpaths, fill)
                                     {
                                         painter.add(egui::Shape::mesh(mesh));
@@ -1760,14 +2170,29 @@ impl AmalithApp {
                                 if stroke != Stroke::NONE {
                                     for points in &screen_subpaths {
                                         if points.len() >= 2 {
-                                            painter.add(egui::Shape::closed_line(
-                                                points.clone(),
-                                                stroke,
-                                            ));
+                                            painter.add(if path_closed {
+                                                egui::Shape::closed_line(points.clone(), stroke)
+                                            } else {
+                                                egui::Shape::line(points.clone(), stroke)
+                                            });
                                         }
                                     }
                                 }
-                                if direct_selection_tool.active {
+                                let path_is_selected = selected_paths.contains(&id)
+                                    || direct_selection_tool.has_selected_anchor_on(id);
+                                if path_overlay_active && path_is_selected {
+                                    for points in &screen_subpaths {
+                                        if points.len() >= 2 {
+                                            let overlay = Stroke::new(1.5_f32, ACCENT);
+                                            painter.add(if path_closed {
+                                                egui::Shape::closed_line(points.clone(), overlay)
+                                            } else {
+                                                egui::Shape::line(points.clone(), overlay)
+                                            });
+                                        }
+                                    }
+                                }
+                                if direct_selection_active {
                                     for index in amalith_core::geom::anchor_indices(&path.geometry)
                                     {
                                         let Some(position) = direct_selection_tool
@@ -1781,23 +2206,22 @@ impl AmalithApp {
                                         );
                                         let marker =
                                             EguiRect::from_center_size(screen, Vec2::splat(7.0));
-                                        let selected =
-                                            direct_selection_tool.selected.contains(&(id, index));
-                                        painter.rect_filled(
-                                            marker,
-                                            0.0,
-                                            if selected {
-                                                Color32::from_rgb(59, 155, 255)
-                                            } else {
-                                                Color32::WHITE
-                                            },
-                                        );
-                                        painter.rect_stroke(
-                                            marker,
-                                            0.0,
-                                            Stroke::new(1.25_f32, Color32::from_rgb(59, 155, 255)),
-                                            egui::StrokeKind::Outside,
-                                        );
+                                        // In node mode, a filled blue square
+                                        // means that anchor is selected.
+                                        // Unselected anchors stay white with
+                                        // a blue border, so a marquee's exact
+                                        // node selection is immediately clear.
+                                        if direct_selection_tool.selected.contains(&(id, index)) {
+                                            painter.rect_filled(marker, 0.0, ACCENT);
+                                        } else {
+                                            painter.rect_filled(marker, 0.0, Color32::WHITE);
+                                            painter.rect_stroke(
+                                                marker,
+                                                0.0,
+                                                Stroke::new(1.25_f32, ACCENT),
+                                                egui::StrokeKind::Outside,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1841,6 +2265,7 @@ impl AmalithApp {
                                 ),
                                 None => Stroke::NONE,
                             };
+                            let path_closed = path_is_closed(path);
                             let ghost_subpaths: Vec<Vec<Pos2>> = path
                                 .flattened_points(0.5)
                                 .into_iter()
@@ -1857,7 +2282,7 @@ impl AmalithApp {
                                         .collect()
                                 })
                                 .collect();
-                            if ghost_fill.a() > 0 {
+                            if path_closed && ghost_fill.a() > 0 {
                                 if let Some(mesh) =
                                     fill_mesh::fill_mesh(&ghost_subpaths, ghost_fill)
                                 {
@@ -1867,10 +2292,11 @@ impl AmalithApp {
                             if ghost_stroke != Stroke::NONE {
                                 for points in &ghost_subpaths {
                                     if points.len() >= 2 {
-                                        painter.add(egui::Shape::closed_line(
-                                            points.clone(),
-                                            ghost_stroke,
-                                        ));
+                                        painter.add(if path_closed {
+                                            egui::Shape::closed_line(points.clone(), ghost_stroke)
+                                        } else {
+                                            egui::Shape::line(points.clone(), ghost_stroke)
+                                        });
                                     }
                                 }
                             }
@@ -1984,6 +2410,64 @@ impl AmalithApp {
                         }
                     }
                 }
+                if let Some(preview) = &primitive_tool.preview {
+                    let points: Vec<Vec<Pos2>> = preview
+                        .flattened_points(0.5)
+                        .into_iter()
+                        .map(|subpath| {
+                            subpath
+                                .into_iter()
+                                .map(|point| {
+                                    camera.document_to_screen(
+                                        Pos2::new(point.x as f32, point.y as f32),
+                                        available,
+                                    )
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    for subpath in points {
+                        if subpath.len() >= 2 {
+                            painter.add(egui::Shape::closed_line(
+                                subpath,
+                                Stroke::new(1.5_f32, ACCENT),
+                            ));
+                        }
+                    }
+                }
+                if pen_tool.active && pen_tool.is_drawing() {
+                    if let Some(preview) = &pen_tool.preview {
+                        for subpath in preview.flattened_points(0.5) {
+                            let points: Vec<_> = subpath
+                                .into_iter()
+                                .map(|point| {
+                                    camera.document_to_screen(
+                                        Pos2::new(point.x as f32, point.y as f32),
+                                        available,
+                                    )
+                                })
+                                .collect();
+                            if points.len() >= 2 {
+                                painter
+                                    .add(egui::Shape::line(points, Stroke::new(1.5_f32, ACCENT)));
+                            }
+                        }
+                    }
+                    for point in pen_tool.anchors() {
+                        let point = camera.document_to_screen(
+                            Pos2::new(point.x as f32, point.y as f32),
+                            available,
+                        );
+                        let marker = EguiRect::from_center_size(point, Vec2::splat(7.0));
+                        painter.rect_filled(marker, 0.0, Color32::WHITE);
+                        painter.rect_stroke(
+                            marker,
+                            0.0,
+                            Stroke::new(1.25_f32, ACCENT),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                }
                 if let Some(preview) = artboard_tool.duplicate_preview() {
                     if !rects_intersect(preview, visible_document) {
                         return;
@@ -2014,6 +2498,9 @@ impl AmalithApp {
                         );
                     }
                 }
+                if let Some(cursor) = canvas_cursor {
+                    paint_canvas_cursor(painter, cursor);
+                }
             });
     }
 
@@ -2034,15 +2521,20 @@ impl AmalithApp {
         let label = selection_label(editor.document(), &selected);
 
         egui::TopBottomPanel::top("options_bar")
-            .exact_height(36.0)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(47, 47, 47)))
+            .exact_height(30.0)
+            .frame(egui::Frame::NONE.fill(APP_BAR))
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = Vec2::new(6.0, 0.0);
-                ui.horizontal_centered(|ui| {
-                    ui.label(egui::RichText::new(label).color(Color32::from_gray(220)));
+                ui.spacing_mut().item_spacing = Vec2::new(5.0, 0.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(11.0)
+                            .color(Color32::from_gray(182)),
+                    );
                     ui.separator();
 
-                    ui.label("Fill:");
+                    ui.label(egui::RichText::new("Fill").size(11.0));
                     if swatch_with_dropdown(
                         ui,
                         ui.id().with("options_fill_swatch"),
@@ -2054,7 +2546,7 @@ impl AmalithApp {
                         select_or_open_swatch(state, PaintSlot::Fill, representative.fill);
                     }
 
-                    ui.label("Stroke:");
+                    ui.label(egui::RichText::new("Stroke").size(11.0));
                     if swatch_with_dropdown(
                         ui,
                         ui.id().with("options_stroke_swatch"),
@@ -2067,11 +2559,12 @@ impl AmalithApp {
                     }
 
                     ui.separator();
-                    ui.label("Stroke:");
+                    ui.label(egui::RichText::new("Weight").size(11.0));
                     let mut width = representative.stroke_width;
                     if ui
                         .add(
                             egui::DragValue::new(&mut width)
+                                .max_decimals(2)
                                 .speed(0.25)
                                 .range(0.0..=10_000.0)
                                 .suffix(" px"),
@@ -2086,10 +2579,9 @@ impl AmalithApp {
                             *error = Some(err.to_string());
                         }
                     }
-                    ui.label("▾");
 
                     ui.separator();
-                    ui.label("Opacity:");
+                    ui.label(egui::RichText::new("Opacity").size(11.0));
                     let mut opacity_percent = (representative.opacity * 100.0).clamp(0.0, 100.0);
                     if ui
                         .add(
@@ -2108,7 +2600,6 @@ impl AmalithApp {
                             *error = Some(err.to_string());
                         }
                     }
-                    ui.label("›");
                 });
             });
     }
@@ -2119,116 +2610,195 @@ impl AmalithApp {
         artboard_tool: &mut ArtboardTool,
         rectangle_tool: &mut RectangleTool,
         ellipse_tool: &mut EllipseTool,
+        pen_tool: &mut PenTool,
+        primitive_tool: &mut PrimitiveTool,
         selection_tool: &mut SelectionTool,
         direct_selection_tool: &mut DirectSelectionTool,
         fill_stroke_panel: &mut FillStrokePanelState,
         error: &mut Option<String>,
     ) {
         let first_artboard = editor.document().artboards().first().map(|board| board.id);
-        // Two tool columns, Illustrator-style, rather than one — the panel
-        // width below is sized for exactly that (2 * 32px buttons + the
-        // gaps/margins around them), not just "wide enough for whatever's
-        // in it today".
         egui::SidePanel::left("tools_bar")
-            .exact_width(76.0)
+            .exact_width(52.0)
             .resizable(false)
-            .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+            .frame(egui::Frame::NONE.fill(PANEL))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.vertical_centered(|ui| {
-                            ui.add_space(8.0);
+                            ui.add_space(5.0);
                             let button = |ui: &mut egui::Ui,
-                                          label: &str,
+                                          icon: ToolIcon,
                                           tooltip: &str,
                                           active: bool|
                              -> bool {
-                                ui.add_sized(
-                                    [32.0, 32.0],
-                                    egui::Button::new(label)
-                                        .fill(if active {
-                                            Color32::from_rgb(68, 100, 132)
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        })
-                                        .frame(false),
-                                )
-                                .on_hover_text(tooltip)
-                                .clicked()
+                                let (rect, response) =
+                                    ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
+                                if active {
+                                    ui.painter().rect_filled(
+                                        rect,
+                                        3.0,
+                                        Color32::from_rgb(61, 92, 123),
+                                    );
+                                } else if response.hovered() {
+                                    ui.painter().rect_filled(rect, 3.0, PANEL_RAISED);
+                                }
+                                paint_brand_tool_icon(ui.painter(), rect.shrink(5.0), icon, active);
+                                response.on_hover_text(tooltip).clicked()
                             };
 
-                            egui::Grid::new("tool_grid")
-                                .num_columns(2)
-                                .min_col_width(32.0)
-                                .spacing([4.0, 4.0])
-                                .show(ui, |ui| {
-                                    if button(ui, "V", "Selection (V)", selection_tool.active) {
-                                        activate_tool(
-                                            ToolKind::Selection,
-                                            artboard_tool,
-                                            rectangle_tool,
-                                            ellipse_tool,
-                                            selection_tool,
-                                            direct_selection_tool,
-                                            first_artboard,
-                                        );
-                                    }
-                                    if button(
-                                        ui,
-                                        "A",
-                                        "Direct Selection (A)",
-                                        direct_selection_tool.active,
-                                    ) {
-                                        activate_tool(
-                                            ToolKind::DirectSelection,
-                                            artboard_tool,
-                                            rectangle_tool,
-                                            ellipse_tool,
-                                            selection_tool,
-                                            direct_selection_tool,
-                                            first_artboard,
-                                        );
-                                    }
-                                    ui.end_row();
-                                    if button(ui, "M", "Rectangle (M)", rectangle_tool.active) {
-                                        activate_tool(
-                                            ToolKind::Rectangle,
-                                            artboard_tool,
-                                            rectangle_tool,
-                                            ellipse_tool,
-                                            selection_tool,
-                                            direct_selection_tool,
-                                            first_artboard,
-                                        );
-                                    }
-                                    if button(ui, "L", "Ellipse (L)", ellipse_tool.active) {
-                                        activate_tool(
-                                            ToolKind::Ellipse,
-                                            artboard_tool,
-                                            rectangle_tool,
-                                            ellipse_tool,
-                                            selection_tool,
-                                            direct_selection_tool,
-                                            first_artboard,
-                                        );
-                                    }
-                                    ui.end_row();
-                                    if button(ui, "Art", "Artboard (Shift+O)", artboard_tool.active)
+                            if button(
+                                ui,
+                                ToolIcon::Selection,
+                                "Selection (V)",
+                                selection_tool.active,
+                            ) {
+                                activate_tool(
+                                    ToolKind::Selection,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                            }
+                            if button(
+                                ui,
+                                ToolIcon::DirectSelection,
+                                "Direct Selection (A)",
+                                direct_selection_tool.active,
+                            ) {
+                                activate_tool(
+                                    ToolKind::DirectSelection,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                            }
+                            if button(ui, ToolIcon::Pen, "Pen (P)", pen_tool.active) {
+                                activate_tool(
+                                    ToolKind::Pen,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                            }
+                            let shape_active = rectangle_tool.active
+                                || ellipse_tool.active
+                                || primitive_tool.active.is_some();
+                            let (shape_rect, shape_response) =
+                                ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
+                            if shape_active {
+                                ui.painter().rect_filled(
+                                    shape_rect,
+                                    3.0,
+                                    Color32::from_rgb(61, 92, 123),
+                                );
+                            } else if shape_response.hovered() {
+                                ui.painter().rect_filled(shape_rect, 3.0, PANEL_RAISED);
+                            }
+                            paint_brand_tool_icon(
+                                ui.painter(),
+                                shape_rect.shrink(5.0),
+                                ToolIcon::Rectangle,
+                                shape_active,
+                            );
+                            let flyout_id = ui.id().with("shape_tool_flyout");
+                            // Desktop Illustrator exposes a stacked tool by
+                            // pressing and holding its toolbar slot. Open
+                            // the flyout as soon as that press is held so a
+                            // mouse user gets the same behavior as touch.
+                            if shape_response.is_pointer_button_down_on() {
+                                egui::Popup::open_id(ui.ctx(), flyout_id);
+                            }
+                            let mut flyout_choice = None;
+                            egui::Popup::from_response(&shape_response)
+                                .id(flyout_id)
+                                .open_memory(None)
+                                .show(|ui| {
+                                    ui.set_min_width(210.0);
+                                    if ui.button("□  Rectangle Tool                 (M)").clicked()
                                     {
-                                        activate_tool(
-                                            ToolKind::Artboard,
-                                            artboard_tool,
-                                            rectangle_tool,
-                                            ellipse_tool,
-                                            selection_tool,
-                                            direct_selection_tool,
-                                            first_artboard,
-                                        );
+                                        flyout_choice = Some(ToolKind::Rectangle);
                                     }
-                                    ui.end_row();
+                                    if ui.button("▢  Rounded Rectangle Tool").clicked() {
+                                        flyout_choice = Some(ToolKind::RoundedRectangle);
+                                    }
+                                    if ui
+                                        .button("○  Ellipse Tool                     (L)")
+                                        .clicked()
+                                    {
+                                        flyout_choice = Some(ToolKind::Ellipse);
+                                    }
+                                    if ui.button("⬡  Polygon Tool").clicked() {
+                                        flyout_choice = Some(ToolKind::Polygon);
+                                    }
+                                    if ui.button("☆  Star Tool").clicked() {
+                                        flyout_choice = Some(ToolKind::Star);
+                                    }
                                 });
-                            ui.add_space(14.0);
+                            if let Some(tool) = flyout_choice {
+                                activate_tool(
+                                    tool,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                                egui::Popup::close_id(ui.ctx(), flyout_id);
+                            } else if shape_response.clicked() {
+                                egui::Popup::close_id(ui.ctx(), flyout_id);
+                                activate_tool(
+                                    ToolKind::Rectangle,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                            }
+                            if button(
+                                ui,
+                                ToolIcon::Artboard,
+                                "Artboard (Shift+O)",
+                                artboard_tool.active,
+                            ) {
+                                activate_tool(
+                                    ToolKind::Artboard,
+                                    artboard_tool,
+                                    rectangle_tool,
+                                    ellipse_tool,
+                                    pen_tool,
+                                    primitive_tool,
+                                    selection_tool,
+                                    direct_selection_tool,
+                                    first_artboard,
+                                );
+                            }
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(5.0);
                             Self::fill_stroke_widget_ui(
                                 ui,
                                 editor,
@@ -2270,8 +2840,8 @@ impl AmalithApp {
             }
         };
 
-        let swatch_size = 24.0;
-        let offset = 10.0;
+        let swatch_size = 20.0;
+        let offset = 8.0;
         let (rect, _response) = ui.allocate_exact_size(
             Vec2::new(swatch_size + offset, swatch_size + offset),
             egui::Sense::hover(),
@@ -2349,11 +2919,15 @@ impl AmalithApp {
             }
         }
 
-        ui.add_space(4.0);
+        ui.add_space(3.0);
         ui.horizontal(|ui| {
             // Swap fill and stroke on the current selection.
             if ui
-                .add(egui::Button::new("\u{21C4}").small().frame(false))
+                .add(
+                    egui::Button::new(egui::RichText::new("⇄").size(13.0))
+                        .small()
+                        .frame(false),
+                )
                 .on_hover_text("Swap fill and stroke")
                 .clicked()
                 && has_selection
@@ -2363,7 +2937,11 @@ impl AmalithApp {
             }
             // Reset to the default appearance (light fill, dark stroke).
             if ui
-                .add(egui::Button::new("\u{21BA}").small().frame(false))
+                .add(
+                    egui::Button::new(egui::RichText::new("↶").size(13.0))
+                        .small()
+                        .frame(false),
+                )
                 .on_hover_text("Default fill and stroke")
                 .clicked()
                 && has_selection
@@ -2379,11 +2957,11 @@ impl AmalithApp {
         // text-label buttons. Anything wider here grows the panel's layout
         // past the 76px column that its frame is clipped to and leaves an
         // unpainted black gap between the sidebar and the canvas.
-        ui.add_space(4.0);
+        ui.add_space(3.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.spacing_mut().item_spacing.x = 3.0;
             let active_paint = paint_for_slot(representative, state.active);
-            let icon = Vec2::splat(16.0);
+            let icon = Vec2::splat(13.0);
 
             // Solid color: a plain filled swatch, highlighted when the active
             // slot is currently a solid paint.
@@ -2483,6 +3061,7 @@ impl AmalithApp {
         let boards = editor.document().artboards().to_vec();
         let rows_height = (ui.available_height() - 34.0).max(0.0);
         egui::ScrollArea::vertical()
+            .id_salt("artboards_panel_rows")
             .auto_shrink([false, false])
             .max_height(rows_height)
             .show(ui, |ui| {
@@ -2590,6 +3169,7 @@ impl AmalithApp {
         let layers = editor.document().layers().to_vec();
         let rows_height = (ui.available_height() - 34.0).max(0.0);
         egui::ScrollArea::vertical()
+            .id_salt("layers_panel_rows")
             .auto_shrink([false, false])
             .max_height(rows_height)
             .show(ui, |ui| {
@@ -2851,20 +3431,54 @@ impl AmalithApp {
         selection_tool: &mut SelectionTool,
         artboards: &mut ArtboardsPanelState,
         layers: &mut LayersPanelState,
+        layout: &mut PanelLayout,
         error: &mut Option<String>,
     ) {
-        let artboards_left = !artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Left;
-        let layers_left = !layers.chrome.hidden && layers.chrome.dock == PanelDock::Left;
-        if artboards_left || layers_left {
-            egui::SidePanel::left("left_panel_dock")
-                .exact_width(220.0)
+        layout.left_headers.clear();
+        layout.right_headers.clear();
+        layout.left_rect = None;
+        layout.right_rect = None;
+        let frame = ctx.input(|input| input.screen_rect());
+
+        // Esc aborts a live drag, leaving the dock untouched.
+        if layout.drag.is_some() && ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            layout.drag = None;
+        }
+        if layout.drag.is_none() {
+            layout.ghost = None;
+        }
+
+        // A rail is only a vertical stack while it actually holds both
+        // panels; otherwise it renders as a plain (tabbed) group.
+        for (side, rail) in [
+            (PanelDock::Left, &mut layout.left),
+            (PanelDock::Right, &mut layout.right),
+        ] {
+            let count = [&artboards.chrome, &layers.chrome]
+                .iter()
+                .filter(|chrome| !chrome.hidden && chrome.dock == side)
+                .count();
+            if count < 2 {
+                rail.stacked = None;
+            }
+        }
+
+        let left_on = (!artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Left)
+            || (!layers.chrome.hidden && layers.chrome.dock == PanelDock::Left);
+        if left_on {
+            let response = egui::SidePanel::left("left_panel_dock")
+                .exact_width(layout.left.width)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                .frame(egui::Frame::NONE.fill(PANEL))
                 .show(ctx, |ui| {
                     Self::dock_column_body(
                         ui,
                         ctx,
                         PanelDock::Left,
+                        &mut layout.left,
+                        &mut layout.left_headers,
+                        &mut layout.drag,
+                        &mut layout.ghost,
                         editor,
                         artboard_tool,
                         selection_tool,
@@ -2873,20 +3487,25 @@ impl AmalithApp {
                         error,
                     );
                 });
+            layout.left_rect = Some(response.response.rect);
         }
 
-        let artboards_right = !artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Right;
-        let layers_right = !layers.chrome.hidden && layers.chrome.dock == PanelDock::Right;
-        if artboards_right || layers_right {
-            egui::SidePanel::right("right_panel_dock")
-                .exact_width(220.0)
+        let right_on = (!artboards.chrome.hidden && artboards.chrome.dock == PanelDock::Right)
+            || (!layers.chrome.hidden && layers.chrome.dock == PanelDock::Right);
+        if right_on {
+            let response = egui::SidePanel::right("right_panel_dock")
+                .exact_width(layout.right.width)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(Color32::from_rgb(42, 42, 42)))
+                .frame(egui::Frame::NONE.fill(PANEL))
                 .show(ctx, |ui| {
                     Self::dock_column_body(
                         ui,
                         ctx,
                         PanelDock::Right,
+                        &mut layout.right,
+                        &mut layout.right_headers,
+                        &mut layout.drag,
+                        &mut layout.ghost,
                         editor,
                         artboard_tool,
                         selection_tool,
@@ -2895,12 +3514,59 @@ impl AmalithApp {
                         error,
                     );
                 });
+            layout.right_rect = Some(response.response.rect);
         }
 
-        Self::floating_artboards_panel(ctx, editor, artboard_tool, artboards, error);
-        Self::floating_layers_panel(ctx, editor, selection_tool, layers, error);
-        Self::paint_panel_drop_target(ctx, &artboards.chrome, "artboards_drop_target");
-        Self::paint_panel_drop_target(ctx, &layers.chrome, "layers_drop_target");
+        for panel in [PanelId::Artboards, PanelId::Layers] {
+            Self::floating_panel_overlay(
+                ctx,
+                panel,
+                &mut layout.drag,
+                &mut layout.ghost,
+                editor,
+                artboard_tool,
+                selection_tool,
+                artboards,
+                layers,
+                error,
+            );
+        }
+
+        // A live drag is preview-only: draw the ghost and the blue drop
+        // indicator now, and commit the move once, on release.
+        if let Some(mut drag) = layout.drag.take() {
+            let target = Self::resolve_drop(
+                drag.cursor,
+                drag.grab_offset,
+                layout.left_rect,
+                &layout.left_headers,
+                layout.right_rect,
+                &layout.right_headers,
+                frame,
+            );
+            if drag.released {
+                Self::apply_drop(target, drag.panel, artboards, layers, layout);
+                layout.ghost = None;
+            } else {
+                if matches!(drag.origin, PanelDock::Floating { .. }) {
+                    // An already-floating panel just follows the cursor; the
+                    // blue indicator still shows when it is over a rail.
+                    let chrome = match drag.panel {
+                        PanelId::Artboards => &mut artboards.chrome,
+                        PanelId::Layers => &mut layers.chrome,
+                    };
+                    chrome.dock = PanelDock::Floating {
+                        pos: drag.cursor - drag.grab_offset,
+                    };
+                } else {
+                    Self::paint_drag_ghost(ctx, drag.cursor - drag.grab_offset, layout.ghost);
+                }
+                Self::paint_drop_indicator(ctx, target, layout, frame);
+                drag.released = false;
+                layout.drag = Some(drag);
+            }
+            ctx.request_repaint();
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2908,6 +3574,10 @@ impl AmalithApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         side: PanelDock,
+        rail: &mut PanelRail,
+        headers: &mut Vec<EguiRect>,
+        drag: &mut Option<PanelDrag>,
+        ghost: &mut Option<(&'static str, Vec2)>,
         editor: &mut Editor,
         artboard_tool: &mut ArtboardTool,
         selection_tool: &mut SelectionTool,
@@ -2917,206 +3587,712 @@ impl AmalithApp {
     ) {
         let show_artboards = !artboards.chrome.hidden && artboards.chrome.dock == side;
         let show_layers = !layers.chrome.hidden && layers.chrome.dock == side;
-        let panel_count = usize::from(show_artboards) + usize::from(show_layers);
-        let panel_height = ui.available_height() / panel_count.max(1) as f32;
-
-        if show_artboards {
-            ui.push_id("artboards_panel", |ui| {
-                ui.allocate_ui(Vec2::new(ui.available_width(), panel_height), |ui| {
-                    let header = Self::panel_title_bar(ui, "Artboards");
-                    Self::handle_panel_drag(ctx, header, &mut artboards.chrome);
-                    ui.separator();
-                    Self::artboards_panel_body(ui, editor, artboard_tool, artboards, error);
-                });
-            });
+        let visible: Vec<_> = [
+            (PanelId::Artboards, show_artboards),
+            (PanelId::Layers, show_layers),
+        ]
+        .into_iter()
+        .filter_map(|(panel, visible)| visible.then_some(panel))
+        .collect();
+        if visible.is_empty() {
+            return;
         }
-        if show_layers {
-            ui.push_id("layers_panel", |ui| {
-                ui.allocate_ui(Vec2::new(ui.available_width(), panel_height), |ui| {
-                    let header = Self::panel_title_bar(ui, "Layers");
-                    Self::handle_panel_drag(ctx, header, &mut layers.chrome);
-                    ui.separator();
-                    Self::layers_panel_body(ui, editor, selection_tool, layers, error);
-                });
-            });
+        if !visible.contains(&rail.active) {
+            rail.active = visible[0];
+            rail.collapsed = false;
         }
-    }
 
-    fn panel_title_bar(ui: &mut egui::Ui, title: &str) -> egui::Response {
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(title)
-                        .strong()
-                        .color(Color32::from_gray(226)),
-                )
-                .sense(egui::Sense::drag()),
+        // The rail owns one shared width. Its inside edge is a direct
+        // horizontal resize target, just like Illustrator's dock divider.
+        let available = ui.max_rect();
+        let resize_rect = if side == PanelDock::Left {
+            EguiRect::from_min_max(
+                Pos2::new(available.right() - 3.0, available.top()),
+                available.right_bottom(),
             )
-        })
-        .inner
-        .on_hover_cursor(egui::CursorIcon::Grab)
+        } else {
+            EguiRect::from_min_max(
+                available.left_top(),
+                Pos2::new(available.left() + 3.0, available.bottom()),
+            )
+        };
+        let resize = ui.interact(
+            resize_rect,
+            ui.id().with("rail_resize"),
+            egui::Sense::drag(),
+        );
+        if resize.dragged() {
+            let dx = ui.input(|input| input.pointer.delta().x);
+            let direction = if side == PanelDock::Left { 1.0 } else { -1.0 };
+            rail.width = (rail.width + dx * direction).clamp(180.0, 460.0);
+            ctx.request_repaint();
+        }
+        if resize.hovered() || resize.dragged() {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        ui.painter().line_segment(
+            [resize_rect.center_top(), resize_rect.center_bottom()],
+            Stroke::new(1.0_f32, PANEL_BORDER),
+        );
+
+        // Two panels stacked above/below each other on this rail render as a
+        // vertical stack with a draggable divider instead of tabs.
+        if visible.len() == 2 {
+            if let Some(stack) = rail
+                .stacked
+                .filter(|s| visible.contains(&s.top) && visible.contains(&s.bottom()))
+            {
+                Self::dock_stacked_body(
+                    ui,
+                    ctx,
+                    side,
+                    rail,
+                    stack,
+                    headers,
+                    drag,
+                    ghost,
+                    editor,
+                    artboard_tool,
+                    selection_tool,
+                    artboards,
+                    layers,
+                    error,
+                );
+                return;
+            }
+        }
+
+        let mut header_drag: Option<(PanelId, egui::Response)> = None;
+        let header_frame = egui::Frame::NONE.fill(PANEL_RAISED).show(ui, |ui| {
+            ui.set_height(26.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for &panel in &visible {
+                    let active = rail.active == panel;
+                    let response = ui.add_sized(
+                        [86.0, 22.0],
+                        egui::Button::new(
+                            egui::RichText::new(Self::panel_label(panel))
+                                .size(10.0)
+                                .color(if active {
+                                    Color32::from_gray(235)
+                                } else {
+                                    Color32::from_gray(160)
+                                }),
+                        )
+                        .selected(active)
+                        .frame(false)
+                        .sense(egui::Sense::click_and_drag()),
+                    );
+                    if response.double_clicked() {
+                        rail.collapsed = !rail.collapsed;
+                    } else if response.clicked() {
+                        rail.active = panel;
+                        rail.collapsed = false;
+                    }
+                    if response.drag_started() || response.dragged() || response.drag_stopped() {
+                        header_drag = Some((panel, response));
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new("×").small().frame(false))
+                        .on_hover_text("Close panel (Window menu restores it)")
+                        .clicked()
+                    {
+                        match rail.active {
+                            PanelId::Artboards => artboards.chrome.hidden = true,
+                            PanelId::Layers => layers.chrome.hidden = true,
+                        }
+                    }
+                    let glyph = if rail.collapsed {
+                        "\u{25B8}"
+                    } else {
+                        "\u{25BE}"
+                    };
+                    if ui
+                        .add(egui::Button::new(glyph).small().frame(false))
+                        .on_hover_text("Collapse / expand this group")
+                        .clicked()
+                    {
+                        rail.collapsed = !rail.collapsed;
+                    }
+                });
+            });
+        });
+        headers.push(header_frame.response.rect);
+
+        if let Some((panel, response)) = header_drag {
+            Self::track_panel_drag(
+                &response,
+                panel,
+                side,
+                drag,
+                ghost,
+                Vec2::new(rail.width, 320.0),
+            );
+        }
+        if rail.collapsed {
+            return;
+        }
+        ui.separator();
+        match rail.active {
+            PanelId::Artboards => {
+                Self::artboards_panel_body(ui, editor, artboard_tool, artboards, error)
+            }
+            PanelId::Layers => Self::layers_panel_body(ui, editor, selection_tool, layers, error),
+        }
     }
 
-    fn handle_panel_drag(
+    /// Renders a rail's two panels as a vertical stack: a header per panel,
+    /// a draggable divider that repartitions the body height, and per-panel
+    /// collapse. Dragging a header previews a move via `track_panel_drag`,
+    /// exactly like the tabbed group's header.
+    #[allow(clippy::too_many_arguments)]
+    fn dock_stacked_body(
+        ui: &mut egui::Ui,
         ctx: &egui::Context,
-        response: egui::Response,
-        chrome: &mut PanelChromeState,
+        side: PanelDock,
+        rail: &mut PanelRail,
+        stack: StackedRail,
+        headers: &mut Vec<EguiRect>,
+        drag: &mut Option<PanelDrag>,
+        ghost: &mut Option<(&'static str, Vec2)>,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
+        selection_tool: &mut SelectionTool,
+        artboards: &mut ArtboardsPanelState,
+        layers: &mut LayersPanelState,
+        error: &mut Option<String>,
     ) {
-        let Some(pointer) = response.interact_pointer_pos() else {
+        const HEADER: f32 = 26.0;
+        const DIVIDER: f32 = 6.0;
+        let width = ui.available_width();
+        let body_area = (ui.available_height() - HEADER * 2.0 - DIVIDER).max(0.0);
+        let (top_body, bottom_body) = match (stack.top_collapsed, stack.bottom_collapsed) {
+            (true, true) => (0.0, 0.0),
+            (true, false) => (0.0, body_area),
+            (false, true) => (body_area, 0.0),
+            (false, false) => (body_area * stack.split, body_area * (1.0 - stack.split)),
+        };
+        let mut next = stack;
+        let mut dragged: Option<(PanelId, egui::Response)> = None;
+
+        for (slot, panel, body_h, collapsed) in [
+            (0usize, stack.top, top_body, stack.top_collapsed),
+            (1usize, stack.bottom(), bottom_body, stack.bottom_collapsed),
+        ] {
+            let section = ui.allocate_ui_with_layout(
+                Vec2::new(width, HEADER + body_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let mut header = None;
+                    let header_frame = egui::Frame::NONE.fill(PANEL_RAISED).show(ui, |ui| {
+                        ui.set_height(HEADER);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            let response = ui.add_sized(
+                                [110.0, 22.0],
+                                egui::Button::new(
+                                    egui::RichText::new(Self::panel_label(panel))
+                                        .size(10.0)
+                                        .color(Color32::from_gray(220)),
+                                )
+                                .frame(false)
+                                .sense(egui::Sense::click_and_drag()),
+                            );
+                            let toggle = response.double_clicked();
+                            header = Some(response);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(egui::Button::new("×").small().frame(false))
+                                        .on_hover_text("Close panel (Window menu restores it)")
+                                        .clicked()
+                                    {
+                                        match panel {
+                                            PanelId::Artboards => artboards.chrome.hidden = true,
+                                            PanelId::Layers => layers.chrome.hidden = true,
+                                        }
+                                    }
+                                    let glyph = if collapsed { "\u{25B8}" } else { "\u{25BE}" };
+                                    let clicked = ui
+                                        .add(egui::Button::new(glyph).small().frame(false))
+                                        .on_hover_text("Collapse / expand this panel")
+                                        .clicked();
+                                    if clicked || toggle {
+                                        if slot == 0 {
+                                            next.top_collapsed = !next.top_collapsed;
+                                        } else {
+                                            next.bottom_collapsed = !next.bottom_collapsed;
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                    });
+                    if let Some(response) = header {
+                        if response.drag_started() || response.dragged() || response.drag_stopped()
+                        {
+                            dragged = Some((panel, response));
+                        }
+                    }
+                    if !collapsed {
+                        ui.separator();
+                        match panel {
+                            PanelId::Artboards => Self::artboards_panel_body(
+                                ui,
+                                editor,
+                                artboard_tool,
+                                artboards,
+                                error,
+                            ),
+                            PanelId::Layers => {
+                                Self::layers_panel_body(ui, editor, selection_tool, layers, error)
+                            }
+                        }
+                    }
+                    header_frame.response.rect
+                },
+            );
+            headers.push(section.inner);
+
+            if slot == 0 {
+                let (rect, resize) =
+                    ui.allocate_exact_size(Vec2::new(width, DIVIDER), egui::Sense::drag());
+                if resize.dragged() && body_area > 0.0 {
+                    let dy = ui.input(|input| input.pointer.delta().y);
+                    next.split = (next.split + dy / body_area)
+                        .clamp(StackedRail::MIN_SPLIT, StackedRail::MAX_SPLIT);
+                    ctx.request_repaint();
+                }
+                if resize.hovered() || resize.dragged() {
+                    ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
+                }
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.center().y,
+                    Stroke::new(1.0_f32, PANEL_BORDER),
+                );
+            }
+        }
+
+        rail.stacked = Some(next);
+
+        if let Some((panel, response)) = dragged {
+            Self::track_panel_drag(&response, panel, side, drag, ghost, Vec2::new(width, 300.0));
+        }
+    }
+
+    fn panel_label(panel: PanelId) -> &'static str {
+        match panel {
+            PanelId::Artboards => "ARTBOARDS",
+            PanelId::Layers => "LAYERS",
+        }
+    }
+
+    fn panel_title(panel: PanelId) -> &'static str {
+        match panel {
+            PanelId::Artboards => "Artboards",
+            PanelId::Layers => "Layers",
+        }
+    }
+
+    fn panel_key(panel: PanelId) -> &'static str {
+        match panel {
+            PanelId::Artboards => "artboards",
+            PanelId::Layers => "layers",
+        }
+    }
+
+    fn rail_mut(side: PanelDock, layout: &mut PanelLayout) -> &mut PanelRail {
+        match side {
+            PanelDock::Left => &mut layout.left,
+            _ => &mut layout.right,
+        }
+    }
+
+    /// Records/updates the live [`PanelDrag`] from a header (or float
+    /// title-bar) response. Does NOT touch the dock layout — `panels_ui`
+    /// previews and commits.
+    fn track_panel_drag(
+        response: &egui::Response,
+        panel: PanelId,
+        origin: PanelDock,
+        drag: &mut Option<PanelDrag>,
+        ghost: &mut Option<(&'static str, Vec2)>,
+        ghost_size: Vec2,
+    ) {
+        let Some(cursor) = response.interact_pointer_pos() else {
             return;
         };
         if response.drag_started() {
-            chrome.drag_offset = pointer - response.rect.min;
-            chrome.dragging = true;
-        }
-        if response.dragged() || response.drag_stopped() {
-            chrome.dock = Self::dock_target(pointer, ctx).unwrap_or(PanelDock::Floating {
-                pos: pointer - chrome.drag_offset,
+            *drag = Some(PanelDrag {
+                panel,
+                origin,
+                grab_offset: cursor - response.rect.left_top(),
+                cursor,
+                released: false,
             });
-            ctx.request_repaint();
-        }
-        if response.drag_stopped() && !matches!(chrome.dock, PanelDock::Floating { .. }) {
-            chrome.dragging = false;
+            *ghost = Some((Self::panel_title(panel), ghost_size));
+        } else if let Some(active) = drag.as_mut().filter(|d| d.panel == panel) {
+            active.cursor = cursor;
+            active.released = response.drag_stopped();
+            *ghost = Some((Self::panel_title(panel), ghost_size));
         }
     }
 
-    fn floating_artboards_panel(
-        ctx: &egui::Context,
-        editor: &mut Editor,
-        artboard_tool: &mut ArtboardTool,
-        state: &mut ArtboardsPanelState,
-        error: &mut Option<String>,
-    ) {
-        let PanelDock::Floating { pos } = state.chrome.dock else {
-            return;
-        };
-        if state.chrome.hidden {
-            return;
-        }
-        let mut open = true;
-        let response = egui::Window::new("Artboards")
-            .id(egui::Id::new("artboards_panel"))
-            .default_width(220.0)
-            .min_width(180.0)
-            .min_height(180.0)
-            .current_pos(pos)
-            .open(&mut open)
-            .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
-            .show(ctx, |ui| {
-                Self::artboards_panel_body(ui, editor, artboard_tool, state, error)
-            });
-        state.chrome.hidden = !open;
-        Self::handle_floating_response(
-            ctx,
-            response.map(|window| window.response),
-            &mut state.chrome,
-            pos,
-        );
-    }
+    /// Where a live drag would land if released now. Near a rail's edge or a
+    /// gap between its groups it inserts a new group; over a group's tab
+    /// strip it tabs in; near a bare screen edge it docks a new column on
+    /// that side; anywhere else it floats. Pure — geometry in, decision out.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_drop(
+        cursor: Pos2,
+        grab_offset: Vec2,
+        left_rect: Option<EguiRect>,
+        left_headers: &[EguiRect],
+        right_rect: Option<EguiRect>,
+        right_headers: &[EguiRect],
+        frame: EguiRect,
+    ) -> DropTarget {
+        const EDGE: f32 = 44.0;
+        let near_left = cursor.x <= frame.left() + EDGE;
+        let near_right = cursor.x >= frame.right() - EDGE;
+        let over = |rect: Option<EguiRect>| rect.is_some_and(|r| r.expand(EDGE).contains(cursor));
 
-    fn floating_layers_panel(
-        ctx: &egui::Context,
-        editor: &mut Editor,
-        selection_tool: &mut SelectionTool,
-        state: &mut LayersPanelState,
-        error: &mut Option<String>,
-    ) {
-        let PanelDock::Floating { pos } = state.chrome.dock else {
-            return;
-        };
-        if state.chrome.hidden {
-            return;
-        }
-        let mut open = true;
-        let response = egui::Window::new("Layers")
-            .id(egui::Id::new("layers_panel"))
-            .default_width(220.0)
-            .min_width(180.0)
-            .min_height(180.0)
-            .current_pos(pos)
-            .open(&mut open)
-            .frame(egui::Frame::window(&ctx.style()).fill(Color32::from_rgb(42, 42, 42)))
-            .show(ctx, |ui| {
-                Self::layers_panel_body(ui, editor, selection_tool, state, error)
-            });
-        state.chrome.hidden = !open;
-        Self::handle_floating_response(
-            ctx,
-            response.map(|window| window.response),
-            &mut state.chrome,
-            pos,
-        );
-    }
-
-    fn handle_floating_response(
-        ctx: &egui::Context,
-        response: Option<egui::Response>,
-        chrome: &mut PanelChromeState,
-        previous_pos: Pos2,
-    ) {
-        let Some(response) = response else { return };
-        let actual_pos = response.rect.min;
-        let pointer_down = ctx.input(|input| input.pointer.primary_down());
-        let window_moved = actual_pos.distance(previous_pos) > 0.1;
-        if pointer_down && window_moved {
-            chrome.dragging = true;
-        }
-        let pos = if chrome.dragging && pointer_down && !window_moved {
-            ctx.input(|input| input.pointer.interact_pos())
-                .map_or(actual_pos, |pointer| pointer - chrome.drag_offset)
+        let (side, rect, headers) = if over(left_rect) || (near_left && left_rect.is_some()) {
+            (PanelDock::Left, left_rect, left_headers)
+        } else if over(right_rect) || (near_right && right_rect.is_some()) {
+            (PanelDock::Right, right_rect, right_headers)
+        } else if near_left {
+            return DropTarget::TabInto {
+                side: PanelDock::Left,
+            };
+        } else if near_right {
+            return DropTarget::TabInto {
+                side: PanelDock::Right,
+            };
         } else {
-            actual_pos
+            return DropTarget::Float {
+                pos: cursor - grab_offset,
+            };
         };
-        chrome.dock = PanelDock::Floating { pos };
-        if chrome.dragging && ctx.input(|input| input.pointer.primary_released()) {
-            if let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) {
-                if let Some(target) = Self::dock_target(pointer, ctx) {
-                    chrome.dock = target;
+
+        let Some(rect) = rect else {
+            return DropTarget::TabInto { side };
+        };
+        if headers.is_empty() {
+            return DropTarget::TabInto { side };
+        }
+
+        if let Some((index, header)) = headers
+            .iter()
+            .enumerate()
+            .find(|(_, h)| cursor.y >= h.top() && cursor.y <= h.bottom())
+        {
+            let t = (cursor.y - header.top()) / header.height().max(1.0);
+            if t < 0.3 {
+                return DropTarget::Rail { side, index };
+            }
+            if t > 0.7 {
+                return DropTarget::Rail {
+                    side,
+                    index: index + 1,
+                };
+            }
+            return DropTarget::TabInto { side };
+        }
+
+        let mut boundaries = vec![headers[0].top()];
+        for pair in headers.windows(2) {
+            boundaries.push((pair[0].bottom() + pair[1].top()) * 0.5);
+        }
+        boundaries.push(rect.bottom());
+        let index = boundaries
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| (**a - cursor.y).abs().total_cmp(&(**b - cursor.y).abs()))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        DropTarget::Rail { side, index }
+    }
+
+    /// Commits a resolved [`DropTarget`] to the panel + rail state. Called
+    /// once, on release.
+    fn apply_drop(
+        target: DropTarget,
+        panel: PanelId,
+        artboards: &mut ArtboardsPanelState,
+        layers: &mut LayersPanelState,
+        layout: &mut PanelLayout,
+    ) {
+        let other = match panel {
+            PanelId::Artboards => PanelId::Layers,
+            PanelId::Layers => PanelId::Artboards,
+        };
+        let set_dock =
+            |a: &mut ArtboardsPanelState, l: &mut LayersPanelState, dock: PanelDock| match panel {
+                PanelId::Artboards => a.chrome.dock = dock,
+                PanelId::Layers => l.chrome.dock = dock,
+            };
+        match target {
+            DropTarget::Float { pos } => set_dock(artboards, layers, PanelDock::Floating { pos }),
+            DropTarget::TabInto { side } => {
+                set_dock(artboards, layers, side);
+                let rail = Self::rail_mut(side, layout);
+                rail.stacked = None;
+                rail.active = panel;
+                rail.collapsed = false;
+            }
+            DropTarget::Rail { side, index } => {
+                let other_here = {
+                    let chrome = match other {
+                        PanelId::Artboards => &artboards.chrome,
+                        PanelId::Layers => &layers.chrome,
+                    };
+                    !chrome.hidden && chrome.dock == side
+                };
+                set_dock(artboards, layers, side);
+                let rail = Self::rail_mut(side, layout);
+                if other_here {
+                    let split = rail
+                        .stacked
+                        .map(|s| s.split)
+                        .unwrap_or(0.5)
+                        .clamp(StackedRail::MIN_SPLIT, StackedRail::MAX_SPLIT);
+                    let top = if index == 0 { panel } else { other };
+                    rail.stacked = Some(StackedRail {
+                        top,
+                        split,
+                        top_collapsed: false,
+                        bottom_collapsed: false,
+                    });
+                } else {
+                    rail.stacked = None;
+                    rail.active = panel;
+                }
+                rail.collapsed = false;
+            }
+        }
+    }
+
+    /// The translucent proxy that follows the cursor while a docked panel is
+    /// being dragged out (an already-floating panel moves for real instead).
+    fn paint_drag_ghost(ctx: &egui::Context, top_left: Pos2, ghost: Option<(&'static str, Vec2)>) {
+        let Some((label, size)) = ghost else {
+            return;
+        };
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("panel_drag_ghost"),
+        ));
+        let rect = EguiRect::from_min_size(top_left, size);
+        painter.rect_filled(rect, 4.0, Color32::from_rgba_unmultiplied(43, 43, 43, 180));
+        painter.rect_filled(
+            EguiRect::from_min_size(rect.min, Vec2::new(rect.width(), 24.0)),
+            4.0,
+            Color32::from_rgba_unmultiplied(58, 58, 58, 210),
+        );
+        painter.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(18, 18, 18, 200)),
+            egui::StrokeKind::Outside,
+        );
+        painter.text(
+            rect.min + Vec2::new(8.0, 12.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            FontId::proportional(11.0),
+            Color32::from_gray(215),
+        );
+    }
+
+    /// The blue drop indicator: a full-width line at the target insertion
+    /// boundary, a boxed group for a tab-in, or a full-height edge line for
+    /// a new dock column — matching Illustrator's dock previews.
+    fn paint_drop_indicator(
+        ctx: &egui::Context,
+        target: DropTarget,
+        layout: &PanelLayout,
+        frame: EguiRect,
+    ) {
+        const BLUE: Color32 = Color32::from_rgb(29, 122, 240);
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("panel_drop_indicator"),
+        ));
+        let rail_geom = |side: PanelDock| match side {
+            PanelDock::Left => (layout.left_rect, layout.left_headers.as_slice()),
+            _ => (layout.right_rect, layout.right_headers.as_slice()),
+        };
+        let edge_line = |side: PanelDock| {
+            let x = match side {
+                PanelDock::Left => frame.left() + 1.5,
+                _ => frame.right() - 1.5,
+            };
+            painter.rect_filled(
+                EguiRect::from_min_max(
+                    Pos2::new(x - 1.5, frame.top()),
+                    Pos2::new(x + 1.5, frame.bottom()),
+                ),
+                0.0,
+                BLUE,
+            );
+        };
+        match target {
+            DropTarget::Float { .. } => {}
+            DropTarget::TabInto { side } => {
+                let (rect, headers) = rail_geom(side);
+                match rect {
+                    Some(r) => {
+                        let band = headers.first().copied().unwrap_or_else(|| {
+                            EguiRect::from_min_size(r.min, Vec2::new(r.width(), 26.0))
+                        });
+                        painter.rect_stroke(
+                            band.expand(1.0),
+                            2.0,
+                            Stroke::new(2.0_f32, BLUE),
+                            egui::StrokeKind::Outside,
+                        );
+                    }
+                    None => edge_line(side),
                 }
             }
-            chrome.dragging = false;
+            DropTarget::Rail { side, index } => {
+                let (rect, headers) = rail_geom(side);
+                let Some(r) = rect else {
+                    edge_line(side);
+                    return;
+                };
+                let y = if headers.is_empty() {
+                    r.top() + 1.5
+                } else if index == 0 {
+                    headers[0].top()
+                } else if index >= headers.len() {
+                    r.bottom() - 1.5
+                } else {
+                    (headers[index - 1].bottom() + headers[index].top()) * 0.5
+                };
+                painter.rect_filled(
+                    EguiRect::from_min_max(
+                        Pos2::new(r.left(), y - 1.5),
+                        Pos2::new(r.right(), y + 1.5),
+                    ),
+                    0.0,
+                    BLUE,
+                );
+                for cx in [r.left() + 2.0, r.right() - 2.0] {
+                    painter.rect_filled(
+                        EguiRect::from_center_size(Pos2::new(cx, y), Vec2::splat(5.0)),
+                        1.0,
+                        BLUE,
+                    );
+                }
+            }
         }
     }
 
-    fn dock_target(pointer: Pos2, ctx: &egui::Context) -> Option<PanelDock> {
-        let rect = ctx.input(|input| input.screen_rect());
-        if pointer.x <= rect.left() + 40.0 {
-            Some(PanelDock::Left)
-        } else if pointer.x >= rect.right() - 40.0 {
-            Some(PanelDock::Right)
-        } else {
-            None
+    /// One floating panel: an in-app, app-styled overlay window (custom dark
+    /// title bar, no OS chrome) that can be moved freely and dragged back
+    /// onto a rail. Not an OS window — it lives inside the app frame.
+    #[allow(clippy::too_many_arguments)]
+    fn floating_panel_overlay(
+        ctx: &egui::Context,
+        panel: PanelId,
+        drag: &mut Option<PanelDrag>,
+        ghost: &mut Option<(&'static str, Vec2)>,
+        editor: &mut Editor,
+        artboard_tool: &mut ArtboardTool,
+        selection_tool: &mut SelectionTool,
+        artboards: &mut ArtboardsPanelState,
+        layers: &mut LayersPanelState,
+        error: &mut Option<String>,
+    ) {
+        let chrome = match panel {
+            PanelId::Artboards => &artboards.chrome,
+            PanelId::Layers => &layers.chrome,
+        };
+        let PanelDock::Floating { pos } = chrome.dock else {
+            return;
+        };
+        if chrome.hidden {
+            return;
         }
-    }
+        let size = chrome.float_size;
+        let mut close = false;
 
-    fn paint_panel_drop_target(ctx: &egui::Context, state: &PanelChromeState, id: &'static str) {
-        if !state.dragging || !ctx.input(|input| input.pointer.primary_down()) {
-            return;
-        }
-        let Some(pointer) = ctx.input(|input| input.pointer.interact_pos()) else {
-            return;
-        };
-        let rect = ctx.input(|input| input.screen_rect());
-        let target = if pointer.x <= rect.left() + 40.0 {
-            Some(EguiRect::from_min_max(
-                rect.min,
-                Pos2::new(rect.left() + 4.0, rect.bottom()),
-            ))
-        } else if pointer.x >= rect.right() - 40.0 {
-            Some(EguiRect::from_min_max(
-                Pos2::new(rect.right() - 4.0, rect.top()),
-                rect.max,
-            ))
-        } else {
-            None
-        };
-        if let Some(target) = target {
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new(id),
-            ))
-            .rect_filled(target, 0.0, Color32::from_rgb(45, 139, 242));
+        egui::Window::new(Self::panel_title(panel))
+            .id(egui::Id::new((
+                "amalith_float_panel",
+                Self::panel_key(panel),
+            )))
+            .title_bar(false)
+            .resizable(false)
+            .movable(false)
+            .fixed_pos(pos)
+            .default_width(size.x)
+            .frame(
+                egui::Frame::NONE
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0_f32, PANEL_BORDER))
+                    .inner_margin(egui::Margin::ZERO),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(size.x);
+                let bar = egui::Frame::NONE
+                    .fill(PANEL_RAISED)
+                    .inner_margin(egui::Margin::symmetric(6, 3))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.set_width(size.x - 12.0);
+                            if ui
+                                .add(egui::Button::new("×").small().frame(false))
+                                .on_hover_text("Close panel (Window menu restores it)")
+                                .clicked()
+                            {
+                                close = true;
+                            }
+                            ui.label(
+                                egui::RichText::new(Self::panel_title(panel))
+                                    .size(10.0)
+                                    .color(Color32::from_gray(220)),
+                            );
+                        });
+                    });
+                let bar = bar.response.interact(egui::Sense::click_and_drag());
+                if bar.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                Self::track_panel_drag(&bar, panel, PanelDock::Floating { pos }, drag, ghost, size);
+                egui::ScrollArea::vertical()
+                    .id_salt(("amalith_float_body", Self::panel_key(panel)))
+                    .max_height((size.y - 30.0).max(60.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(size.x);
+                        match panel {
+                            PanelId::Artboards => Self::artboards_panel_body(
+                                ui,
+                                editor,
+                                artboard_tool,
+                                artboards,
+                                error,
+                            ),
+                            PanelId::Layers => {
+                                Self::layers_panel_body(ui, editor, selection_tool, layers, error)
+                            }
+                        }
+                    });
+            });
+
+        if close {
+            match panel {
+                PanelId::Artboards => artboards.chrome.hidden = true,
+                PanelId::Layers => layers.chrome.hidden = true,
+            }
         }
     }
 }
@@ -3124,7 +4300,10 @@ impl AmalithApp {
 impl eframe::App for AmalithApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        self.process_native_menu_events();
+        {
+            self.process_native_menu_events();
+            Self::title_bar_ui(ctx);
+        }
         // File commands belong to the document workspace; never let a
         // focused New Document/editor field consume them.
         let shortcuts_enabled = self.creating.is_none() && !ctx.wants_keyboard_input();
@@ -3185,6 +4364,283 @@ impl eframe::App for AmalithApp {
             Self::error_toast_ui(ctx, &mut self.error);
         }
     }
+}
+
+/// Paint the supplied branding SVGs directly into egui's vector canvas. The
+/// artwork deliberately stays in SVG form in `branding/SVG`; this small
+/// reader supports the primitive shapes used by Amalith's tool glyphs and
+/// avoids fuzzy bitmap icons on high-density displays.
+fn paint_brand_tool_icon(painter: &egui::Painter, rect: EguiRect, icon: ToolIcon, active: bool) {
+    let source = icon.svg();
+    let outline = if active {
+        Color32::from_gray(245)
+    } else {
+        Color32::from_rgb(188, 188, 190)
+    };
+    let dark_fill = if active {
+        Color32::from_rgb(66, 101, 135)
+    } else {
+        Color32::from_rgb(57, 58, 57)
+    };
+    let direct_fill = if active {
+        Color32::from_rgb(235, 241, 247)
+    } else {
+        Color32::from_rgb(188, 188, 190)
+    };
+    let point = |x: f32, y: f32| {
+        Pos2::new(
+            rect.left() + rect.width() * x / 100.0,
+            rect.top() + rect.height() * y / 100.0,
+        )
+    };
+    let stroke = |tag: &str| {
+        let width = svg_attribute(tag, "stroke-width")
+            .and_then(|value| value.strip_suffix("px"))
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(4.0);
+        Stroke::new((width * rect.width() / 100.0).max(1.0), outline)
+    };
+
+    for tag in svg_tags(source, "polygon") {
+        let points = svg_attribute(tag, "points")
+            .map(svg_numbers)
+            .unwrap_or_default()
+            .chunks_exact(2)
+            .map(|pair| point(pair[0], pair[1]))
+            .collect::<Vec<_>>();
+        if points.len() >= 3 {
+            let fill = if tag.contains("cls-3") || matches!(icon, ToolIcon::DirectSelection) {
+                direct_fill
+            } else {
+                dark_fill
+            };
+            painter.add(egui::Shape::convex_polygon(points, fill, stroke(tag)));
+        }
+    }
+    for tag in svg_tags(source, "rect") {
+        let (Some(x), Some(y), Some(width), Some(height)) = (
+            svg_number(tag, "x"),
+            svg_number(tag, "y"),
+            svg_number(tag, "width"),
+            svg_number(tag, "height"),
+        ) else {
+            continue;
+        };
+        let shape = EguiRect::from_min_max(point(x, y), point(x + width, y + height));
+        painter.rect_filled(shape, 0.0, dark_fill);
+        painter.rect_stroke(shape, 0.0, stroke(tag), egui::StrokeKind::Middle);
+    }
+    for tag in svg_tags(source, "ellipse") {
+        let (Some(cx), Some(cy), Some(rx), Some(ry)) = (
+            svg_number(tag, "cx"),
+            svg_number(tag, "cy"),
+            svg_number(tag, "rx"),
+            svg_number(tag, "ry"),
+        ) else {
+            continue;
+        };
+        let points = (0..24)
+            .map(|step| {
+                let theta = step as f32 / 24.0 * std::f32::consts::TAU;
+                point(cx + rx * theta.cos(), cy + ry * theta.sin())
+            })
+            .collect();
+        painter.add(egui::Shape::convex_polygon(points, dark_fill, stroke(tag)));
+    }
+    for tag in svg_tags(source, "circle") {
+        let (Some(cx), Some(cy), Some(radius)) = (
+            svg_number(tag, "cx"),
+            svg_number(tag, "cy"),
+            svg_number(tag, "r"),
+        ) else {
+            continue;
+        };
+        painter.circle_filled(point(cx, cy), radius * rect.width() / 100.0, outline);
+    }
+    for tag in svg_tags(source, "line") {
+        let (Some(x1), Some(y1), Some(x2), Some(y2)) = (
+            svg_number(tag, "x1"),
+            svg_number(tag, "y1"),
+            svg_number(tag, "x2"),
+            svg_number(tag, "y2"),
+        ) else {
+            continue;
+        };
+        painter.line_segment([point(x1, y1), point(x2, y2)], stroke(tag));
+    }
+}
+
+/// Draws the Pen SVG at the exact pointer hotspot. egui only exposes system
+/// cursor names, so a canvas-painted cursor is the way to use the supplied
+/// vector artwork while keeping it sharp at every display scale.
+fn paint_pen_cursor(painter: &egui::Painter, pointer: Pos2, closing_path: bool) {
+    let size = 32.0;
+    // The nib in the source artwork is at approximately (20, 14) in its
+    // 100×100 view box. Pin it to the pointer rather than centering the
+    // artwork, so clicking lands exactly at the apparent pen tip.
+    let rect = EguiRect::from_min_size(
+        pointer - Vec2::new(size * 0.2017, size * 0.1362),
+        Vec2::splat(size),
+    );
+    let source = if closing_path {
+        CURSOR_PEN_CLOSE_SVG
+    } else {
+        CURSOR_PEN_DRAWING_SVG
+    };
+    let point = |x: f32, y: f32| {
+        Pos2::new(
+            rect.left() + rect.width() * x / 100.0,
+            rect.top() + rect.height() * y / 100.0,
+        )
+    };
+    let dark = Color32::from_rgb(81, 83, 81);
+    let stroke = |tag: &str| {
+        let width = svg_attribute(tag, "stroke-width")
+            .and_then(|value| value.strip_suffix("px"))
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(3.0);
+        Stroke::new((width * rect.width() / 100.0).max(1.0), dark)
+    };
+
+    for tag in svg_tags(source, "polygon") {
+        let points = svg_attribute(tag, "points")
+            .map(svg_numbers)
+            .unwrap_or_default()
+            .chunks_exact(2)
+            .map(|pair| point(pair[0], pair[1]))
+            .collect::<Vec<_>>();
+        if points.len() >= 3 {
+            painter.add(egui::Shape::convex_polygon(points, dark, stroke(tag)));
+        }
+    }
+    for tag in svg_tags(source, "circle") {
+        let (Some(cx), Some(cy), Some(radius)) = (
+            svg_number(tag, "cx"),
+            svg_number(tag, "cy"),
+            svg_number(tag, "r"),
+        ) else {
+            continue;
+        };
+        let center = point(cx, cy);
+        let radius = radius * rect.width() / 100.0;
+        // Only the final circle in Pen-closeShape is the outline badge; the
+        // other circle is part of the pen body and remains filled.
+        if closing_path && tag.contains("cls-2") {
+            painter.circle_stroke(center, radius, stroke(tag));
+        } else {
+            painter.circle_filled(center, radius, dark);
+        }
+    }
+    for tag in svg_tags(source, "line") {
+        let (Some(x1), Some(y1), Some(x2), Some(y2)) = (
+            svg_number(tag, "x1"),
+            svg_number(tag, "y1"),
+            svg_number(tag, "x2"),
+            svg_number(tag, "y2"),
+        ) else {
+            continue;
+        };
+        painter.line_segment([point(x1, y1), point(x2, y2)], stroke(tag));
+    }
+}
+
+fn paint_canvas_cursor(painter: &egui::Painter, cursor: CanvasCursor) {
+    match cursor {
+        CanvasCursor::Pen {
+            pointer,
+            closing_path,
+        } => paint_pen_cursor(painter, pointer, closing_path),
+        CanvasCursor::Selection { pointer, direct } => {
+            paint_selection_cursor(painter, pointer, direct)
+        }
+    }
+}
+
+/// Paints the supplied V/A selection artwork with its pointed top vertex as
+/// the cursor hotspot. The V arrow remains dark with a light outline; the A
+/// arrow intentionally reverses that treatment, matching the SVGs.
+fn paint_selection_cursor(painter: &egui::Painter, pointer: Pos2, direct: bool) {
+    let size = 30.0;
+    let hotspot = if direct {
+        Vec2::new(size * 0.3431, size * 0.1652)
+    } else {
+        Vec2::new(size * 0.3082, size * 0.1798)
+    };
+    let rect = EguiRect::from_min_size(pointer - hotspot, Vec2::splat(size));
+    let source = if direct {
+        CURSOR_DIRECT_SELECTION_SVG
+    } else {
+        CURSOR_SELECTION_SVG
+    };
+    let fill = if direct {
+        Color32::from_rgb(176, 175, 177)
+    } else {
+        Color32::from_rgb(81, 82, 81)
+    };
+    let outline = if direct {
+        Color32::from_rgb(81, 82, 81)
+    } else {
+        Color32::from_rgb(176, 175, 177)
+    };
+    let point = |x: f32, y: f32| {
+        Pos2::new(
+            rect.left() + rect.width() * x / 100.0,
+            rect.top() + rect.height() * y / 100.0,
+        )
+    };
+    for tag in svg_tags(source, "polygon") {
+        let points = svg_attribute(tag, "points")
+            .map(svg_numbers)
+            .unwrap_or_default()
+            .chunks_exact(2)
+            .map(|pair| point(pair[0], pair[1]))
+            .collect::<Vec<_>>();
+        if points.len() >= 3 {
+            let width = svg_attribute(tag, "stroke-width")
+                .and_then(|value| value.strip_suffix("px"))
+                .and_then(|value| value.parse::<f32>().ok())
+                .unwrap_or(3.6);
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                fill,
+                Stroke::new((width * size / 100.0).max(1.0), outline),
+            ));
+        }
+    }
+}
+
+fn svg_tags<'a>(source: &'a str, element: &str) -> Vec<&'a str> {
+    let needle = format!("<{element}");
+    source
+        .split(&needle)
+        .skip(1)
+        .filter_map(|rest| rest.split('>').next())
+        .collect()
+}
+
+fn svg_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let marker = format!("{name}=\"");
+    tag.split_once(&marker)?
+        .1
+        .split_once('"')
+        .map(|(value, _)| value)
+}
+
+fn svg_numbers(value: &str) -> Vec<f32> {
+    value
+        .split(|character: char| {
+            !character.is_ascii_digit() && character != '.' && character != '-'
+        })
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect()
+}
+
+fn svg_number(tag: &str, name: &str) -> Option<f32> {
+    svg_attribute(tag, name)?
+        .trim_end_matches("px")
+        .parse()
+        .ok()
 }
 
 fn paint_slot_swatch(
@@ -4000,6 +5456,13 @@ fn object_label(object: &amalith_core::Object) -> String {
     }
 }
 
+fn path_is_closed(path: &PathData) -> bool {
+    matches!(
+        path.geometry.elements().last(),
+        Some(amalith_core::geom::PathEl::ClosePath)
+    )
+}
+
 fn path_label(path: &PathData) -> String {
     use amalith_core::geom::PathEl;
 
@@ -4057,10 +5520,68 @@ mod canvas_input_tests {
     }
 
     #[test]
+    fn dock_resolve_drop_classifies_positions() {
+        use egui::{pos2, vec2};
+        let frame = EguiRect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 800.0));
+        let right = EguiRect::from_min_max(pos2(780.0, 0.0), pos2(1000.0, 800.0));
+        let headers = [EguiRect::from_min_max(pos2(780.0, 0.0), pos2(1000.0, 26.0))];
+        let grab = vec2(10.0, 8.0);
+        let r = |c| AmalithApp::resolve_drop(c, grab, None, &[], Some(right), &headers, frame);
+
+        // Top quarter of the only header -> insert a new group above it.
+        assert_eq!(
+            r(pos2(880.0, 3.0)),
+            DropTarget::Rail {
+                side: PanelDock::Right,
+                index: 0
+            }
+        );
+        // Middle of the header -> tab into that group.
+        assert_eq!(
+            r(pos2(880.0, 13.0)),
+            DropTarget::TabInto {
+                side: PanelDock::Right
+            }
+        );
+        // Well below the header but still over the rail -> new group at the bottom.
+        assert_eq!(
+            r(pos2(880.0, 700.0)),
+            DropTarget::Rail {
+                side: PanelDock::Right,
+                index: 1
+            }
+        );
+        // Far from any rail -> float at cursor minus the grab offset.
+        assert_eq!(
+            r(pos2(400.0, 400.0)),
+            DropTarget::Float {
+                pos: pos2(390.0, 392.0)
+            }
+        );
+        // Near the bare left edge -> dock a column on the left (empty -> tab-in).
+        assert_eq!(
+            r(pos2(12.0, 400.0)),
+            DropTarget::TabInto {
+                side: PanelDock::Left
+            }
+        );
+    }
+
+    #[test]
+    fn command_temporarily_activates_direct_selection_from_the_black_arrow() {
+        assert!(temporary_direct_selection(true, true, false));
+        assert!(!temporary_direct_selection(false, true, false));
+        assert!(!temporary_direct_selection(true, false, false));
+        assert!(!temporary_direct_selection(true, true, true));
+    }
+
+    #[test]
     fn tool_switch_is_exclusive() {
         let mut artboard = ArtboardTool::default();
         let mut rectangle = RectangleTool::default();
         let mut ellipse = EllipseTool::default();
+        let mut pen = PenTool::default();
+        let mut primitive = PrimitiveTool::default();
         let mut selection = SelectionTool::default();
         let mut direct_selection = DirectSelectionTool::default();
 
@@ -4069,6 +5590,8 @@ mod canvas_input_tests {
             &mut artboard,
             &mut rectangle,
             &mut ellipse,
+            &mut pen,
+            &mut primitive,
             &mut selection,
             &mut direct_selection,
             None,
@@ -4082,6 +5605,8 @@ mod canvas_input_tests {
             &mut artboard,
             &mut rectangle,
             &mut ellipse,
+            &mut pen,
+            &mut primitive,
             &mut selection,
             &mut direct_selection,
             None,
@@ -4174,6 +5699,8 @@ mod canvas_input_tests {
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
+            pen_tool: PenTool::default(),
+            primitive_tool: PrimitiveTool::default(),
             selection_tool: SelectionTool::default(),
             direct_selection_tool: DirectSelectionTool::default(),
         };
@@ -4193,6 +5720,8 @@ mod canvas_input_tests {
             artboard_tool: ArtboardTool::default(),
             rectangle_tool: RectangleTool::default(),
             ellipse_tool: EllipseTool::default(),
+            pen_tool: PenTool::default(),
+            primitive_tool: PrimitiveTool::default(),
             selection_tool: SelectionTool::default(),
             direct_selection_tool: DirectSelectionTool::default(),
         };
@@ -4210,6 +5739,8 @@ mod canvas_input_tests {
                 artboard_tool: ArtboardTool::default(),
                 rectangle_tool: RectangleTool::default(),
                 ellipse_tool: EllipseTool::default(),
+                pen_tool: PenTool::default(),
+                primitive_tool: PrimitiveTool::default(),
                 selection_tool: SelectionTool::default(),
                 direct_selection_tool: DirectSelectionTool::default(),
             }

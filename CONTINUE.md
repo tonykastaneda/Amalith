@@ -1,6 +1,6 @@
 # Amalith — session handoff
 
-Read this first after `/compact` or `/new`. Product spec: `amalith-project-brief.md`. Do not resurrect the name Vextor.
+Read this first after `/compact` or `/new`. Product spec: `amalith-project-brief.md`.
 
 **Repo:** `~/Documents/GitHub/Amalith`  
 **GitHub:** `tonykastaneda/Amalith`  
@@ -15,7 +15,7 @@ export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 cargo run -p amalith-app
 ```
 
-You are the **orchestrator**. Do not implement app code yourself. Delegate to Herdr specialists in workspace **Amalith**. Writable path is Amalith only (old `GitHub/Vextor` may be a leftover symlink — never sandbox-write through it).
+You are the **orchestrator**. Do not implement app code yourself. Delegate to Herdr specialists in workspace **Amalith**. Writable path is Amalith only.
 
 ## Invariants
 

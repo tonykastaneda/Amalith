@@ -432,6 +432,19 @@ impl Editor {
                     index,
                 }]
             }
+            Command::CreatePath { layer, path, name } => {
+                let mut object = Object::new(
+                    amalith_core::ObjectId::new(),
+                    ObjectParent::Layer(layer),
+                    amalith_core::ObjectKind::Path(path),
+                );
+                object.name = name;
+                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                vec![Edit::InsertObject {
+                    object: Box::new(object),
+                    index,
+                }]
+            }
             Command::MoveObject { object, delta } => {
                 let current = self
                     .document

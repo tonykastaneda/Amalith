@@ -5,7 +5,7 @@
 //! (`crate::edit`) that turns intent into an actual, undoable document
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
-use amalith_core::{Affine, ArtboardId, LayerId, ObjectId, Paint, Rect, Vec2};
+use amalith_core::{Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, Vec2};
 
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +72,12 @@ pub enum Command {
     CreateEllipse {
         layer: LayerId,
         rect: Rect,
+        name: Option<String>,
+    },
+    /// Creates an arbitrary path primitive as the top-most child of `layer`.
+    CreatePath {
+        layer: LayerId,
+        path: PathData,
         name: Option<String>,
     },
     /// Translates an object by `delta`, in the coordinate space of the

@@ -103,7 +103,7 @@ impl DirectSelectionTool {
                     self.selected.clear();
                 }
                 for layer in editor.document().layers() {
-                    for &id in editor.document().children_of(ObjectParent::Layer(layer.id)) {
+                    for id in path_descendants(editor.document(), ObjectParent::Layer(layer.id)) {
                         let Some(object) = editor.document().object(id) else {
                             continue;
                         };
@@ -138,6 +138,13 @@ impl DirectSelectionTool {
             Some(Drag::Marquee { start, current, .. }) => Some(normalized_rect(start, current)),
             _ => None,
         }
+    }
+
+    /// Whether this object is the active node-edit target. The canvas uses
+    /// this to draw Illustrator's blue editable-path overlay without
+    /// replacing the object's real fill or stroke.
+    pub(crate) fn has_selected_anchor_on(&self, id: ObjectId) -> bool {
+        self.selected.iter().any(|&(object_id, _)| object_id == id)
     }
 
     pub(crate) fn display_anchor_position(
@@ -215,11 +222,10 @@ pub(crate) fn topmost_anchor_at(
         if !layer.visible {
             return None;
         }
-        document
-            .children_of(ObjectParent::Layer(layer.id))
-            .iter()
+        path_descendants(document, ObjectParent::Layer(layer.id))
+            .into_iter()
             .rev()
-            .find_map(|&id| {
+            .find_map(|id| {
                 let object = document.object(id)?;
                 let ObjectKind::Path(path) = &object.kind else {
                     return None;
@@ -240,6 +246,26 @@ pub(crate) fn topmost_anchor_at(
                     .map(|(index, _)| (id, index))
             })
     })
+}
+
+/// The rendered leaf paths under `parent`, in paint order. Direct selection
+/// operates on those leaves even when their parent group is what the black
+/// arrow selected, matching the canvas renderer's group expansion.
+fn path_descendants(document: &Document, parent: ObjectParent) -> Vec<ObjectId> {
+    let mut paths = Vec::new();
+    for &id in document.children_of(parent) {
+        let Some(object) = document.object(id) else {
+            continue;
+        };
+        match &object.kind {
+            ObjectKind::Path(_) => paths.push(id),
+            ObjectKind::Group(_) => {
+                paths.extend(path_descendants(document, ObjectParent::Group(id)));
+            }
+            _ => {}
+        }
+    }
+    paths
 }
 
 fn normalized_rect(a: Point, b: Point) -> Rect {
@@ -326,5 +352,27 @@ mod tests {
         let tool = DirectSelectionTool::default();
         let preview = tool.preview_geometry(object, &geometry);
         assert!(matches!(preview, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn finds_anchors_nested_inside_a_group() {
+        let (mut editor, child) = editor_with_rect();
+        editor
+            .execute(Command::Group {
+                ids: vec![child],
+                name: Some("Grouped rectangle".into()),
+            })
+            .unwrap();
+        let ObjectKind::Path(path) = &editor.document().object(child).unwrap().kind else {
+            unreachable!()
+        };
+        let index = geom::anchor_indices(&path.geometry)[0];
+        let point = editor.document().world_transform(child)
+            * geom::anchor_position(&path.geometry, index).unwrap();
+
+        assert_eq!(
+            topmost_anchor_at(editor.document(), point, 0.1),
+            Some((child, index))
+        );
     }
 }

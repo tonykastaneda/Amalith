@@ -70,6 +70,72 @@ impl PathData {
         Self { geometry: path }
     }
 
+    /// A closed straight-sided path through `points`.
+    pub fn polygon(points: &[crate::geom::Point]) -> Self {
+        let mut path = BezPath::new();
+        if let Some(first) = points.first() {
+            path.move_to((first.x, first.y));
+            for point in &points[1..] {
+                path.line_to((point.x, point.y));
+            }
+            path.close_path();
+        }
+        Self { geometry: path }
+    }
+
+    /// An open straight-sided path through `points`.
+    ///
+    /// Unlike [`Self::polygon`], this deliberately leaves the final segment
+    /// open. It is the native representation used by the Pen tool for an
+    /// unfinished/open path, rather than a closed shape with an invisible
+    /// closing edge.
+    pub fn polyline(points: &[crate::geom::Point]) -> Self {
+        let mut path = BezPath::new();
+        if let Some(first) = points.first() {
+            path.move_to((first.x, first.y));
+            for point in &points[1..] {
+                path.line_to((point.x, point.y));
+            }
+        }
+        Self { geometry: path }
+    }
+
+    /// A rounded rectangle with cubic Bézier corners.
+    pub fn rounded_rectangle(rect: Rect, radius: f64) -> Self {
+        let radius = radius
+            .min(rect.width().abs() * 0.5)
+            .min(rect.height().abs() * 0.5);
+        let k = radius * 0.552_284_749_830_793_6;
+        let mut path = BezPath::new();
+        path.move_to((rect.x0 + radius, rect.y0));
+        path.line_to((rect.x1 - radius, rect.y0));
+        path.curve_to(
+            (rect.x1 - radius + k, rect.y0),
+            (rect.x1, rect.y0 + radius - k),
+            (rect.x1, rect.y0 + radius),
+        );
+        path.line_to((rect.x1, rect.y1 - radius));
+        path.curve_to(
+            (rect.x1, rect.y1 - radius + k),
+            (rect.x1 - radius + k, rect.y1),
+            (rect.x1 - radius, rect.y1),
+        );
+        path.line_to((rect.x0 + radius, rect.y1));
+        path.curve_to(
+            (rect.x0 + radius - k, rect.y1),
+            (rect.x0, rect.y1 - radius + k),
+            (rect.x0, rect.y1 - radius),
+        );
+        path.line_to((rect.x0, rect.y0 + radius));
+        path.curve_to(
+            (rect.x0, rect.y0 + radius - k),
+            (rect.x0 + radius - k, rect.y0),
+            (rect.x0 + radius, rect.y0),
+        );
+        path.close_path();
+        Self { geometry: path }
+    }
+
     pub fn local_bounds(&self) -> Rect {
         crate::geom::bez_path_bounds(&self.geometry)
     }
