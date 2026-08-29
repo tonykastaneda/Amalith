@@ -28,7 +28,7 @@ use amalith_shell::handles::{self, Handle};
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
-use amalith_shell::{chrome, convert, layout, panels, sample, select, Theme};
+use amalith_shell::{chrome, convert, layout, panels, picker, sample, select, Theme};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -137,6 +137,8 @@ enum Drag {
         start_doc: Point,
         cur_doc: Point,
     },
+    /// Dragging inside the colour picker (`in_hue` = the hue strip).
+    PickColor { in_hue: bool },
 }
 
 struct App {
@@ -154,6 +156,8 @@ struct App {
     active_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
+    /// Open colour picker, if any.
+    picker: Option<picker::Picker>,
     /// In-progress Pen path — placed anchors in document space. Empty when
     /// not drawing.
     pen: Vec<Point>,
@@ -204,6 +208,7 @@ impl App {
             selection: Vec::new(),
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
+            picker: None,
             pen: Vec::new(),
             pen_redo: Vec::new(),
             last_pen: None,
@@ -254,12 +259,49 @@ impl App {
         self.view.to_screen().inverse() * screen
     }
 
+    /// Apply the colour picker's current colour to its slot on the
+    /// selection (one undoable command).
+    fn apply_picker_color(&mut self) {
+        let Some(pk) = self.picker else {
+            return;
+        };
+        if self.selection.is_empty() {
+            return;
+        }
+        let objects = self.selection.clone();
+        let paint = amalith_core::Paint::Solid(pk.color());
+        let cmd = match pk.slot {
+            panels::PaintSlot::Fill => Command::SetFill { objects, paint },
+            panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
+        };
+        let _ = self.editor.execute(cmd);
+        self.request_main_redraw();
+    }
+
     fn apply_panel_action(&mut self, action: panels::Action) {
         match action {
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
             panels::Action::Select(id) => self.selection = vec![id],
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
+            panels::Action::OpenPicker(slot) => {
+                self.active_slot = slot;
+                let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                let cur = self.representative().and_then(|a| {
+                    match slot {
+                        panels::PaintSlot::Fill => a.fill,
+                        panels::PaintSlot::Stroke => a.stroke,
+                    }
+                    .color()
+                });
+                let origin = Point::new(
+                    (self.pointer.x + 10.0).min(w - picker::W - 4.0).max(4.0),
+                    (self.pointer.y - picker::H * 0.5)
+                        .min(h - picker::H - 4.0)
+                        .max(4.0),
+                );
+                self.picker = Some(picker::Picker::from_color(slot, origin, cur));
+            }
             panels::Action::SetPaint(paint) => {
                 if !self.selection.is_empty() {
                     let objects = self.selection.clone();
@@ -548,6 +590,46 @@ impl App {
                 let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
+
+                // The colour picker is modal while open.
+                if let Some(pk) = self.picker {
+                    match picker::hit(&pk, self.pointer) {
+                        picker::Hit::Sv(s, v) => {
+                            if let Some(p) = &mut self.picker {
+                                p.s = s;
+                                p.v = v;
+                            }
+                            self.drag = Drag::PickColor { in_hue: false };
+                        }
+                        picker::Hit::Hue(hue) => {
+                            if let Some(p) = &mut self.picker {
+                                p.h = hue;
+                            }
+                            self.drag = Drag::PickColor { in_hue: true };
+                        }
+                        picker::Hit::NoneButton => {
+                            if !self.selection.is_empty() {
+                                let objects = self.selection.clone();
+                                let paint = amalith_core::Paint::None;
+                                let _ = self.editor.execute(match pk.slot {
+                                    panels::PaintSlot::Fill => Command::SetFill { objects, paint },
+                                    panels::PaintSlot::Stroke => {
+                                        Command::SetStroke { objects, paint }
+                                    }
+                                });
+                            }
+                            self.picker = None;
+                        }
+                        picker::Hit::Inside => {}
+                        picker::Hit::Outside => {
+                            self.apply_picker_color();
+                            self.picker = None;
+                        }
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 for side in [RailSide::Left, RailSide::Right] {
                     let rail = self.dock.rail(side);
                     if rail.is_empty() {
@@ -828,6 +910,18 @@ impl App {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
                 self.request_main_redraw();
             }
+            Drag::PickColor { in_hue } => {
+                let in_hue = *in_hue;
+                if let Some(pk) = self.picker {
+                    let (h, s, v) = picker::drag_value(&pk, self.pointer, in_hue);
+                    if let Some(p) = &mut self.picker {
+                        p.h = h;
+                        p.s = s;
+                        p.v = v;
+                    }
+                    self.request_main_redraw();
+                }
+            }
             Drag::DrawShape {
                 tool, start_doc, ..
             } => {
@@ -941,6 +1035,7 @@ impl App {
     fn on_release(&mut self) {
         match std::mem::take(&mut self.drag) {
             Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } | Drag::Pan { .. } => {}
+            Drag::PickColor { .. } => self.apply_picker_color(),
             Drag::MoveObjects {
                 start_doc,
                 last_doc,
@@ -1181,6 +1276,17 @@ impl App {
                         hl,
                     );
                 }
+            }
+        }
+        if matches!(role, Role::Main) {
+            if let Some(pk) = self.picker {
+                picker::paint(
+                    &mut self.content,
+                    &pk,
+                    self.theme.text,
+                    &self.theme,
+                    &mut self.text,
+                );
             }
         }
         self.scene.reset();
@@ -1439,9 +1545,11 @@ impl ApplicationHandler for App {
                                 self.commit_pen(false);
                             }
                             KeyCode::Escape => {
-                                self.pen.clear();
-                                self.pen_redo.clear();
-                                self.selection.clear();
+                                if self.picker.take().is_none() {
+                                    self.pen.clear();
+                                    self.pen_redo.clear();
+                                    self.selection.clear();
+                                }
                                 self.request_main_redraw();
                             }
                             KeyCode::KeyV => self.set_tool(Tool::Select),

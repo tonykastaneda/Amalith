@@ -27,6 +27,7 @@ pub mod icons;
 pub mod layout;
 pub mod panel;
 pub mod panels;
+pub mod picker;
 pub mod sample;
 pub mod select;
 pub mod text;

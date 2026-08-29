@@ -70,6 +70,8 @@ pub enum Action {
     SetTool(Tool),
     Select(ObjectId),
     SetActiveSlot(PaintSlot),
+    /// Open the colour picker for this slot.
+    OpenPicker(PaintSlot),
     SetPaint(Paint),
     SetStrokeWidth(f64),
 }
@@ -91,10 +93,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     if id.0 == "swatches" {
         let l = swatch_layout(body);
         if l.fill.contains(local) {
-            return Action::SetActiveSlot(PaintSlot::Fill);
+            return Action::OpenPicker(PaintSlot::Fill);
         }
         if l.stroke.contains(local) {
-            return Action::SetActiveSlot(PaintSlot::Stroke);
+            return Action::OpenPicker(PaintSlot::Stroke);
         }
         for (w, r) in &l.widths {
             if r.contains(local) {
@@ -111,10 +113,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     if id.0 == "tools" {
         let (fr, sr) = tool_chips(body);
         if fr.contains(local) {
-            return Action::SetActiveSlot(PaintSlot::Fill);
+            return Action::OpenPicker(PaintSlot::Fill);
         }
         if sr.contains(local) {
-            return Action::SetActiveSlot(PaintSlot::Stroke);
+            return Action::OpenPicker(PaintSlot::Stroke);
         }
     }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
