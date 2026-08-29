@@ -382,21 +382,18 @@ impl App {
         }
     }
 
-    /// True while the temporary ⌘ white-arrow gesture is in effect (the
-    /// Selection tool is active and ⌘ is held). Unlike the persistent
-    /// `A` tool, this exposes every path's nodes for the duration of the
-    /// hold — Illustrator's temporary Direct Selection reaches anything.
+    /// True while the temporary ⌘ white-arrow gesture is in effect: the
+    /// Selection tool is active and ⌘ is held.
     fn direct_via_cmd(&self) -> bool {
         self.active_tool == Tool::Select && self.cmd_down && !self.space_down
     }
 
-    /// Paths whose anchors are currently on screen for Direct Selection.
-    /// The persistent `A` tool shows nodes only for objects you've
-    /// already picked; the temporary ⌘ gesture shows every path's.
+    /// Paths whose anchors are currently on screen for Direct Selection:
+    /// the object selection plus anything with a live anchor selection.
+    /// Nothing shows until you've actually picked something — neither the
+    /// `A` tool nor the ⌘ gesture lights up every path on its own. A ⌘
+    /// marquee still reaches unselected paths (see `on_release`).
     fn node_paths(&self) -> Vec<ObjectId> {
-        if self.direct_via_cmd() {
-            return anchors::path_leaves(self.editor.document());
-        }
         let mut out = self.selection.clone();
         for (id, _) in &self.anchor_sel {
             if !out.contains(id) {
