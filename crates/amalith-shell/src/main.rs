@@ -318,6 +318,9 @@ struct App {
     shape_press: Option<(Instant, Rect)>,
     /// The primitive flyout, anchored at the Shape slot's screen rect.
     shape_flyout: Option<Rect>,
+    /// Set on boot / new / open — fit the view to the artboards once the
+    /// canvas viewport size is known.
+    pending_fit: bool,
     /// Current stroke weight / opacity shown in the options bar. The
     /// steppers edit these; new shapes and any selection pick them up.
     stroke_w: f64,
@@ -399,6 +402,7 @@ impl App {
             last_shape_tool: Tool::Rectangle,
             shape_press: None,
             shape_flyout: None,
+            pending_fit: true,
             stroke_w: 1.0,
             opacity: 1.0,
             picker: None,
@@ -495,6 +499,7 @@ impl App {
         self.tabs.push(Doc::placeholder());
         self.active = self.tabs.len() - 1;
         self.load_active_doc(doc);
+        self.pending_fit = true;
         self.request_main_redraw();
     }
 
@@ -1409,6 +1414,26 @@ impl App {
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, right) = self.canvas_x_span();
         Rect::new(left, CHROME_TOP, right, h)
+    }
+
+    /// Fit the view so the document's artboards are centred in the canvas.
+    fn fit_view(&mut self) {
+        let boards = self.editor.document().artboards();
+        let Some(first) = boards.first() else { return };
+        let mut b = first.rect;
+        for a in &boards[1..] {
+            b = b.union(a.rect);
+        }
+        let vp = self.canvas_viewport();
+        if vp.width() < 10.0 || vp.height() < 10.0 || b.width() < 1.0 || b.height() < 1.0 {
+            return;
+        }
+        let zoom = ((vp.width() / b.width()).min(vp.height() / b.height()) * 0.88).clamp(0.02, 8.0);
+        let (bc, vc) = (b.center(), vp.center());
+        self.view.zoom = zoom;
+        self.view.pan = Vec2::new(vc.x - zoom * bc.x, vc.y - zoom * bc.y);
+        self.pending_fit = false;
+        self.request_main_redraw();
     }
 
     /// Recompute the pointer style and, on change, tell the OS.
@@ -2829,6 +2854,9 @@ impl ApplicationHandler for App {
             for action in actions {
                 self.run_menu_action(action);
             }
+        }
+        if self.pending_fit {
+            self.fit_view();
         }
         // Modal / picker open+close changes whether the OS cursor hides.
         self.update_canvas_cursor();
