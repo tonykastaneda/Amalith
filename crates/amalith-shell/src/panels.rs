@@ -475,6 +475,16 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
     rows
 }
 
+/// The layer that ultimately contains `id` (walking out through groups).
+fn owning_layer(doc: &Document, mut id: ObjectId) -> Option<LayerId> {
+    loop {
+        match doc.object(id)?.parent {
+            ObjectParent::Layer(l) => return Some(l),
+            ObjectParent::Group(g) => id = g,
+        }
+    }
+}
+
 fn kind_name(doc: &Document, id: ObjectId) -> String {
     match doc.object(id).map(|o| &o.kind) {
         Some(ObjectKind::Path(_)) => "Path",
@@ -535,7 +545,17 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
 
         match row.kind {
             RowKind::Layer(lid) => {
-                let fill = if ctx.selected_layer == Some(lid) {
+                let has_obj_sel = !ctx.selection.is_empty();
+                // The layer that holds the current object selection reads
+                // as "the layer you're in": bold, no blue. A plain layer
+                // selection (no objects) gets the usual blue row.
+                let owns = has_obj_sel
+                    && ctx
+                        .selection
+                        .iter()
+                        .any(|o| owning_layer(ctx.doc, *o) == Some(lid));
+                let show_blue = !has_obj_sel && ctx.selected_layer == Some(lid);
+                let fill = if show_blue {
                     ctx.theme.select_blue.with_alpha(0.22)
                 } else {
                     ctx.theme.strip_bg
@@ -545,16 +565,32 @@ fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx
                     Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
                     _ => None,
                 };
-                draw_name_field(
-                    scene,
-                    text,
-                    ctx.theme,
-                    body.x0 + PAD,
-                    r,
-                    &row.label,
-                    ctx.theme.text,
-                    editing,
-                );
+                if editing.is_some() {
+                    draw_name_field(
+                        scene,
+                        text,
+                        ctx.theme,
+                        body.x0 + PAD,
+                        r,
+                        &row.label,
+                        ctx.theme.text,
+                        editing,
+                    );
+                } else {
+                    let baseline = r.y0 + ROW_H * 0.5 + 4.0;
+                    text.draw(scene, &row.label, 12.0, ctx.theme.text, body.x0 + PAD, baseline);
+                    if owns {
+                        // Faux-bold: a second pass nudged half a pixel.
+                        text.draw(
+                            scene,
+                            &row.label,
+                            12.0,
+                            ctx.theme.text,
+                            body.x0 + PAD + 0.6,
+                            baseline,
+                        );
+                    }
+                }
             }
             RowKind::Object { id, is_group } => {
                 let selected = ctx.selection.contains(&id);

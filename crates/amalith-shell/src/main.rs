@@ -402,6 +402,10 @@ impl App {
                 }
             }
             panels::Action::SelectLayer(id) => {
+                // Selecting a layer deselects any objects, so the row can
+                // show its plain blue highlight.
+                self.selection.clear();
+                self.anchor_sel.clear();
                 self.selected_layer = Some(id);
                 if double {
                     self.begin_rename(panels::RenameId::Layer(id));
