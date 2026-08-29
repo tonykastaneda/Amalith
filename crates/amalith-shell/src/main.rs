@@ -31,7 +31,7 @@ use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{chrome, convert, layout, panels, picker, sample, select, Theme};
-use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
+use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
@@ -49,7 +49,6 @@ const APP_BAR_H: f64 = 30.0;
 const OPT_BAR_H: f64 = 30.0;
 /// Total fixed chrome above the canvas / below the top of the window.
 const CHROME_TOP: f64 = APP_BAR_H + OPT_BAR_H;
-const OPT_WIDTHS: [f64; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
 /// When a rail is empty, the strip of canvas along that edge that still
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
@@ -219,6 +218,10 @@ struct App {
     active_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
+    /// Current stroke weight / opacity shown in the options bar. The
+    /// steppers edit these; new shapes and any selection pick them up.
+    stroke_w: f64,
+    opacity: f32,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
     /// Time + position of the last left press, for double-click detection.
@@ -281,6 +284,8 @@ impl App {
             expanded_groups: std::collections::HashSet::new(),
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
+            stroke_w: 1.0,
+            opacity: 1.0,
             picker: None,
             last_click: None,
             pen: Vec::new(),
@@ -540,6 +545,7 @@ impl App {
         }) {
             self.selection = vec![id];
             self.last_pen = Some((id, anchors, closed));
+            self.apply_new_appearance(id);
         }
         self.request_main_redraw();
     }
@@ -619,6 +625,64 @@ impl App {
             MenuAction::BringToFront => self.restack_extreme(true),
             MenuAction::SendBackward => self.restack(-1),
             MenuAction::SendToBack => self.restack_extreme(false),
+        }
+    }
+
+    /// Options-bar Weight stepper. Reads the live selection value (or the
+    /// stored current), nudges it, applies to any selection, and keeps it
+    /// as the value new shapes will use.
+    fn step_weight(&mut self, dir: i32) {
+        let base = self
+            .selection
+            .first()
+            .and_then(|id| self.editor.document().object(*id))
+            .map(|o| o.appearance.stroke_width)
+            .unwrap_or(self.stroke_w);
+        let step = if base < 1.0 { 0.25 } else { 1.0 };
+        let next = (base + dir as f64 * step).clamp(0.0, 1000.0);
+        self.stroke_w = next;
+        if !self.selection.is_empty() {
+            let _ = self.editor.execute(Command::SetStrokeWidth {
+                objects: self.selection.clone(),
+                width: next,
+            });
+        }
+        self.request_main_redraw();
+    }
+
+    /// Options-bar Opacity stepper (5% steps).
+    fn step_opacity(&mut self, dir: i32) {
+        let base = self
+            .selection
+            .first()
+            .and_then(|id| self.editor.document().object(*id))
+            .map(|o| o.appearance.opacity)
+            .unwrap_or(self.opacity);
+        let next = (base + dir as f32 * 0.05).clamp(0.0, 1.0);
+        self.opacity = next;
+        if !self.selection.is_empty() {
+            let _ = self.editor.execute(Command::SetOpacity {
+                objects: self.selection.clone(),
+                opacity: next,
+            });
+        }
+        self.request_main_redraw();
+    }
+
+    /// Push the options-bar Weight / Opacity onto a freshly created
+    /// object, so those fields mean something with nothing selected.
+    fn apply_new_appearance(&mut self, id: ObjectId) {
+        if (self.stroke_w - 1.0).abs() > f64::EPSILON {
+            let _ = self.editor.execute(Command::SetStrokeWidth {
+                objects: vec![id],
+                width: self.stroke_w,
+            });
+        }
+        if (self.opacity - 1.0).abs() > f32::EPSILON {
+            let _ = self.editor.execute(Command::SetOpacity {
+                objects: vec![id],
+                opacity: self.opacity,
+            });
         }
     }
 
@@ -799,7 +863,9 @@ impl App {
 
     /// The document-space rect currently visible in the canvas (between the
     /// rails). Used to cull hit-testing to what the user can see.
-    fn visible_doc_rect(&self) -> Rect {
+    /// Logical x-range of the canvas viewport — window edges minus any
+    /// docked rails.
+    fn canvas_x_span(&self) -> (f64, f64) {
         let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let left = if self.dock.left.is_empty() {
             0.0
@@ -811,10 +877,16 @@ impl App {
         } else {
             rail_rect_for(RailSide::Right, self.dock.right.width as f64, w, h).x0
         };
+        (left, right.max(left))
+    }
+
+    fn visible_doc_rect(&self) -> Rect {
+        let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let (left, right) = self.canvas_x_span();
         self.view
             .to_screen()
             .inverse()
-            .transform_rect_bbox(Rect::new(left, CHROME_TOP, right.max(left), h))
+            .transform_rect_bbox(Rect::new(left, CHROME_TOP, right, h))
     }
 
     /// Logical size of the main window's client area.
@@ -945,42 +1017,32 @@ impl App {
                     return;
                 }
 
-                // The tool options strip: fill/stroke chips + width buttons.
+                // The tool options strip: fill/stroke chips + steppers.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
                     && self.pointer.y < CHROME_TOP
                 {
-                    let left_x = if self.dock.left.is_empty() {
-                        0.0
-                    } else {
-                        rail_rect_for(RailSide::Left, self.dock.left.width as f64, w, h).x1
-                    };
-                    let right_x = if self.dock.right.is_empty() {
-                        w
-                    } else {
-                        rail_rect_for(RailSide::Right, self.dock.right.width as f64, w, h).x0
-                    };
-                    let bar = opt_bar_rect(left_x, right_x);
-                    if opt_bar_has_paint(self.active_tool, !self.selection.is_empty()) {
-                        let (fr, sr, widths) = opt_bar_chips(bar);
-                        if fr.contains(self.pointer) {
-                            self.apply_panel_action(
-                                panels::Action::OpenPicker(panels::PaintSlot::Fill),
-                                double,
-                            );
-                        } else if sr.contains(self.pointer) {
-                            self.apply_panel_action(
-                                panels::Action::OpenPicker(panels::PaintSlot::Stroke),
-                                double,
-                            );
-                        } else if let Some((wv, _)) =
-                            widths.iter().find(|(_, r)| r.contains(self.pointer))
-                        {
-                            self.apply_panel_action(
-                                panels::Action::SetStrokeWidth(*wv),
-                                double,
-                            );
-                        }
+                    let (left_x, right_x) = self.canvas_x_span();
+                    let ob = opt_bar_layout(opt_bar_rect(left_x, right_x));
+                    let p = self.pointer;
+                    if ob.fill.contains(p) {
+                        self.apply_panel_action(
+                            panels::Action::OpenPicker(panels::PaintSlot::Fill),
+                            double,
+                        );
+                    } else if ob.stroke.contains(p) {
+                        self.apply_panel_action(
+                            panels::Action::OpenPicker(panels::PaintSlot::Stroke),
+                            double,
+                        );
+                    } else if ob.weight_up.contains(p) {
+                        self.step_weight(1);
+                    } else if ob.weight_down.contains(p) {
+                        self.step_weight(-1);
+                    } else if ob.opacity_up.contains(p) {
+                        self.step_opacity(1);
+                    } else if ob.opacity_down.contains(p) {
+                        self.step_opacity(-1);
                     }
                     return;
                 }
@@ -1573,6 +1635,7 @@ impl App {
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
                         self.selection = vec![id];
+                        self.apply_new_appearance(id);
                     }
                     self.request_main_redraw();
                 }
@@ -1902,6 +1965,8 @@ impl App {
                 self.redock_preview.as_ref(),
                 status_text.as_deref(),
                 &self.expanded_groups,
+                self.stroke_w,
+                self.opacity,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2271,6 +2336,24 @@ impl ApplicationHandler for App {
                     // Pixel-based (trackpad): physical px → logical.
                     MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
                 };
+                // Scrolling over a Weight / Opacity field nudges it.
+                if self.picker.is_none()
+                    && self.pointer.y >= APP_BAR_H
+                    && self.pointer.y < CHROME_TOP
+                    && dy.abs() > 0.5
+                {
+                    let (lx, rx) = self.canvas_x_span();
+                    let ob = opt_bar_layout(opt_bar_rect(lx, rx));
+                    let dir = if dy > 0.0 { 1 } else { -1 };
+                    if ob.weight_field.contains(self.pointer) {
+                        self.step_weight(dir);
+                        return;
+                    }
+                    if ob.opacity_field.contains(self.pointer) {
+                        self.step_opacity(dir);
+                        return;
+                    }
+                }
                 if self.cmd_down {
                     // ⌘ + scroll → zoom at the cursor.
                     let factor = 2f64.powf(dy / 180.0);
@@ -2437,36 +2520,110 @@ fn opt_bar_rect(left_x: f64, right_x: f64) -> Rect {
     Rect::new(left_x, APP_BAR_H, right_x.max(left_x), CHROME_TOP)
 }
 
-/// Fill chip, stroke chip, and the five stroke-width buttons, laid out
-/// along the left of the options bar.
-fn opt_bar_chips(bar: Rect) -> (Rect, Rect, Vec<(f64, Rect)>) {
+/// Interactive rects along the options bar. `label_*` are where the
+/// preceding text label starts, so paint and hit stay in lockstep.
+struct OptBar {
+    label_fill: f64,
+    fill: Rect,
+    label_stroke: f64,
+    stroke: Rect,
+    label_weight: f64,
+    weight_field: Rect,
+    weight_up: Rect,
+    weight_down: Rect,
+    label_opacity: f64,
+    opacity_field: Rect,
+    opacity_up: Rect,
+    opacity_down: Rect,
+}
+
+fn opt_bar_layout(bar: Rect) -> OptBar {
     let cy = bar.y0 + bar.height() * 0.5;
-    let fill = Rect::from_center_size(Point::new(bar.x0 + 20.0, cy - 3.0), (17.0, 17.0));
-    let stroke = fill.with_origin(Point::new(fill.x0 + 9.0, fill.y0 + 9.0));
-    let mut widths = Vec::new();
-    let x0 = stroke.x1 + 20.0;
-    for (i, w) in OPT_WIDTHS.iter().enumerate() {
-        let x = x0 + i as f64 * 22.0;
-        widths.push((*w, Rect::new(x, cy - 9.0, x + 18.0, cy + 9.0)));
+    let chip = |cx: f64| Rect::from_center_size(Point::new(cx, cy), (18.0, 18.0));
+    let field = |x: f64, w: f64| Rect::new(x, cy - 10.0, x + w, cy + 10.0);
+
+    let mut x = bar.x0 + 12.0;
+    x += 82.0 + 14.0; // "No Selection" + separator gap
+
+    let label_fill = x;
+    x += 28.0;
+    let fill = chip(x + 9.0);
+    x += 18.0 + 8.0 + 12.0 + 16.0; // chip + gap + indicator square + gap
+
+    let label_stroke = x;
+    x += 42.0;
+    let stroke = chip(x + 9.0);
+    x += 18.0 + 8.0 + 12.0 + 18.0;
+
+    let label_weight = x;
+    x += 46.0;
+    let weight_field = field(x, 56.0);
+    x += 56.0;
+    let weight_up = Rect::new(x, cy - 10.0, x + 13.0, cy);
+    let weight_down = Rect::new(x, cy, x + 13.0, cy + 10.0);
+    x += 13.0 + 20.0;
+
+    let label_opacity = x;
+    x += 52.0;
+    let opacity_field = field(x, 46.0);
+    x += 46.0;
+    let opacity_up = Rect::new(x, cy - 10.0, x + 13.0, cy);
+    let opacity_down = Rect::new(x, cy, x + 13.0, cy + 10.0);
+
+    OptBar {
+        label_fill,
+        fill,
+        label_stroke,
+        stroke,
+        label_weight,
+        weight_field,
+        weight_up,
+        weight_down,
+        label_opacity,
+        opacity_field,
+        opacity_up,
+        opacity_down,
     }
-    (fill, stroke, widths)
 }
 
-/// Whether the paint / width controls are relevant right now.
-fn opt_bar_has_paint(active_tool: Tool, has_selection: bool) -> bool {
-    has_selection || active_tool.is_shape() || active_tool == Tool::Pen
-}
-
-fn tool_hint(tool: Tool) -> &'static str {
-    match tool {
-        Tool::Select => "Drag to move · Alt-drag to copy · handles scale, halo rotates",
-        Tool::DirectSelect => "Click a shape to edit its nodes · drag a box to grab several",
-        Tool::Pen => "Click to place anchors · click the first to close · Enter to finish",
-        Tool::Rectangle | Tool::Ellipse | Tool::RoundedRect | Tool::Polygon | Tool::Star => {
-            "Drag to draw · Shift constrains · Alt draws from the centre"
-        }
-        Tool::Artboard => "Drag empty canvas to create · drag an artboard to move it",
-    }
+/// A boxed numeric readout plus an up / down stepper column, matching
+/// Illustrator's control bar.
+fn draw_opt_field(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    field: Rect,
+    up: Rect,
+    down: Rect,
+    value: &str,
+) {
+    let border = theme.text_dim.with_alpha(0.5);
+    scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
+    scene.stroke(&Stroke::new(1.0), ID, border, None, &field);
+    text.draw(
+        scene,
+        value,
+        11.5,
+        theme.text,
+        field.x0 + 6.0,
+        field.y0 + field.height() * 0.5 + 4.0,
+    );
+    let stepper = Rect::new(up.x0, up.y0, up.x1, down.y1);
+    scene.fill(Fill::NonZero, ID, theme.bg, None, &stepper);
+    scene.stroke(&Stroke::new(1.0), ID, border, None, &stepper);
+    let cx = stepper.x0 + stepper.width() * 0.5;
+    let mut tri = BezPath::new();
+    tri.move_to((cx - 3.0, up.y1 - 3.0));
+    tri.line_to((cx + 3.0, up.y1 - 3.0));
+    tri.line_to((cx, up.y0 + 3.0));
+    tri.close_path();
+    scene.fill(Fill::NonZero, ID, theme.text_dim, None, &tri);
+    let mut tri = BezPath::new();
+    tri.move_to((cx - 3.0, down.y0 + 3.0));
+    tri.line_to((cx + 3.0, down.y0 + 3.0));
+    tri.line_to((cx, down.y1 - 3.0));
+    tri.close_path();
+    scene.fill(Fill::NonZero, ID, theme.text_dim, None, &tri);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2475,12 +2632,13 @@ fn paint_options_bar(
     text: &mut TextContext,
     bar: Rect,
     theme: &Theme,
-    active_tool: Tool,
     representative: Option<amalith_core::Appearance>,
     active_slot: panels::PaintSlot,
-    has_selection: bool,
+    selection_count: usize,
+    cur_weight: f64,
+    cur_opacity: f32,
 ) {
-    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &bar);
+    scene.fill(Fill::NonZero, ID, theme.strip_active, None, &bar);
     scene.fill(
         Fill::NonZero,
         ID,
@@ -2488,56 +2646,106 @@ fn paint_options_bar(
         None,
         &Rect::new(bar.x0, bar.y1 - 1.0, bar.x1, bar.y1),
     );
+    let baseline = bar.y0 + bar.height() * 0.5 + 4.0;
+    let ob = opt_bar_layout(bar);
 
-    if opt_bar_has_paint(active_tool, has_selection) {
-        let (fr, sr, widths) = opt_bar_chips(bar);
-        panels::draw_paint_swatch(
-            scene,
-            theme,
-            sr,
-            representative.map(|a| a.stroke).unwrap_or(amalith_core::Paint::None),
-            active_slot == panels::PaintSlot::Stroke,
-        );
-        panels::draw_paint_swatch(
-            scene,
-            theme,
-            fr,
-            representative
-                .map(|a| a.fill)
-                .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
-            active_slot == panels::PaintSlot::Fill,
-        );
-        let cur_w = representative.map(|a| a.stroke_width);
-        let white = vello::peniko::Color::from_rgb8(0xff, 0xff, 0xff);
-        for (w, r) in &widths {
-            let on = cur_w.is_some_and(|c| (c - *w).abs() < 0.01);
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                if on { theme.select_blue } else { theme.app_bar },
-                None,
-                r,
-            );
-            text.draw(
-                scene,
-                &format!("{}", *w as i64),
-                11.0,
-                if on { white } else { theme.text_dim },
-                r.x0 + 5.0,
-                r.y0 + 14.0,
-            );
-        }
-    }
+    // Selection status.
+    let status = match selection_count {
+        0 => "No Selection".to_string(),
+        1 => "1 Selected".to_string(),
+        n => format!("{n} Selected"),
+    };
+    text.draw(scene, &status, 11.5, theme.text_dim, bar.x0 + 12.0, baseline);
 
-    let hint = tool_hint(active_tool);
-    let hw = text.measure(hint, 11.5);
+    let sep = |scene: &mut Scene, x: f64| {
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            theme.border,
+            None,
+            &Rect::new(x, bar.y0 + 7.0, x + 1.0, bar.y1 - 7.0),
+        );
+    };
+    sep(scene, ob.label_fill - 12.0);
+
+    // Fill / Stroke.
+    let indicator = |scene: &mut Scene, chip: Rect| {
+        let s = Rect::from_center_size(
+            Point::new(chip.x1 + 12.0, chip.center().y),
+            (11.0, 11.0),
+        );
+        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim, None, &s);
+    };
+    text.draw(scene, "Fill", 11.5, theme.text_dim, ob.label_fill, baseline);
+    panels::draw_paint_swatch(
+        scene,
+        theme,
+        ob.fill,
+        representative
+            .map(|a| a.fill)
+            .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
+        active_slot == panels::PaintSlot::Fill,
+    );
+    indicator(scene, ob.fill);
     text.draw(
         scene,
-        hint,
+        "Stroke",
         11.5,
         theme.text_dim,
-        (bar.x1 - hw - 12.0).max(bar.x0 + 8.0),
-        bar.y0 + bar.height() * 0.5 + 4.0,
+        ob.label_stroke,
+        baseline,
+    );
+    panels::draw_paint_swatch(
+        scene,
+        theme,
+        ob.stroke,
+        representative
+            .map(|a| a.stroke)
+            .unwrap_or(amalith_core::Paint::None),
+        active_slot == panels::PaintSlot::Stroke,
+    );
+    indicator(scene, ob.stroke);
+    sep(scene, ob.label_weight - 12.0);
+
+    // Weight.
+    let w = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
+    text.draw(
+        scene,
+        "Weight",
+        11.5,
+        theme.text_dim,
+        ob.label_weight,
+        baseline,
+    );
+    draw_opt_field(
+        scene,
+        text,
+        theme,
+        ob.weight_field,
+        ob.weight_up,
+        ob.weight_down,
+        &format!("{w:.1} px"),
+    );
+    sep(scene, ob.label_opacity - 12.0);
+
+    // Opacity.
+    let op = representative.map(|a| a.opacity).unwrap_or(cur_opacity);
+    text.draw(
+        scene,
+        "Opacity",
+        11.5,
+        theme.text_dim,
+        ob.label_opacity,
+        baseline,
+    );
+    draw_opt_field(
+        scene,
+        text,
+        theme,
+        ob.opacity_field,
+        ob.opacity_up,
+        ob.opacity_down,
+        &format!("{:.0}%", op * 100.0),
     );
 }
 
@@ -2565,6 +2773,8 @@ fn paint_main(
     redock_preview: Option<&(RailSide, DropTarget)>,
     status: Option<&str>,
     expanded: &std::collections::HashSet<ObjectId>,
+    cur_weight: f64,
+    cur_opacity: f32,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -2611,10 +2821,11 @@ fn paint_main(
         text,
         opt_bar_rect(left_x, right_x),
         theme,
-        active_tool,
         representative,
         active_slot,
-        !selection.is_empty(),
+        selection.len(),
+        cur_weight,
+        cur_opacity,
     );
 
     for side in [RailSide::Left, RailSide::Right] {
