@@ -291,15 +291,16 @@ pub fn paint(
     // Direct Selection: anchor markers.
     if let Some(av) = anchor_view {
         let white = Color::from_rgb8(0xff, 0xff, 0xff);
-        let drag_delta = drag
+        // Document-space drag delta for the selected anchors.
+        let dv = drag
             .and_then(|d| d.anchors)
-            .map(|(_, dv)| Vec2::new(dv.x * view.zoom, dv.y * view.zoom))
+            .map(|(_, dv)| Vec2::new(dv.x, dv.y))
             .unwrap_or(Vec2::ZERO);
         for &id in av.paths {
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));
-                let p = if sel { pos + drag_delta } else { pos };
-                let sq = Rect::from_center_size(p, (7.0, 7.0));
+                let doc_pos = if sel { pos + dv } else { pos };
+                let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
