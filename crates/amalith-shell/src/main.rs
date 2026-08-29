@@ -118,13 +118,13 @@ enum Drag {
     RailWidth { side: RailSide },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
-    /// Moving the current selection (or, with `dup`, alt-drag-duplicating
-    /// it). Deltas are in document space.
+    /// Moving the current selection. Deltas are in document space. Alt
+    /// (held at any point) duplicates; Shift locks to 8 directions —
+    /// both read live at release / in the preview.
     MoveObjects {
         start_doc: Point,
         last_doc: Point,
         moved: bool,
-        dup: bool,
     },
     /// Rubber-band selection; `start` is the press point (screen px).
     Marquee { start: Point },
@@ -1855,11 +1855,10 @@ impl App {
                         }
                     }
                 }
-                let start_move = |dp: Point, dup: bool| Drag::MoveObjects {
+                let start_move = |dp: Point| Drag::MoveObjects {
                     start_doc: dp,
                     last_doc: dp,
                     moved: false,
-                    dup,
                 };
                 let doc = self.editor.document();
                 if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
@@ -1877,7 +1876,7 @@ impl App {
                         if !self.selection.contains(&id) {
                             self.selection = vec![id];
                         }
-                        self.drag = start_move(dp, self.alt_down);
+                        self.drag = start_move(dp);
                     }
                 } else {
                     // Empty space: a press inside the selection box drags
@@ -1886,7 +1885,7 @@ impl App {
                         && select::union_bounds(doc, &self.selection)
                             .is_some_and(|b| b.contains(dp));
                     if inside_box {
-                        self.drag = start_move(dp, self.alt_down);
+                        self.drag = start_move(dp);
                     } else {
                         if !self.shift_down {
                             self.selection.clear();
@@ -1964,14 +1963,13 @@ impl App {
                 self.drag = Drag::Pan { last: self.pointer };
                 self.request_main_redraw();
             }
-            Drag::MoveObjects { start_doc, dup, .. } => {
-                let (start_doc, dup) = (*start_doc, *dup);
+            Drag::MoveObjects { start_doc, .. } => {
+                let start_doc = *start_doc;
                 let dp = self.doc_point(self.pointer);
                 self.drag = Drag::MoveObjects {
                     start_doc,
                     last_doc: dp,
                     moved: true,
-                    dup,
                 };
                 self.request_main_redraw();
             }
@@ -2153,11 +2151,14 @@ impl App {
                 start_doc,
                 last_doc,
                 moved,
-                dup,
             } => {
                 if moved && !self.selection.is_empty() {
-                    let delta = convert::vec2_to_core(last_doc - start_doc);
-                    if dup {
+                    let mut d = last_doc - start_doc;
+                    if self.shift_down {
+                        d = snap8(d);
+                    }
+                    let delta = convert::vec2_to_core(d);
+                    if self.alt_down {
                         if let Ok(new_ids) = self
                             .editor
                             .duplicate_objects(&self.selection.clone(), delta)
@@ -2436,11 +2437,14 @@ impl App {
                 start_doc,
                 last_doc,
                 moved: true,
-                dup,
             } => Some(DragPreview {
                 ids: &self.selection,
-                delta: *last_doc - *start_doc,
-                dup: *dup,
+                delta: if self.shift_down {
+                    snap8(*last_doc - *start_doc)
+                } else {
+                    *last_doc - *start_doc
+                },
+                dup: self.alt_down,
                 xf: None,
                 anchors: None,
             }),
