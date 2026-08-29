@@ -118,6 +118,9 @@ enum Drag {
     RailWidth { side: RailSide },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
+    /// Illustrator scrubby zoom (Space+⌘ drag): zoom anchored at
+    /// `anchor`, driven by horizontal motion since `last`.
+    ScrubZoom { anchor: Point, last: Point },
     /// Moving the current selection. Deltas are in document space. Alt
     /// (held at any point) duplicates; Shift locks to 8 directions —
     /// both read live at release / in the preview.
@@ -273,6 +276,8 @@ enum CanvasCursor {
     Grab,
     /// Closed hand — Space held and dragging the canvas.
     Grabbing,
+    /// Magnifier glyph — Space+⌘ scrubby zoom (＋ or － by direction).
+    Zoom,
 }
 
 struct App {
@@ -325,6 +330,9 @@ struct App {
     /// Set on boot / new / open — fit the view to the artboards once the
     /// canvas viewport size is known.
     pending_fit: bool,
+    /// Direction of the last scrubby-zoom move: `>= 0` = in (＋ cursor),
+    /// `< 0` = out (－ cursor).
+    zoom_sign: i8,
     /// Current stroke weight / opacity shown in the options bar. The
     /// steppers edit these; new shapes and any selection pick them up.
     stroke_w: f64,
@@ -408,6 +416,7 @@ impl App {
             shape_press: None,
             shape_flyout: None,
             pending_fit: true,
+            zoom_sign: 1,
             stroke_w: 1.0,
             opacity: 1.0,
             picker: None,
@@ -1462,6 +1471,10 @@ impl App {
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
             CanvasCursor::Default
+        } else if matches!(self.drag, Drag::ScrubZoom { .. })
+            || (self.space_down && self.cmd_down)
+        {
+            CanvasCursor::Zoom
         } else if self.space_down || matches!(self.drag, Drag::Pan { .. }) {
             if matches!(self.drag, Drag::Pan { .. }) {
                 CanvasCursor::Grabbing
@@ -1478,7 +1491,8 @@ impl App {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
                 use winit::window::CursorIcon;
-                w.set_cursor_visible(mode != CanvasCursor::Glyph);
+                let drawn = matches!(mode, CanvasCursor::Glyph | CanvasCursor::Zoom);
+                w.set_cursor_visible(!drawn);
                 w.set_cursor(match mode {
                     CanvasCursor::Crosshair => CursorIcon::Crosshair,
                     CanvasCursor::Grab => CursorIcon::Grab,
@@ -1827,6 +1841,15 @@ impl App {
                     return;
                 }
                 // Not on a rail.
+                if self.space_down && self.cmd_down {
+                    // Illustrator scrubby zoom — anchored at the press.
+                    self.drag = Drag::ScrubZoom {
+                        anchor: self.pointer,
+                        last: self.pointer,
+                    };
+                    self.update_canvas_cursor();
+                    return;
+                }
                 if self.space_down {
                     self.drag = Drag::Pan { last: self.pointer };
                     self.update_canvas_cursor();
@@ -2069,8 +2092,8 @@ impl App {
 
     fn on_cursor_move(&mut self) {
         self.update_canvas_cursor();
-        // Redraw so the tool glyph tracks the pointer.
-        if self.cursor_mode == CanvasCursor::Glyph {
+        // Redraw so a drawn cursor glyph tracks the pointer.
+        if matches!(self.cursor_mode, CanvasCursor::Glyph | CanvasCursor::Zoom) {
             self.request_main_redraw();
         }
         match &self.drag {
@@ -2114,6 +2137,20 @@ impl App {
                 let last = *last;
                 self.view.pan += self.pointer - last;
                 self.drag = Drag::Pan { last: self.pointer };
+                self.request_main_redraw();
+            }
+            Drag::ScrubZoom { anchor, last } => {
+                let (anchor, last) = (*anchor, *last);
+                let dx = self.pointer.x - last.x;
+                if dx.abs() > 0.01 {
+                    self.zoom_sign = if dx < 0.0 { -1 } else { 1 };
+                    self.view.zoom_at(2f64.powf(dx / 180.0), anchor);
+                }
+                self.drag = Drag::ScrubZoom {
+                    anchor,
+                    last: self.pointer,
+                };
+                self.update_canvas_cursor();
                 self.request_main_redraw();
             }
             Drag::MoveObjects { start_doc, .. } => {
@@ -2304,7 +2341,11 @@ impl App {
             self.set_tool(t);
         }
         match std::mem::take(&mut self.drag) {
-            Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } | Drag::Pan { .. } => {}
+            Drag::None
+            | Drag::Splitter { .. }
+            | Drag::RailWidth { .. }
+            | Drag::Pan { .. }
+            | Drag::ScrubZoom { .. } => {}
             Drag::PickColor { .. } => self.apply_picker_color(),
             Drag::MoveObjects {
                 start_doc,
@@ -2750,6 +2791,8 @@ impl App {
         });
         let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
         let active_tab = self.active;
+        let zoom_cursor =
+            (self.cursor_mode == CanvasCursor::Zoom).then_some(self.zoom_sign >= 0);
         let cursor_glyph = (self.cursor_mode == CanvasCursor::Glyph).then(|| {
             let pen_closing = self.active_tool == Tool::Pen && self.pen.len() >= 3 && {
                 let hover = self.doc_point(self.pointer);
@@ -2793,6 +2836,7 @@ impl App {
                 &tab_labels,
                 active_tab,
                 cursor_glyph,
+                zoom_cursor,
                 self.last_shape_tool,
                 self.shape_flyout,
             ),
@@ -3787,6 +3831,7 @@ fn paint_main(
     tab_labels: &[String],
     active_tab: usize,
     cursor_glyph: Option<(Tool, bool)>,
+    zoom_cursor: Option<bool>,
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
 ) {
@@ -3953,6 +3998,9 @@ fn paint_main(
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
+    }
+    if let Some(plus) = zoom_cursor {
+        icons::draw_magnifier(scene, pointer, plus);
     }
 
     // Primitive flyout.

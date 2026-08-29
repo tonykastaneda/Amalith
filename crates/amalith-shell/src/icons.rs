@@ -64,6 +64,44 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
 }
 
+/// A magnifying-glass cursor centred at `center`, with a `+` (`plus`) or
+/// `−` inside. Light body + dark keyline so it reads on any background.
+pub fn draw_magnifier(scene: &mut Scene, center: Point, plus: bool) {
+    let body = Color::from_rgb8(0xe4, 0xe3, 0xe3);
+    let key = Color::from_rgb8(0x12, 0x12, 0x12);
+    let (cx, cy, r) = (center.x, center.y, 7.0);
+
+    // Handle (behind the lens).
+    let h0 = Point::new(cx + r * 0.72, cy + r * 0.72);
+    let h1 = Point::new(cx + r * 1.9, cy + r * 1.9);
+    scene.stroke(&Stroke::new(4.5), ID, key, None, &Line::new(h0, h1));
+    scene.stroke(&Stroke::new(2.5), ID, body, None, &Line::new(h0, h1));
+
+    // Lens.
+    let lens = Circle::new((cx, cy), r);
+    scene.fill(Fill::NonZero, ID, body, None, &lens);
+    scene.stroke(&Stroke::new(2.0), ID, key, None, &lens);
+
+    // Sign.
+    let s = r * 0.55;
+    scene.stroke(
+        &Stroke::new(1.8),
+        ID,
+        key,
+        None,
+        &Line::new(Point::new(cx - s, cy), Point::new(cx + s, cy)),
+    );
+    if plus {
+        scene.stroke(
+            &Stroke::new(1.8),
+            ID,
+            key,
+            None,
+            &Line::new(Point::new(cx, cy - s), Point::new(cx, cy + s)),
+        );
+    }
+}
+
 /// Draw a cursor SVG (`CURSOR_*`) at `box_`, honouring the fill / stroke
 /// / stroke-width the artwork declares per CSS class — those colours are
 /// chosen deliberately (a light body, a white halo, a black keyline) so
