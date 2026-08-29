@@ -25,10 +25,12 @@ pub mod dock;
 pub mod handles;
 pub mod layout;
 pub mod panel;
+pub mod panels;
 pub mod sample;
 pub mod select;
 pub mod text;
 pub mod theme;
+pub mod tool;
 
 pub use dock::{Axis, Child, DockModel, DropTarget, Floating, Node, NodePath, PanelId, Side};
 pub use layout::{hit_test, Layout, PanelArea, SplitterHandle, TabRect};

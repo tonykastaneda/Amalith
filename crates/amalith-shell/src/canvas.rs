@@ -11,6 +11,7 @@ use vello::Scene;
 use crate::handles::{self, Handle};
 use crate::text::TextContext;
 use crate::theme::Theme;
+use crate::tool::Tool;
 use crate::{convert, select};
 
 /// Pan (screen px) and zoom for the document view.
@@ -91,6 +92,7 @@ pub fn paint(
     text: &mut TextContext,
     selection: &[ObjectId],
     drag: Option<DragPreview<'_>>,
+    draw_shape: Option<(Tool, Rect)>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -151,6 +153,35 @@ pub fn paint(
     if let Some(d) = drag.filter(|d| d.dup) {
         for &id in d.ids {
             paint_object(scene, doc, id, vt * Affine::translate(d.delta), None);
+        }
+    }
+
+    // Shape-tool rubber-band preview.
+    if let Some((tool, r_doc)) = draw_shape {
+        let r = vt.transform_rect_bbox(r_doc);
+        let fill = theme.select_blue.with_alpha(0.12);
+        match tool {
+            Tool::Ellipse => {
+                let e = vello::kurbo::Ellipse::from_rect(r);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &e);
+                scene.stroke(
+                    &Stroke::new(1.0),
+                    Affine::IDENTITY,
+                    theme.select_blue,
+                    None,
+                    &e,
+                );
+            }
+            _ => {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
+                scene.stroke(
+                    &Stroke::new(1.0),
+                    Affine::IDENTITY,
+                    theme.select_blue,
+                    None,
+                    &r,
+                );
+            }
         }
     }
 

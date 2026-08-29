@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use amalith_commands::{Command, Editor};
-use amalith_core::{Document, ObjectId};
+use amalith_commands::{Command, CommandOutcome, Editor};
+use amalith_core::{Document, LayerId, ObjectId};
 use amalith_shell::canvas::{self, CanvasView, DragPreview};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
@@ -27,8 +27,8 @@ use amalith_shell::dock::{
 use amalith_shell::handles::{self, Handle};
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
-use amalith_shell::{chrome, layout, sample, Theme};
-use amalith_shell::{convert, select};
+use amalith_shell::tool::Tool;
+use amalith_shell::{chrome, convert, layout, panels, sample, select, Theme};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -131,6 +131,12 @@ enum Drag {
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
     },
+    /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
+    DrawShape {
+        tool: Tool,
+        start_doc: Point,
+        cur_doc: Point,
+    },
 }
 
 struct App {
@@ -145,6 +151,7 @@ struct App {
     dock: DockModel,
     editor: Editor,
     selection: Vec<ObjectId>,
+    active_tool: Tool,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     view: CanvasView,
@@ -179,6 +186,7 @@ impl App {
             dock: DockModel::new(demo_dock()),
             editor: Editor::new(sample::document()),
             selection: Vec::new(),
+            active_tool: Tool::Select,
             marquee: None,
             view: CanvasView::default(),
             theme: Theme::default(),
@@ -230,6 +238,21 @@ impl App {
     fn prune_selection(&mut self) {
         let doc = self.editor.document();
         self.selection.retain(|id| doc.object(*id).is_some());
+    }
+
+    /// The layer new shapes should land in — the topmost, creating one if
+    /// the document has none.
+    fn ensure_layer(&mut self) -> LayerId {
+        if let Some(l) = self.editor.document().layers().last() {
+            return l.id;
+        }
+        match self.editor.execute(Command::CreateLayer {
+            name: "Layer 1".into(),
+            index: None,
+        }) {
+            Ok(CommandOutcome::Layer(id)) => id,
+            _ => LayerId::new(),
+        }
     }
 
     /// The document-space rect currently visible in the canvas (between the
@@ -404,21 +427,40 @@ impl App {
                         return;
                     }
                     for area in &laid.areas {
-                        if !area.tab_strip.contains(self.pointer) {
-                            continue;
+                        if area.tab_strip.contains(self.pointer) {
+                            if let Some(tab) =
+                                area.tabs.iter().position(|t| t.rect.contains(self.pointer))
+                            {
+                                self.drag = Drag::PendingTearoff {
+                                    side,
+                                    panel: area.tabs[tab].panel,
+                                    path: area.path.clone(),
+                                    tab,
+                                    press: self.pointer,
+                                };
+                            }
+                            return;
                         }
-                        if let Some(tab) =
-                            area.tabs.iter().position(|t| t.rect.contains(self.pointer))
-                        {
-                            self.drag = Drag::PendingTearoff {
-                                side,
-                                panel: area.tabs[tab].panel,
-                                path: area.path.clone(),
-                                tab,
-                                press: self.pointer,
-                            };
+                        if area.body.contains(self.pointer) {
+                            if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                                let action = {
+                                    let ctx = panels::Ctx {
+                                        theme: &self.theme,
+                                        doc: self.editor.document(),
+                                        selection: &self.selection,
+                                        active_tool: self.active_tool,
+                                    };
+                                    panels::hit(pid, area.body, self.pointer, &ctx)
+                                };
+                                match action {
+                                    panels::Action::SetTool(t) => self.active_tool = t,
+                                    panels::Action::Select(id) => self.selection = vec![id],
+                                    panels::Action::None => {}
+                                }
+                                self.request_main_redraw();
+                            }
+                            return;
                         }
-                        return;
                     }
                     return;
                 }
@@ -427,8 +469,19 @@ impl App {
                     self.drag = Drag::Pan { last: self.pointer };
                     return;
                 }
-                // Selection tool (ported from amalith-app's `press`):
                 let dp = self.doc_point(self.pointer);
+
+                // A shape tool rubber-bands a new object.
+                if matches!(self.active_tool, Tool::Rectangle | Tool::Ellipse) {
+                    self.drag = Drag::DrawShape {
+                        tool: self.active_tool,
+                        start_doc: dp,
+                        cur_doc: dp,
+                    };
+                    return;
+                }
+
+                // Selection tool (ported from amalith-app's `press`):
                 let visible = self.visible_doc_rect();
 
                 // Transform handles / rotation halo win over object hits.
@@ -603,6 +656,17 @@ impl App {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
                 self.request_main_redraw();
             }
+            Drag::DrawShape {
+                tool, start_doc, ..
+            } => {
+                let (tool, start_doc) = (*tool, *start_doc);
+                self.drag = Drag::DrawShape {
+                    tool,
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::Scale {
                 handle,
                 start_bounds,
@@ -725,6 +789,33 @@ impl App {
                             objects: self.selection.clone(),
                             delta,
                         });
+                    }
+                    self.request_main_redraw();
+                }
+            }
+            Drag::DrawShape {
+                tool,
+                start_doc,
+                cur_doc,
+            } => {
+                let r = shape_rect(start_doc, cur_doc, self.shift_down);
+                if r.width() > 0.5 && r.height() > 0.5 {
+                    let layer = self.ensure_layer();
+                    let cmd = match tool {
+                        Tool::Rectangle => Command::CreateRect {
+                            layer,
+                            rect: r,
+                            name: None,
+                        },
+                        Tool::Ellipse => Command::CreateEllipse {
+                            layer,
+                            rect: r,
+                            name: None,
+                        },
+                        Tool::Select => return,
+                    };
+                    if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
+                        self.selection = vec![id];
                     }
                     self.request_main_redraw();
                 }
@@ -856,6 +947,17 @@ impl App {
             }),
             _ => None,
         };
+        let draw_shape = match &self.drag {
+            Drag::DrawShape {
+                tool,
+                start_doc,
+                cur_doc,
+            } => Some((
+                *tool,
+                convert::rect(shape_rect(*start_doc, *cur_doc, self.shift_down)),
+            )),
+            _ => None,
+        };
 
         self.content.reset();
         match role {
@@ -867,7 +969,9 @@ impl App {
                 &self.view,
                 &self.theme,
                 &self.selection,
+                self.active_tool,
                 preview,
+                draw_shape,
                 self.marquee,
                 wl,
                 hl,
@@ -1105,6 +1209,18 @@ fn demo_dock() -> Node {
     }
 }
 
+/// Normalized rect between two document-space points; `square` locks it
+/// to the larger dimension. Returns core kurbo for the create commands.
+fn shape_rect(a: Point, b: Point, square: bool) -> amalith_core::Rect {
+    let (mut ex, mut ey) = (b.x, b.y);
+    if square {
+        let s = (b.x - a.x).abs().max((b.y - a.y).abs());
+        ex = a.x + s.copysign(b.x - a.x);
+        ey = a.y + s.copysign(b.y - a.y);
+    }
+    amalith_core::Rect::new(a.x.min(ex), a.y.min(ey), a.x.max(ex), a.y.max(ey))
+}
+
 fn tab_label(panel: PanelId) -> String {
     match panel.0 {
         "tools" => "Tools",
@@ -1150,7 +1266,9 @@ fn paint_main(
     view: &CanvasView,
     theme: &Theme,
     selection: &[ObjectId],
+    active_tool: Tool,
     drag_preview: Option<DragPreview<'_>>,
+    draw_shape: Option<(Tool, Rect)>,
     marquee: Option<Rect>,
     width: f64,
     height: f64,
@@ -1185,6 +1303,7 @@ fn paint_main(
         text,
         selection,
         drag_preview,
+        draw_shape,
     );
 
     if let Some(m) = marquee {
@@ -1202,6 +1321,17 @@ fn paint_main(
         let laid = build_rail_layout(rail, theme, text, rect);
         if !rail.is_empty() {
             chrome::paint(scene, &laid, theme, text, &tab_label);
+            let ctx = panels::Ctx {
+                theme,
+                doc,
+                selection,
+                active_tool,
+            };
+            for area in &laid.areas {
+                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                    panels::paint(scene, text, pid, area.body, &ctx);
+                }
+            }
             // Bar on the canvas-facing edge — the whole-rail resize handle.
             scene.fill(
                 Fill::NonZero,
