@@ -3,7 +3,7 @@
 
 use amalith_core::{Document, ObjectId, ObjectKind};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
-use vello::peniko::{Color, Fill};
+use vello::peniko::{BlendMode, Color, Compose, Fill, Mix};
 use vello::Scene;
 
 use crate::convert;
@@ -42,20 +42,28 @@ impl CanvasView {
     }
 }
 
-/// Live drag preview: `ids` are drawn offset by `delta` (document space).
+/// Live drag preview. For a move, the dragged objects render offset by
+/// `delta` (document space). For a duplicate (`dup`), the originals stay
+/// put and a translucent ghost is drawn at `delta` instead.
 #[derive(Clone, Copy)]
 pub struct DragPreview<'a> {
     pub ids: &'a [ObjectId],
     pub delta: Vec2,
+    pub dup: bool,
 }
 
 impl DragPreview<'_> {
-    fn offset_for(&self, id: ObjectId) -> Affine {
-        if self.ids.contains(&id) {
+    /// Transform for a dragged object's *own* rendering.
+    fn object_offset(&self, id: ObjectId) -> Affine {
+        if !self.dup && self.ids.contains(&id) {
             Affine::translate(self.delta)
         } else {
             Affine::IDENTITY
         }
+    }
+
+    fn is_dragged(&self, id: ObjectId) -> bool {
+        self.ids.contains(&id)
     }
 }
 
@@ -118,10 +126,29 @@ pub fn paint(
         }
     }
 
-    // Selection outlines (blue box round each selected object's bounds).
+    // Duplicate drag: a translucent ghost of the selection at the offset.
+    if let Some(d) = drag.filter(|d| d.dup) {
+        scene.push_layer(
+            Fill::NonZero,
+            BlendMode::new(Mix::Normal, Compose::SrcOver),
+            0.55,
+            Affine::IDENTITY,
+            &viewport,
+        );
+        for &id in d.ids {
+            paint_object(scene, doc, id, vt * Affine::translate(d.delta), None);
+        }
+        scene.pop_layer();
+    }
+
+    // Selection outline — follows the drag (where the move ends up, or
+    // where the duplicate lands).
     for &id in selection {
         if let Some(b) = crate::select::bounds(doc, id) {
-            let off = drag.map_or(Affine::IDENTITY, |d| d.offset_for(id));
+            let off = match drag {
+                Some(d) if d.is_dragged(id) => Affine::translate(d.delta),
+                _ => Affine::IDENTITY,
+            };
             let screen = (vt * off).transform_rect_bbox(b);
             scene.stroke(
                 &Stroke::new(1.0),
@@ -149,7 +176,7 @@ fn paint_object(
     if !obj.visible {
         return;
     }
-    let off = drag.map_or(Affine::IDENTITY, |d| d.offset_for(id));
+    let off = drag.map_or(Affine::IDENTITY, |d| d.object_offset(id));
     let m = vt * off * convert::affine(obj.transform);
     let fill = obj.appearance.fill.color().map(convert::color);
     let stroke = obj.appearance.stroke.color().map(convert::color);

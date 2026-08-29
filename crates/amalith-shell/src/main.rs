@@ -718,10 +718,11 @@ impl App {
                 start_doc,
                 last_doc,
                 moved: true,
-                ..
+                dup,
             } => Some(DragPreview {
                 ids: &self.selection,
                 delta: *last_doc - *start_doc,
+                dup: *dup,
             }),
             _ => None,
         };
