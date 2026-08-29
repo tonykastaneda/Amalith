@@ -165,13 +165,12 @@ enum Drag {
     },
     /// Artboard tool: rubber-banding a new artboard.
     DrawArtboard { start_doc: Point, cur_doc: Point },
-    /// Artboard tool: dragging an existing artboard. `dup` (Alt) drops a
-    /// copy instead of moving the original.
+    /// Artboard tool: dragging an existing artboard. Alt (held at any
+    /// point) drops a copy; Shift locks to 8 directions — both read live.
     MoveArtboard {
         id: ArtboardId,
         start_doc: Point,
         last_doc: Point,
-        dup: bool,
     },
     /// Artboard tool: dragging a resize handle of the selected artboard.
     ResizeArtboard {
@@ -1749,7 +1748,6 @@ impl App {
                                 id,
                                 start_doc: dp,
                                 last_doc: dp,
-                                dup: self.alt_down,
                             };
                         }
                         None => {
@@ -2021,15 +2019,12 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::MoveArtboard {
-                id, start_doc, dup, ..
-            } => {
-                let (id, start_doc, dup) = (*id, *start_doc, *dup);
+            Drag::MoveArtboard { id, start_doc, .. } => {
+                let (id, start_doc) = (*id, *start_doc);
                 self.drag = Drag::MoveArtboard {
                     id,
                     start_doc,
                     last_doc: self.doc_point(self.pointer),
-                    dup,
                 };
                 self.request_main_redraw();
             }
@@ -2239,11 +2234,14 @@ impl App {
                 id,
                 start_doc,
                 last_doc,
-                dup,
             } => {
-                let delta = convert::vec2_to_core(last_doc - start_doc);
+                let mut d = last_doc - start_doc;
+                if self.shift_down {
+                    d = snap8(d);
+                }
+                let delta = convert::vec2_to_core(d);
                 if delta.x != 0.0 || delta.y != 0.0 {
-                    let cmd = if dup {
+                    let cmd = if self.alt_down {
                         Command::DuplicateArtboard { id, delta }
                     } else {
                         Command::MoveArtboard { id, delta }
@@ -2499,9 +2497,11 @@ impl App {
                 id,
                 start_doc,
                 last_doc,
-                ..
             } => {
-                let d = *last_doc - *start_doc;
+                let mut d = *last_doc - *start_doc;
+                if self.shift_down {
+                    d = snap8(d);
+                }
                 self.editor
                     .document()
                     .artboards()
@@ -2813,8 +2813,11 @@ impl ApplicationHandler for App {
                     self.shift_down = m.state().shift_key();
                     self.alt_down = m.state().alt_key();
                     // Toggling the temporary white-arrow gesture shows or
-                    // hides the node overlay.
-                    if (self.effective_tool() == Tool::DirectSelect) != was_direct {
+                    // hides the node overlay; a live drag reacts to
+                    // Shift-lock / Alt-copy changing under it.
+                    if (self.effective_tool() == Tool::DirectSelect) != was_direct
+                        || !matches!(self.drag, Drag::None)
+                    {
                         self.request_main_redraw();
                     }
                 }
@@ -3157,6 +3160,18 @@ fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
         .rev()
         .find(|ab| ab.rect.contains(p))
         .map(|ab| ab.id)
+}
+
+/// Snap a delta to the nearest of the 8 cardinal / diagonal directions,
+/// keeping only the component along that axis (Shift-lock for drags).
+fn snap8(d: Vec2) -> Vec2 {
+    if d.hypot() < 1e-6 {
+        return d;
+    }
+    let step = std::f64::consts::FRAC_PI_4;
+    let angle = (d.y.atan2(d.x) / step).round() * step;
+    let dir = Vec2::new(angle.cos(), angle.sin());
+    dir * d.dot(dir)
 }
 
 /// Box between two document-space points. `square` (Shift) locks it to
