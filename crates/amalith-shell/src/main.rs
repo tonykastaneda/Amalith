@@ -35,6 +35,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 /// When a rail is empty, the strip of canvas along that edge that still
@@ -122,6 +123,9 @@ struct App {
     /// Pointer position within whichever window last reported it, logical.
     pointer: Point,
     pointer_win: Option<WindowId>,
+    /// Held modifiers on the main window.
+    cmd_down: bool,
+    space_down: bool,
     drag: Drag,
     /// Live re-dock target (which rail, and where in it) while a floating
     /// window is over the document window.
@@ -147,6 +151,8 @@ impl App {
             scale: 1.0,
             pointer: Point::ZERO,
             pointer_win: None,
+            cmd_down: false,
+            space_down: false,
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
@@ -349,8 +355,11 @@ impl App {
                     }
                     return;
                 }
-                // Not on a rail — pan the canvas.
-                self.drag = Drag::Pan { last: self.pointer };
+                // Not on a rail. Space+drag is a hand pan; otherwise this
+                // press belongs to the active tool (none wired yet).
+                if self.space_down {
+                    self.drag = Drag::Pan { last: self.pointer };
+                }
             }
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -697,14 +706,33 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => self.on_release(),
+            WindowEvent::ModifiersChanged(m) => {
+                if Some(id) == self.main_id {
+                    self.cmd_down = m.state().super_key();
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
+                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
+                    self.space_down = event.state.is_pressed();
+                }
+            }
+            WindowEvent::PinchGesture { delta, .. } if Some(id) == self.main_id => {
+                self.view.zoom_at(1.0 + delta, self.pointer);
+            }
             WindowEvent::MouseWheel { delta, .. } if Some(id) == self.main_id => {
-                let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    MouseScrollDelta::PixelDelta(p) => p.y / self.scale / 40.0,
+                let (dx, dy) = match delta {
+                    // Line-based (mouse wheel): each notch ≈ 30 logical px.
+                    MouseScrollDelta::LineDelta(x, y) => (x as f64 * 30.0, y as f64 * 30.0),
+                    // Pixel-based (trackpad): physical px → logical.
+                    MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
                 };
-                if dy != 0.0 {
-                    let factor = (1.0 + dy * 0.12).clamp(0.25, 4.0);
+                if self.cmd_down {
+                    // ⌘ + scroll → zoom at the cursor.
+                    let factor = 2f64.powf(dy / 180.0);
                     self.view.zoom_at(factor, self.pointer);
+                } else {
+                    // Plain scroll → pan.
+                    self.view.pan += Vec2::new(dx, dy);
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(id),
