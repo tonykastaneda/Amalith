@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use amalith_core::{Document, ObjectId, ObjectKind};
-use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
+use vello::kurbo::{Affine, BezPath, Point, Rect, Shape, Stroke, Vec2};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -170,27 +170,21 @@ pub fn paint(
     if let Some((tool, r_doc)) = draw_shape {
         let r = vt.transform_rect_bbox(r_doc);
         let fill = theme.select_blue.with_alpha(0.12);
+        let stroke = Stroke::new(1.0);
         match tool {
             Tool::Ellipse => {
                 let e = vello::kurbo::Ellipse::from_rect(r);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &e);
-                scene.stroke(
-                    &Stroke::new(1.0),
-                    Affine::IDENTITY,
-                    theme.select_blue,
-                    None,
-                    &e,
-                );
+                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &e);
+            }
+            Tool::Rectangle | Tool::Select | Tool::Pen => {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
+                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &r);
             }
             _ => {
-                scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
-                scene.stroke(
-                    &Stroke::new(1.0),
-                    Affine::IDENTITY,
-                    theme.select_blue,
-                    None,
-                    &r,
-                );
+                let p = shape_preview_path(tool, r);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &p);
+                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &p);
             }
         }
     }
@@ -284,6 +278,52 @@ pub fn paint(
     }
 
     scene.pop_layer();
+}
+
+/// Screen-space outline for a primitive shape tool's rubber-band preview.
+fn shape_preview_path(tool: Tool, r: Rect) -> BezPath {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let (cx, cy) = (r.center().x, r.center().y);
+    let (rx, ry) = (r.width() * 0.5, r.height() * 0.5);
+    let mut p = BezPath::new();
+    match tool {
+        Tool::RoundedRect => {
+            return vello::kurbo::RoundedRect::new(
+                r.x0,
+                r.y0,
+                r.x1,
+                r.y1,
+                r.width().min(r.height()) * 0.18,
+            )
+            .to_path(0.1);
+        }
+        Tool::Polygon => {
+            for i in 0..6 {
+                let a = -FRAC_PI_2 + i as f64 * TAU / 6.0;
+                let pt = (cx + rx * a.cos(), cy + ry * a.sin());
+                if i == 0 {
+                    p.move_to(pt);
+                } else {
+                    p.line_to(pt);
+                }
+            }
+        }
+        Tool::Star => {
+            for i in 0..10 {
+                let a = -FRAC_PI_2 + i as f64 * PI / 5.0;
+                let k = if i % 2 == 0 { 1.0 } else { 0.45 };
+                let pt = (cx + rx * k * a.cos(), cy + ry * k * a.sin());
+                if i == 0 {
+                    p.move_to(pt);
+                } else {
+                    p.line_to(pt);
+                }
+            }
+        }
+        _ => {}
+    }
+    p.close_path();
+    p
 }
 
 /// The extra affine to apply to the whole selection quad given a

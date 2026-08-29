@@ -14,7 +14,10 @@ pub enum Icon {
     DirectSelect,
     Pen,
     Rectangle,
+    RoundedRect,
     Ellipse,
+    Polygon,
+    Star,
     Artboard,
 }
 
@@ -75,9 +78,42 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
                 &Rect::new(4.0, 6.0, 20.0, 18.0),
             );
         }
+        Icon::RoundedRect => {
+            let rr = vello::kurbo::RoundedRect::new(4.0, 6.0, 20.0, 18.0, 4.0);
+            scene.stroke(&Stroke::new(1.8), t, color, None, &rr);
+        }
         Icon::Ellipse => {
             let e = vello::kurbo::Ellipse::new((12.0, 12.0), (8.5, 7.0), 0.0);
             scene.stroke(&Stroke::new(1.8), t, color, None, &e);
+        }
+        Icon::Polygon => {
+            let mut p = BezPath::new();
+            for i in 0..6 {
+                let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::TAU / 6.0;
+                let pt = (12.0 + 9.0 * a.cos(), 12.0 + 9.0 * a.sin());
+                if i == 0 {
+                    p.move_to(pt);
+                } else {
+                    p.line_to(pt);
+                }
+            }
+            p.close_path();
+            scene.stroke(&Stroke::new(1.7), t, color, None, &p);
+        }
+        Icon::Star => {
+            let mut p = BezPath::new();
+            for i in 0..10 {
+                let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
+                let r = if i % 2 == 0 { 10.0 } else { 4.5 };
+                let pt = (12.0 + r * a.cos(), 12.0 + r * a.sin());
+                if i == 0 {
+                    p.move_to(pt);
+                } else {
+                    p.line_to(pt);
+                }
+            }
+            p.close_path();
+            scene.stroke(&Stroke::new(1.6), t, color, None, &p);
         }
         Icon::Artboard => {
             scene.stroke(

@@ -733,7 +733,7 @@ impl App {
                 }
 
                 // A shape tool rubber-bands a new object.
-                if matches!(self.active_tool, Tool::Rectangle | Tool::Ellipse) {
+                if self.active_tool.is_shape() {
                     self.drag = Drag::DrawShape {
                         tool: self.active_tool,
                         start_doc: dp,
@@ -1086,6 +1086,16 @@ impl App {
                             rect: r,
                             name: None,
                         },
+                        Tool::RoundedRect | Tool::Polygon | Tool::Star => {
+                            match primitive_path(tool, r) {
+                                Some(path) => Command::CreatePath {
+                                    layer,
+                                    path,
+                                    name: None,
+                                },
+                                None => return,
+                            }
+                        }
                         Tool::Select | Tool::Pen => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
@@ -1649,6 +1659,40 @@ fn constrained(prev: Option<Point>, p: Point, snap: bool) -> Point {
 
 /// Normalized rect between two document-space points; `square` locks it
 /// to the larger dimension. Returns core kurbo for the create commands.
+/// `PathData` for the primitive shape tools, from a document-space box.
+fn primitive_path(tool: Tool, r: amalith_core::Rect) -> Option<amalith_core::PathData> {
+    use amalith_core::{PathData, Point as CP};
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let c = r.center();
+    let (rx, ry) = (r.width() * 0.5, r.height() * 0.5);
+    match tool {
+        Tool::RoundedRect => Some(PathData::rounded_rectangle(
+            r,
+            r.width().min(r.height()) * 0.18,
+        )),
+        Tool::Polygon => {
+            let pts: Vec<CP> = (0..6)
+                .map(|i| {
+                    let a = -FRAC_PI_2 + i as f64 * TAU / 6.0;
+                    CP::new(c.x + rx * a.cos(), c.y + ry * a.sin())
+                })
+                .collect();
+            Some(PathData::polygon(&pts))
+        }
+        Tool::Star => {
+            let pts: Vec<CP> = (0..10)
+                .map(|i| {
+                    let a = -FRAC_PI_2 + i as f64 * PI / 5.0;
+                    let k = if i % 2 == 0 { 1.0 } else { 0.45 };
+                    CP::new(c.x + rx * k * a.cos(), c.y + ry * k * a.sin())
+                })
+                .collect();
+            Some(PathData::polygon(&pts))
+        }
+        _ => None,
+    }
+}
+
 fn shape_rect(a: Point, b: Point, square: bool) -> amalith_core::Rect {
     let (mut ex, mut ey) = (b.x, b.y);
     if square {
