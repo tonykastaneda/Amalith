@@ -469,6 +469,34 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// ⌘] / ⌘[ — move the selection `steps` places forward (+) or back
+    /// (−) in its parent's paint order.
+    fn restack(&mut self, steps: i32) {
+        if self.selection.is_empty() || steps == 0 {
+            return;
+        }
+        let _ = self.editor.execute(Command::NudgeStack {
+            ids: self.selection.clone(),
+            steps,
+        });
+        self.request_main_redraw();
+    }
+
+    /// ⌘⌥] / ⌘⌥[ — bring the selection to the very front / back. Bounded
+    /// by the largest sibling count among the selection's parents, which
+    /// is the most swaps `NudgeStack` could ever need.
+    fn restack_extreme(&mut self, to_front: bool) {
+        let doc = self.editor.document();
+        let bound = self
+            .selection
+            .iter()
+            .filter_map(|id| doc.object(*id))
+            .map(|o| doc.children_of(o.parent).len() as i32)
+            .max()
+            .unwrap_or(0);
+        self.restack(if to_front { bound } else { -bound });
+    }
+
     /// ⌘O — pick a `.amalith` file and load it, replacing the document.
     fn open_document(&mut self) {
         let Some(path) = rfd::FileDialog::new()
@@ -1889,6 +1917,21 @@ impl ApplicationHandler for App {
                         KeyCode::KeyO => self.open_document(),
                         KeyCode::KeyS => self.save_document(self.shift_down),
                         KeyCode::KeyI if self.shift_down => self.import_svg(),
+                        // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
+                        KeyCode::BracketRight => {
+                            if self.alt_down {
+                                self.restack_extreme(true);
+                            } else {
+                                self.restack(1);
+                            }
+                        }
+                        KeyCode::BracketLeft => {
+                            if self.alt_down {
+                                self.restack_extreme(false);
+                            } else {
+                                self.restack(-1);
+                            }
+                        }
                         _ => {}
                     },
                     // Bare-key: arrow nudge, Escape, tool shortcuts.
