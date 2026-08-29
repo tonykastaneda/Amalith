@@ -31,7 +31,7 @@ use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{chrome, convert, layout, panels, picker, sample, select, Theme};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
-use vello::peniko::{color::palette, Fill};
+use vello::peniko::{color::palette, Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
 use vello::{AaConfig, Renderer, RendererOptions, Scene};
@@ -42,6 +42,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+/// Height of the top app bar, logical points.
+const APP_BAR_H: f64 = 30.0;
 /// When a rail is empty, the strip of canvas along that edge that still
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
@@ -472,7 +474,7 @@ impl App {
         self.view
             .to_screen()
             .inverse()
-            .transform_rect_bbox(Rect::new(left, 0.0, right.max(left), h))
+            .transform_rect_bbox(Rect::new(left, APP_BAR_H, right.max(left), h))
     }
 
     /// Logical size of the main window's client area.
@@ -597,6 +599,11 @@ impl App {
                 let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
+
+                // The app bar swallows clicks (unless the picker is up).
+                if self.picker.is_none() && self.pointer.y < APP_BAR_H {
+                    return;
+                }
 
                 // The colour picker is modal while open.
                 if let Some(pk) = self.picker {
@@ -1373,8 +1380,18 @@ impl ApplicationHandler for App {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("Amalith — shell")
+            .with_title("Amalith Ver. Alpha")
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
+        #[cfg(target_os = "macos")]
+        let attrs = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            // Paint behind the title bar; keep the traffic lights, drop the
+            // title text.
+            attrs
+                .with_titlebar_transparent(true)
+                .with_fullsize_content_view(true)
+                .with_title_hidden(true)
+        };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();
         let wid = window.id();
@@ -1728,9 +1745,10 @@ fn tab_label(panel: PanelId) -> String {
 
 fn rail_rect_for(side: RailSide, rail_w: f64, width: f64, height: f64) -> Rect {
     let rw = rail_w.clamp(RAIL_MIN_W, (width * 0.7).max(RAIL_MIN_W));
+    let top = APP_BAR_H;
     match side {
-        RailSide::Left => Rect::new(0.0, 0.0, rw, height),
-        RailSide::Right => Rect::new(width - rw, 0.0, width, height),
+        RailSide::Left => Rect::new(0.0, top, rw, height),
+        RailSide::Right => Rect::new(width - rw, top, width, height),
     }
 }
 
@@ -1791,7 +1809,7 @@ fn paint_main(
     } else {
         rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
     };
-    let viewport = Rect::new(left_x, 0.0, right_x.max(left_x), height);
+    let viewport = Rect::new(left_x, APP_BAR_H, right_x.max(left_x), height);
     canvas::paint(
         scene,
         doc,
@@ -1847,6 +1865,28 @@ fn paint_main(
             chrome::paint_drop(scene, target, &laid, rect, theme);
         }
     }
+
+    // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
+    // traffic lights floating over its left end.
+    let bar = Rect::new(0.0, 0.0, width, APP_BAR_H);
+    scene.fill(Fill::NonZero, ID, theme.app_bar, None, &bar);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(0.0, APP_BAR_H - 1.0, width, APP_BAR_H),
+    );
+    let name = "Amalith Ver. Alpha";
+    let tw = text.measure(name, 12.5);
+    text.draw(
+        scene,
+        name,
+        12.5,
+        Color::from_rgb8(0xcd, 0xcd, 0xcd),
+        (width - tw) * 0.5,
+        APP_BAR_H * 0.5 + 4.5,
+    );
 }
 
 /// A torn-off window: dark body, a header strip that always names the

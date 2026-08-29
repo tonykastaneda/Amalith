@@ -7,6 +7,8 @@ use vello::peniko::Color;
 pub struct Theme {
     /// Window ground (behind the canvas and rails).
     pub bg: Color,
+    /// The top app bar.
+    pub app_bar: Color,
     /// The canvas area behind the artboards.
     pub canvas_bg: Color,
     /// A panel body.
@@ -45,6 +47,7 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             bg: Color::from_rgb8(0x1e, 0x1e, 0x1e),
+            app_bar: Color::from_rgb8(0x30, 0x30, 0x30),
             canvas_bg: Color::from_rgb8(0x33, 0x33, 0x33),
             panel_bg: Color::from_rgb8(0x2b, 0x2b, 0x2b),
             strip_bg: Color::from_rgb8(0x24, 0x24, 0x24),
