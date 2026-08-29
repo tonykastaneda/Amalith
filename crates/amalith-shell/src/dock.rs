@@ -97,17 +97,35 @@ pub enum RailSide {
     Right,
 }
 
-/// One docked column: a single [`Node`] tree, or empty. All the tree
-/// mechanics live here so every rail — left, right, and any future one —
-/// behaves identically.
-#[derive(Clone, Debug, PartialEq, Default)]
+/// Default rail width, logical points.
+pub const RAIL_DEFAULT_W: f32 = 320.0;
+
+/// One docked column: a single [`Node`] tree (or empty) plus how wide the
+/// whole rail is. All the tree mechanics live here so every rail — left,
+/// right, and any future one — behaves identically.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rail {
     pub tree: Option<Node>,
+    /// Rail width in logical points; the user drags the rail's inner edge
+    /// to change it.
+    pub width: f32,
+}
+
+impl Default for Rail {
+    fn default() -> Self {
+        Self {
+            tree: None,
+            width: RAIL_DEFAULT_W,
+        }
+    }
 }
 
 impl Rail {
     pub fn with(node: Node) -> Self {
-        Self { tree: Some(node) }
+        Self {
+            tree: Some(node),
+            width: RAIL_DEFAULT_W,
+        }
     }
 
     pub fn is_empty(&self) -> bool {

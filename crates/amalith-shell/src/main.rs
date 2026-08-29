@@ -35,13 +35,15 @@ use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-/// Width of a dock rail, in logical points.
-const RAIL_W: f64 = 320.0;
 /// When a rail is empty, the strip of canvas along that edge that still
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
 /// Slack around a splitter's visual gap for grabbing it.
 const GRAB_SLOP: f64 = 3.0;
+/// Visible thickness of the bar on a rail's inner edge.
+const RAIL_EDGE: f64 = 4.0;
+/// Min / max rail width as a fraction of the window, logical points.
+const RAIL_MIN_W: f64 = 160.0;
 /// Pointer travel before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 5.0;
 /// Default size of a torn-off panel window, logical points.
@@ -95,6 +97,8 @@ enum Drag {
     /// authoritative window top-left in virtual-desktop logical points;
     /// `grab` is the constant cursor offset within it.
     MovingFloating { id: u64, grab: Vec2, pos: Point },
+    /// Dragging a rail's inner edge to widen / narrow the whole rail.
+    RailWidth { side: RailSide },
 }
 
 struct App {
@@ -186,8 +190,8 @@ impl App {
             return (RailSide::Right, DropTarget::Float);
         }
         for side in [RailSide::Left, RailSide::Right] {
-            let rect = rail_rect_for(side, w, h);
             let rail = self.dock.rail(side);
+            let rect = rail_rect_for(side, rail.width as f64, w, h);
             if rail.is_empty() {
                 let in_zone = match side {
                     RailSide::Left => local.x <= EMPTY_ZONE,
@@ -292,7 +296,16 @@ impl App {
                     if rail.is_empty() {
                         continue;
                     }
-                    let rect = rail_rect_for(side, w, h);
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    // The rail's inner edge widens the whole rail — check it
+                    // first, since its grab zone spills onto the canvas.
+                    if rail_edge_bar(side, rect)
+                        .inflate(GRAB_SLOP + 1.0, 0.0)
+                        .contains(self.pointer)
+                    {
+                        self.drag = Drag::RailWidth { side };
+                        return;
+                    }
                     if !rect.contains(self.pointer) {
                         continue;
                     }
@@ -353,12 +366,25 @@ impl App {
 
     fn on_cursor_move(&mut self) {
         match &self.drag {
+            Drag::RailWidth { side } => {
+                let side = *side;
+                let Some((w, _)) = self.main_logical_size() else {
+                    return;
+                };
+                let raw = match side {
+                    RailSide::Left => self.pointer.x,
+                    RailSide::Right => w - self.pointer.x,
+                };
+                let clamped = raw.clamp(RAIL_MIN_W, (w * 0.7).max(RAIL_MIN_W));
+                self.dock.rail_mut(side).width = clamped as f32;
+                self.request_main_redraw();
+            }
             Drag::Splitter { side, path, gap } => {
                 let (side, path, gap) = (*side, path.clone(), *gap);
                 let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
-                let rect = rail_rect_for(side, w, h);
+                let rect = rail_rect_for(side, self.dock.rail(side).width as f64, w, h);
                 let laid =
                     build_rail_layout(self.dock.rail(side), &self.theme, &mut self.text, rect);
                 if let Some(sp) = laid
@@ -428,7 +454,7 @@ impl App {
 
     fn on_release(&mut self) {
         match std::mem::take(&mut self.drag) {
-            Drag::None | Drag::Splitter { .. } => {}
+            Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } => {}
             Drag::PendingTearoff {
                 side, path, tab, ..
             } => {
@@ -683,10 +709,19 @@ fn tab_label(panel: PanelId) -> String {
     .to_string()
 }
 
-fn rail_rect_for(side: RailSide, width: f64, height: f64) -> Rect {
+fn rail_rect_for(side: RailSide, rail_w: f64, width: f64, height: f64) -> Rect {
+    let rw = rail_w.clamp(RAIL_MIN_W, (width * 0.7).max(RAIL_MIN_W));
     match side {
-        RailSide::Left => Rect::new(0.0, 0.0, RAIL_W.min(width), height),
-        RailSide::Right => Rect::new((width - RAIL_W).max(0.0), 0.0, width, height),
+        RailSide::Left => Rect::new(0.0, 0.0, rw, height),
+        RailSide::Right => Rect::new(width - rw, 0.0, width, height),
+    }
+}
+
+/// The draggable bar on a rail's canvas-facing edge.
+fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
+    match side {
+        RailSide::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
+        RailSide::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
     }
 }
 
@@ -721,10 +756,18 @@ fn paint_main(
         if rail.is_empty() && !is_preview_target {
             continue;
         }
-        let rect = rail_rect_for(side, width, height);
+        let rect = rail_rect_for(side, rail.width as f64, width, height);
         let laid = build_rail_layout(rail, theme, text, rect);
         if !rail.is_empty() {
             chrome::paint(scene, &laid, theme, text, &tab_label);
+            // Bar on the canvas-facing edge — the whole-rail resize handle.
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                theme.splitter,
+                None,
+                &rail_edge_bar(side, rect),
+            );
         }
         if let Some((_, target)) = preview.filter(|(s, _)| *s == side) {
             chrome::paint_drop(scene, target, &laid, rect, theme);
