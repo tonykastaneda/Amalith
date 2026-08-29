@@ -112,6 +112,7 @@ pub fn paint(
     selection: &[ObjectId],
     drag: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
+    artboard_ghost: Option<Rect>,
     pen: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
 ) {
@@ -178,6 +179,17 @@ pub fn paint(
     }
 
     // Shape-tool rubber-band preview.
+    if let Some(g) = artboard_ghost {
+        let r = vt.transform_rect_bbox(g);
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            theme.select_blue,
+            None,
+            &r,
+        );
+    }
+
     if let Some((tool, r_doc)) = draw_shape {
         let r = vt.transform_rect_bbox(r_doc);
         let fill = theme.select_blue.with_alpha(0.12);

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
-use amalith_core::{Document, LayerId, ObjectId};
+use amalith_core::{ArtboardId, Document, LayerId, ObjectId};
 use amalith_shell::anchors;
 use amalith_shell::canvas::{self, AnchorView, CanvasView, DragPreview, PenPreview};
 use amalith_shell::dock::{
@@ -155,6 +155,14 @@ enum Drag {
     AnchorMarquee {
         start: Point,
         candidate: Option<ObjectId>,
+    },
+    /// Artboard tool: rubber-banding a new artboard.
+    DrawArtboard { start_doc: Point, cur_doc: Point },
+    /// Artboard tool: dragging an existing artboard.
+    MoveArtboard {
+        id: ArtboardId,
+        start_doc: Point,
+        last_doc: Point,
     },
 }
 
@@ -971,6 +979,23 @@ impl App {
                     return;
                 }
 
+                // Artboard tool: drag an existing artboard, or rubber-band
+                // a new one on empty canvas.
+                if self.active_tool == Tool::Artboard {
+                    self.drag = match artboard_at(self.editor.document(), dp) {
+                        Some(id) => Drag::MoveArtboard {
+                            id,
+                            start_doc: dp,
+                            last_doc: dp,
+                        },
+                        None => Drag::DrawArtboard {
+                            start_doc: dp,
+                            cur_doc: dp,
+                        },
+                    };
+                    return;
+                }
+
                 // Direct Selection (Illustrator white arrow): nodes show
                 // only for objects you've already picked. A click grabs a
                 // node of such an object; otherwise it starts a marquee
@@ -1220,6 +1245,23 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::DrawArtboard { start_doc, .. } => {
+                let start_doc = *start_doc;
+                self.drag = Drag::DrawArtboard {
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
+            Drag::MoveArtboard { id, start_doc, .. } => {
+                let (id, start_doc) = (*id, *start_doc);
+                self.drag = Drag::MoveArtboard {
+                    id,
+                    start_doc,
+                    last_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::Scale {
                 handle,
                 start_bounds,
@@ -1376,11 +1418,37 @@ impl App {
                                 None => return,
                             }
                         }
-                        Tool::Select | Tool::DirectSelect | Tool::Pen => return,
+                        Tool::Select | Tool::DirectSelect | Tool::Pen | Tool::Artboard => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
                         self.selection = vec![id];
                     }
+                    self.request_main_redraw();
+                }
+            }
+            Drag::DrawArtboard {
+                start_doc,
+                cur_doc,
+            } => {
+                let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
+                if r.width() > 1.0 && r.height() > 1.0 {
+                    let n = self.editor.document().artboards().len() + 1;
+                    let _ = self.editor.execute(Command::CreateArtboard {
+                        name: format!("Artboard {n}"),
+                        rect: r,
+                        index: None,
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::MoveArtboard {
+                id,
+                start_doc,
+                last_doc,
+            } => {
+                let delta = convert::vec2_to_core(last_doc - start_doc);
+                if delta.x != 0.0 || delta.y != 0.0 {
+                    let _ = self.editor.execute(Command::MoveArtboard { id, delta });
                     self.request_main_redraw();
                 }
             }
@@ -1597,6 +1665,31 @@ impl App {
             )),
             _ => None,
         };
+        // Live outline for the Artboard tool (new-artboard rubber-band, or
+        // a ghost of an artboard being dragged). Document-space Rect;
+        // canvas applies the view transform.
+        let artboard_ghost: Option<Rect> = match &self.drag {
+            Drag::DrawArtboard { start_doc, cur_doc } => Some(convert::rect(shape_rect(
+                *start_doc,
+                *cur_doc,
+                self.shift_down,
+                self.alt_down,
+            ))),
+            Drag::MoveArtboard {
+                id,
+                start_doc,
+                last_doc,
+            } => {
+                let d = *last_doc - *start_doc;
+                self.editor
+                    .document()
+                    .artboards()
+                    .iter()
+                    .find(|a| a.id == *id)
+                    .map(|a| convert::rect(a.rect) + d)
+            }
+            _ => None,
+        };
         let pen_preview = if self.active_tool == Tool::Pen && !self.pen.is_empty() {
             let hover = self.doc_point(self.pointer);
             let near_close = self.pen.len() >= 3
@@ -1649,6 +1742,7 @@ impl App {
                 self.pointer,
                 preview,
                 draw_shape,
+                artboard_ghost,
                 pen_preview,
                 anchor_view,
                 self.marquee,
@@ -1994,6 +2088,7 @@ impl ApplicationHandler for App {
                             KeyCode::KeyP => self.set_tool(Tool::Pen),
                             KeyCode::KeyM => self.set_tool(Tool::Rectangle),
                             KeyCode::KeyL => self.set_tool(Tool::Ellipse),
+                            KeyCode::KeyO if self.shift_down => self.set_tool(Tool::Artboard),
                             _ => {}
                         }
                     }
@@ -2107,6 +2202,16 @@ fn primitive_path(tool: Tool, r: amalith_core::Rect) -> Option<amalith_core::Pat
     }
 }
 
+/// Topmost artboard whose rect contains the document-space point `dp`.
+fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
+    let p = amalith_core::Point::new(dp.x, dp.y);
+    doc.artboards()
+        .iter()
+        .rev()
+        .find(|ab| ab.rect.contains(p))
+        .map(|ab| ab.id)
+}
+
 /// Box between two document-space points. `square` (Shift) locks it to
 /// the larger dimension; `from_center` (Alt) treats `a` as the centre.
 fn shape_rect(a: Point, b: Point, square: bool, from_center: bool) -> amalith_core::Rect {
@@ -2176,6 +2281,7 @@ fn paint_main(
     pointer: Point,
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
+    artboard_ghost: Option<Rect>,
     pen_preview: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
     marquee: Option<Rect>,
@@ -2215,6 +2321,7 @@ fn paint_main(
         selection,
         drag_preview,
         draw_shape,
+        artboard_ghost,
         pen_preview,
         anchor_view,
     );
