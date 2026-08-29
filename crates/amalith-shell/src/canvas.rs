@@ -120,7 +120,7 @@ pub fn paint(
 
     // Selection outlines (blue box round each selected object's bounds).
     for &id in selection {
-        if let Some(b) = crate::select::object_bbox(doc, id) {
+        if let Some(b) = crate::select::bounds(doc, id) {
             let off = drag.map_or(Affine::IDENTITY, |d| d.offset_for(id));
             let screen = (vt * off).transform_rect_bbox(b);
             scene.stroke(

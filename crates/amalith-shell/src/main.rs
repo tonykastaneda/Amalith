@@ -106,11 +106,13 @@ enum Drag {
     RailWidth { side: RailSide },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
-    /// Moving the current selection. Deltas are in document space.
+    /// Moving the current selection (or, with `dup`, alt-drag-duplicating
+    /// it). Deltas are in document space.
     MoveObjects {
         start_doc: Point,
         last_doc: Point,
         moved: bool,
+        dup: bool,
     },
     /// Rubber-band selection; `start` is the press point (screen px).
     Marquee { start: Point },
@@ -139,6 +141,7 @@ struct App {
     /// Held modifiers on the main window.
     cmd_down: bool,
     shift_down: bool,
+    alt_down: bool,
     space_down: bool,
     drag: Drag,
     /// Live re-dock target (which rail, and where in it) while a floating
@@ -169,6 +172,7 @@ impl App {
             pointer_win: None,
             cmd_down: false,
             shift_down: false,
+            alt_down: false,
             space_down: false,
             drag: Drag::None,
             redock_preview: None,
@@ -205,6 +209,32 @@ impl App {
     /// Screen (logical) point → document point.
     fn doc_point(&self, screen: Point) -> Point {
         self.view.to_screen().inverse() * screen
+    }
+
+    /// Drop selection ids that no longer exist (after undo/redo/delete).
+    fn prune_selection(&mut self) {
+        let doc = self.editor.document();
+        self.selection.retain(|id| doc.object(*id).is_some());
+    }
+
+    /// The document-space rect currently visible in the canvas (between the
+    /// rails). Used to cull hit-testing to what the user can see.
+    fn visible_doc_rect(&self) -> Rect {
+        let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let left = if self.dock.left.is_empty() {
+            0.0
+        } else {
+            rail_rect_for(RailSide::Left, self.dock.left.width as f64, w, h).x1
+        };
+        let right = if self.dock.right.is_empty() {
+            w
+        } else {
+            rail_rect_for(RailSide::Right, self.dock.right.width as f64, w, h).x0
+        };
+        self.view
+            .to_screen()
+            .inverse()
+            .transform_rect_bbox(Rect::new(left, 0.0, right.max(left), h))
     }
 
     /// Logical size of the main window's client area.
@@ -382,27 +412,42 @@ impl App {
                     self.drag = Drag::Pan { last: self.pointer };
                     return;
                 }
-                // Selection tool: hit an object → select + start a move;
-                // hit nothing → clear (unless shift) + start a marquee.
+                // Selection tool (ported from amalith-app's `press`):
                 let dp = self.doc_point(self.pointer);
-                match select::hit(self.editor.document(), dp) {
-                    Some(id) => {
-                        if self.shift_down {
-                            if let Some(i) = self.selection.iter().position(|x| *x == id) {
-                                self.selection.remove(i);
-                            } else {
-                                self.selection.push(id);
-                            }
-                        } else if !self.selection.contains(&id) {
+                let visible = self.visible_doc_rect();
+                let start_move = |dp: Point, dup: bool| Drag::MoveObjects {
+                    start_doc: dp,
+                    last_doc: dp,
+                    moved: false,
+                    dup,
+                };
+                let doc = self.editor.document();
+                if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
+                    if self.shift_down {
+                        // Shift-click toggles that object; no drag.
+                        if let Some(i) = self.selection.iter().position(|x| *x == id) {
+                            self.selection.remove(i);
+                        } else {
+                            self.selection.push(id);
+                        }
+                    } else {
+                        // Click on an unselected object replaces the
+                        // selection before the move; click on one already
+                        // selected drags the whole selection.
+                        if !self.selection.contains(&id) {
                             self.selection = vec![id];
                         }
-                        self.drag = Drag::MoveObjects {
-                            start_doc: dp,
-                            last_doc: dp,
-                            moved: false,
-                        };
+                        self.drag = start_move(dp, self.alt_down);
                     }
-                    None => {
+                } else {
+                    // Empty space: a press inside the selection box drags
+                    // the selection; otherwise it's a marquee.
+                    let inside_box = !self.shift_down
+                        && select::union_bounds(doc, &self.selection)
+                            .is_some_and(|b| b.contains(dp));
+                    if inside_box {
+                        self.drag = start_move(dp, self.alt_down);
+                    } else {
                         if !self.shift_down {
                             self.selection.clear();
                         }
@@ -479,13 +524,14 @@ impl App {
                 self.drag = Drag::Pan { last: self.pointer };
                 self.request_main_redraw();
             }
-            Drag::MoveObjects { start_doc, .. } => {
-                let start_doc = *start_doc;
+            Drag::MoveObjects { start_doc, dup, .. } => {
+                let (start_doc, dup) = (*start_doc, *dup);
                 let dp = self.doc_point(self.pointer);
                 self.drag = Drag::MoveObjects {
                     start_doc,
                     last_doc: dp,
                     moved: true,
+                    dup,
                 };
                 self.request_main_redraw();
             }
@@ -555,13 +601,23 @@ impl App {
                 start_doc,
                 last_doc,
                 moved,
+                dup,
             } => {
                 if moved && !self.selection.is_empty() {
                     let delta = convert::vec2_to_core(last_doc - start_doc);
-                    let _ = self.editor.execute(Command::MoveObjects {
-                        objects: self.selection.clone(),
-                        delta,
-                    });
+                    if dup {
+                        if let Ok(new_ids) = self
+                            .editor
+                            .duplicate_objects(&self.selection.clone(), delta)
+                        {
+                            self.selection = new_ids;
+                        }
+                    } else {
+                        let _ = self.editor.execute(Command::MoveObjects {
+                            objects: self.selection.clone(),
+                            delta,
+                        });
+                    }
                     self.request_main_redraw();
                 }
             }
@@ -662,6 +718,7 @@ impl App {
                 start_doc,
                 last_doc,
                 moved: true,
+                ..
             } => Some(DragPreview {
                 ids: &self.selection,
                 delta: *last_doc - *start_doc,
@@ -834,6 +891,7 @@ impl ApplicationHandler for App {
                 if Some(id) == self.main_id {
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
+                    self.alt_down = m.state().alt_key();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
@@ -846,6 +904,7 @@ impl ApplicationHandler for App {
                         } else {
                             self.editor.undo()
                         };
+                        self.prune_selection();
                         self.request_main_redraw();
                     }
                     PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)

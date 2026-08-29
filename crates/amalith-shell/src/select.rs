@@ -1,66 +1,70 @@
-//! Document hit-testing and object bounds, in document space (vello kurbo).
+//! Document hit-testing for the selection tool, ported from
+//! `amalith-app`'s `topmost_selectable_at` / marquee logic.
+//!
+//! Everything is bounds-based (document-space AABBs from
+//! [`Document::bounds_of`], which already unions a group's descendants) and
+//! culled to the visible rect, so a click selects the whole group and
+//! never reaches an off-screen object. Coordinates are vello kurbo.
 
-use amalith_core::{Document, ObjectId, ObjectKind};
+use amalith_core::{Document, ObjectId, ObjectParent};
 use vello::kurbo::{Point, Rect};
 
 use crate::convert;
 
-/// Axis-aligned document-space bounds of `id`: its own transform applied,
-/// groups unioning their (already-transformed) children.
-pub fn object_bbox(doc: &Document, id: ObjectId) -> Option<Rect> {
-    let obj = doc.object(id)?;
-    let m = convert::affine(obj.transform);
-
-    if let ObjectKind::Group(g) = &obj.kind {
-        let mut acc: Option<Rect> = None;
-        for &child in &g.children {
-            if let Some(b) = object_bbox(doc, child) {
-                acc = Some(acc.map_or(b, |a| a.union(b)));
-            }
-        }
-        return acc.map(|b| m.transform_rect_bbox(b));
-    }
-
-    let local = match &obj.kind {
-        ObjectKind::Path(pd) => Some(convert::rect(pd.local_bounds())),
-        ObjectKind::CompoundPath(cp) => cp.local_bounds().map(convert::rect),
-        other => other.own_local_bounds().map(convert::rect),
-    };
-    local.map(|b| m.transform_rect_bbox(b))
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
 }
 
-/// Frontmost object whose bounds contain `doc_point` (paint order is
-/// back-to-front, so the last child of the last layer wins).
-pub fn hit(doc: &Document, doc_point: Point) -> Option<ObjectId> {
+/// Document-space bounds of `id` (vello kurbo), or `None` if it has none.
+pub fn bounds(doc: &Document, id: ObjectId) -> Option<Rect> {
+    doc.bounds_of(id).map(convert::rect)
+}
+
+/// Frontmost layer-child whose bounds contain `point` and overlap
+/// `visible`. Layer direct children only — a `Group` is selected as a unit.
+pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Option<ObjectId> {
     for layer in doc.layers().iter().rev() {
         if !layer.visible {
             continue;
         }
-        for &id in layer.children.iter().rev() {
-            if object_bbox(doc, id).is_some_and(|b| b.contains(doc_point)) {
-                return Some(id);
+        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+            let Some(obj) = doc.object(id) else { continue };
+            if !obj.visible {
+                continue;
+            }
+            if let Some(b) = bounds(doc, id) {
+                if overlaps(b, visible) && b.contains(point) {
+                    return Some(id);
+                }
             }
         }
     }
     None
 }
 
-fn overlaps(a: Rect, b: Rect) -> bool {
-    a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
-}
-
-/// Every visible object whose bounds overlap `doc_rect`.
-pub fn within(doc: &Document, doc_rect: Rect) -> Vec<ObjectId> {
+/// Layer-children whose bounds intersect `marquee` (document space).
+pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
     let mut out = Vec::new();
     for layer in doc.layers() {
         if !layer.visible {
             continue;
         }
-        for &id in &layer.children {
-            if object_bbox(doc, id).is_some_and(|b| overlaps(doc_rect, b)) {
+        for &id in doc.children_of(ObjectParent::Layer(layer.id)) {
+            if bounds(doc, id).is_some_and(|b| overlaps(b, marquee)) {
                 out.push(id);
             }
         }
     }
     out
+}
+
+/// Union of the given objects' bounds — the selection box.
+pub fn union_bounds(doc: &Document, ids: &[ObjectId]) -> Option<Rect> {
+    let mut acc: Option<Rect> = None;
+    for &id in ids {
+        if let Some(b) = bounds(doc, id) {
+            acc = Some(acc.map_or(b, |a| a.union(b)));
+        }
+    }
+    acc
 }
