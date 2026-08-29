@@ -66,6 +66,8 @@ pub struct NewDocForm {
     pub preview: PreviewMode,
     pub focus: Option<Field>,
     pub open_menu: Option<Menu>,
+    /// Vertical scroll offset of the form's content, in px.
+    pub scroll: f64,
 }
 
 impl Default for NewDocForm {
@@ -83,6 +85,7 @@ impl Default for NewDocForm {
             preview: PreviewMode::Default,
             focus: Some(Field::Name),
             open_menu: None,
+            scroll: 0.0,
         }
     }
 }
@@ -277,8 +280,12 @@ fn menu_len(m: Menu) -> usize {
 }
 
 /// Every interactive rect in the modal.
+const FOOTER_H: f64 = 62.0;
+
+/// The form's interactive rects. Produced content-local by
+/// [`build_content`] (y from the content top), then [`L::shifted`] into
+/// place for a given scroll offset.
 pub struct L {
-    pub panel: Rect,
     pub name: Rect,
     pub width: Rect,
     pub unit: Rect,
@@ -294,12 +301,37 @@ pub struct L {
     pub raster: Rect,
     pub preview: Rect,
     pub more: Rect,
-    pub close: Rect,
-    pub create: Rect,
+    pub bleed_header_y: f64,
 }
 
 impl L {
-    /// The box for `menu`'s trigger.
+    fn shifted(&self, dy: f64) -> L {
+        let s = |r: Rect| r + vello::kurbo::Vec2::new(0.0, dy);
+        L {
+            name: s(self.name),
+            width: s(self.width),
+            unit: s(self.unit),
+            height: s(self.height),
+            orient_p: s(self.orient_p),
+            orient_l: s(self.orient_l),
+            ab_minus: s(self.ab_minus),
+            ab_field: s(self.ab_field),
+            ab_plus: s(self.ab_plus),
+            bleed: [
+                s(self.bleed[0]),
+                s(self.bleed[1]),
+                s(self.bleed[2]),
+                s(self.bleed[3]),
+            ],
+            link: s(self.link),
+            color: s(self.color),
+            raster: s(self.raster),
+            preview: s(self.preview),
+            more: s(self.more),
+            bleed_header_y: self.bleed_header_y + dy,
+        }
+    }
+
     fn trigger(&self, m: Menu) -> Rect {
         match m {
             Menu::Unit => self.unit,
@@ -308,13 +340,14 @@ impl L {
             Menu::Preview => self.preview,
         }
     }
-    /// Item rects for an open menu. Opens downward, or upward when the
-    /// trigger sits in the lower half of the panel (so a bottom dropdown
-    /// never covers the Close / Create buttons).
-    fn items(&self, m: Menu) -> Vec<Rect> {
+
+    /// Item rects for an open menu — downward unless that would run past
+    /// the bottom of the visible scroll area, in which case upward.
+    fn items(&self, m: Menu, scroll_rect: Rect) -> Vec<Rect> {
         let t = self.trigger(m);
-        let up = t.y0 > self.panel.center().y;
-        (0..menu_len(m))
+        let n = menu_len(m);
+        let up = t.y1 + n as f64 * FH > scroll_rect.y1;
+        (0..n)
             .map(|i| {
                 let y = if up {
                     t.y0 - (i as f64 + 1.0) * FH
@@ -327,31 +360,73 @@ impl L {
     }
 }
 
-/// Centered modal panel rect for a `w × h` window.
-pub fn panel_rect(w: f64, h: f64) -> Rect {
-    let pw = 580.0_f64.min(w - 64.0).max(340.0);
-    let ph = 792.0_f64.min(h - 48.0).max(420.0);
-    Rect::from_center_size(Point::new(w * 0.5, h * 0.5), (pw, ph))
+/// Fully-resolved modal geometry for a window + scroll offset.
+pub struct Layout {
+    pub panel: Rect,
+    /// The clipped, scrollable content region (panel minus footer).
+    pub scroll_rect: Rect,
+    pub content_h: f64,
+    /// Applied scroll, clamped to `[0, max_scroll]`.
+    pub scroll: f64,
+    pub max_scroll: f64,
+    /// Content rects, already shifted for `scroll`.
+    pub l: L,
+    pub close: Rect,
+    pub create: Rect,
 }
 
-pub fn build(panel: Rect) -> L {
+pub fn layout(win: Rect, raw_scroll: f64) -> Layout {
+    let pw = 600.0_f64.min(win.width() - 80.0).max(360.0);
+    let ph = 760.0_f64.min(win.height() - 56.0).max(360.0);
+    let panel = Rect::from_center_size(
+        Point::new(win.width() * 0.5, win.height() * 0.5),
+        (pw, ph),
+    );
+
     let x = panel.x0 + 30.0;
-    let right = panel.x1 - 30.0;
-    let fw = right - x;
+    let cw = panel.width() - 60.0 - 12.0; // leave room for the scrollbar
+    let (content, content_h) = build_content(x, cw);
+
+    let scroll_rect = Rect::new(panel.x0, panel.y0, panel.x1, panel.y1 - FOOTER_H);
+    let max_scroll = (content_h + 16.0 - scroll_rect.height()).max(0.0);
+    let scroll = raw_scroll.clamp(0.0, max_scroll);
+    let l = content.shifted(scroll_rect.y0 + 8.0 - scroll);
+
+    let create = Rect::new(
+        panel.x1 - 30.0 - 110.0,
+        panel.y1 - 14.0 - 34.0,
+        panel.x1 - 30.0,
+        panel.y1 - 14.0,
+    );
+    let close = Rect::new(create.x0 - 14.0 - 96.0, create.y0, create.x0 - 14.0, create.y1);
+
+    Layout {
+        panel,
+        scroll_rect,
+        content_h,
+        scroll,
+        max_scroll,
+        l,
+        close,
+        create,
+    }
+}
+
+/// Content-local rects (y from the content top) plus total content height.
+fn build_content(x: f64, cw: f64) -> (L, f64) {
+    let right = x + cw;
     let field = |y: f64, x0: f64, x1: f64| Rect::new(x0, y, x1, y + FH);
 
-    let mut y = panel.y0 + 52.0;
+    let mut y = 28.0; // room for the "PRESET DETAILS" caption
     let name = field(y, x, right);
-    y += FH + 32.0; // + hairline
+    y += FH + 30.0; // + hairline
 
-    // Width row.
     y += 22.0;
-    let col_w = fw * 0.42;
+    let col_w = cw * 0.42;
     let width = field(y, x, x + col_w);
     let unit = field(y, x + col_w + 18.0, right);
     y += FH + 28.0;
 
-    // Height / Orientation / Artboards row.
     y += 22.0;
     let height = field(y, x, x + col_w);
     let ox = x + col_w + 18.0;
@@ -362,23 +437,21 @@ pub fn build(panel: Rect) -> L {
     let ab_minus = Rect::new(ab_field.x0 - 10.0 - 26.0, y, ab_field.x0 - 10.0, y + 30.0);
     y += 30.0 + 34.0;
 
-    // Bleed: a section header, then two rows of two fields.
-    y += 24.0; // "Bleed" header sits at bt.y0 - ~24
-    y += 22.0; // "Top" / "Bottom" labels
-    let half = (fw - 18.0) * 0.5;
+    let bleed_header_y = y;
+    y += 26.0; // header
+    y += 22.0; // Top / Bottom labels
+    let half = (cw - 18.0) * 0.5;
     let bt = field(y, x, x + half);
     let bb = field(y, x + half + 18.0, right);
     y += FH + 28.0;
-    y += 22.0; // "Left" / "Right" labels
+    y += 22.0; // Left / Right labels
     let bl = field(y, x, x + half);
     let br = field(y, x + half + 18.0, right);
     y += FH + 20.0;
 
-    // Link bleed.
     let link = Rect::new(x, y, x + 220.0, y + 20.0);
     y += 20.0 + 26.0;
 
-    // Color / Raster / Preview.
     y += 22.0;
     let color = field(y, x, right);
     y += FH + 28.0;
@@ -390,44 +463,53 @@ pub fn build(panel: Rect) -> L {
     y += FH + 26.0;
 
     let more = Rect::new(x, y, x + 136.0, y + 30.0);
+    y += 30.0 + 12.0;
 
-    let create = Rect::new(right - 110.0, panel.y1 - 24.0 - 36.0, right, panel.y1 - 24.0);
-    let close = Rect::new(create.x0 - 14.0 - 96.0, create.y0, create.x0 - 14.0, create.y1);
-
-    L {
-        panel,
-        name,
-        width,
-        unit,
-        height,
-        orient_p,
-        orient_l,
-        ab_minus,
-        ab_field,
-        ab_plus,
-        bleed: [bt, bb, bl, br],
-        link,
-        color,
-        raster,
-        preview,
-        more,
-        close,
-        create,
-    }
+    (
+        L {
+            name,
+            width,
+            unit,
+            height,
+            orient_p,
+            orient_l,
+            ab_minus,
+            ab_field,
+            ab_plus,
+            bleed: [bt, bb, bl, br],
+            link,
+            color,
+            raster,
+            preview,
+            more,
+            bleed_header_y,
+        },
+        y,
+    )
 }
 
-pub fn hit(form: &NewDocForm, l: &L, p: Point) -> Hit {
-    // An open menu's items take priority; every other click falls through
-    // to the normal handling (which also closes the menu).
+pub fn hit(form: &NewDocForm, lay: &Layout, p: Point) -> Hit {
+    let l = &lay.l;
+    // Open-menu items take priority.
     if let Some(m) = form.open_menu {
-        for (i, r) in l.items(m).iter().enumerate() {
+        for (i, r) in l.items(m, lay.scroll_rect).iter().enumerate() {
             if r.contains(p) {
                 return Hit::MenuItem(m, i);
             }
         }
     }
-    if !l.panel.contains(p) {
+    if !lay.panel.contains(p) {
         return Hit::Backdrop;
+    }
+    // Pinned footer.
+    if lay.create.contains(p) {
+        return Hit::Create;
+    }
+    if lay.close.contains(p) {
+        return Hit::Close;
+    }
+    if !lay.scroll_rect.contains(p) {
+        return Hit::None; // footer band, no button
     }
     let fields = [
         (l.name, Field::Name),
@@ -470,19 +552,17 @@ pub fn hit(form: &NewDocForm, l: &L, p: Point) -> Hit {
     if l.link.contains(p) {
         return Hit::ToggleLink;
     }
-    if l.create.contains(p) {
-        return Hit::Create;
-    }
-    if l.close.contains(p) {
-        return Hit::Close;
-    }
     Hit::None
 }
 
 // ---- painting --------------------------------------------------------
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect, form: &NewDocForm) {
-    let l = build(panel_rect(win.width(), win.height()));
+    let lay = layout(win, form.scroll);
+    let l = &lay.l;
+    let dim = theme.text_dim;
+    let x = l.name.x0;
+    let right = l.name.x1;
 
     // Dim backdrop + panel.
     scene.fill(
@@ -492,27 +572,25 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
         None,
         &win,
     );
-    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &l.panel);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &l.panel);
-
-    let dim = theme.text_dim;
-    let x = l.panel.x0 + 30.0;
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &lay.panel);
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &lay.panel);
 
     let caption = |scene: &mut Scene, text: &mut TextContext, s: &str, r: Rect| {
         text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 8.0);
     };
 
-    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.panel.y0 + 34.0);
-    draw_field(scene, text, theme, l.name, &form.name, form.focus == Some(Field::Name));
+    // --- scrollable content -------------------------------------------
+    scene.push_clip_layer(Fill::NonZero, ID, &lay.scroll_rect);
 
-    // hairline under name
-    let hy = l.name.y1 + 16.0;
+    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.name.y0 - 16.0);
+    draw_field(scene, text, theme, l.name, &form.name, form.focus == Some(Field::Name));
+    let hy = l.name.y1 + 15.0;
     scene.fill(
         Fill::NonZero,
         ID,
         theme.border,
         None,
-        &Rect::new(x, hy, l.panel.x1 - 30.0, hy + 1.0),
+        &Rect::new(x, hy, right, hy + 1.0),
     );
 
     caption(scene, text, "Width", l.width);
@@ -526,8 +604,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     draw_orient(scene, theme, l.orient_p, l.orient_l, form.portrait());
     draw_stepper(scene, text, theme, l.ab_minus, l.ab_field, l.ab_plus, form.artboards);
 
-    // "Bleed" section header, well above the Top/Bottom labels.
-    text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed[0].y0 - 28.0);
+    text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed_header_y + 12.0);
     let bl = ["Top", "Bottom", "Left", "Right"];
     for i in 0..4 {
         caption(scene, text, bl[i], l.bleed[i]);
@@ -552,12 +629,10 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     draw_dropdown(scene, text, theme, l.preview, preview_label(form.preview));
 
     draw_button(scene, text, theme, l.more, "More Settings", false);
-    draw_button(scene, text, theme, l.close, "Close", false);
-    draw_button(scene, text, theme, l.create, "Create", true);
 
-    // Open menu on top.
+    // Open menu, still within the clip.
     if let Some(m) = form.open_menu {
-        let items = l.items(m);
+        let items = l.items(m, lay.scroll_rect);
         let y0 = items.iter().map(|r| r.y0).fold(f64::MAX, f64::min);
         let y1 = items.iter().map(|r| r.y1).fold(f64::MIN, f64::max);
         let listbox = Rect::new(items[0].x0, y0, items[0].x1, y1);
@@ -573,6 +648,46 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
             text.draw(scene, s, 12.0, theme.text, r.x0 + 10.0, r.y0 + FH * 0.5 + 4.0);
         }
     }
+
+    scene.pop_layer();
+
+    // --- scrollbar ---------------------------------------------------
+    if lay.max_scroll > 0.0 {
+        let track = Rect::new(
+            lay.panel.x1 - 9.0,
+            lay.scroll_rect.y0 + 4.0,
+            lay.panel.x1 - 4.0,
+            lay.scroll_rect.y1 - 4.0,
+        );
+        let frac = (lay.scroll_rect.height() / (lay.content_h + 16.0)).min(1.0);
+        let th = (track.height() * frac).max(28.0);
+        let ty = track.y0 + (track.height() - th) * (lay.scroll / lay.max_scroll);
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            dim.with_alpha(0.55),
+            None,
+            &Rect::new(track.x0, ty, track.x1, ty + th),
+        );
+    }
+
+    // --- pinned footer ---------------------------------------------------
+    let footer = Rect::new(
+        lay.panel.x0,
+        lay.panel.y1 - FOOTER_H,
+        lay.panel.x1,
+        lay.panel.y1,
+    );
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &footer);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(footer.x0, footer.y0, footer.x1, footer.y0 + 1.0),
+    );
+    draw_button(scene, text, theme, lay.close, "Close", false);
+    draw_button(scene, text, theme, lay.create, "Create", true);
 }
 
 fn draw_field(

@@ -1351,8 +1351,8 @@ impl App {
 
                 // The New Document modal is, well, modal.
                 if let Some(form) = &self.newdoc {
-                    let l = newdoc::build(newdoc::panel_rect(w, h));
-                    let hit = newdoc::hit(form, &l, self.pointer);
+                    let lay = newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll);
+                    let hit = newdoc::hit(form, &lay, self.pointer);
                     self.apply_newdoc_hit(hit);
                     return;
                 }
@@ -2825,6 +2825,12 @@ impl ApplicationHandler for App {
                     // Pixel-based (trackpad): physical px → logical.
                     MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
                 };
+                // The New Document modal scrolls its content.
+                if let Some(form) = &mut self.newdoc {
+                    form.scroll = (form.scroll - dy).max(0.0);
+                    self.request_main_redraw();
+                    return;
+                }
                 // Scrolling over a Weight / Opacity field nudges it.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
