@@ -152,6 +152,8 @@ struct App {
     editor: Editor,
     selection: Vec<ObjectId>,
     active_tool: Tool,
+    /// Which paint slot the Swatches panel targets.
+    active_slot: panels::PaintSlot,
     /// In-progress Pen path — placed anchors in document space. Empty when
     /// not drawing.
     pen: Vec<Point>,
@@ -201,6 +203,7 @@ impl App {
             editor: Editor::new(sample::document()),
             selection: Vec::new(),
             active_tool: Tool::Select,
+            active_slot: panels::PaintSlot::Fill,
             pen: Vec::new(),
             pen_redo: Vec::new(),
             last_pen: None,
@@ -249,6 +252,42 @@ impl App {
     /// Screen (logical) point → document point.
     fn doc_point(&self, screen: Point) -> Point {
         self.view.to_screen().inverse() * screen
+    }
+
+    fn apply_panel_action(&mut self, action: panels::Action) {
+        match action {
+            panels::Action::None => {}
+            panels::Action::SetTool(t) => self.set_tool(t),
+            panels::Action::Select(id) => self.selection = vec![id],
+            panels::Action::SetActiveSlot(s) => self.active_slot = s,
+            panels::Action::SetPaint(paint) => {
+                if !self.selection.is_empty() {
+                    let objects = self.selection.clone();
+                    let cmd = match self.active_slot {
+                        panels::PaintSlot::Fill => Command::SetFill { objects, paint },
+                        panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
+                    };
+                    let _ = self.editor.execute(cmd);
+                }
+            }
+            panels::Action::SetStrokeWidth(width) => {
+                if !self.selection.is_empty() {
+                    let _ = self.editor.execute(Command::SetStrokeWidth {
+                        objects: self.selection.clone(),
+                        width,
+                    });
+                }
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    /// Appearance of the first selected object, for the Swatches panel.
+    fn representative(&self) -> Option<amalith_core::Appearance> {
+        self.selection
+            .first()
+            .and_then(|id| self.editor.document().object(*id))
+            .map(|o| o.appearance)
     }
 
     /// Drop selection ids that no longer exist (after undo/redo/delete).
@@ -557,6 +596,7 @@ impl App {
                         }
                         if area.body.contains(self.pointer) {
                             if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                                let rep = self.representative();
                                 let action = {
                                     let ctx = panels::Ctx {
                                         theme: &self.theme,
@@ -564,15 +604,12 @@ impl App {
                                         selection: &self.selection,
                                         active_tool: self.active_tool,
                                         pointer: self.pointer,
+                                        representative: rep,
+                                        active_slot: self.active_slot,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
-                                match action {
-                                    panels::Action::SetTool(t) => self.set_tool(t),
-                                    panels::Action::Select(id) => self.selection = vec![id],
-                                    panels::Action::None => {}
-                                }
-                                self.request_main_redraw();
+                                self.apply_panel_action(action);
                             }
                             return;
                         }
@@ -1110,6 +1147,7 @@ impl App {
         };
 
         self.content.reset();
+        let representative = self.representative();
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -1120,6 +1158,8 @@ impl App {
                 &self.theme,
                 &self.selection,
                 self.active_tool,
+                self.active_slot,
+                representative,
                 self.pointer,
                 preview,
                 draw_shape,
@@ -1543,6 +1583,8 @@ fn paint_main(
     theme: &Theme,
     selection: &[ObjectId],
     active_tool: Tool,
+    active_slot: panels::PaintSlot,
+    representative: Option<amalith_core::Appearance>,
     pointer: Point,
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
@@ -1606,6 +1648,8 @@ fn paint_main(
                 selection,
                 active_tool,
                 pointer,
+                representative,
+                active_slot,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
