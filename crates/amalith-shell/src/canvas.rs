@@ -288,7 +288,7 @@ pub fn paint(
         }
     }
 
-    // Direct Selection: anchor markers.
+    // Direct Selection: contour highlight + anchor markers.
     if let Some(av) = anchor_view {
         let white = Color::from_rgb8(0xff, 0xff, 0xff);
         // Document-space drag delta for the selected anchors.
@@ -296,6 +296,32 @@ pub fn paint(
             .and_then(|d| d.anchors)
             .map(|(_, dv)| Vec2::new(dv.x, dv.y))
             .unwrap_or(Vec2::ZERO);
+        let core_dv = amalith_core::Vec2::new(dv.x, dv.y);
+
+        // Outline every path that has a selected anchor.
+        for &id in av.paths {
+            let idxs: Vec<usize> = av
+                .selected
+                .iter()
+                .filter(|(o, _)| *o == id)
+                .map(|(_, i)| *i)
+                .collect();
+            if idxs.is_empty() {
+                continue;
+            }
+            if let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) {
+                let g = crate::anchors::deformed(&pd.geometry, &idxs, core_dv);
+                let m = vt * convert::affine(doc.world_transform(id));
+                scene.stroke(
+                    &Stroke::new(1.5),
+                    m,
+                    theme.select_blue,
+                    None,
+                    &convert::bez_path(&g),
+                );
+            }
+        }
+
         for &id in av.paths {
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));

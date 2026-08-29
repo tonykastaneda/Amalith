@@ -1390,14 +1390,9 @@ impl App {
         } else {
             None
         };
+        // Direct Selection shows every path's anchors, like amalith-app.
         let anchor_paths: Vec<ObjectId> = if self.active_tool == Tool::DirectSelect {
-            let mut seen = HashMap::new();
-            self.selection
-                .iter()
-                .copied()
-                .chain(self.anchor_sel.iter().map(|(id, _)| *id))
-                .filter(|id| seen.insert(*id, ()).is_none())
-                .collect()
+            anchors::path_leaves(self.editor.document())
         } else {
             Vec::new()
         };
