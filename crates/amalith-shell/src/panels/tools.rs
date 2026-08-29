@@ -1,8 +1,10 @@
-//! Tools panel: a grid of tool buttons that reflows to 1 or 2 columns
-//! with the panel width, plus the fill / stroke chips at the bottom.
+//! Tools panel: five slots — Select, Direct Select, Pen, a Shape slot
+//! that stands in for whichever primitive tool is current (press-and-hold
+//! for the flyout), and Artboard — in a grid that reflows to 1 or 2
+//! columns with the panel width. Fill / stroke chips sit at the bottom.
 
 use amalith_core::{Color as CoreColor, Paint};
-use vello::kurbo::{Point, Rect};
+use vello::kurbo::{BezPath, Point, Rect};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -16,8 +18,23 @@ use super::{draw_paint_swatch, Action, Ctx, PaintSlot, ID};
 const CELL: f64 = 36.0;
 /// Gap above the grid.
 const TOP: f64 = 4.0;
+/// Index of the Shape slot among [`slots`].
+const SHAPE_SLOT: usize = 3;
 
-/// How many columns fit in `body` — 2 once it's wide enough, else 1.
+/// The primitive tools the Shape slot collects, in flyout order.
+pub const SHAPE_TOOLS: [Tool; 5] = [
+    Tool::Rectangle,
+    Tool::RoundedRect,
+    Tool::Ellipse,
+    Tool::Polygon,
+    Tool::Star,
+];
+
+/// The five visible slots; the Shape slot shows `shape`'s icon.
+fn slots(shape: Tool) -> [Tool; 5] {
+    [Tool::Select, Tool::DirectSelect, Tool::Pen, shape, Tool::Artboard]
+}
+
 fn cols(body: Rect) -> usize {
     if body.width() >= 2.0 * CELL + 6.0 {
         2
@@ -26,7 +43,7 @@ fn cols(body: Rect) -> usize {
     }
 }
 
-/// The button rect for tool index `i`, row-major, grid centred in `body`.
+/// Button rect for slot index `i`, row-major, grid centred in `body`.
 fn cell(body: Rect, i: usize, cols: usize) -> Rect {
     let grid_w = cols as f64 * CELL;
     let x0 = body.x0 + (body.width() - grid_w).max(0.0) * 0.5;
@@ -36,7 +53,11 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
     Rect::new(x, y, x + CELL, y + CELL)
 }
 
-/// The overlapping fill / stroke chips at the bottom of the tool strip.
+/// Screen rect of the Shape slot — the flyout anchors to it.
+pub fn shape_slot_rect(body: Rect) -> Rect {
+    cell(body, SHAPE_SLOT, cols(body))
+}
+
 fn tool_chips(body: Rect) -> (Rect, Rect) {
     let s = 20.0;
     let cx = body.x0 + (body.width() * 0.5) - 5.0;
@@ -49,21 +70,32 @@ fn tool_chips(body: Rect) -> (Rect, Rect) {
 pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let white = Color::from_rgb8(0xff, 0xff, 0xff);
     let cols = cols(body);
-    for (i, tool) in Tool::ALL.into_iter().enumerate() {
+    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
         let r = cell(body, i, cols);
-        let active = tool == ctx.active_tool;
+        let active = if i == SHAPE_SLOT {
+            ctx.active_tool.is_shape()
+        } else {
+            tool == ctx.active_tool
+        };
         if active {
             scene.fill(Fill::NonZero, ID, ctx.theme.select_blue, None, &r);
         } else if r.contains(ctx.pointer) {
             scene.fill(Fill::NonZero, ID, ctx.theme.select_blue.with_alpha(0.14), None, &r);
         }
         let color = if active { white } else { ctx.theme.text_dim };
-        let icon_box = Rect::from_center_size(r.center(), (22.0, 22.0));
-        icons::draw(scene, tool.icon(), icon_box, color);
+        icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (22.0, 22.0)), color);
+        if i == SHAPE_SLOT {
+            // Bottom-right triangle: this slot has a flyout.
+            let mut t = BezPath::new();
+            t.move_to((r.x1 - 6.0, r.y1 - 2.0));
+            t.line_to((r.x1 - 2.0, r.y1 - 2.0));
+            t.line_to((r.x1 - 2.0, r.y1 - 6.0));
+            t.close_path();
+            scene.fill(Fill::NonZero, ID, color, None, &t);
+        }
     }
 
-    // Fill / stroke chips — same as the Swatches panel, so the current
-    // paints are visible (and slot-switchable) from the tool strip.
+    // Fill / stroke chips.
     let (fr, sr) = tool_chips(body);
     let rep = ctx.representative;
     draw_paint_swatch(
@@ -83,7 +115,7 @@ pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx:
     );
 }
 
-pub(super) fn hit(body: Rect, local: Point, _ctx: &Ctx) -> Action {
+pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     let (fr, sr) = tool_chips(body);
     if fr.contains(local) {
         return Action::OpenPicker(PaintSlot::Fill);
@@ -92,9 +124,13 @@ pub(super) fn hit(body: Rect, local: Point, _ctx: &Ctx) -> Action {
         return Action::OpenPicker(PaintSlot::Stroke);
     }
     let cols = cols(body);
-    for (i, tool) in Tool::ALL.into_iter().enumerate() {
+    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
-            return Action::SetTool(tool);
+            return if i == SHAPE_SLOT {
+                Action::ShapeSlot
+            } else {
+                Action::SetTool(tool)
+            };
         }
     }
     Action::None

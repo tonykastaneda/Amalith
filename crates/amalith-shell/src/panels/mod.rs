@@ -9,7 +9,7 @@
 mod artboards;
 mod layers;
 mod swatches;
-mod tools;
+pub mod tools;
 
 use std::collections::HashSet;
 
@@ -79,6 +79,8 @@ pub struct Ctx<'a> {
     /// Appearance of the first selected object, if any (for the swatches).
     pub representative: Option<Appearance>,
     pub active_slot: PaintSlot,
+    /// Which primitive tool the Tools-panel Shape slot stands in for.
+    pub shape_tool: Tool,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
     /// The row being inline-renamed, and its current edit buffer.
@@ -108,6 +110,9 @@ pub enum Action {
     ToggleLocked(ObjectId),
     /// Layers panel: expand / collapse a group row.
     ToggleExpand(ObjectId),
+    /// Tools panel: the Shape slot was clicked (tap = last shape tool,
+    /// hold = flyout).
+    ShapeSlot,
     /// Panel footer buttons.
     NewLayer,
     NewArtboard,

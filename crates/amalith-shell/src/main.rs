@@ -311,6 +311,13 @@ struct App {
     pre_artboard_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
+    /// The primitive the Tools-panel Shape slot represents / re-activates.
+    last_shape_tool: Tool,
+    /// Shape-slot press in progress: (when, its screen rect) — a hold
+    /// opens the flyout, a quick release re-activates `last_shape_tool`.
+    shape_press: Option<(Instant, Rect)>,
+    /// The primitive flyout, anchored at the Shape slot's screen rect.
+    shape_flyout: Option<Rect>,
     /// Current stroke weight / opacity shown in the options bar. The
     /// steppers edit these; new shapes and any selection pick them up.
     stroke_w: f64,
@@ -370,7 +377,7 @@ impl App {
             dock: {
                 let mut d = DockModel::new(demo_right_dock());
                 d.left = Rail::with(demo_left_dock());
-                d.left.width = 52.0;
+                d.left.width = 80.0; // two tool columns
                 d
             },
             tabs: vec![Doc::placeholder()],
@@ -389,6 +396,9 @@ impl App {
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
+            last_shape_tool: Tool::Rectangle,
+            shape_press: None,
+            shape_flyout: None,
             stroke_w: 1.0,
             opacity: 1.0,
             picker: None,
@@ -716,6 +726,8 @@ impl App {
                     self.set_tool(Tool::Artboard);
                 }
             }
+            // Intercepted in on_press (press-and-hold logic).
+            panels::Action::ShapeSlot => {}
         }
         self.request_main_redraw();
     }
@@ -1302,6 +1314,9 @@ impl App {
         if t != Tool::Artboard {
             self.selected_artboard = None;
         }
+        if t.is_shape() {
+            self.last_shape_tool = t;
+        }
         self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
@@ -1560,6 +1575,22 @@ impl App {
                     return;
                 }
 
+                // The primitive flyout captures the next click: pick a
+                // shape tool, or click away to dismiss.
+                if let Some(anchor) = self.shape_flyout {
+                    for (i, t) in panels::tools::SHAPE_TOOLS.iter().enumerate() {
+                        if shape_flyout_cell(anchor, i).contains(self.pointer) {
+                            self.last_shape_tool = *t;
+                            self.set_tool(*t);
+                            break;
+                        }
+                    }
+                    self.shape_flyout = None;
+                    self.shape_press = None;
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // The app bar swallows clicks (unless the picker is up).
                 if self.picker.is_none() && self.pointer.y < APP_BAR_H {
                     return;
@@ -1716,6 +1747,7 @@ impl App {
                                         pointer: self.pointer,
                                         representative: rep,
                                         active_slot: self.active_slot,
+                                        shape_tool: self.last_shape_tool,
                                         expanded: &self.expanded_groups,
                                         renaming: self
                                             .rename
@@ -1726,7 +1758,16 @@ impl App {
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
-                                self.apply_panel_action(action, double);
+                                if action == panels::Action::ShapeSlot {
+                                    // Start a press: a hold opens the
+                                    // flyout, a quick release re-picks
+                                    // the last shape tool.
+                                    let anchor =
+                                        panels::tools::shape_slot_rect(area.body);
+                                    self.shape_press = Some((Instant::now(), anchor));
+                                } else {
+                                    self.apply_panel_action(action, double);
+                                }
                             }
                             return;
                         }
@@ -2203,6 +2244,12 @@ impl App {
     }
 
     fn on_release(&mut self) {
+        // A quick tap on the Shape slot (released before the hold opened
+        // the flyout) just re-activates the last shape tool.
+        if self.shape_press.take().is_some() && self.shape_flyout.is_none() {
+            let t = self.last_shape_tool;
+            self.set_tool(t);
+        }
         match std::mem::take(&mut self.drag) {
             Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } | Drag::Pan { .. } => {}
             Drag::PickColor { .. } => self.apply_picker_color(),
@@ -2692,6 +2739,8 @@ impl App {
                 &tab_labels,
                 active_tab,
                 cursor_glyph,
+                self.last_shape_tool,
+                self.shape_flyout,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2783,6 +2832,14 @@ impl ApplicationHandler for App {
         }
         // Modal / picker open+close changes whether the OS cursor hides.
         self.update_canvas_cursor();
+        // A held Shape-slot press opens the primitive flyout.
+        if let Some((t, anchor)) = self.shape_press {
+            if self.shape_flyout.is_none() && t.elapsed().as_millis() >= 300 {
+                self.shape_flyout = Some(anchor);
+                self.shape_press = None;
+                self.request_main_redraw();
+            }
+        }
         for host in self.hosts.values() {
             host.window.request_redraw();
         }
@@ -3282,6 +3339,13 @@ fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
         .map(|ab| ab.id)
 }
 
+/// Rect of primitive flyout cell `i`, a horizontal row right of `anchor`.
+fn shape_flyout_cell(anchor: Rect, i: usize) -> Rect {
+    let sz = 34.0;
+    let x = anchor.x1 + 8.0 + i as f64 * sz;
+    Rect::new(x, anchor.y0, x + sz, anchor.y0 + sz)
+}
+
 /// Fractional (0..1) hotspot of a tool's cursor glyph within its box —
 /// where the actual click point sits.
 fn cursor_hotspot(t: Tool) -> (f64, f64) {
@@ -3663,6 +3727,8 @@ fn paint_main(
     tab_labels: &[String],
     active_tab: usize,
     cursor_glyph: Option<(Tool, bool)>,
+    shape_tool: Tool,
+    shape_flyout: Option<Rect>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3775,6 +3841,7 @@ fn paint_main(
                 pointer,
                 representative,
                 active_slot,
+                shape_tool,
                 expanded,
                 renaming,
                 selected_layer,
@@ -3826,6 +3893,29 @@ fn paint_main(
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
+    }
+
+    // Primitive flyout.
+    if let Some(anchor) = shape_flyout {
+        let last = shape_flyout_cell(anchor, panels::tools::SHAPE_TOOLS.len() - 1);
+        let bg = Rect::new(anchor.x1 + 4.0, anchor.y0 - 3.0, last.x1 + 3.0, last.y1 + 3.0);
+        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bg);
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bg);
+        for (i, t) in panels::tools::SHAPE_TOOLS.iter().enumerate() {
+            let c = shape_flyout_cell(anchor, i);
+            let on = *t == shape_tool;
+            if on {
+                scene.fill(Fill::NonZero, ID, theme.select_blue, None, &c);
+            } else if c.contains(pointer) {
+                scene.fill(Fill::NonZero, ID, theme.select_blue.with_alpha(0.14), None, &c);
+            }
+            let col = if on {
+                Color::from_rgb8(0xff, 0xff, 0xff)
+            } else {
+                theme.text_dim
+            };
+            icons::draw(scene, t.icon(), Rect::from_center_size(c.center(), (22.0, 22.0)), col);
+        }
     }
 
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
