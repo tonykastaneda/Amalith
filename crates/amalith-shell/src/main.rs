@@ -29,7 +29,7 @@ use vello::wgpu;
 use vello::{AaConfig, Renderer, RendererOptions, Scene};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -342,6 +342,34 @@ impl App {
             }
             _ => {}
         }
+
+        // Move a floating window by locking it to the cursor: the cursor's
+        // position *inside* the window, versus where it was grabbed, is the
+        // move. Both come from the same `position / scale`, so there is no
+        // scale or acceleration mismatch, and nothing reads the OS window
+        // rect back — so it can't drift or jitter.
+        if let Drag::MovingFloating { id, grab, pos } = self.drag {
+            let float_wid = self.floating_window(id).map(|w| w.id());
+            let global = if self.pointer_win == float_wid {
+                pos + self.pointer.to_vec2()
+            } else if self.pointer_win == self.main_id {
+                self.main_inner_origin() + self.pointer.to_vec2()
+            } else {
+                return;
+            };
+            let new_pos = global - grab;
+            self.drag = Drag::MovingFloating {
+                id,
+                grab,
+                pos: new_pos,
+            };
+            if let Some(w) = self.floating_window(id) {
+                w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
+                w.request_redraw();
+            }
+            self.redock_preview = Some(self.resolve_redock(global));
+            self.request_main_redraw();
+        }
     }
 
     fn on_release(&mut self) {
@@ -367,6 +395,9 @@ impl App {
                 if matches!(target, DropTarget::Float) {
                     if let Some(f) = self.dock.floating_mut(id) {
                         f.rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+                    }
+                    if let Some(w) = self.floating_window(id) {
+                        w.request_redraw();
                     }
                 } else {
                     self.dock.redock(id, target);
@@ -561,24 +592,6 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
-
-    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _dev: DeviceId, event: DeviceEvent) {
-        let DeviceEvent::MouseMotion { delta } = event else {
-            return;
-        };
-        let Drag::MovingFloating { id, grab, pos } = &mut self.drag else {
-            return;
-        };
-        *pos += Vec2::new(delta.0, delta.1) / self.scale;
-        let (id, grab, pos) = (*id, *grab, *pos);
-
-        if let Some(w) = self.floating_window(id) {
-            w.set_outer_position(LogicalPosition::new(pos.x, pos.y));
-        }
-        let target = self.resolve_redock(pos + grab);
-        self.redock_preview = Some(target);
-        self.request_main_redraw();
-    }
 }
 
 /// A stand-in dock tree until real workspace state exists: Layers on top,
@@ -652,6 +665,9 @@ fn paint_main(
     }
 }
 
+/// A torn-off window: dark body, a header strip that always names the
+/// panel (so a floating window is never an anonymous square), an accent
+/// line, and a 1px frame since the OS chrome is gone.
 fn paint_floating(
     scene: &mut Scene,
     text: &mut TextContext,
@@ -661,12 +677,46 @@ fn paint_floating(
     height: f64,
 ) {
     let full = Rect::new(0.0, 0.0, width, height);
-    let laid = layout::layout(node, full, theme, &mut |p| {
-        text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
-    });
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &full);
-    chrome::paint(scene, &laid, theme, text, &tab_label);
+
+    let h = theme.tab_strip_h;
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.strip_bg,
+        None,
+        &Rect::new(0.0, 0.0, width, h),
+    );
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.drop_line,
+        None,
+        &Rect::new(0.0, h - 2.0, width, h),
+    );
+
+    let baseline = h * 0.5 + 12.5 * 0.34;
+    text.draw(
+        scene,
+        &floating_title(node),
+        12.5,
+        theme.text,
+        theme.tab_pad_x,
+        baseline,
+    );
+
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &full);
+}
+
+fn floating_title(node: &Node) -> String {
+    match node {
+        Node::Tabs { panels, active } => panels
+            .get(*active)
+            .or_else(|| panels.first())
+            .map(|p| tab_label(*p))
+            .unwrap_or_else(|| "Panel".to_string()),
+        Node::Split { .. } => "Panel".to_string(),
+    }
 }
 
 fn main() {
