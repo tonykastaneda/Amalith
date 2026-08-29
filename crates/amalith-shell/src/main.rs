@@ -376,7 +376,12 @@ impl App {
                     RailSide::Right => w - self.pointer.x,
                 };
                 let clamped = raw.clamp(RAIL_MIN_W, (w * 0.7).max(RAIL_MIN_W));
-                self.dock.rail_mut(side).width = clamped as f32;
+                let gap = self.theme.splitter_thickness as f32;
+                self.dock.rail_mut(side).set_width_absorbing(
+                    clamped as f32,
+                    gap,
+                    matches!(side, RailSide::Left),
+                );
                 self.request_main_redraw();
             }
             Drag::Splitter { side, path, gap } => {

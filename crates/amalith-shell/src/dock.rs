@@ -223,6 +223,58 @@ impl Rail {
         true
     }
 
+    /// Set the rail's width, feeding the whole change to one edge column so
+    /// the others keep their pixel size.
+    ///
+    /// If the rail's top node is a horizontal split of two-or-more columns,
+    /// every column but the one on the resized edge is pinned to its
+    /// current width and the edge column absorbs the delta. `edge_is_last`
+    /// says which column touches the moving edge (the right rail resizes
+    /// from its left edge → first column; the left rail from its right edge
+    /// → last column). `gap` is the splitter thickness. With a single
+    /// column or a vertical stack this is just a width change.
+    pub fn set_width_absorbing(&mut self, new_w: f32, gap: f32, edge_is_last: bool) {
+        let old_w = self.width;
+        self.width = new_w.max(1.0);
+
+        let Some(Node::Split {
+            axis: Axis::Horizontal,
+            children,
+        }) = &mut self.tree
+        else {
+            return;
+        };
+        let n = children.len();
+        if n < 2 {
+            return;
+        }
+        let wsum: f32 = children.iter().map(|c| c.weight.max(0.0)).sum();
+        if wsum <= 0.0 {
+            return;
+        }
+        let strut = gap * (n as f32 - 1.0);
+        let old_avail = (old_w - strut).max(1.0);
+        let new_avail = (new_w - strut).max(1.0);
+
+        let px: Vec<f32> = children
+            .iter()
+            .map(|c| old_avail * c.weight.max(0.0) / wsum)
+            .collect();
+        let absorb = if edge_is_last { n - 1 } else { 0 };
+        let pinned: f32 = px
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != absorb)
+            .map(|(_, v)| *v)
+            .sum();
+        let absorb_px = (new_avail - pinned).max(48.0);
+
+        // Weights become target pixel widths; layout then reproduces them.
+        for (i, c) in children.iter_mut().enumerate() {
+            c.weight = if i == absorb { absorb_px } else { px[i] };
+        }
+    }
+
     /// First tab group a breadth-first walk finds — a fallback drop spot.
     pub fn any_tab_path(&self) -> Option<NodePath> {
         let t = self.tree.as_ref()?;
@@ -742,6 +794,40 @@ mod tests {
                 assert!((children[2].weight - 1.0).abs() < 1e-6);
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn set_width_absorbing_pins_the_other_columns() {
+        let mut rail = Rail::with(Node::Split {
+            axis: Axis::Horizontal,
+            children: vec![
+                Child {
+                    node: tabs(&[A]),
+                    weight: 1.0,
+                },
+                Child {
+                    node: tabs(&[B]),
+                    weight: 1.0,
+                },
+                Child {
+                    node: tabs(&[C]),
+                    weight: 1.0,
+                },
+            ],
+        });
+        rail.width = 300.0; // three 100px columns, no splitter gap
+                            // Widen from the left edge to 400: the first column absorbs the
+                            // whole +100; the other two stay at 100.
+        rail.set_width_absorbing(400.0, 0.0, false);
+        assert_eq!(rail.width, 400.0);
+        match rail.tree.unwrap() {
+            Node::Split { children, .. } => {
+                assert!((children[0].weight - 200.0).abs() < 1e-3);
+                assert!((children[1].weight - 100.0).abs() < 1e-3);
+                assert!((children[2].weight - 100.0).abs() < 1e-3);
+            }
+            _ => panic!("expected a horizontal split"),
         }
     }
 
