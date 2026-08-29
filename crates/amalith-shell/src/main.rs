@@ -157,6 +157,10 @@ struct App {
     pen: Vec<Point>,
     /// Anchors popped by ⌘Z while drawing, for ⌘⇧Z to restore.
     pen_redo: Vec<Point>,
+    /// The path just committed by the Pen, so ⌘Z can re-open it a point
+    /// shorter instead of undoing the whole object. Cleared by any other
+    /// action.
+    last_pen: Option<(ObjectId, Vec<Point>, bool)>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     view: CanvasView,
@@ -199,6 +203,7 @@ impl App {
             active_tool: Tool::Select,
             pen: Vec::new(),
             pen_redo: Vec::new(),
+            last_pen: None,
             marquee: None,
             view: CanvasView::default(),
             theme: Theme::default(),
@@ -272,11 +277,12 @@ impl App {
         self.pen_redo.clear();
         if self.pen.len() < 2 {
             self.pen.clear();
+            self.last_pen = None;
             return;
         }
-        let pts: Vec<amalith_core::Point> = self
-            .pen
-            .drain(..)
+        let anchors: Vec<Point> = std::mem::take(&mut self.pen);
+        let pts: Vec<amalith_core::Point> = anchors
+            .iter()
             .map(|p| amalith_core::Point::new(p.x, p.y))
             .collect();
         let path = if closed {
@@ -291,6 +297,7 @@ impl App {
             name: None,
         }) {
             self.selection = vec![id];
+            self.last_pen = Some((id, anchors, closed));
         }
         self.request_main_redraw();
     }
@@ -301,8 +308,37 @@ impl App {
             self.pen.clear();
             self.pen_redo.clear();
         }
+        self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
+    }
+
+    /// ⌘Z with the Pen tool: step back one anchor. While still drawing this
+    /// just pops the local anchor; after a commit it deletes the object and
+    /// re-commits it one anchor shorter (so the shape shrinks a point at a
+    /// time). Returns true if it handled the keystroke.
+    fn pen_undo_step(&mut self) -> bool {
+        if self.active_tool != Tool::Pen {
+            return false;
+        }
+        if let Some(p) = self.pen.pop() {
+            self.pen_redo.push(p);
+            self.request_main_redraw();
+            return true;
+        }
+        if let Some((id, mut anchors, closed)) = self.last_pen.take() {
+            let _ = self.editor.execute(Command::DeleteObject { id });
+            anchors.pop();
+            if anchors.len() >= 2 {
+                self.pen = anchors;
+                self.commit_pen(closed && self.pen.len() >= 3);
+            } else {
+                self.selection.clear();
+            }
+            self.request_main_redraw();
+            return true;
+        }
+        false
     }
 
     fn select_all(&mut self) {
@@ -466,6 +502,8 @@ impl App {
         let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
         };
+        // Any press ends the "⌘Z re-opens the last pen path" window.
+        self.last_pen = None;
         match role {
             Role::Main => {
                 let Some((w, h)) = self.main_logical_size() else {
@@ -1245,29 +1283,30 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
                 let pressed = event.state.is_pressed();
+                // Any key other than ⌘Z ends the pen re-open window.
+                if pressed && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyZ)) {
+                    self.last_pen = None;
+                }
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Space) => self.space_down = pressed,
                     PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
-                        let drawing = self.active_tool == Tool::Pen;
-                        if drawing && !self.shift_down && !self.pen.is_empty() {
-                            // Step back one placed anchor instead of undoing
-                            // a committed shape.
-                            if let Some(p) = self.pen.pop() {
-                                self.pen_redo.push(p);
-                            }
-                        } else if drawing && self.shift_down && !self.pen_redo.is_empty() {
+                        let redo = self.shift_down;
+                        if redo && self.active_tool == Tool::Pen && !self.pen_redo.is_empty() {
                             if let Some(p) = self.pen_redo.pop() {
                                 self.pen.push(p);
                             }
+                            self.request_main_redraw();
+                        } else if !redo && self.pen_undo_step() {
+                            // handled
                         } else {
-                            let _ = if self.shift_down {
+                            let _ = if redo {
                                 self.editor.redo()
                             } else {
                                 self.editor.undo()
                             };
                             self.prune_selection();
+                            self.request_main_redraw();
                         }
-                        self.request_main_redraw();
                     }
                     PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                         if pressed && !self.selection.is_empty() =>

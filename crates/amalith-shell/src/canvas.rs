@@ -320,8 +320,15 @@ fn paint_object(
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
-        if let Some(c) = fill {
-            scene.fill(Fill::NonZero, m, c, None, bp);
+        // Open paths (a line, an unclosed pen path) don't get a fill.
+        let closed = bp
+            .elements()
+            .iter()
+            .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
+        if closed {
+            if let Some(c) = fill {
+                scene.fill(Fill::NonZero, m, c, None, bp);
+            }
         }
         if let Some(c) = stroke {
             scene.stroke(&Stroke::new(sw), m, c, None, bp);
