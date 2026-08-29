@@ -1,15 +1,17 @@
-//! Amalith shell — proof of life.
+//! Amalith shell — entry point.
 //!
-//! One winit window, one wgpu surface, one vello scene. Draws a dark
-//! ground and a couple of shapes and stays responsive to resize/close.
-//! This exists to prove the winit + wgpu + vello stack builds and runs on
-//! the target machine before the toolkit is built on top of it.
+//! Owns the winit event loop and the per-window render state (surface +
+//! vello renderer). The frame's drawing delegates to `amalith_shell`'s
+//! `layout` + `chrome` over a demo dock tree; input wiring and real panels
+//! come next.
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use vello::kurbo::{Affine, Rect, RoundedRect, Stroke};
-use vello::peniko::{color::palette, Color, Fill};
+use amalith_shell::dock::{Axis, Child, Node, PanelId};
+use amalith_shell::{chrome, layout, Theme};
+use vello::kurbo::{Affine, Rect};
+use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
 use vello::{AaConfig, Renderer, RendererOptions, Scene};
@@ -147,43 +149,58 @@ impl ApplicationHandler for App {
     }
 }
 
-/// The whole frame's drawing. This is the seam where the real UI + dock +
-/// canvas rendering will plug in.
+/// A stand-in dock tree until real workspace state exists: Layers on top,
+/// an Artboards/Swatches tab group below it.
+fn demo_dock() -> Node {
+    Node::Split {
+        axis: Axis::Vertical,
+        children: vec![
+            Child {
+                node: Node::Tabs {
+                    panels: vec![PanelId("layers")],
+                    active: 0,
+                },
+                weight: 1.6,
+            },
+            Child {
+                node: Node::Tabs {
+                    panels: vec![PanelId("artboards"), PanelId("swatches")],
+                    active: 0,
+                },
+                weight: 1.0,
+            },
+        ],
+    }
+}
+
+fn tab_label(panel: PanelId) -> &'static str {
+    match panel.0 {
+        "layers" => "Layers",
+        "artboards" => "Artboards",
+        "swatches" => "Swatches",
+        other => other,
+    }
+}
+
+/// The whole frame's drawing: a canvas ground and a right-hand dock rail
+/// laid out and rendered by `amalith_shell`.
 fn paint(scene: &mut Scene, width: f64, height: f64) {
-    // Ground.
+    let theme = Theme::default();
+
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        Color::from_rgb8(0x2b, 0x2b, 0x2b),
+        theme.bg,
         None,
         &Rect::new(0.0, 0.0, width, height),
     );
 
-    // A panel-ish rounded rect on the right, to prove fills + rounding.
-    let panel = RoundedRect::new(width - 260.0, 20.0, width - 20.0, height - 20.0, 6.0);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        Color::from_rgb8(0x33, 0x33, 0x33),
-        None,
-        &panel,
-    );
-    scene.stroke(
-        &Stroke::new(1.0),
-        Affine::IDENTITY,
-        Color::from_rgb8(0x1f, 0x1f, 0x1f),
-        None,
-        &panel,
-    );
-
-    // A blue accent bar — the future dock-drop indicator.
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        Color::from_rgb8(0x1d, 0x7a, 0xf0),
-        None,
-        &Rect::new(width - 260.0, 60.0, width - 20.0, 63.0),
-    );
+    let rail = Rect::new((width - 300.0).max(0.0), 0.0, width, height);
+    let dock = demo_dock();
+    let laid = layout::layout(&dock, rail, &theme, &|p| {
+        theme.tab_pad_x * 2.0 + tab_label(p).chars().count() as f64 * 7.0
+    });
+    chrome::paint(scene, &laid, &theme);
 }
 
 fn main() {
