@@ -6,9 +6,9 @@
         fill: #515251;
         stroke: #b0afb1;
         stroke-miterlimit: 10;
-        stroke-width: 3.66px;
+        stroke-width: 4.46px;
       }
     </style>
   </defs>
-  <polygon class="cls-1" points="30.82 17.98 75.15 65.32 52.99 65.32 32.33 84.92 30.82 17.98"/>
+  <polygon class="cls-1" points="50 9.98 59.93 40.55 92.08 40.55 66.07 59.45 76.01 90.02 50 71.12 23.99 90.02 33.93 59.45 7.92 40.55 40.07 40.55 50 9.98"/>
 </svg>

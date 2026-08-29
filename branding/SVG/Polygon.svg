@@ -3,12 +3,12 @@
   <defs>
     <style>
       .cls-1 {
-        fill: #b0afb1;
-        stroke: #515251;
+        fill: #515251;
+        stroke: #b0afb1;
         stroke-miterlimit: 10;
-        stroke-width: 3.66px;
+        stroke-width: 4.8px;
       }
     </style>
   </defs>
-  <polygon class="cls-1" points="32.01 13.09 76.34 60.43 66.61 86.91 33.52 80.03 32.01 13.09"/>
+  <polygon class="cls-1" points="69.97 15.42 30.03 15.42 10.07 50 30.03 84.58 69.97 84.58 89.93 50 69.97 15.42"/>
 </svg>

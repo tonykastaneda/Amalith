@@ -2,22 +2,34 @@
 <svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <defs>
     <style>
-      .cls-1 {
-        fill: #515351;
+      .cls-1, .cls-2 {
+        stroke: #dcdbdb;
       }
 
-      .cls-1, .cls-2 {
-        stroke: #b1afb1;
+      .cls-1, .cls-2, .cls-3 {
         stroke-miterlimit: 10;
+      }
+
+      .cls-1, .cls-3 {
+        stroke-width: 3.05px;
+      }
+
+      .cls-2 {
         stroke-width: 3.52px;
       }
 
-      .cls-3, .cls-2 {
-        fill: #b1afb1;
+      .cls-2, .cls-4 {
+        fill: #dcdbdb;
+      }
+
+      .cls-3 {
+        fill: none;
+        stroke: #000;
       }
     </style>
   </defs>
   <polygon class="cls-1" points="73.34 55.41 29.01 8.07 30.52 75.01 53.49 79.78 59.5 91.4 71.83 85.01 66.35 74.42 73.34 55.41"/>
-  <circle class="cls-3" cx="48.76" cy="55.17" r="5.32"/>
+  <circle class="cls-4" cx="48.76" cy="55.17" r="5.32"/>
   <line class="cls-2" x1="48.76" y1="55.17" x2="29.01" y2="8.07"/>
+  <circle class="cls-3" cx="83.57" cy="76.09" r="6.44"/>
 </svg>

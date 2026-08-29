@@ -11,12 +11,18 @@ use vello::Scene;
 
 const ID: Affine = Affine::IDENTITY;
 
-const SELECT_SVG: &str = include_str!("../../../branding/SVG/V-selection.svg");
+const SELECT_SVG: &str = include_str!("../../../branding/SVG/V-selectio.svg");
 const DIRECT_SELECT_SVG: &str = include_str!("../../../branding/SVG/A-selection.svg");
 const PEN_SVG: &str = include_str!("../../../branding/SVG/Pen.svg");
 const RECT_SVG: &str = include_str!("../../../branding/SVG/Square.svg");
 const ELLIPSE_SVG: &str = include_str!("../../../branding/SVG/Circle.svg");
+const POLYGON_SVG: &str = include_str!("../../../branding/SVG/Polygon.svg");
+const STAR_SVG: &str = include_str!("../../../branding/SVG/Start.svg");
 const ARTBOARD_SVG: &str = include_str!("../../../branding/SVG/Artboard Tool.svg");
+
+/// Pointer-cursor glyphs for the Pen tool while it's drawing.
+pub const PEN_DRAWING_SVG: &str = include_str!("../../../branding/SVG/Pen-drawingShape.svg");
+pub const PEN_CLOSING_SVG: &str = include_str!("../../../branding/SVG/Pen-closingShape.svg");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
@@ -36,58 +42,23 @@ fn brand_svg(icon: Icon) -> Option<&'static str> {
         Icon::Select => SELECT_SVG,
         Icon::DirectSelect => DIRECT_SELECT_SVG,
         Icon::Pen => PEN_SVG,
-        Icon::Rectangle => RECT_SVG,
+        Icon::Rectangle | Icon::RoundedRect => RECT_SVG,
         Icon::Ellipse => ELLIPSE_SVG,
+        Icon::Polygon => POLYGON_SVG,
+        Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
-        _ => return None,
     })
+}
+
+/// Paint an arbitrary brand SVG (e.g. a pen cursor) into `box_`, tinted.
+pub fn draw_svg(scene: &mut Scene, src: &str, box_: Rect, color: Color) {
+    paint_brand(scene, src, box_, color, false);
 }
 
 /// Draw `icon` filling `box_` (screen px), tinted `color`.
 pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     if let Some(src) = brand_svg(icon) {
         paint_brand(scene, src, box_, color, icon == Icon::DirectSelect);
-        return;
-    }
-
-    // Hand-drawn fallbacks — no brand artwork exists for these.
-    let s = box_.width().min(box_.height()) / 24.0;
-    let t = Affine::translate((box_.x0, box_.y0)) * Affine::scale(s);
-    match icon {
-        Icon::RoundedRect => {
-            let rr = vello::kurbo::RoundedRect::new(4.0, 6.0, 20.0, 18.0, 4.0);
-            scene.stroke(&Stroke::new(1.8), t, color, None, &rr);
-        }
-        Icon::Polygon => {
-            let mut p = BezPath::new();
-            for i in 0..6 {
-                let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::TAU / 6.0;
-                let pt = (12.0 + 9.0 * a.cos(), 12.0 + 9.0 * a.sin());
-                if i == 0 {
-                    p.move_to(pt);
-                } else {
-                    p.line_to(pt);
-                }
-            }
-            p.close_path();
-            scene.stroke(&Stroke::new(1.7), t, color, None, &p);
-        }
-        Icon::Star => {
-            let mut p = BezPath::new();
-            for i in 0..10 {
-                let a = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::PI / 5.0;
-                let r = if i % 2 == 0 { 10.0 } else { 4.5 };
-                let pt = (12.0 + r * a.cos(), 12.0 + r * a.sin());
-                if i == 0 {
-                    p.move_to(pt);
-                } else {
-                    p.line_to(pt);
-                }
-            }
-            p.close_path();
-            scene.stroke(&Stroke::new(1.6), t, color, None, &p);
-        }
-        _ => {}
     }
 }
 

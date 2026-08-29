@@ -31,7 +31,7 @@ use amalith_shell::layout::Layout;
 use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
-use amalith_shell::{chrome, convert, layout, panels, picker, sample, select, Theme};
+use amalith_shell::{chrome, convert, icons, layout, panels, picker, sample, select, Theme};
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -337,6 +337,9 @@ struct App {
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
+    /// Whether the pointer is over the canvas (OS cursor hidden, tool
+    /// glyph drawn instead).
+    cursor_over_canvas: bool,
     /// The macOS application menu bar, once the app has resumed.
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
@@ -393,6 +396,7 @@ impl App {
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
+            cursor_over_canvas: false,
             #[cfg(target_os = "macos")]
             native_menu: None,
         }
@@ -1371,6 +1375,29 @@ impl App {
             .transform_rect_bbox(Rect::new(left, CHROME_TOP, right, h))
     }
 
+    /// The canvas viewport in screen (logical) px.
+    fn canvas_viewport(&self) -> Rect {
+        let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let (left, right) = self.canvas_x_span();
+        Rect::new(left, CHROME_TOP, right, h)
+    }
+
+    /// Refresh whether the pointer is over the canvas, hiding the OS
+    /// cursor there so the tool glyph can stand in for it.
+    fn update_canvas_cursor(&mut self) {
+        let over = self.pointer_win == self.main_id
+            && self.picker.is_none()
+            && self.newdoc.is_none()
+            && self.canvas_viewport().contains(self.pointer);
+        if over != self.cursor_over_canvas {
+            self.cursor_over_canvas = over;
+            if let Some(w) = self.main_window() {
+                w.set_cursor_visible(!over);
+            }
+            self.request_main_redraw();
+        }
+    }
+
     /// Logical size of the main window's client area.
     fn main_logical_size(&self) -> Option<(f64, f64)> {
         let w = self.main_window()?;
@@ -1920,6 +1947,11 @@ impl App {
     }
 
     fn on_cursor_move(&mut self) {
+        self.update_canvas_cursor();
+        // Redraw so the tool glyph tracks the pointer.
+        if self.cursor_over_canvas {
+            self.request_main_redraw();
+        }
         match &self.drag {
             Drag::RailWidth { side } => {
                 let side = *side;
@@ -2588,6 +2620,15 @@ impl App {
         });
         let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
         let active_tab = self.active;
+        let cursor_glyph = self.cursor_over_canvas.then(|| {
+            let pen_closing = self.active_tool == Tool::Pen && self.pen.len() >= 3 && {
+                let hover = self.doc_point(self.pointer);
+                self.pen
+                    .first()
+                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.view.zoom)
+            };
+            (self.effective_tool(), pen_closing)
+        });
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -2621,6 +2662,7 @@ impl App {
                 self.newdoc.as_ref(),
                 &tab_labels,
                 active_tab,
+                cursor_glyph,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2710,6 +2752,8 @@ impl ApplicationHandler for App {
                 self.run_menu_action(action);
             }
         }
+        // Modal / picker open+close changes whether the OS cursor hides.
+        self.update_canvas_cursor();
         for host in self.hosts.values() {
             host.window.request_redraw();
         }
@@ -2792,6 +2836,12 @@ impl ApplicationHandler for App {
                 if let Some((panel, press)) = self.pending_tearoff.take() {
                     self.tear_off(event_loop, panel, press);
                 }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if Some(id) == self.pointer_win {
+                    self.pointer_win = None;
+                }
+                self.update_canvas_cursor();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
@@ -3166,6 +3216,16 @@ fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
         .map(|ab| ab.id)
 }
 
+/// Fractional (0..1) hotspot of a tool's cursor glyph within its box —
+/// where the actual click point sits.
+fn cursor_hotspot(t: Tool) -> (f64, f64) {
+    match t {
+        Tool::Select | Tool::DirectSelect => (0.32, 0.13),
+        Tool::Pen => (0.29, 0.08),
+        _ => (0.5, 0.5),
+    }
+}
+
 /// Snap a delta to the nearest of the 8 cardinal / diagonal directions,
 /// keeping only the component along that axis (Shift-lock for drags).
 fn snap8(d: Vec2) -> Vec2 {
@@ -3536,6 +3596,7 @@ fn paint_main(
     newdoc_form: Option<&newdoc::NewDocForm>,
     tab_labels: &[String],
     active_tab: usize,
+    cursor_glyph: Option<(Tool, bool)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3684,6 +3745,29 @@ fn paint_main(
         cur_weight,
         cur_opacity,
     );
+
+    // Tool glyph standing in for the OS cursor over the canvas.
+    if let Some((tool, pen_closing)) = cursor_glyph {
+        let sz = 22.0;
+        let (hx, hy) = cursor_hotspot(tool);
+        let box_ = Rect::new(
+            pointer.x - sz * hx,
+            pointer.y - sz * hy,
+            pointer.x - sz * hx + sz,
+            pointer.y - sz * hy + sz,
+        );
+        let tint = Color::from_rgb8(0xff, 0xff, 0xff);
+        if tool == Tool::Pen {
+            let src = if pen_closing {
+                icons::PEN_CLOSING_SVG
+            } else {
+                icons::PEN_DRAWING_SVG
+            };
+            icons::draw_svg(scene, src, box_, Color::from_rgb8(0xdc, 0xdb, 0xdb));
+        } else {
+            icons::draw(scene, tool.icon(), box_, tint);
+        }
+    }
 
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
     // traffic lights floating over its left end.
