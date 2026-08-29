@@ -375,18 +375,28 @@ impl App {
     /// black arrow is active is Illustrator's temporary white-arrow
     /// gesture (⌘+Space stays reserved for zoom).
     fn effective_tool(&self) -> Tool {
-        if self.active_tool == Tool::Select && self.cmd_down && !self.space_down {
+        if self.direct_via_cmd() {
             Tool::DirectSelect
         } else {
             self.active_tool
         }
     }
 
-    /// Paths whose anchors are currently on screen for Direct Selection:
-    /// the object selection, plus anything with a live anchor selection.
-    /// Illustrator's white arrow shows nodes only after you've picked an
-    /// object — it never lights up every path in the document.
+    /// True while the temporary ⌘ white-arrow gesture is in effect (the
+    /// Selection tool is active and ⌘ is held). Unlike the persistent
+    /// `A` tool, this exposes every path's nodes for the duration of the
+    /// hold — Illustrator's temporary Direct Selection reaches anything.
+    fn direct_via_cmd(&self) -> bool {
+        self.active_tool == Tool::Select && self.cmd_down && !self.space_down
+    }
+
+    /// Paths whose anchors are currently on screen for Direct Selection.
+    /// The persistent `A` tool shows nodes only for objects you've
+    /// already picked; the temporary ⌘ gesture shows every path's.
     fn node_paths(&self) -> Vec<ObjectId> {
+        if self.direct_via_cmd() {
+            return anchors::path_leaves(self.editor.document());
+        }
         let mut out = self.selection.clone();
         for (id, _) in &self.anchor_sel {
             if !out.contains(id) {
