@@ -1472,6 +1472,9 @@ impl App {
         let anchor_view = direct.then_some(AnchorView {
             selected: &self.anchor_sel,
             paths: &anchor_paths,
+            // The persistent A tool fills all nodes solid blue; the
+            // temporary ⌘ gesture keeps unselected nodes white-outlined.
+            filled: self.active_tool == Tool::DirectSelect,
         });
 
         self.content.reset();

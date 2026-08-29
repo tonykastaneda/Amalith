@@ -69,6 +69,10 @@ pub struct AnchorView<'a> {
     pub selected: &'a [(ObjectId, usize)],
     /// Paths whose anchors to display.
     pub paths: &'a [ObjectId],
+    /// The persistent `A` tool fills every node solid blue; the
+    /// temporary ⌘ gesture leaves unselected nodes white with a blue
+    /// outline.
+    pub filled: bool,
 }
 
 /// In-progress Pen path preview (all points in document space).
@@ -330,7 +334,11 @@ pub fn paint(
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
-                    if sel { theme.select_blue } else { white },
+                    if sel || av.filled {
+                        theme.select_blue
+                    } else {
+                        white
+                    },
                     None,
                     &sq,
                 );
