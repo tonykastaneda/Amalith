@@ -269,6 +269,10 @@ enum CanvasCursor {
     Glyph,
     /// OS crosshair — the primitive/shape drawing tools.
     Crosshair,
+    /// Open hand — Space held, ready to pan.
+    Grab,
+    /// Closed hand — Space held and dragging the canvas.
+    Grabbing,
 }
 
 struct App {
@@ -1458,6 +1462,12 @@ impl App {
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
             CanvasCursor::Default
+        } else if self.space_down || matches!(self.drag, Drag::Pan { .. }) {
+            if matches!(self.drag, Drag::Pan { .. }) {
+                CanvasCursor::Grabbing
+            } else {
+                CanvasCursor::Grab
+            }
         } else {
             match self.effective_tool() {
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
@@ -1467,10 +1477,13 @@ impl App {
         if mode != self.cursor_mode {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
+                use winit::window::CursorIcon;
                 w.set_cursor_visible(mode != CanvasCursor::Glyph);
                 w.set_cursor(match mode {
-                    CanvasCursor::Crosshair => winit::window::CursorIcon::Crosshair,
-                    _ => winit::window::CursorIcon::Default,
+                    CanvasCursor::Crosshair => CursorIcon::Crosshair,
+                    CanvasCursor::Grab => CursorIcon::Grab,
+                    CanvasCursor::Grabbing => CursorIcon::Grabbing,
+                    _ => CursorIcon::Default,
                 });
             }
             self.request_main_redraw();
@@ -1816,6 +1829,7 @@ impl App {
                 // Not on a rail.
                 if self.space_down {
                     self.drag = Drag::Pan { last: self.pointer };
+                    self.update_canvas_cursor();
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
@@ -2548,6 +2562,7 @@ impl App {
                 self.request_main_redraw();
             }
         }
+        self.update_canvas_cursor();
     }
 
     fn floating_layout(&mut self, id: u64) -> Layout {
@@ -3058,7 +3073,10 @@ impl ApplicationHandler for App {
                     self.last_pen = None;
                 }
                 match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Space) => self.space_down = pressed,
+                    PhysicalKey::Code(KeyCode::Space) => {
+                        self.space_down = pressed;
+                        self.update_canvas_cursor();
+                    }
                     PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
                         let redo = self.shift_down;
                         if redo && self.active_tool == Tool::Pen && !self.pen_redo.is_empty() {
