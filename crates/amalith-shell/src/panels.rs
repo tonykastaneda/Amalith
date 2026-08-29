@@ -108,6 +108,15 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         }
         return Action::None;
     }
+    if id.0 == "tools" {
+        let (fr, sr) = tool_chips(body);
+        if fr.contains(local) {
+            return Action::SetActiveSlot(PaintSlot::Fill);
+        }
+        if sr.contains(local) {
+            return Action::SetActiveSlot(PaintSlot::Stroke);
+        }
+    }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
     let row = ((local.y - body.y0) / unit).floor();
     if row < 0.0 {
@@ -131,6 +140,16 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
 fn row_rect(body: Rect, i: usize) -> Rect {
     let y = body.y0 + i as f64 * ROW_H;
     Rect::new(body.x0, y, body.x1, y + ROW_H)
+}
+
+/// The overlapping fill / stroke chips at the bottom of the tool strip.
+fn tool_chips(body: Rect) -> (Rect, Rect) {
+    let s = 20.0;
+    let cx = body.x0 + (body.width() * 0.5) - 5.0;
+    let y = body.y1 - s - 14.0 - 10.0;
+    let fill = Rect::new(cx - s * 0.5, y, cx + s * 0.5, y + s);
+    let stroke = fill.with_origin(Point::new(fill.x0 + 11.0, fill.y0 + 11.0));
+    (fill, stroke)
 }
 
 fn paint_tools(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx) {
@@ -158,6 +177,26 @@ fn paint_tools(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx
         let icon_box = Rect::from_center_size(r.center(), (22.0, 22.0));
         icons::draw(scene, tool.icon(), icon_box, color);
     }
+
+    // Fill / stroke chips — same as the Swatches panel, so the current
+    // paints are visible (and slot-switchable) from the tool strip.
+    let (fr, sr) = tool_chips(body);
+    let rep = ctx.representative;
+    draw_paint_swatch(
+        scene,
+        ctx.theme,
+        sr,
+        rep.map(|a| a.stroke).unwrap_or(Paint::None),
+        ctx.active_slot == PaintSlot::Stroke,
+    );
+    draw_paint_swatch(
+        scene,
+        ctx.theme,
+        fr,
+        rep.map(|a| a.fill)
+            .unwrap_or(Paint::Solid(CoreColor::rgb(0.87, 0.87, 0.87))),
+        ctx.active_slot == PaintSlot::Fill,
+    );
 }
 
 struct LayerRow {
