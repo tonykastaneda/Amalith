@@ -46,10 +46,12 @@ use winit::window::{Window, WindowId};
 
 /// Height of the top app bar, logical points.
 const APP_BAR_H: f64 = 30.0;
+/// The document-tab strip, between the app bar and the options bar.
+const TAB_BAR_H: f64 = 28.0;
 /// The tool options strip, between the app bar and the canvas.
 const OPT_BAR_H: f64 = 30.0;
 /// Total fixed chrome above the canvas / below the top of the window.
-const CHROME_TOP: f64 = APP_BAR_H + OPT_BAR_H;
+const CHROME_TOP: f64 = APP_BAR_H + TAB_BAR_H + OPT_BAR_H;
 /// When a rail is empty, the strip of canvas along that edge that still
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
@@ -213,6 +215,52 @@ struct Rename {
     fresh: bool,
 }
 
+/// One open document's worth of state. The *active* tab's copy lives
+/// directly on [`App`] (the fields below `dock`); the inactive tabs are
+/// parked here and swapped in on a tab switch via
+/// [`App::take_active_doc`] / [`App::load_active_doc`].
+struct Doc {
+    editor: Editor,
+    file_path: Option<std::path::PathBuf>,
+    asset_store: amalith_io::AssetStore,
+    io_error: Option<String>,
+    selection: Vec<ObjectId>,
+    anchor_sel: Vec<(ObjectId, usize)>,
+    expanded_groups: std::collections::HashSet<ObjectId>,
+    selected_artboard: Option<ArtboardId>,
+    selected_layer: Option<LayerId>,
+    rename: Option<Rename>,
+    stroke_w: f64,
+    opacity: f32,
+    view: CanvasView,
+}
+
+impl Doc {
+    fn new(editor: Editor) -> Self {
+        Self {
+            editor,
+            file_path: None,
+            asset_store: amalith_io::AssetStore::new(),
+            io_error: None,
+            selection: Vec::new(),
+            anchor_sel: Vec::new(),
+            expanded_groups: std::collections::HashSet::new(),
+            selected_artboard: None,
+            selected_layer: None,
+            rename: None,
+            stroke_w: 1.0,
+            opacity: 1.0,
+            view: CanvasView::default(),
+        }
+    }
+
+    /// An empty stand-in — used for the active tab's parked slot, and as
+    /// the value left behind by `std::mem::replace`.
+    fn placeholder() -> Self {
+        Self::new(Editor::new(amalith_core::Document::new("Untitled")))
+    }
+}
+
 struct App {
     context: RenderContext,
     hosts: HashMap<WindowId, WindowHost>,
@@ -223,6 +271,10 @@ struct App {
     content: Scene,
     text: TextContext,
     dock: DockModel,
+    /// Parked state for every open document. `tabs[active]` is a
+    /// placeholder while that document is the live one on `App`.
+    tabs: Vec<Doc>,
+    active: usize,
     editor: Editor,
     /// Path this document was last opened from / saved to, for ⌘S.
     file_path: Option<std::path::PathBuf>,
@@ -306,6 +358,8 @@ impl App {
                 d.left.width = 52.0;
                 d
             },
+            tabs: vec![Doc::placeholder()],
+            active: 0,
             editor: Editor::new(sample::document()),
             file_path: None,
             asset_store: amalith_io::AssetStore::new(),
@@ -360,6 +414,123 @@ impl App {
         if let Some(w) = self.main_window() {
             w.request_redraw();
         }
+    }
+
+    /// Move the live (active) document state off `App` into a [`Doc`].
+    fn take_active_doc(&mut self) -> Doc {
+        Doc {
+            editor: std::mem::replace(
+                &mut self.editor,
+                Editor::new(amalith_core::Document::new("Untitled")),
+            ),
+            file_path: self.file_path.take(),
+            asset_store: std::mem::replace(&mut self.asset_store, amalith_io::AssetStore::new()),
+            io_error: self.io_error.take(),
+            selection: std::mem::take(&mut self.selection),
+            anchor_sel: std::mem::take(&mut self.anchor_sel),
+            expanded_groups: std::mem::take(&mut self.expanded_groups),
+            selected_artboard: self.selected_artboard.take(),
+            selected_layer: self.selected_layer.take(),
+            rename: self.rename.take(),
+            stroke_w: self.stroke_w,
+            opacity: self.opacity,
+            view: self.view,
+        }
+    }
+
+    /// Make `doc` the live document on `App`.
+    fn load_active_doc(&mut self, doc: Doc) {
+        self.editor = doc.editor;
+        self.file_path = doc.file_path;
+        self.asset_store = doc.asset_store;
+        self.io_error = doc.io_error;
+        self.selection = doc.selection;
+        self.anchor_sel = doc.anchor_sel;
+        self.expanded_groups = doc.expanded_groups;
+        self.selected_artboard = doc.selected_artboard;
+        self.selected_layer = doc.selected_layer;
+        self.rename = doc.rename;
+        self.stroke_w = doc.stroke_w;
+        self.opacity = doc.opacity;
+        self.view = doc.view;
+        // Transient interaction state doesn't cross documents.
+        self.drag = Drag::None;
+        self.pen.clear();
+        self.pen_redo.clear();
+        self.last_pen = None;
+        self.marquee = None;
+        self.picker = None;
+    }
+
+    /// Open `doc` in a new tab and make it active.
+    fn add_doc(&mut self, doc: Doc) {
+        self.tabs[self.active] = self.take_active_doc();
+        self.tabs.push(Doc::placeholder());
+        self.active = self.tabs.len() - 1;
+        self.load_active_doc(doc);
+        self.request_main_redraw();
+    }
+
+    /// Switch the live document to tab `i`.
+    fn switch_to(&mut self, i: usize) {
+        if i == self.active || i >= self.tabs.len() {
+            return;
+        }
+        self.tabs[self.active] = self.take_active_doc();
+        let doc = std::mem::replace(&mut self.tabs[i], Doc::placeholder());
+        self.active = i;
+        self.load_active_doc(doc);
+        self.request_main_redraw();
+    }
+
+    /// Close tab `i`. Closing the last one leaves a fresh Untitled.
+    fn close_tab(&mut self, i: usize) {
+        if i >= self.tabs.len() {
+            return;
+        }
+        if self.tabs.len() == 1 {
+            self.load_active_doc(Doc::placeholder());
+            self.request_main_redraw();
+            return;
+        }
+        if i == self.active {
+            self.tabs.remove(i);
+            self.active = i.min(self.tabs.len() - 1);
+            let doc = std::mem::replace(&mut self.tabs[self.active], Doc::placeholder());
+            self.load_active_doc(doc);
+        } else {
+            self.tabs.remove(i);
+            if i < self.active {
+                self.active -= 1;
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    /// Display label for tab `i`: `Name* @ zoom% (Color/Preview)`.
+    fn tab_label(&self, i: usize) -> String {
+        let d = if i == self.active {
+            (
+                &self.editor,
+                self.view.zoom,
+            )
+        } else {
+            (&self.tabs[i].editor, self.tabs[i].view.zoom)
+        };
+        let (editor, zoom) = d;
+        let doc = editor.document();
+        let name = doc.metadata.title.as_deref().unwrap_or("Untitled");
+        let dirty = if editor.can_undo() { "*" } else { "" };
+        let color = match doc.settings.color_mode {
+            amalith_core::ColorMode::Cmyk => "CMYK",
+            amalith_core::ColorMode::Rgb => "RGB",
+        };
+        let preview = match doc.settings.preview_mode {
+            amalith_core::PreviewMode::Default => "Default",
+            amalith_core::PreviewMode::Pixel => "Pixel",
+            amalith_core::PreviewMode::Overprint => "Overprint",
+        };
+        format!("{name}{dirty} @ {:.0}% ({color}/{preview})", zoom * 100.0)
     }
 
     /// Global (virtual-desktop) logical position of the main window's
@@ -874,23 +1045,8 @@ impl App {
             index: None,
         });
 
-        self.editor = editor;
-        self.asset_store = amalith_io::AssetStore::new();
-        self.file_path = None;
-        self.selection.clear();
-        self.anchor_sel.clear();
-        self.expanded_groups.clear();
-        self.selected_artboard = None;
-        self.selected_layer = None;
-        self.rename = None;
-        self.pen.clear();
-        self.pen_redo.clear();
-        self.last_pen = None;
-        self.picker = None;
-        self.io_error = None;
-        self.view = CanvasView::default();
         self.newdoc = None;
-        self.request_main_redraw();
+        self.add_doc(Doc::new(editor));
     }
 
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
@@ -1050,21 +1206,16 @@ impl App {
         };
         match amalith_io::load(&path) {
             Ok((document, assets)) => {
-                self.editor = Editor::new(document);
-                self.asset_store = assets;
-                self.file_path = Some(path);
-                self.selection.clear();
-                self.anchor_sel.clear();
-                self.pen.clear();
-                self.pen_redo.clear();
-                self.last_pen = None;
-                self.picker = None;
-                self.io_error = None;
-                self.view = CanvasView::default();
+                let mut doc = Doc::new(Editor::new(document));
+                doc.asset_store = assets;
+                doc.file_path = Some(path);
+                self.add_doc(doc);
             }
-            Err(err) => self.io_error = Some(format!("Open failed: {err}")),
+            Err(err) => {
+                self.io_error = Some(format!("Open failed: {err}"));
+                self.request_main_redraw();
+            }
         }
-        self.request_main_redraw();
     }
 
     /// ⌘S / ⌘⇧S — write the document to its `.amalith` file, prompting for
@@ -1362,9 +1513,33 @@ impl App {
                     return;
                 }
 
-                // The tool options strip: fill/stroke chips + steppers.
+                // The document-tab strip: switch tabs / close a tab.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
+                    && self.pointer.y < APP_BAR_H + TAB_BAR_H
+                {
+                    let (left_x, right_x) = self.canvas_x_span();
+                    let strip = Rect::new(left_x, APP_BAR_H, right_x, APP_BAR_H + TAB_BAR_H);
+                    let labels: Vec<String> =
+                        (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+                    for (i, (whole, close)) in
+                        layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
+                    {
+                        if close.contains(self.pointer) {
+                            self.close_tab(i);
+                            return;
+                        }
+                        if whole.contains(self.pointer) {
+                            self.switch_to(i);
+                            return;
+                        }
+                    }
+                    return;
+                }
+
+                // The tool options strip: fill/stroke chips + steppers.
+                if self.picker.is_none()
+                    && self.pointer.y >= APP_BAR_H + TAB_BAR_H
                     && self.pointer.y < CHROME_TOP
                 {
                     let (left_x, right_x) = self.canvas_x_span();
@@ -2408,6 +2583,8 @@ impl App {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
         });
+        let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+        let active_tab = self.active;
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -2439,6 +2616,8 @@ impl App {
                 self.selected_layer,
                 self.selected_artboard,
                 self.newdoc.as_ref(),
+                &tab_labels,
+                active_tab,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2833,7 +3012,7 @@ impl ApplicationHandler for App {
                 }
                 // Scrolling over a Weight / Opacity field nudges it.
                 if self.picker.is_none()
-                    && self.pointer.y >= APP_BAR_H
+                    && self.pointer.y >= APP_BAR_H + TAB_BAR_H
                     && self.pointer.y < CHROME_TOP
                     && dy.abs() > 0.5
                 {
@@ -3035,9 +3214,34 @@ fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: R
     }
 }
 
-/// The options-bar strip rect for a given canvas x-span.
+/// The options-bar strip rect for a given canvas x-span (below the tab
+/// strip, above the canvas).
 fn opt_bar_rect(left_x: f64, right_x: f64) -> Rect {
-    Rect::new(left_x, APP_BAR_H, right_x.max(left_x), CHROME_TOP)
+    Rect::new(left_x, APP_BAR_H + TAB_BAR_H, right_x.max(left_x), CHROME_TOP)
+}
+
+/// Lay `labels` out as document tabs across `strip`, left to right.
+/// Returns `(whole tab rect, close-× rect)` per tab.
+fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(Rect, Rect)> {
+    let mut out = Vec::with_capacity(labels.len());
+    let mut x = strip.x0 + 4.0;
+    for label in labels {
+        let tw = text.measure(label, 12.0);
+        let w = tw + 18.0 /* × */ + 22.0 /* padding */;
+        let whole = Rect::new(x, strip.y0, (x + w).min(strip.x1), strip.y1);
+        let close = Rect::new(
+            whole.x0 + 6.0,
+            strip.y0 + 4.0,
+            whole.x0 + 20.0,
+            strip.y1 - 4.0,
+        );
+        out.push((whole, close));
+        x += w + 2.0;
+        if x >= strip.x1 {
+            break;
+        }
+    }
+    out
 }
 
 /// Interactive rects along the options bar. `label_*` are where the
@@ -3300,6 +3504,8 @@ fn paint_main(
     selected_layer: Option<LayerId>,
     selected_artboard: Option<ArtboardId>,
     newdoc_form: Option<&newdoc::NewDocForm>,
+    tab_labels: &[String],
+    active_tab: usize,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3354,6 +3560,57 @@ fn paint_main(
         cur_weight,
         cur_opacity,
     );
+
+    // Document-tab strip.
+    let tab_strip = Rect::new(left_x, APP_BAR_H, right_x, APP_BAR_H + TAB_BAR_H);
+    scene.fill(Fill::NonZero, ID, theme.app_bar, None, &tab_strip);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(tab_strip.x0, tab_strip.y1 - 1.0, tab_strip.x1, tab_strip.y1),
+    );
+    for (i, (whole, close)) in layout_tabs(text, tab_labels, tab_strip).into_iter().enumerate() {
+        let is_active = i == active_tab;
+        if is_active {
+            scene.fill(Fill::NonZero, ID, theme.strip_active, None, &whole);
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                theme.select_blue,
+                None,
+                &Rect::new(whole.x0, whole.y1 - 2.0, whole.x1, whole.y1),
+            );
+        }
+        // Close ×.
+        let xc = close.center();
+        let cc = if is_active { theme.text } else { theme.text_dim };
+        let mut xg = BezPath::new();
+        xg.move_to((xc.x - 4.0, xc.y - 4.0));
+        xg.line_to((xc.x + 4.0, xc.y + 4.0));
+        xg.move_to((xc.x + 4.0, xc.y - 4.0));
+        xg.line_to((xc.x - 4.0, xc.y + 4.0));
+        scene.stroke(&Stroke::new(1.3), ID, cc, None, &xg);
+        text.draw(
+            scene,
+            &tab_labels[i],
+            12.0,
+            if is_active { theme.text } else { theme.text_dim },
+            close.x1 + 6.0,
+            tab_strip.y0 + TAB_BAR_H * 0.5 + 4.0,
+        );
+        // Divider between tabs.
+        if i + 1 < tab_labels.len() {
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                theme.border,
+                None,
+                &Rect::new(whole.x1, tab_strip.y0 + 5.0, whole.x1 + 1.0, tab_strip.y1 - 5.0),
+            );
+        }
+    }
 
     for side in [RailSide::Left, RailSide::Right] {
         let rail = dock.rail(side);
