@@ -61,6 +61,15 @@ pub struct DragPreview<'a> {
     pub xf: Option<&'a HashMap<ObjectId, Affine>>,
 }
 
+/// In-progress Pen path preview (all points in document space).
+#[derive(Clone, Copy)]
+pub struct PenPreview<'a> {
+    pub anchors: &'a [Point],
+    pub hover: Point,
+    /// The cursor is close enough to the first anchor to close the path.
+    pub near_close: bool,
+}
+
 impl DragPreview<'_> {
     /// Transform for a dragged object's own rendering (translate only).
     fn object_offset(&self, id: ObjectId) -> Affine {
@@ -93,6 +102,7 @@ pub fn paint(
     selection: &[ObjectId],
     drag: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
+    pen: Option<PenPreview<'_>>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -180,6 +190,45 @@ pub fn paint(
                     theme.select_blue,
                     None,
                     &r,
+                );
+            }
+        }
+    }
+
+    // Pen: in-progress path.
+    if let Some(pen) = pen {
+        if let Some((&first, rest)) = pen.anchors.split_first() {
+            let mut path = BezPath::new();
+            path.move_to(vt * first);
+            for &a in rest {
+                path.line_to(vt * a);
+            }
+            path.line_to(vt * pen.hover);
+            scene.stroke(
+                &Stroke::new(1.5),
+                Affine::IDENTITY,
+                theme.select_blue,
+                None,
+                &path,
+            );
+            let white = Color::from_rgb8(0xff, 0xff, 0xff);
+            for (i, &a) in pen.anchors.iter().enumerate() {
+                let hot = i == 0 && pen.near_close;
+                let sz = if hot { 9.0 } else { 6.0 };
+                let sq = Rect::from_center_size(vt * a, (sz, sz));
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    if hot { theme.select_blue } else { white },
+                    None,
+                    &sq,
+                );
+                scene.stroke(
+                    &Stroke::new(1.25),
+                    Affine::IDENTITY,
+                    theme.select_blue,
+                    None,
+                    &sq,
                 );
             }
         }

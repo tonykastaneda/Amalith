@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 use amalith_core::{Document, LayerId, ObjectId};
-use amalith_shell::canvas::{self, CanvasView, DragPreview};
+use amalith_shell::canvas::{self, CanvasView, DragPreview, PenPreview};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
@@ -152,6 +152,9 @@ struct App {
     editor: Editor,
     selection: Vec<ObjectId>,
     active_tool: Tool,
+    /// In-progress Pen path — committed anchors in document space. Empty
+    /// when not drawing.
+    pen: Vec<Point>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     view: CanvasView,
@@ -192,6 +195,7 @@ impl App {
             editor: Editor::new(sample::document()),
             selection: Vec::new(),
             active_tool: Tool::Select,
+            pen: Vec::new(),
             marquee: None,
             view: CanvasView::default(),
             theme: Theme::default(),
@@ -256,6 +260,43 @@ impl App {
             objects: self.selection.clone(),
             delta: amalith_core::Vec2::new(dx * step, dy * step),
         });
+        self.request_main_redraw();
+    }
+
+    /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` makes
+    /// it a polygon; otherwise an open polyline.
+    fn commit_pen(&mut self, closed: bool) {
+        if self.pen.len() < 2 {
+            self.pen.clear();
+            return;
+        }
+        let pts: Vec<amalith_core::Point> = self
+            .pen
+            .drain(..)
+            .map(|p| amalith_core::Point::new(p.x, p.y))
+            .collect();
+        let path = if closed {
+            amalith_core::PathData::polygon(&pts)
+        } else {
+            amalith_core::PathData::polyline(&pts)
+        };
+        let layer = self.ensure_layer();
+        if let Ok(CommandOutcome::Object(id)) = self.editor.execute(Command::CreatePath {
+            layer,
+            path,
+            name: None,
+        }) {
+            self.selection = vec![id];
+        }
+        self.request_main_redraw();
+    }
+
+    /// Switch tools, discarding any in-progress Pen path.
+    fn set_tool(&mut self, t: Tool) {
+        if t != Tool::Pen {
+            self.pen.clear();
+        }
+        self.active_tool = t;
         self.request_main_redraw();
     }
 
@@ -484,7 +525,7 @@ impl App {
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
                                 match action {
-                                    panels::Action::SetTool(t) => self.active_tool = t,
+                                    panels::Action::SetTool(t) => self.set_tool(t),
                                     panels::Action::Select(id) => self.selection = vec![id],
                                     panels::Action::None => {}
                                 }
@@ -501,6 +542,25 @@ impl App {
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
+
+                // Pen: click to place anchors; click the first anchor to
+                // close and commit.
+                if self.active_tool == Tool::Pen {
+                    let close_r = 8.0 / self.view.zoom;
+                    if self.pen.len() >= 3
+                        && self
+                            .pen
+                            .first()
+                            .is_some_and(|f| (*f - dp).hypot() <= close_r)
+                    {
+                        self.commit_pen(true);
+                    } else {
+                        let p = constrained(self.pen.last().copied(), dp, self.shift_down);
+                        self.pen.push(p);
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
 
                 // A shape tool rubber-bands a new object.
                 if matches!(self.active_tool, Tool::Rectangle | Tool::Ellipse) {
@@ -843,7 +903,7 @@ impl App {
                             rect: r,
                             name: None,
                         },
-                        Tool::Select => return,
+                        Tool::Select | Tool::Pen => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
                         self.selection = vec![id];
@@ -989,6 +1049,21 @@ impl App {
             )),
             _ => None,
         };
+        let pen_preview = if self.active_tool == Tool::Pen && !self.pen.is_empty() {
+            let hover = self.doc_point(self.pointer);
+            let near_close = self.pen.len() >= 3
+                && self
+                    .pen
+                    .first()
+                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.view.zoom);
+            Some(PenPreview {
+                anchors: &self.pen,
+                hover,
+                near_close,
+            })
+        } else {
+            None
+        };
 
         self.content.reset();
         match role {
@@ -1004,6 +1079,7 @@ impl App {
                 self.pointer,
                 preview,
                 draw_shape,
+                pen_preview,
                 self.marquee,
                 wl,
                 hl,
@@ -1261,22 +1337,18 @@ impl ApplicationHandler for App {
                             KeyCode::ArrowRight => self.nudge(1.0, 0.0),
                             KeyCode::ArrowUp => self.nudge(0.0, -1.0),
                             KeyCode::ArrowDown => self.nudge(0.0, 1.0),
+                            KeyCode::Enter | KeyCode::NumpadEnter if !self.pen.is_empty() => {
+                                self.commit_pen(false);
+                            }
                             KeyCode::Escape => {
+                                self.pen.clear();
                                 self.selection.clear();
                                 self.request_main_redraw();
                             }
-                            KeyCode::KeyV => {
-                                self.active_tool = Tool::Select;
-                                self.request_main_redraw();
-                            }
-                            KeyCode::KeyM => {
-                                self.active_tool = Tool::Rectangle;
-                                self.request_main_redraw();
-                            }
-                            KeyCode::KeyL => {
-                                self.active_tool = Tool::Ellipse;
-                                self.request_main_redraw();
-                            }
+                            KeyCode::KeyV => self.set_tool(Tool::Select),
+                            KeyCode::KeyP => self.set_tool(Tool::Pen),
+                            KeyCode::KeyM => self.set_tool(Tool::Rectangle),
+                            KeyCode::KeyL => self.set_tool(Tool::Ellipse),
                             _ => {}
                         }
                     }
@@ -1337,6 +1409,21 @@ fn demo_left_dock() -> Node {
         panels: vec![PanelId("tools")],
         active: 0,
     }
+}
+
+/// Snap `p` to a 45°-stepped direction from `prev` when `snap` (Shift).
+fn constrained(prev: Option<Point>, p: Point, snap: bool) -> Point {
+    let Some(prev) = prev.filter(|_| snap) else {
+        return p;
+    };
+    let d = p - prev;
+    let len = d.hypot();
+    if len == 0.0 {
+        return p;
+    }
+    let step = std::f64::consts::FRAC_PI_4;
+    let a = (d.y.atan2(d.x) / step).round() * step;
+    Point::new(prev.x + len * a.cos(), prev.y + len * a.sin())
 }
 
 /// Normalized rect between two document-space points; `square` locks it
@@ -1400,6 +1487,7 @@ fn paint_main(
     pointer: Point,
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
+    pen_preview: Option<PenPreview<'_>>,
     marquee: Option<Rect>,
     width: f64,
     height: f64,
@@ -1435,6 +1523,7 @@ fn paint_main(
         selection,
         drag_preview,
         draw_shape,
+        pen_preview,
     );
 
     if let Some(m) = marquee {
