@@ -39,7 +39,7 @@ use winit::window::{Window, WindowId};
 /// accepts a drop (creating the rail).
 const EMPTY_ZONE: f64 = 48.0;
 /// Slack around a splitter's visual gap for grabbing it.
-const GRAB_SLOP: f64 = 3.0;
+const GRAB_SLOP: f64 = 5.0;
 /// Visible thickness of the bar on a rail's inner edge.
 const RAIL_EDGE: f64 = 4.0;
 /// Min / max rail width as a fraction of the window, logical points.

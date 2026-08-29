@@ -40,7 +40,8 @@ impl Default for Theme {
             strip_bg: Color::from_rgb8(0x24, 0x24, 0x24),
             strip_active: Color::from_rgb8(0x2b, 0x2b, 0x2b),
             border: Color::from_rgb8(0x15, 0x15, 0x15),
-            splitter: Color::from_rgb8(0x1a, 0x1a, 0x1a),
+            // Light enough to read as a grabbable groove against panel_bg.
+            splitter: Color::from_rgb8(0x3d, 0x3d, 0x3d),
             drop_fill: Color::from_rgb8(0x1d, 0x7a, 0xf0).with_alpha(0.20),
             drop_line: Color::from_rgb8(0x1d, 0x7a, 0xf0),
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),
