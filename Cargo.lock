@@ -23,6 +23,10 @@ name = "accesskit"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e25ae84c0260bdf5df07796d7cc4882460de26a2b406ec0e6c42461a723b271b"
+dependencies = [
+ "enumn",
+ "serde",
+]
 
 [[package]]
 name = "accesskit_atspi_common"
@@ -123,6 +127,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.3.4",
  "once_cell",
+ "serde",
  "version_check",
  "zerocopy",
 ]
@@ -135,6 +140,7 @@ dependencies = [
  "amalith-core",
  "amalith-io",
  "eframe",
+ "egui_dock",
  "lyon_tessellation",
  "muda",
  "rfd",
@@ -937,6 +943,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "duplicate"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e92f10a49176cbffacaedabfaa11d51db1ea0f80a83c26e1873b43cd1742c24"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "proc-macro2-diagnostics",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -944,6 +961,7 @@ checksum = "94bdf37f8d5bd9aa7f753573fdda9cf7343afa73dd28d7bfe9593bd9798fc07e"
 dependencies = [
  "bytemuck",
  "emath",
+ "serde",
 ]
 
 [[package]]
@@ -996,6 +1014,7 @@ dependencies = [
  "log",
  "nohash-hasher",
  "profiling",
+ "serde",
  "smallvec",
  "unicode-segmentation",
 ]
@@ -1041,6 +1060,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_dock"
+version = "0.17.0"
+dependencies = [
+ "duplicate",
+ "egui",
+ "paste",
+ "serde",
+]
+
+[[package]]
 name = "egui_glow"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,6 +1094,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45fd7bc25f769a3c198fe1cf183124bf4de3bd62ef7b4f1eaf6b08711a3af8db"
 dependencies = [
  "bytemuck",
+ "serde",
 ]
 
 [[package]]
@@ -1095,6 +1125,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "enumn"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f9ed6b3789237c8a0c1c505af1c7eb2c560df6186f01b098c3a1064ea532f38"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "epaint"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1110,6 +1151,7 @@ dependencies = [
  "nohash-hasher",
  "parking_lot",
  "profiling",
+ "serde",
 ]
 
 [[package]]
@@ -2902,6 +2944,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proc-macro2-diagnostics"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af066a9c399a26e020ada66a034357a868728e72cd426f3adcd35f80d88d88c8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "version_check",
 ]
 
 [[package]]

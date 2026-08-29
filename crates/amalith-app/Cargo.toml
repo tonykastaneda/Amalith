@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 eframe.workspace = true
+egui_dock.workspace = true
 amalith-core = { path = "../amalith-core" }
 amalith-commands = { path = "../amalith-commands" }
 amalith-io = { path = "../amalith-io" }

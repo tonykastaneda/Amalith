@@ -55,6 +55,57 @@ impl DirectSelectionTool {
                 }
                 self.drag = Some(Drag::Move { start: point });
             }
+        } else if let Some((id, a, b)) = topmost_segment_at(document, point, hit_radius) {
+            // Clicking a contour segment selects the two anchors that
+            // bound that edge, matching Illustrator's white-arrow
+            // click-on-a-line.
+            let anchors = [(id, a), (id, b)];
+            if add {
+                let all_selected = anchors.iter().all(|anchor| self.selected.contains(anchor));
+                if all_selected {
+                    for anchor in &anchors {
+                        self.selected.remove(anchor);
+                    }
+                    self.drag = None;
+                } else {
+                    self.selected.extend(anchors);
+                    self.drag = Some(Drag::Move { start: point });
+                }
+            } else {
+                let already = anchors.iter().all(|anchor| self.selected.contains(anchor))
+                    && self.selected.len() == 2;
+                if !already {
+                    self.selected.clear();
+                    self.selected.extend(anchors);
+                }
+                self.drag = Some(Drag::Move { start: point });
+            }
+        } else if let Some(id) = topmost_path_at(document, point) {
+            // Clicking the body of a shape (not a single node) selects
+            // every anchor on that path — Illustrator's white-arrow
+            // click-in-the-middle.
+            let anchors = path_anchors(document, id);
+            if add {
+                let all_selected = !anchors.is_empty()
+                    && anchors.iter().all(|anchor| self.selected.contains(anchor));
+                if all_selected {
+                    for anchor in &anchors {
+                        self.selected.remove(anchor);
+                    }
+                    self.drag = None;
+                } else {
+                    self.selected.extend(anchors);
+                    self.drag = Some(Drag::Move { start: point });
+                }
+            } else {
+                let already = !anchors.is_empty()
+                    && anchors.iter().all(|anchor| self.selected.contains(anchor));
+                if !already {
+                    self.selected.clear();
+                    self.selected.extend(anchors);
+                }
+                self.drag = Some(Drag::Move { start: point });
+            }
         } else {
             if !add {
                 self.selected.clear();
@@ -207,6 +258,144 @@ impl DirectSelectionTool {
             self.cancel_drag();
         }
     }
+}
+
+/// The topmost path segment whose contour lies within `hit_radius` of
+/// `point`, as the two editable anchors that bound that segment.
+fn topmost_segment_at(
+    document: &Document,
+    point: Point,
+    hit_radius: f64,
+) -> Option<(ObjectId, usize, usize)> {
+    document.layers().iter().rev().find_map(|layer| {
+        if !layer.visible {
+            return None;
+        }
+        path_descendants(document, ObjectParent::Layer(layer.id))
+            .into_iter()
+            .rev()
+            .find_map(|id| {
+                let object = document.object(id)?;
+                let ObjectKind::Path(path) = &object.kind else {
+                    return None;
+                };
+                if !object.visible {
+                    return None;
+                }
+                let transform = document.world_transform(id);
+                contour_segments(&path.geometry)
+                    .into_iter()
+                    .find_map(|(from, to, edges)| {
+                        edges
+                            .iter()
+                            .any(|&(a, b)| {
+                                distance_to_segment(point, transform * a, transform * b)
+                                    <= hit_radius
+                            })
+                            .then_some((id, from, to))
+                    })
+            })
+    })
+}
+
+fn contour_segments(path: &geom::BezPath) -> Vec<(usize, usize, Vec<(Point, Point)>)> {
+    let mut result = Vec::new();
+    let mut start_idx = 0usize;
+    let mut start_pt = Point::ZERO;
+    let mut last_idx = 0usize;
+    let mut last_pt = Point::ZERO;
+    let mut started = false;
+
+    let push_segment = |from: usize, to: usize, mini: geom::BezPath, out: &mut Vec<_>| {
+        let mut edges = Vec::new();
+        for poly in geom::flattened_points(&mini, 0.5) {
+            for pair in poly.windows(2) {
+                edges.push((pair[0], pair[1]));
+            }
+        }
+        if !edges.is_empty() {
+            out.push((from, to, edges));
+        }
+    };
+
+    for (index, element) in path.elements().iter().enumerate() {
+        match *element {
+            geom::PathEl::MoveTo(point) => {
+                start_idx = index;
+                start_pt = point;
+                last_idx = index;
+                last_pt = point;
+                started = true;
+            }
+            geom::PathEl::LineTo(point)
+            | geom::PathEl::QuadTo(_, point)
+            | geom::PathEl::CurveTo(_, _, point) => {
+                let mut mini = geom::BezPath::new();
+                mini.move_to(last_pt);
+                mini.push(*element);
+                push_segment(last_idx, index, mini, &mut result);
+                last_idx = index;
+                last_pt = point;
+            }
+            geom::PathEl::ClosePath if started => {
+                if (last_pt - start_pt).hypot() > 1e-9 {
+                    let mut mini = geom::BezPath::new();
+                    mini.move_to(last_pt);
+                    mini.line_to(start_pt);
+                    push_segment(last_idx, start_idx, mini, &mut result);
+                }
+            }
+            geom::PathEl::ClosePath => {}
+        }
+    }
+    result
+}
+
+fn distance_to_segment(point: Point, a: Point, b: Point) -> f64 {
+    let ab = b - a;
+    let ap = point - a;
+    let len2 = ab.dot(ab);
+    if len2 <= f64::EPSILON {
+        return ap.hypot();
+    }
+    let t = (ap.dot(ab) / len2).clamp(0.0, 1.0);
+    (ap - ab * t).hypot()
+}
+
+/// The topmost visible path whose document-space bounds contain `point`.
+/// Used when a white-arrow click misses every anchor but lands inside a
+/// shape, so the click can select that path's full node set.
+fn topmost_path_at(document: &Document, point: Point) -> Option<ObjectId> {
+    document.layers().iter().rev().find_map(|layer| {
+        if !layer.visible {
+            return None;
+        }
+        path_descendants(document, ObjectParent::Layer(layer.id))
+            .into_iter()
+            .rev()
+            .find(|&id| {
+                document.object(id).is_some_and(|object| {
+                    object.visible
+                        && matches!(object.kind, ObjectKind::Path(_))
+                        && document
+                            .bounds_of(id)
+                            .is_some_and(|bounds| bounds.contains(point))
+                })
+            })
+    })
+}
+
+fn path_anchors(document: &Document, id: ObjectId) -> Vec<(ObjectId, usize)> {
+    let Some(object) = document.object(id) else {
+        return Vec::new();
+    };
+    let ObjectKind::Path(path) = &object.kind else {
+        return Vec::new();
+    };
+    geom::anchor_indices(&path.geometry)
+        .into_iter()
+        .map(|index| (id, index))
+        .collect()
 }
 
 /// Finds the topmost path anchor within `hit_radius` document units.
@@ -374,5 +563,60 @@ mod tests {
             topmost_anchor_at(editor.document(), point, 0.1),
             Some((child, index))
         );
+    }
+
+    #[test]
+    fn clicking_a_path_body_selects_every_anchor() {
+        let (editor, object) = editor_with_rect();
+        let ObjectKind::Path(path) = &editor.document().object(object).unwrap().kind else {
+            unreachable!()
+        };
+        let all = geom::anchor_indices(&path.geometry);
+        assert_eq!(all.len(), 4);
+
+        let mut tool = DirectSelectionTool::default();
+        tool.press(editor.document(), Point::new(5.0, 5.0), 0.1, false);
+
+        let selected: HashSet<usize> = tool
+            .selected
+            .iter()
+            .filter(|(id, _)| *id == object)
+            .map(|(_, index)| *index)
+            .collect();
+        assert_eq!(selected, all.iter().copied().collect());
+    }
+
+    #[test]
+    fn clicking_a_contour_segment_selects_its_two_endpoints() {
+        let (editor, object) = editor_with_rect();
+        let ObjectKind::Path(path) = &editor.document().object(object).unwrap().kind else {
+            unreachable!()
+        };
+        let anchors = geom::anchor_indices(&path.geometry);
+        assert_eq!(anchors.len(), 4);
+        // Midpoint of the top edge (0,0)-(10,0).
+        let mut tool = DirectSelectionTool::default();
+        tool.press(editor.document(), Point::new(5.0, 0.0), 0.5, false);
+        let selected: HashSet<usize> = tool
+            .selected
+            .iter()
+            .filter(|(id, _)| *id == object)
+            .map(|(_, index)| *index)
+            .collect();
+        assert_eq!(selected.len(), 2);
+        assert!(selected.contains(&anchors[0]));
+        assert!(selected.contains(&anchors[1]));
+    }
+
+    #[test]
+    fn clicking_empty_space_does_not_select_anchors() {
+        let (editor, object) = editor_with_rect();
+        let mut tool = DirectSelectionTool::default();
+        tool.press(editor.document(), Point::new(50.0, 50.0), 0.1, false);
+        assert!(
+            !tool.has_selected_anchor_on(object),
+            "a miss should start a marquee, not select the path"
+        );
+        assert!(matches!(tool.drag, Some(Drag::Marquee { .. })));
     }
 }

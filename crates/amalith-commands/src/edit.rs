@@ -16,8 +16,8 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    geom::BezPath, Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint,
+    geom::BezPath, Affine, Artboard, ArtboardId, ColorMode, Document, Layer, LayerId, Object,
+    ObjectId, ObjectKind, ObjectParent, Paint,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,6 +86,9 @@ pub(crate) enum Edit {
     SetOpacity {
         id: ObjectId,
         opacity: f32,
+    },
+    SetColorMode {
+        mode: ColorMode,
     },
 }
 
@@ -239,6 +242,10 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 },
                 None,
             ))
+        }
+        Edit::SetColorMode { mode } => {
+            let old = std::mem::replace(&mut doc.settings.color_mode, mode);
+            Ok((Edit::SetColorMode { mode: old }, None))
         }
     }
 }

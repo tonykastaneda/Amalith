@@ -39,8 +39,8 @@ pub use error::CommandError;
 mod tests {
     use super::*;
     use amalith_core::{
-        Affine, Color, Document, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint,
-        Rect, Vec2,
+        Affine, Color, ColorMode, Document, Layer, LayerId, Object, ObjectId, ObjectKind,
+        ObjectParent, Paint, Rect, Vec2,
     };
 
     fn new_editor() -> Editor {
@@ -2009,5 +2009,86 @@ mod tests {
             editor.document().object(a).unwrap().appearance.opacity,
             0.35
         );
+    }
+
+    #[test]
+    fn set_color_mode_undo_redo_and_no_op_when_unchanged() {
+        let mut editor = new_editor();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Cmyk);
+
+        editor
+            .execute(Command::SetColorMode {
+                mode: ColorMode::Rgb,
+            })
+            .unwrap();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Rgb);
+        assert!(editor.can_undo());
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Cmyk);
+
+        editor.redo().unwrap();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Rgb);
+
+        editor
+            .execute(Command::SetColorMode {
+                mode: ColorMode::Rgb,
+            })
+            .unwrap();
+        editor.undo().unwrap();
+        assert_eq!(
+            editor.document().settings.color_mode,
+            ColorMode::Cmyk,
+            "a no-op SetColorMode must not push a history entry"
+        );
+    }
+
+    #[test]
+    fn rgb_to_cmyk_limits_object_paints_and_undo_restores_them() {
+        let mut editor = new_editor();
+        editor
+            .execute(Command::SetColorMode {
+                mode: ColorMode::Rgb,
+            })
+            .unwrap();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let green = Paint::Solid(Color::rgb(0.0, 1.0, 0.0));
+        editor
+            .execute(Command::SetFill {
+                objects: vec![id],
+                paint: green,
+            })
+            .unwrap();
+
+        editor
+            .execute(Command::SetColorMode {
+                mode: ColorMode::Cmyk,
+            })
+            .unwrap();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Cmyk);
+        let limited = editor.document().object(id).unwrap().appearance.fill;
+        assert_ne!(limited, green, "pure RGB green is outside process CMYK");
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().settings.color_mode, ColorMode::Rgb);
+        assert_eq!(editor.document().object(id).unwrap().appearance.fill, green);
     }
 }

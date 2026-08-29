@@ -5,7 +5,7 @@
 //! (`crate::edit`) that turns intent into an actual, undoable document
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
-use amalith_core::{Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, Vec2};
+use amalith_core::{Affine, ArtboardId, ColorMode, LayerId, ObjectId, Paint, PathData, Rect, Vec2};
 
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
@@ -179,6 +179,13 @@ pub enum Command {
     SetOpacity {
         objects: Vec<ObjectId>,
         opacity: f32,
+    },
+    /// Sets the document color mode (CMYK / RGB). Switching from RGB to
+    /// CMYK also gamut-maps every object's fill and stroke into a
+    /// process-CMYK range (undo restores the original colors). No-op when
+    /// the document is already in `mode`.
+    SetColorMode {
+        mode: ColorMode,
     },
 }
 

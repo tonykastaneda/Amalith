@@ -17,6 +17,14 @@ impl Paint {
             Paint::Solid(color) => Some(color),
         }
     }
+
+    /// See [`Color::to_cmyk_limited`]. `None` is unchanged.
+    pub fn to_cmyk_limited(self) -> Self {
+        match self {
+            Paint::None => Paint::None,
+            Paint::Solid(color) => Paint::Solid(color.to_cmyk_limited()),
+        }
+    }
 }
 
 /// An object's fill, stroke, and compositing opacity.

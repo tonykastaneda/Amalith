@@ -12,8 +12,8 @@ use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Document, DocumentError, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Rect, Vec2,
+    Affine, Artboard, ArtboardId, ColorMode, Document, DocumentError, Layer, LayerId, Object,
+    ObjectId, ObjectKind, ObjectParent, Rect, Vec2,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -651,6 +651,27 @@ impl Editor {
                 .into_iter()
                 .map(|id| Edit::SetOpacity { id, opacity })
                 .collect(),
+            Command::SetColorMode { mode } => {
+                if self.document.settings.color_mode == mode {
+                    Vec::new()
+                } else {
+                    let mut edits = vec![Edit::SetColorMode { mode }];
+                    if mode == ColorMode::Cmyk {
+                        for object in self.document.objects() {
+                            let id = object.id;
+                            let fill = object.appearance.fill.to_cmyk_limited();
+                            if fill != object.appearance.fill {
+                                edits.push(Edit::SetFill { id, paint: fill });
+                            }
+                            let stroke = object.appearance.stroke.to_cmyk_limited();
+                            if stroke != object.appearance.stroke {
+                                edits.push(Edit::SetStroke { id, paint: stroke });
+                            }
+                        }
+                    }
+                    edits
+                }
+            }
             Command::Paste { .. } => {
                 unreachable!("Editor::execute intercepts Command::Paste before calling compile")
             }
