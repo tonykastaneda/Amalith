@@ -6,8 +6,8 @@
 //! just answers "where does everything sit" and "if I drop here, what
 //! happens".
 //!
-//! Layout is one tree of [`Node`]s per surface: the main window's
-//! [`DockModel::root`], plus one tree per detached [`Floating`] group.
+//! Layout is one tree of [`Node`]s per surface: a [`Rail`] on each side of
+//! the document window, plus one tree per detached [`Floating`] group.
 //! Splits carry child weights; tab groups carry an active index. Every
 //! mutation is a small, testable operation.
 
@@ -90,52 +90,203 @@ pub struct Floating {
     pub rect: [f32; 4],
 }
 
-/// The whole panel layout: the document window's tree plus any detached
-/// groups.
+/// Which edge of the document window a rail sits on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RailSide {
+    Left,
+    Right,
+}
+
+/// One docked column: a single [`Node`] tree, or empty. All the tree
+/// mechanics live here so every rail — left, right, and any future one —
+/// behaves identically.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Rail {
+    pub tree: Option<Node>,
+}
+
+impl Rail {
+    pub fn with(node: Node) -> Self {
+        Self { tree: Some(node) }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tree.is_none()
+    }
+
+    pub fn panels(&self) -> Vec<PanelId> {
+        let mut out = Vec::new();
+        if let Some(t) = &self.tree {
+            collect(t, &mut out);
+        }
+        out
+    }
+
+    /// Removes `panel`, pruning empty tab groups and collapsing single-child
+    /// splits; empties the rail if that was the last panel.
+    pub fn remove(&mut self, panel: PanelId) -> bool {
+        let Some(t) = &mut self.tree else {
+            return false;
+        };
+        let hit = remove_in(t, panel);
+        if node_is_empty(t) {
+            self.tree = None;
+        }
+        hit
+    }
+
+    /// Applies a resolved drop of `panel` onto this rail. `Float` is a
+    /// no-op here (the caller detaches instead).
+    pub fn dock(&mut self, panel: PanelId, target: DropTarget) {
+        self.remove(panel);
+        match target {
+            DropTarget::Float => {}
+            DropTarget::Tab { path, index } => {
+                let Some(t) = &mut self.tree else {
+                    self.tree = Some(Node::Tabs {
+                        panels: vec![panel],
+                        active: 0,
+                    });
+                    return;
+                };
+                if let Some(Node::Tabs { panels, active }) = node_at_mut(t, &path) {
+                    let i = index.min(panels.len());
+                    panels.insert(i, panel);
+                    *active = i;
+                }
+            }
+            DropTarget::Split { path, side } => {
+                let Some(t) = self.tree.take() else {
+                    self.tree = Some(Node::Tabs {
+                        panels: vec![panel],
+                        active: 0,
+                    });
+                    return;
+                };
+                self.tree = Some(split_at(t, &path, side, panel));
+            }
+        }
+    }
+
+    /// Make tab `index` active in the tab group at `path`. `true` if `path`
+    /// pointed at a tab group.
+    pub fn activate_tab(&mut self, path: &NodePath, index: usize) -> bool {
+        let Some(t) = &mut self.tree else {
+            return false;
+        };
+        if let Some(Node::Tabs { panels, active }) = node_at_mut(t, path) {
+            if !panels.is_empty() {
+                *active = index.min(panels.len() - 1);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move the boundary after child `gap` of the split at `path` so child
+    /// `gap` takes `frac` (clamped 5%–95%) of that pair's combined span;
+    /// their weight sum is preserved so other children hold their size.
+    pub fn set_boundary(&mut self, path: &NodePath, gap: usize, frac: f32) -> bool {
+        let Some(t) = &mut self.tree else {
+            return false;
+        };
+        let Some(Node::Split { children, .. }) = node_at_mut(t, path) else {
+            return false;
+        };
+        if gap + 1 >= children.len() {
+            return false;
+        }
+        let frac = frac.clamp(0.05, 0.95);
+        let pair = children[gap].weight.max(0.0) + children[gap + 1].weight.max(0.0);
+        let pair = if pair <= 0.0 { 2.0 } else { pair };
+        children[gap].weight = pair * frac;
+        children[gap + 1].weight = pair * (1.0 - frac);
+        true
+    }
+
+    /// First tab group a breadth-first walk finds — a fallback drop spot.
+    pub fn any_tab_path(&self) -> Option<NodePath> {
+        let t = self.tree.as_ref()?;
+        walk(t)
+            .into_iter()
+            .find_map(|(path, node)| matches!(node, Node::Tabs { .. }).then_some(path))
+    }
+
+    /// Path to the tab group currently holding `panel`.
+    pub fn path_of(&self, panel: PanelId) -> Option<NodePath> {
+        let t = self.tree.as_ref()?;
+        walk(t).into_iter().find_map(|(path, node)| match node {
+            Node::Tabs { panels, .. } if panels.contains(&panel) => Some(path),
+            _ => None,
+        })
+    }
+
+    fn tab_len(&self, path: &NodePath) -> Option<usize> {
+        let t = self.tree.as_ref()?;
+        walk(t).into_iter().find_map(|(p, node)| {
+            (&p == path).then_some(node).and_then(|n| match n {
+                Node::Tabs { panels, .. } => Some(panels.len()),
+                _ => None,
+            })
+        })
+    }
+}
+
+/// The whole panel layout: a rail on each side of the canvas, plus any
+/// detached groups.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DockModel {
-    pub root: Option<Node>,
+    pub left: Rail,
+    pub right: Rail,
     pub floating: Vec<Floating>,
     next_id: u64,
 }
 
 impl DockModel {
-    pub fn new(root: Node) -> Self {
+    /// New model with `right` populating the right rail and an empty left.
+    pub fn new(right: Node) -> Self {
         Self {
-            root: Some(root),
+            left: Rail::default(),
+            right: Rail::with(right),
             floating: Vec::new(),
             next_id: 1,
         }
     }
 
-    /// Every panel currently placed anywhere (main tree + floating), in an
-    /// arbitrary but stable order. Used by the app to know what to build.
-    pub fn panels(&self) -> Vec<PanelId> {
-        let mut out = Vec::new();
-        if let Some(root) = &self.root {
-            collect(root, &mut out);
+    pub fn rail(&self, side: RailSide) -> &Rail {
+        match side {
+            RailSide::Left => &self.left,
+            RailSide::Right => &self.right,
         }
+    }
+
+    pub fn rail_mut(&mut self, side: RailSide) -> &mut Rail {
+        match side {
+            RailSide::Left => &mut self.left,
+            RailSide::Right => &mut self.right,
+        }
+    }
+
+    /// Every panel placed anywhere, in an arbitrary but stable order.
+    pub fn panels(&self) -> Vec<PanelId> {
+        let mut out = self.left.panels();
+        out.extend(self.right.panels());
         for f in &self.floating {
             collect(&f.node, &mut out);
         }
         out
     }
 
-    /// Is `panel` placed somewhere?
     pub fn contains(&self, panel: PanelId) -> bool {
         self.panels().contains(&panel)
     }
 
-    /// Removes `panel` wherever it is, pruning empty tab groups and
-    /// collapsing single-child splits. Returns `true` if it was present.
+    /// Removes `panel` from wherever it sits — either rail or a floating
+    /// group (empty floating groups are dropped).
     pub fn remove(&mut self, panel: PanelId) -> bool {
-        let mut removed = false;
-        if let Some(root) = &mut self.root {
-            removed |= remove_in(root, panel);
-        }
-        if self.root.as_ref().is_some_and(node_is_empty) {
-            self.root = None;
-        }
+        let mut removed = self.left.remove(panel);
+        removed |= self.right.remove(panel);
         self.floating.retain_mut(|f| {
             let hit = remove_in(&mut f.node, panel);
             removed |= hit;
@@ -178,11 +329,10 @@ impl DockModel {
         Some(self.floating.remove(i))
     }
 
-    /// Docks floating group `id` back into the main tree: its active panel
-    /// lands at `target`, any siblings tab in beside it. Returns the panels
-    /// that were re-docked. No-op (empty vec) if `id` is unknown or
-    /// `target` is `Float`.
-    pub fn redock(&mut self, id: u64, target: DropTarget) -> Vec<PanelId> {
+    /// Docks floating group `id` into the `side` rail: its active panel
+    /// lands at `target`, siblings tab in beside it. Returns the re-docked
+    /// panels; empty if `id` is unknown or `target` is `Float`.
+    pub fn redock(&mut self, id: u64, side: RailSide, target: DropTarget) -> Vec<PanelId> {
         if matches!(target, DropTarget::Float) {
             return Vec::new();
         }
@@ -191,130 +341,23 @@ impl DockModel {
         };
         let mut panels = Vec::new();
         collect(&f.node, &mut panels);
-        // Active panel first so it lands exactly on `target`.
         if let Node::Tabs { active, .. } = &f.node {
             if *active < panels.len() {
                 panels.swap(0, *active);
             }
         }
+        let rail = self.rail_mut(side);
         let mut it = panels.iter().copied();
         if let Some(first) = it.next() {
-            self.dock(first, target);
+            rail.dock(first, target);
         }
         for p in it {
-            // Siblings append to whatever group now holds the active panel.
-            if let Some(path) = self.path_of(panels[0]) {
-                let len = self.tab_len(&path).unwrap_or(0);
-                self.dock(p, DropTarget::Tab { path, index: len });
+            if let Some(path) = rail.path_of(panels[0]) {
+                let len = rail.tab_len(&path).unwrap_or(0);
+                rail.dock(p, DropTarget::Tab { path, index: len });
             }
         }
         panels
-    }
-
-    /// Path to some tab group in the main tree — the first one a
-    /// breadth-first walk finds. Used as a fallback docking spot.
-    pub fn any_tab_path(&self) -> Option<NodePath> {
-        let root = self.root.as_ref()?;
-        walk(root)
-            .into_iter()
-            .find_map(|(path, node)| matches!(node, Node::Tabs { .. }).then_some(path))
-    }
-
-    /// Path to the tab group currently holding `panel`, if any.
-    pub fn path_of(&self, panel: PanelId) -> Option<NodePath> {
-        let root = self.root.as_ref()?;
-        for (path, node) in walk(root) {
-            if let Node::Tabs { panels, .. } = node {
-                if panels.contains(&panel) {
-                    return Some(path);
-                }
-            }
-        }
-        None
-    }
-
-    fn tab_len(&self, path: &NodePath) -> Option<usize> {
-        let root = self.root.as_ref()?;
-        for (p, node) in walk(root) {
-            if &p == path {
-                return match node {
-                    Node::Tabs { panels, .. } => Some(panels.len()),
-                    _ => None,
-                };
-            }
-        }
-        None
-    }
-
-    /// Applies a resolved drop of `panel` onto the main tree. `Float`
-    /// targets are handled by [`Self::detach`] instead.
-    pub fn dock(&mut self, panel: PanelId, target: DropTarget) {
-        self.remove(panel);
-        match target {
-            DropTarget::Float => {}
-            DropTarget::Tab { path, index } => {
-                let Some(root) = &mut self.root else {
-                    self.root = Some(Node::Tabs {
-                        panels: vec![panel],
-                        active: 0,
-                    });
-                    return;
-                };
-                if let Some(Node::Tabs { panels, active }) = node_at_mut(root, &path) {
-                    let i = index.min(panels.len());
-                    panels.insert(i, panel);
-                    *active = i;
-                }
-            }
-            DropTarget::Split { path, side } => {
-                let Some(root) = self.root.take() else {
-                    self.root = Some(Node::Tabs {
-                        panels: vec![panel],
-                        active: 0,
-                    });
-                    return;
-                };
-                self.root = Some(split_at(root, &path, side, panel));
-            }
-        }
-    }
-
-    /// Make tab `index` the active one in the tab group at `path`.
-    /// Returns `true` if `path` pointed at a tab group.
-    pub fn activate_tab(&mut self, path: &NodePath, index: usize) -> bool {
-        let Some(root) = &mut self.root else {
-            return false;
-        };
-        if let Some(Node::Tabs { panels, active }) = node_at_mut(root, path) {
-            if !panels.is_empty() {
-                *active = index.min(panels.len() - 1);
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Move the boundary after child `gap` of the split at `path` so that
-    /// child `gap` takes `frac` (clamped to 5%–95%) of the combined span of
-    /// children `gap` and `gap + 1`. Their weight sum is preserved, so every
-    /// other child keeps its size. Returns `true` on success.
-    pub fn set_boundary(&mut self, path: &NodePath, gap: usize, frac: f32) -> bool {
-        let Some(root) = &mut self.root else {
-            return false;
-        };
-        let Some(Node::Split { children, .. }) = node_at_mut(root, path) else {
-            return false;
-        };
-        if gap + 1 >= children.len() {
-            return false;
-        }
-        let frac = frac.clamp(0.05, 0.95);
-        let pair = children[gap].weight.max(0.0) + children[gap + 1].weight.max(0.0);
-        let pair = if pair <= 0.0 { 2.0 } else { pair };
-        children[gap].weight = pair * frac;
-        children[gap + 1].weight = pair * (1.0 - frac);
-        true
     }
 
     /// Round-trip for workspace persistence lives in the app for now; the
@@ -482,20 +525,23 @@ mod tests {
     fn detach_then_dock_round_trips() {
         let mut m = DockModel::new(tabs(&[A, B]));
         m.detach(B, [10.0, 10.0, 210.0, 310.0]);
-        assert_eq!(m.root, Some(tabs(&[A])));
+        assert_eq!(m.right.tree, Some(tabs(&[A])));
         assert_eq!(m.floating.len(), 1);
         assert_eq!(m.floating[0].node, tabs(&[B]));
 
-        // Drag B back as a tab of the root group; the dropped tab becomes active.
-        m.dock(
-            B,
+        // Drag B back as a tab of the right rail's group; it becomes active
+        // and the emptied floating group is torn down.
+        let id = m.floating[0].id;
+        m.redock(
+            id,
+            RailSide::Right,
             DropTarget::Tab {
                 path: NodePath::default(),
                 index: 1,
             },
         );
         assert_eq!(
-            m.root,
+            m.right.tree,
             Some(Node::Tabs {
                 panels: vec![A, B],
                 active: 1,
@@ -510,14 +556,14 @@ mod tests {
     #[test]
     fn split_on_a_bare_root_makes_a_two_child_split() {
         let mut m = DockModel::new(tabs(&[A]));
-        m.dock(
+        m.right.dock(
             B,
             DropTarget::Split {
                 path: NodePath::default(),
                 side: Side::Right,
             },
         );
-        match m.root.unwrap() {
+        match m.right.tree.unwrap() {
             Node::Split { axis, children } => {
                 assert_eq!(axis, Axis::Horizontal);
                 assert_eq!(children.len(), 2);
@@ -545,14 +591,14 @@ mod tests {
                 },
             ],
         });
-        m.dock(
+        m.right.dock(
             C,
             DropTarget::Split {
                 path: NodePath(vec![1]),
                 side: Side::Right,
             },
         );
-        match m.root.unwrap() {
+        match m.right.tree.unwrap() {
             Node::Split { axis, children } => {
                 assert_eq!(axis, Axis::Horizontal);
                 assert_eq!(children.len(), 3);
@@ -579,9 +625,9 @@ mod tests {
         });
         assert!(m.remove(A));
         // Split collapsed to its one remaining child.
-        assert_eq!(m.root, Some(tabs(&[B])));
+        assert_eq!(m.right.tree, Some(tabs(&[B])));
         assert!(m.remove(B));
-        assert_eq!(m.root, None);
+        assert_eq!(m.right.tree, None);
         assert!(!m.remove(B), "second remove is a no-op");
     }
 
@@ -595,6 +641,7 @@ mod tests {
         // Redock B by splitting the root to its left.
         let moved = m.redock(
             id,
+            RailSide::Right,
             DropTarget::Split {
                 path: NodePath(vec![]),
                 side: Side::Left,
@@ -602,7 +649,7 @@ mod tests {
         );
         assert_eq!(moved, vec![B]);
         assert!(m.floating.is_empty());
-        match m.root.unwrap() {
+        match m.right.tree.unwrap() {
             Node::Split { axis, children } => {
                 assert_eq!(axis, Axis::Horizontal);
                 assert_eq!(children[0].node, tabs(&[B]));
@@ -616,7 +663,7 @@ mod tests {
     fn redock_with_a_float_target_is_a_no_op() {
         let mut m = DockModel::new(tabs(&[A, B]));
         let id = m.detach(B, [0.0; 4]).unwrap();
-        assert!(m.redock(id, DropTarget::Float).is_empty());
+        assert!(m.redock(id, RailSide::Right, DropTarget::Float).is_empty());
         assert!(m.floating(id).is_some(), "still floating");
     }
 
@@ -635,10 +682,10 @@ mod tests {
                 },
             ],
         });
-        assert!(m.activate_tab(&NodePath(vec![1]), 1));
+        assert!(m.right.activate_tab(&NodePath(vec![1]), 1));
         // Out-of-range index clamps to the last tab.
-        assert!(m.activate_tab(&NodePath(vec![1]), 9));
-        match &m.root {
+        assert!(m.right.activate_tab(&NodePath(vec![1]), 9));
+        match &m.right.tree {
             Some(Node::Split { children, .. }) => match &children[1].node {
                 Node::Tabs { active, .. } => assert_eq!(*active, 1),
                 _ => panic!(),
@@ -646,7 +693,7 @@ mod tests {
             _ => panic!(),
         }
         // Path lands on a split, not a tab group.
-        assert!(!m.activate_tab(&NodePath(vec![]), 0));
+        assert!(!m.right.activate_tab(&NodePath(vec![]), 0));
     }
 
     #[test]
@@ -669,8 +716,8 @@ mod tests {
             ],
         });
         // Drag the first boundary to the 25% mark: pair sum 2.0 -> 0.5 / 1.5.
-        assert!(m.set_boundary(&NodePath(vec![]), 0, 0.25));
-        match m.root.unwrap() {
+        assert!(m.right.set_boundary(&NodePath(vec![]), 0, 0.25));
+        match m.right.tree.unwrap() {
             Node::Split { children, .. } => {
                 assert!((children[0].weight - 0.5).abs() < 1e-6);
                 assert!((children[1].weight - 1.5).abs() < 1e-6);
@@ -683,7 +730,7 @@ mod tests {
     #[test]
     fn set_boundary_rejects_a_nonexistent_gap() {
         let mut m = DockModel::new(tabs(&[A]));
-        assert!(!m.set_boundary(&NodePath(vec![]), 0, 0.5));
+        assert!(!m.right.set_boundary(&NodePath(vec![]), 0, 0.5));
     }
 
     #[test]

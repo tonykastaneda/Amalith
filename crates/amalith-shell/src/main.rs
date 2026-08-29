@@ -18,7 +18,9 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use amalith_shell::dock::{Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId};
+use amalith_shell::dock::{
+    Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
+};
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::{chrome, layout, Theme};
@@ -33,8 +35,11 @@ use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-/// Width of the right-hand dock rail, in logical points.
+/// Width of a dock rail, in logical points.
 const RAIL_W: f64 = 320.0;
+/// When a rail is empty, the strip of canvas along that edge that still
+/// accepts a drop (creating the rail).
+const EMPTY_ZONE: f64 = 48.0;
 /// Slack around a splitter's visual gap for grabbing it.
 const GRAB_SLOP: f64 = 3.0;
 /// Pointer travel before a press becomes a drag.
@@ -67,11 +72,17 @@ struct WindowHost {
 enum Drag {
     #[default]
     None,
-    /// Re-weighting the split at `path`, boundary after child `gap`.
-    Splitter { path: NodePath, gap: usize },
-    /// Pressed a tab in the main rail; a click activates it, a drag tears
+    /// Re-weighting the split at `path` in the `side` rail, boundary after
+    /// child `gap`.
+    Splitter {
+        side: RailSide,
+        path: NodePath,
+        gap: usize,
+    },
+    /// Pressed a tab in the `side` rail; a click activates it, a drag tears
     /// it off.
     PendingTearoff {
+        side: RailSide,
         panel: PanelId,
         path: NodePath,
         tab: usize,
@@ -102,8 +113,9 @@ struct App {
     pointer: Point,
     pointer_win: Option<WindowId>,
     drag: Drag,
-    /// Live re-dock target while a floating window is over the rail.
-    redock_preview: Option<DropTarget>,
+    /// Live re-dock target (which rail, and where in it) while a floating
+    /// window is over the document window.
+    redock_preview: Option<(RailSide, DropTarget)>,
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
@@ -155,25 +167,51 @@ impl App {
             .unwrap_or(Point::ZERO)
     }
 
-    fn main_rail(&self) -> Option<(Rect, Rect)> {
+    /// Logical size of the main window's client area.
+    fn main_logical_size(&self) -> Option<(f64, f64)> {
         let w = self.main_window()?;
         let sz = w.inner_size();
-        let (wl, hl) = (sz.width as f64 / self.scale, sz.height as f64 / self.scale);
-        Some((Rect::new(0.0, 0.0, wl, hl), rail_rect(wl, hl)))
+        Some((sz.width as f64 / self.scale, sz.height as f64 / self.scale))
     }
 
-    /// Resolve where the cursor (given in global logical coords) would
-    /// re-dock in the main rail.
-    fn resolve_redock(&mut self, global_cursor: Point) -> DropTarget {
-        let Some((bounds, rail)) = self.main_rail() else {
-            return DropTarget::Float;
+    /// Resolve where the cursor (in global logical coords) would re-dock:
+    /// which rail, and where within it. Checks the left rail/edge, then the
+    /// right.
+    fn resolve_redock(&mut self, global_cursor: Point) -> (RailSide, DropTarget) {
+        let Some((w, h)) = self.main_logical_size() else {
+            return (RailSide::Right, DropTarget::Float);
         };
         let local = global_cursor - self.main_inner_origin().to_vec2();
-        if !bounds.contains(local) {
-            return DropTarget::Float;
+        if !Rect::new(0.0, 0.0, w, h).contains(local) {
+            return (RailSide::Right, DropTarget::Float);
         }
-        let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
-        layout::hit_test(&laid, rail, local, &self.theme)
+        for side in [RailSide::Left, RailSide::Right] {
+            let rect = rail_rect_for(side, w, h);
+            let rail = self.dock.rail(side);
+            if rail.is_empty() {
+                let in_zone = match side {
+                    RailSide::Left => local.x <= EMPTY_ZONE,
+                    RailSide::Right => local.x >= w - EMPTY_ZONE,
+                };
+                if in_zone {
+                    let edge = match side {
+                        RailSide::Left => Side::Left,
+                        RailSide::Right => Side::Right,
+                    };
+                    return (
+                        side,
+                        DropTarget::Split {
+                            path: NodePath(Vec::new()),
+                            side: edge,
+                        },
+                    );
+                }
+            } else if rect.contains(local) {
+                let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+                return (side, layout::hit_test(&laid, rect, local, &self.theme));
+            }
+        }
+        (RailSide::Right, DropTarget::Float)
     }
 
     fn make_host(&mut self, window: Arc<Window>, role: Role) -> WindowHost {
@@ -246,33 +284,47 @@ impl App {
         };
         match role {
             Role::Main => {
-                let Some((_, rail)) = self.main_rail() else {
+                let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
-                let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
-                if let Some(sp) = laid
-                    .splitters
-                    .iter()
-                    .find(|s| s.rect.inflate(GRAB_SLOP, GRAB_SLOP).contains(self.pointer))
-                {
-                    self.drag = Drag::Splitter {
-                        path: sp.path.clone(),
-                        gap: sp.index,
-                    };
-                    return;
-                }
-                for area in &laid.areas {
-                    if !area.tab_strip.contains(self.pointer) {
+                for side in [RailSide::Left, RailSide::Right] {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
                         continue;
                     }
-                    if let Some(tab) = area.tabs.iter().position(|t| t.rect.contains(self.pointer))
+                    let rect = rail_rect_for(side, w, h);
+                    if !rect.contains(self.pointer) {
+                        continue;
+                    }
+                    let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+                    if let Some(sp) = laid
+                        .splitters
+                        .iter()
+                        .find(|s| s.rect.inflate(GRAB_SLOP, GRAB_SLOP).contains(self.pointer))
                     {
-                        self.drag = Drag::PendingTearoff {
-                            panel: area.tabs[tab].panel,
-                            path: area.path.clone(),
-                            tab,
-                            press: self.pointer,
+                        self.drag = Drag::Splitter {
+                            side,
+                            path: sp.path.clone(),
+                            gap: sp.index,
                         };
+                        return;
+                    }
+                    for area in &laid.areas {
+                        if !area.tab_strip.contains(self.pointer) {
+                            continue;
+                        }
+                        if let Some(tab) =
+                            area.tabs.iter().position(|t| t.rect.contains(self.pointer))
+                        {
+                            self.drag = Drag::PendingTearoff {
+                                side,
+                                panel: area.tabs[tab].panel,
+                                path: area.path.clone(),
+                                tab,
+                                press: self.pointer,
+                            };
+                        }
+                        return;
                     }
                     return;
                 }
@@ -301,19 +353,21 @@ impl App {
 
     fn on_cursor_move(&mut self) {
         match &self.drag {
-            Drag::Splitter { path, gap } => {
-                let (path, gap) = (path.clone(), *gap);
-                let Some((_, rail)) = self.main_rail() else {
+            Drag::Splitter { side, path, gap } => {
+                let (side, path, gap) = (*side, path.clone(), *gap);
+                let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
-                let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
+                let rect = rail_rect_for(side, w, h);
+                let laid =
+                    build_rail_layout(self.dock.rail(side), &self.theme, &mut self.text, rect);
                 if let Some(sp) = laid
                     .splitters
                     .iter()
                     .find(|s| s.path == path && s.index == gap)
                 {
                     let frac = sp.frac_at(self.pointer);
-                    self.dock.set_boundary(&path, gap, frac);
+                    self.dock.rail_mut(side).set_boundary(&path, gap, frac);
                     self.request_main_redraw();
                 }
             }
@@ -375,8 +429,10 @@ impl App {
     fn on_release(&mut self) {
         match std::mem::take(&mut self.drag) {
             Drag::None | Drag::Splitter { .. } => {}
-            Drag::PendingTearoff { path, tab, .. } => {
-                self.dock.activate_tab(&path, tab);
+            Drag::PendingTearoff {
+                side, path, tab, ..
+            } => {
+                self.dock.rail_mut(side).activate_tab(&path, tab);
                 self.request_main_redraw();
             }
             Drag::PendingFloatMove { id, tab, .. } => {
@@ -391,7 +447,7 @@ impl App {
             }
             Drag::MovingFloating { id, grab, pos } => {
                 let global_cursor = pos + grab;
-                let target = self.resolve_redock(global_cursor);
+                let (side, target) = self.resolve_redock(global_cursor);
                 if matches!(target, DropTarget::Float) {
                     if let Some(f) = self.dock.floating_mut(id) {
                         f.rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
@@ -400,7 +456,7 @@ impl App {
                         w.request_redraw();
                     }
                 } else {
-                    self.dock.redock(id, target);
+                    self.dock.redock(id, side, target);
                     if let Some((wid, _)) = self
                         .hosts
                         .iter()
@@ -536,18 +592,16 @@ impl ApplicationHandler for App {
                 } else if let Some(host) = self.hosts.remove(&id) {
                     if let Role::Floating(fid) = host.role {
                         // Closing a floating window folds its panels back
-                        // into the rail so nothing is lost.
-                        match self.dock.any_tab_path().map(|path| DropTarget::Tab {
-                            path,
-                            index: usize::MAX,
-                        }) {
-                            Some(target) => {
-                                self.dock.redock(fid, target);
-                            }
-                            None => {
-                                self.dock.remove_floating(fid);
-                            }
-                        }
+                        // into the right rail so nothing is lost.
+                        let path = self.dock.right.any_tab_path().unwrap_or_default();
+                        self.dock.redock(
+                            fid,
+                            RailSide::Right,
+                            DropTarget::Tab {
+                                path,
+                                index: usize::MAX,
+                            },
+                        );
                     }
                     self.request_main_redraw();
                 }
@@ -628,13 +682,16 @@ fn tab_label(panel: PanelId) -> String {
     .to_string()
 }
 
-fn rail_rect(width: f64, height: f64) -> Rect {
-    Rect::new((width - RAIL_W).max(0.0), 0.0, width, height)
+fn rail_rect_for(side: RailSide, width: f64, height: f64) -> Rect {
+    match side {
+        RailSide::Left => Rect::new(0.0, 0.0, RAIL_W.min(width), height),
+        RailSide::Right => Rect::new((width - RAIL_W).max(0.0), 0.0, width, height),
+    }
 }
 
-fn build_layout(dock: &DockModel, theme: &Theme, text: &mut TextContext, rail: Rect) -> Layout {
-    match &dock.root {
-        Some(root) => layout::layout(root, rail, theme, &mut |p| {
+fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: Rect) -> Layout {
+    match &rail.tree {
+        Some(tree) => layout::layout(tree, rect, theme, &mut |p| {
             text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
         }),
         None => Layout::default(),
@@ -648,7 +705,7 @@ fn paint_main(
     theme: &Theme,
     width: f64,
     height: f64,
-    preview: Option<&DropTarget>,
+    preview: Option<&(RailSide, DropTarget)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -657,11 +714,20 @@ fn paint_main(
         None,
         &Rect::new(0.0, 0.0, width, height),
     );
-    let rail = rail_rect(width, height);
-    let laid = build_layout(dock, theme, text, rail);
-    chrome::paint(scene, &laid, theme, text, &tab_label);
-    if let Some(target) = preview {
-        chrome::paint_drop(scene, target, &laid, rail, theme);
+    for side in [RailSide::Left, RailSide::Right] {
+        let rail = dock.rail(side);
+        let is_preview_target = preview.is_some_and(|(s, _)| *s == side);
+        if rail.is_empty() && !is_preview_target {
+            continue;
+        }
+        let rect = rail_rect_for(side, width, height);
+        let laid = build_rail_layout(rail, theme, text, rect);
+        if !rail.is_empty() {
+            chrome::paint(scene, &laid, theme, text, &tab_label);
+        }
+        if let Some((_, target)) = preview.filter(|(s, _)| *s == side) {
+            chrome::paint_drop(scene, target, &laid, rect, theme);
+        }
     }
 }
 
