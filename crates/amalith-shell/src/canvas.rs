@@ -104,12 +104,12 @@ pub fn paint(
 
     let vt = view.to_screen();
 
-    for ab in doc.artboards() {
+    for (i, ab) in doc.artboards().iter().enumerate() {
         let r = vt.transform_rect_bbox(convert::rect(ab.rect));
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            Color::from_rgb8(0x12, 0x12, 0x12),
+            Color::from_rgb8(0x1c, 0x1c, 0x1c),
             None,
             &r.with_origin(Point::new(r.x0 + 3.0, r.y0 + 3.0)),
         );
@@ -123,11 +123,18 @@ pub fn paint(
         scene.stroke(
             &Stroke::new(1.0),
             Affine::IDENTITY,
-            Color::from_rgb8(0x00, 0x00, 0x00),
+            theme.artboard_border,
             None,
             &r,
         );
-        text.draw(scene, &ab.name, 11.0, theme.text_dim, r.x0, r.y0 - 6.0);
+        text.draw(
+            scene,
+            &format!("{:02} - {}", i + 1, ab.name),
+            11.0,
+            theme.artboard_label,
+            r.x0,
+            r.y0 - 6.0,
+        );
     }
 
     for layer in doc.layers() {
@@ -167,24 +174,32 @@ pub fn paint(
             }
             path.close_path();
             scene.stroke(
-                &Stroke::new(1.0),
+                &Stroke::new(1.25),
                 Affine::IDENTITY,
-                theme.drop_line,
+                theme.select_blue,
                 None,
                 &path,
             );
+            let white = Color::from_rgb8(0xff, 0xff, 0xff);
             for h in Handle::ALL {
-                let c = handles::handle_pos(q, h);
-                let sq = Rect::from_center_size(c, (7.0, 7.0));
-                scene.fill(Fill::NonZero, Affine::IDENTITY, theme.canvas_bg, None, &sq);
+                let sq = Rect::from_center_size(handles::handle_pos(q, h), (8.0, 8.0));
+                scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
                 scene.stroke(
-                    &Stroke::new(1.0),
+                    &Stroke::new(1.25),
                     Affine::IDENTITY,
-                    theme.drop_line,
+                    theme.select_blue,
                     None,
                     &sq,
                 );
             }
+            let center = Rect::from_center_size(handles::quad_center(q), (6.0, 6.0));
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                theme.select_blue,
+                None,
+                &center,
+            );
         }
     }
 

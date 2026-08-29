@@ -23,6 +23,13 @@ pub struct Theme {
     pub drop_fill: Color,
     /// The solid Illustrator-style insertion line.
     pub drop_line: Color,
+    /// Selection box, transform handle strokes, center marker.
+    pub select_blue: Color,
+    /// Faint fill inside a live marquee.
+    pub marquee_fill: Color,
+    /// Artboard hairline and its name label.
+    pub artboard_border: Color,
+    pub artboard_label: Color,
     pub text: Color,
     pub text_dim: Color,
 
@@ -38,7 +45,7 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             bg: Color::from_rgb8(0x1e, 0x1e, 0x1e),
-            canvas_bg: Color::from_rgb8(0x26, 0x26, 0x26),
+            canvas_bg: Color::from_rgb8(0x33, 0x33, 0x33),
             panel_bg: Color::from_rgb8(0x2b, 0x2b, 0x2b),
             strip_bg: Color::from_rgb8(0x24, 0x24, 0x24),
             strip_active: Color::from_rgb8(0x2b, 0x2b, 0x2b),
@@ -47,6 +54,10 @@ impl Default for Theme {
             splitter: Color::from_rgb8(0x3d, 0x3d, 0x3d),
             drop_fill: Color::from_rgb8(0x1d, 0x7a, 0xf0).with_alpha(0.20),
             drop_line: Color::from_rgb8(0x1d, 0x7a, 0xf0),
+            select_blue: Color::from_rgb8(0x3b, 0x9b, 0xff),
+            marquee_fill: Color::from_rgb8(0x5a, 0xa5, 0xff).with_alpha(0.10),
+            artboard_border: Color::from_rgb8(0x23, 0x23, 0x23),
+            artboard_label: Color::from_rgb8(0xe1, 0xe1, 0xe1),
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),
             text_dim: Color::from_rgb8(0x8a, 0x8a, 0x8a),
 

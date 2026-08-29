@@ -1188,14 +1188,8 @@ fn paint_main(
     );
 
     if let Some(m) = marquee {
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            theme.drop_line.with_alpha(0.12),
-            None,
-            &m,
-        );
-        scene.stroke(&Stroke::new(1.0), ID, theme.drop_line, None, &m);
+        scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
+        scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &m);
     }
 
     for side in [RailSide::Left, RailSide::Right] {
