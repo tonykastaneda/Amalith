@@ -113,6 +113,7 @@ pub fn paint(
     drag: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     artboard_ghost: Option<Rect>,
+    artboard_handles: Option<[Point; 4]>,
     pen: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
 ) {
@@ -178,7 +179,7 @@ pub fn paint(
         }
     }
 
-    // Shape-tool rubber-band preview.
+    // Artboard tool: live rect outline + resize handles.
     if let Some(g) = artboard_ghost {
         let r = vt.transform_rect_bbox(g);
         scene.stroke(
@@ -188,6 +189,33 @@ pub fn paint(
             None,
             &r,
         );
+    }
+    if let Some(q) = artboard_handles {
+        let mut outline = BezPath::new();
+        outline.move_to(q[0]);
+        for p in &q[1..] {
+            outline.line_to(*p);
+        }
+        outline.close_path();
+        scene.stroke(
+            &Stroke::new(1.25),
+            Affine::IDENTITY,
+            theme.select_blue,
+            None,
+            &outline,
+        );
+        let white = Color::from_rgb8(0xff, 0xff, 0xff);
+        for h in handles::Handle::ALL {
+            let sq = Rect::from_center_size(handles::handle_pos(q, h), (8.0, 8.0));
+            scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
+            scene.stroke(
+                &Stroke::new(1.25),
+                Affine::IDENTITY,
+                theme.select_blue,
+                None,
+                &sq,
+            );
+        }
     }
 
     if let Some((tool, r_doc)) = draw_shape {

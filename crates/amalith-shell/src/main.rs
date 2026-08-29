@@ -168,6 +168,14 @@ enum Drag {
         start_doc: Point,
         last_doc: Point,
     },
+    /// Artboard tool: dragging a resize handle of the selected artboard.
+    ResizeArtboard {
+        id: ArtboardId,
+        handle: handles::Handle,
+        start_rect: amalith_core::Rect,
+        start_doc: Point,
+        cur_doc: Point,
+    },
 }
 
 /// A command reachable from the menu bar (native on macOS, and — later —
@@ -215,6 +223,8 @@ struct App {
     anchor_sel: Vec<(ObjectId, usize)>,
     /// Group ids shown expanded in the Layers panel.
     expanded_groups: std::collections::HashSet<ObjectId>,
+    /// The artboard the Artboard tool is currently editing (shows handles).
+    selected_artboard: Option<ArtboardId>,
     active_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
@@ -282,6 +292,7 @@ impl App {
             selection: Vec::new(),
             anchor_sel: Vec::new(),
             expanded_groups: std::collections::HashSet::new(),
+            selected_artboard: None,
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             stroke_w: 1.0,
@@ -802,6 +813,9 @@ impl App {
         if t != Tool::DirectSelect {
             self.anchor_sel.clear();
         }
+        if t != Tool::Artboard {
+            self.selected_artboard = None;
+        }
         self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
@@ -1192,20 +1206,49 @@ impl App {
                     return;
                 }
 
-                // Artboard tool: drag an existing artboard, or rubber-band
-                // a new one on empty canvas.
+                // Artboard tool: a resize handle of the selected artboard,
+                // else drag an existing artboard, else rubber-band a new one.
                 if self.active_tool == Tool::Artboard {
-                    self.drag = match artboard_at(self.editor.document(), dp) {
-                        Some(id) => Drag::MoveArtboard {
-                            id,
-                            start_doc: dp,
-                            last_doc: dp,
-                        },
-                        None => Drag::DrawArtboard {
-                            start_doc: dp,
-                            cur_doc: dp,
-                        },
-                    };
+                    if let Some(id) = self.selected_artboard {
+                        if let Some(ab) = self
+                            .editor
+                            .document()
+                            .artboards()
+                            .iter()
+                            .find(|a| a.id == id)
+                        {
+                            let quad = handles::rect_quad(convert::rect(ab.rect))
+                                .map(|p| self.view.to_screen() * p);
+                            if let Some(handle) = handles::hit_handle(self.pointer, quad) {
+                                self.drag = Drag::ResizeArtboard {
+                                    id,
+                                    handle,
+                                    start_rect: ab.rect,
+                                    start_doc: dp,
+                                    cur_doc: dp,
+                                };
+                                return;
+                            }
+                        }
+                    }
+                    match artboard_at(self.editor.document(), dp) {
+                        Some(id) => {
+                            self.selected_artboard = Some(id);
+                            self.drag = Drag::MoveArtboard {
+                                id,
+                                start_doc: dp,
+                                last_doc: dp,
+                            };
+                        }
+                        None => {
+                            self.selected_artboard = None;
+                            self.drag = Drag::DrawArtboard {
+                                start_doc: dp,
+                                cur_doc: dp,
+                            };
+                        }
+                    }
+                    self.request_main_redraw();
                     return;
                 }
 
@@ -1475,6 +1518,24 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::ResizeArtboard {
+                id,
+                handle,
+                start_rect,
+                start_doc,
+                ..
+            } => {
+                let (id, handle, start_rect, start_doc) =
+                    (*id, *handle, *start_rect, *start_doc);
+                self.drag = Drag::ResizeArtboard {
+                    id,
+                    handle,
+                    start_rect,
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::Scale {
                 handle,
                 start_bounds,
@@ -1647,11 +1708,15 @@ impl App {
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 1.0 && r.height() > 1.0 {
                     let n = self.editor.document().artboards().len() + 1;
-                    let _ = self.editor.execute(Command::CreateArtboard {
-                        name: format!("Artboard {n}"),
-                        rect: r,
-                        index: None,
-                    });
+                    if let Ok(CommandOutcome::Artboard(id)) =
+                        self.editor.execute(Command::CreateArtboard {
+                            name: format!("Artboard {n}"),
+                            rect: r,
+                            index: None,
+                        })
+                    {
+                        self.selected_artboard = Some(id);
+                    }
                     self.request_main_redraw();
                 }
             }
@@ -1663,6 +1728,24 @@ impl App {
                 let delta = convert::vec2_to_core(last_doc - start_doc);
                 if delta.x != 0.0 || delta.y != 0.0 {
                     let _ = self.editor.execute(Command::MoveArtboard { id, delta });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::ResizeArtboard {
+                id,
+                handle,
+                start_rect,
+                start_doc,
+                cur_doc,
+            } => {
+                let d = convert::vec2_to_core(cur_doc - start_doc);
+                let rect = resize_rect(start_rect, handle, d);
+                if (rect.width() - start_rect.width()).abs() > f64::EPSILON
+                    || (rect.height() - start_rect.height()).abs() > f64::EPSILON
+                    || (rect.x0 - start_rect.x0).abs() > f64::EPSILON
+                    || (rect.y0 - start_rect.y0).abs() > f64::EPSILON
+                {
+                    let _ = self.editor.execute(Command::ResizeArtboard { id, rect });
                     self.request_main_redraw();
                 }
             }
@@ -1902,8 +1985,42 @@ impl App {
                     .find(|a| a.id == *id)
                     .map(|a| convert::rect(a.rect) + d)
             }
+            Drag::ResizeArtboard {
+                handle,
+                start_rect,
+                start_doc,
+                cur_doc,
+                ..
+            } => Some(convert::rect(resize_rect(
+                *start_rect,
+                *handle,
+                convert::vec2_to_core(*cur_doc - *start_doc),
+            ))),
             _ => None,
         };
+        // Resize handles around the selected artboard (or its live rect
+        // mid-drag), screen-space. Only while the Artboard tool is active.
+        let artboard_handles: Option<[Point; 4]> = self
+            .selected_artboard
+            .filter(|_| self.active_tool == Tool::Artboard)
+            .and_then(|id| {
+                let committed = self
+                    .editor
+                    .document()
+                    .artboards()
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(|a| convert::rect(a.rect))?;
+                // A Move/Resize drag of this artboard drives the ghost rect.
+                let rect = match &self.drag {
+                    Drag::MoveArtboard { .. } | Drag::ResizeArtboard { .. } => {
+                        artboard_ghost.unwrap_or(committed)
+                    }
+                    _ => committed,
+                };
+                let vt = self.view.to_screen();
+                Some(handles::rect_quad(rect).map(|p| vt * p))
+            });
         let pen_preview = if self.active_tool == Tool::Pen && !self.pen.is_empty() {
             let hover = self.doc_point(self.pointer);
             let near_close = self.pen.len() >= 3
@@ -1957,6 +2074,7 @@ impl App {
                 preview,
                 draw_shape,
                 artboard_ghost,
+                artboard_handles,
                 pen_preview,
                 anchor_view,
                 self.marquee,
@@ -2451,6 +2569,31 @@ fn primitive_path(tool: Tool, r: amalith_core::Rect) -> Option<amalith_core::Pat
     }
 }
 
+/// `start` with the edge(s) belonging to `h` shifted by `d`, normalised
+/// and kept at least 8 units on a side.
+fn resize_rect(start: amalith_core::Rect, h: Handle, d: amalith_core::Vec2) -> amalith_core::Rect {
+    let (mut x0, mut y0, mut x1, mut y1) = (start.x0, start.y0, start.x1, start.y1);
+    if matches!(h, Handle::Nw | Handle::W | Handle::Sw) {
+        x0 += d.x;
+    }
+    if matches!(h, Handle::Ne | Handle::E | Handle::Se) {
+        x1 += d.x;
+    }
+    if matches!(h, Handle::Nw | Handle::N | Handle::Ne) {
+        y0 += d.y;
+    }
+    if matches!(h, Handle::Sw | Handle::S | Handle::Se) {
+        y1 += d.y;
+    }
+    let n = amalith_core::Rect::new(x0, y0, x1, y1).abs();
+    amalith_core::Rect::new(
+        n.x0,
+        n.y0,
+        n.x0 + n.width().max(8.0),
+        n.y0 + n.height().max(8.0),
+    )
+}
+
 /// Topmost artboard whose rect contains the document-space point `dp`.
 fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
     let p = amalith_core::Point::new(dp.x, dp.y);
@@ -2765,6 +2908,7 @@ fn paint_main(
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     artboard_ghost: Option<Rect>,
+    artboard_handles: Option<[Point; 4]>,
     pen_preview: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
     marquee: Option<Rect>,
@@ -2807,6 +2951,7 @@ fn paint_main(
         drag_preview,
         draw_shape,
         artboard_ghost,
+        artboard_handles,
         pen_preview,
         anchor_view,
     );
