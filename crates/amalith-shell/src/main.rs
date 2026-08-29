@@ -757,6 +757,10 @@ impl App {
         let Some(form) = self.newdoc.as_mut() else {
             return;
         };
+        // Any click that isn't on the open menu itself dismisses it.
+        if !matches!(hit, Hit::MenuItem(..) | Hit::ToggleMenu(_)) {
+            form.open_menu = None;
+        }
         match hit {
             Hit::Field(f) => {
                 form.commit_focus();

@@ -308,12 +308,19 @@ impl L {
             Menu::Preview => self.preview,
         }
     }
-    /// Dropped-open item rects, stacked below the trigger.
+    /// Item rects for an open menu. Opens downward, or upward when the
+    /// trigger sits in the lower half of the panel (so a bottom dropdown
+    /// never covers the Close / Create buttons).
     fn items(&self, m: Menu) -> Vec<Rect> {
         let t = self.trigger(m);
+        let up = t.y0 > self.panel.center().y;
         (0..menu_len(m))
             .map(|i| {
-                let y = t.y1 + i as f64 * FH;
+                let y = if up {
+                    t.y0 - (i as f64 + 1.0) * FH
+                } else {
+                    t.y1 + i as f64 * FH
+                };
                 Rect::new(t.x0, y, t.x1, y + FH)
             })
             .collect()
@@ -322,69 +329,70 @@ impl L {
 
 /// Centered modal panel rect for a `w × h` window.
 pub fn panel_rect(w: f64, h: f64) -> Rect {
-    let pw = 560.0_f64.min(w - 64.0).max(320.0);
-    let ph = 624.0_f64.min(h - 64.0).max(360.0);
+    let pw = 580.0_f64.min(w - 64.0).max(340.0);
+    let ph = 792.0_f64.min(h - 48.0).max(420.0);
     Rect::from_center_size(Point::new(w * 0.5, h * 0.5), (pw, ph))
 }
 
 pub fn build(panel: Rect) -> L {
-    let x = panel.x0 + 28.0;
-    let right = panel.x1 - 28.0;
+    let x = panel.x0 + 30.0;
+    let right = panel.x1 - 30.0;
     let fw = right - x;
     let field = |y: f64, x0: f64, x1: f64| Rect::new(x0, y, x1, y + FH);
 
-    let mut y = panel.y0 + 46.0;
+    let mut y = panel.y0 + 52.0;
     let name = field(y, x, right);
-    y += FH + 26.0; // + hairline
+    y += FH + 32.0; // + hairline
 
     // Width row.
-    y += 20.0;
-    let col_w = fw * 0.40;
+    y += 22.0;
+    let col_w = fw * 0.42;
     let width = field(y, x, x + col_w);
-    let unit = field(y, x + col_w + 16.0, right);
-    y += FH + 22.0;
+    let unit = field(y, x + col_w + 18.0, right);
+    y += FH + 28.0;
 
     // Height / Orientation / Artboards row.
-    y += 20.0;
+    y += 22.0;
     let height = field(y, x, x + col_w);
-    let ox = x + col_w + 16.0;
-    let orient_p = Rect::new(ox, y, ox + 26.0, y + 26.0);
-    let orient_l = Rect::new(ox + 34.0, y, ox + 60.0, y + 26.0);
-    let ab_plus = Rect::new(right - 22.0, y, right, y + 26.0);
-    let ab_field = Rect::new(ab_plus.x0 - 8.0 - 54.0, y, ab_plus.x0 - 8.0, y + 26.0);
-    let ab_minus = Rect::new(ab_field.x0 - 8.0 - 22.0, y, ab_field.x0 - 8.0, y + 26.0);
-    y += 26.0 + 24.0;
+    let ox = x + col_w + 18.0;
+    let orient_p = Rect::new(ox, y, ox + 30.0, y + 30.0);
+    let orient_l = Rect::new(ox + 40.0, y, ox + 70.0, y + 30.0);
+    let ab_plus = Rect::new(right - 26.0, y, right, y + 30.0);
+    let ab_field = Rect::new(ab_plus.x0 - 10.0 - 56.0, y, ab_plus.x0 - 10.0, y + 30.0);
+    let ab_minus = Rect::new(ab_field.x0 - 10.0 - 26.0, y, ab_field.x0 - 10.0, y + 30.0);
+    y += 30.0 + 34.0;
 
-    // Bleed.
-    y += 20.0;
-    let half = (fw - 16.0) * 0.5;
+    // Bleed: a section header, then two rows of two fields.
+    y += 24.0; // "Bleed" header sits at bt.y0 - ~24
+    y += 22.0; // "Top" / "Bottom" labels
+    let half = (fw - 18.0) * 0.5;
     let bt = field(y, x, x + half);
-    let bb = field(y, x + half + 16.0, right);
-    y += FH + 22.0;
-    y += 20.0;
+    let bb = field(y, x + half + 18.0, right);
+    y += FH + 28.0;
+    y += 22.0; // "Left" / "Right" labels
     let bl = field(y, x, x + half);
-    let br = field(y, x + half + 16.0, right);
-    y += FH + 16.0;
+    let br = field(y, x + half + 18.0, right);
+    y += FH + 20.0;
 
     // Link bleed.
-    let link = Rect::new(x, y, x + 200.0, y + 20.0);
-    y += 20.0 + 18.0;
+    let link = Rect::new(x, y, x + 220.0, y + 20.0);
+    y += 20.0 + 26.0;
 
     // Color / Raster / Preview.
-    y += 20.0;
+    y += 22.0;
     let color = field(y, x, right);
-    y += FH + 22.0;
-    y += 20.0;
+    y += FH + 28.0;
+    y += 22.0;
     let raster = field(y, x, right);
-    y += FH + 22.0;
-    y += 20.0;
+    y += FH + 28.0;
+    y += 22.0;
     let preview = field(y, x, right);
-    y += FH + 22.0;
+    y += FH + 26.0;
 
-    let more = Rect::new(x, y, x + 132.0, y + 28.0);
+    let more = Rect::new(x, y, x + 136.0, y + 30.0);
 
-    let create = Rect::new(right - 104.0, panel.y1 - 26.0 - 36.0, right, panel.y1 - 26.0);
-    let close = Rect::new(create.x0 - 12.0 - 92.0, create.y0, create.x0 - 12.0, create.y1);
+    let create = Rect::new(right - 110.0, panel.y1 - 24.0 - 36.0, right, panel.y1 - 24.0);
+    let close = Rect::new(create.x0 - 14.0 - 96.0, create.y0, create.x0 - 14.0, create.y1);
 
     L {
         panel,
@@ -409,18 +417,14 @@ pub fn build(panel: Rect) -> L {
 }
 
 pub fn hit(form: &NewDocForm, l: &L, p: Point) -> Hit {
-    // An open menu captures clicks first.
+    // An open menu's items take priority; every other click falls through
+    // to the normal handling (which also closes the menu).
     if let Some(m) = form.open_menu {
         for (i, r) in l.items(m).iter().enumerate() {
             if r.contains(p) {
                 return Hit::MenuItem(m, i);
             }
         }
-        if l.trigger(m).contains(p) {
-            return Hit::ToggleMenu(m);
-        }
-        // Any other click just closes the menu.
-        return Hit::ToggleMenu(m);
     }
     if !l.panel.contains(p) {
         return Hit::Backdrop;
@@ -492,23 +496,23 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &l.panel);
 
     let dim = theme.text_dim;
-    let x = l.panel.x0 + 28.0;
+    let x = l.panel.x0 + 30.0;
 
     let caption = |scene: &mut Scene, text: &mut TextContext, s: &str, r: Rect| {
-        text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 7.0);
+        text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 8.0);
     };
 
-    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.panel.y0 + 30.0);
+    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.panel.y0 + 34.0);
     draw_field(scene, text, theme, l.name, &form.name, form.focus == Some(Field::Name));
 
     // hairline under name
-    let hy = l.name.y1 + 13.0;
+    let hy = l.name.y1 + 16.0;
     scene.fill(
         Fill::NonZero,
         ID,
         theme.border,
         None,
-        &Rect::new(x, hy, l.panel.x1 - 28.0, hy + 1.0),
+        &Rect::new(x, hy, l.panel.x1 - 30.0, hy + 1.0),
     );
 
     caption(scene, text, "Width", l.width);
@@ -522,14 +526,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     draw_orient(scene, theme, l.orient_p, l.orient_l, form.portrait());
     draw_stepper(scene, text, theme, l.ab_minus, l.ab_field, l.ab_plus, form.artboards);
 
-    caption(scene, text, "Bleed", l.bleed[0]);
+    // "Bleed" section header, well above the Top/Bottom labels.
+    text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed[0].y0 - 28.0);
     let bl = ["Top", "Bottom", "Left", "Right"];
     for i in 0..4 {
-        if i >= 2 {
-            caption(scene, text, bl[i], l.bleed[i]);
-        } else {
-            caption(scene, text, bl[i], l.bleed[i]);
-        }
+        caption(scene, text, bl[i], l.bleed[i]);
         let f = [Field::BleedTop, Field::BleedBottom, Field::BleedLeft, Field::BleedRight][i];
         draw_field(
             scene,
@@ -557,12 +558,9 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     // Open menu on top.
     if let Some(m) = form.open_menu {
         let items = l.items(m);
-        let listbox = Rect::new(
-            items[0].x0,
-            items[0].y0,
-            items[0].x1,
-            items.last().unwrap().y1,
-        );
+        let y0 = items.iter().map(|r| r.y0).fold(f64::MAX, f64::min);
+        let y1 = items.iter().map(|r| r.y1).fold(f64::MIN, f64::max);
+        let listbox = Rect::new(items[0].x0, y0, items[0].x1, y1);
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &listbox);
         scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &listbox);
         let labels: Vec<&str> = match m {
