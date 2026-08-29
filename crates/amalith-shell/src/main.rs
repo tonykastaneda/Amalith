@@ -2435,7 +2435,9 @@ impl App {
                 let (side, target) = self.resolve_redock(global_cursor);
                 if matches!(target, DropTarget::Float) {
                     if let Some(f) = self.dock.floating_mut(id) {
-                        f.rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+                        // Keep the size the window currently has.
+                        let [_, _, w, h] = f.rect;
+                        f.rect = [pos.x as f32, pos.y as f32, w, h];
                     }
                     if let Some(w) = self.floating_window(id) {
                         w.request_redraw();
@@ -2834,6 +2836,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Resized(size) => {
+                let role = self.hosts.get(&id).map(|h| h.role);
                 if let Some(host) = self.hosts.get_mut(&id) {
                     self.context.resize_surface(
                         &mut host.surface,
@@ -2841,6 +2844,18 @@ impl ApplicationHandler for App {
                         size.height.max(1),
                     );
                     host.window.request_redraw();
+                }
+                // Track a floating group's size so it re-docks at the
+                // width the user left it.
+                if let Some(Role::Floating(fid)) = role {
+                    let (w, h) = (
+                        size.width as f32 / self.scale as f32,
+                        size.height as f32 / self.scale as f32,
+                    );
+                    if let Some(f) = self.dock.floating_mut(fid) {
+                        f.rect[2] = w;
+                        f.rect[3] = h;
+                    }
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {

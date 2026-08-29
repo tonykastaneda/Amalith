@@ -409,6 +409,9 @@ impl DockModel {
         let Some(f) = self.remove_floating(id) else {
             return Vec::new();
         };
+        // The rail takes the width the group had while floating, so a
+        // panel re-docks at whatever size the user left it.
+        let float_w = f.rect[2];
         let mut panels = Vec::new();
         collect(&f.node, &mut panels);
         if let Node::Tabs { active, .. } = &f.node {
@@ -417,6 +420,9 @@ impl DockModel {
             }
         }
         let rail = self.rail_mut(side);
+        if float_w > 1.0 {
+            rail.width = float_w;
+        }
         let mut it = panels.iter().copied();
         if let Some(first) = it.next() {
             rail.dock(first, target);
