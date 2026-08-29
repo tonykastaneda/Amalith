@@ -87,6 +87,8 @@ pub enum Action {
     ToggleExpand(ObjectId),
     /// Layers panel: the "+" button.
     NewLayer,
+    /// Artboards panel: the "+" button.
+    NewArtboard,
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -134,6 +136,15 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     }
     if id.0 == "layers" {
         return layers_hit(body, local, ctx);
+    }
+    if id.0 == "artboards" {
+        let last = ctx.doc.artboards().len();
+        let row = ((local.y - body.y0) / ROW_H).floor();
+        return if row as usize == last && row >= 0.0 {
+            Action::NewArtboard
+        } else {
+            Action::None
+        };
     }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
     let row = ((local.y - body.y0) / unit).floor();
@@ -488,6 +499,26 @@ fn paint_artboards(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &
             &vello::kurbo::Line::new((body.x0, y), (body.x1, y)),
         );
     }
+
+    // "+ New Artboard" button, like the Layers panel.
+    let plus = row_rect(body, ctx.doc.artboards().len());
+    if plus.contains(ctx.pointer) {
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            ctx.theme.select_blue.with_alpha(0.14),
+            None,
+            &plus,
+        );
+    }
+    text.draw(
+        scene,
+        "+  New Artboard",
+        12.0,
+        ctx.theme.select_blue,
+        body.x0 + PAD,
+        plus.y0 + ROW_H * 0.5 + 4.0,
+    );
 }
 
 // ---- Swatches panel ----------------------------------------------------

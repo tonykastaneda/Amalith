@@ -162,11 +162,13 @@ enum Drag {
     },
     /// Artboard tool: rubber-banding a new artboard.
     DrawArtboard { start_doc: Point, cur_doc: Point },
-    /// Artboard tool: dragging an existing artboard.
+    /// Artboard tool: dragging an existing artboard. `dup` (Alt) drops a
+    /// copy instead of moving the original.
     MoveArtboard {
         id: ArtboardId,
         start_doc: Point,
         last_doc: Point,
+        dup: bool,
     },
     /// Artboard tool: dragging a resize handle of the selected artboard.
     ResizeArtboard {
@@ -226,6 +228,9 @@ struct App {
     /// The artboard the Artboard tool is currently editing (shows handles).
     selected_artboard: Option<ArtboardId>,
     active_tool: Tool,
+    /// The tool that was active when the Artboard tool was entered, so
+    /// Escape can drop straight back to it.
+    pre_artboard_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
     /// Current stroke weight / opacity shown in the options bar. The
@@ -294,6 +299,7 @@ impl App {
             expanded_groups: std::collections::HashSet::new(),
             selected_artboard: None,
             active_tool: Tool::Select,
+            pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             stroke_w: 1.0,
             opacity: 1.0,
@@ -445,6 +451,29 @@ impl App {
                     name: format!("Layer {n}"),
                     index: None,
                 });
+            }
+            panels::Action::NewArtboard => {
+                let boards = self.editor.document().artboards();
+                let n = boards.len() + 1;
+                // Sit the new board to the right of the rightmost one,
+                // same size; default 1200×800 when there are none.
+                let rect = boards
+                    .iter()
+                    .map(|a| a.rect)
+                    .reduce(|acc, r| if r.x1 > acc.x1 { r } else { acc })
+                    .map(|r| {
+                        let (w, h) = (r.width(), r.height());
+                        amalith_core::Rect::new(r.x1 + 40.0, r.y0, r.x1 + 40.0 + w, r.y0 + h)
+                    })
+                    .unwrap_or_else(|| amalith_core::Rect::new(0.0, 0.0, 1200.0, 800.0));
+                if let Ok(CommandOutcome::Artboard(id)) = self.editor.execute(Command::CreateArtboard {
+                    name: format!("Artboard {n}"),
+                    rect,
+                    index: None,
+                }) {
+                    self.selected_artboard = Some(id);
+                    self.set_tool(Tool::Artboard);
+                }
             }
         }
         self.request_main_redraw();
@@ -812,6 +841,9 @@ impl App {
         }
         if t != Tool::DirectSelect {
             self.anchor_sel.clear();
+        }
+        if t == Tool::Artboard && self.active_tool != Tool::Artboard {
+            self.pre_artboard_tool = self.active_tool;
         }
         if t != Tool::Artboard {
             self.selected_artboard = None;
@@ -1238,6 +1270,7 @@ impl App {
                                 id,
                                 start_doc: dp,
                                 last_doc: dp,
+                                dup: self.alt_down,
                             };
                         }
                         None => {
@@ -1509,12 +1542,15 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::MoveArtboard { id, start_doc, .. } => {
-                let (id, start_doc) = (*id, *start_doc);
+            Drag::MoveArtboard {
+                id, start_doc, dup, ..
+            } => {
+                let (id, start_doc, dup) = (*id, *start_doc, *dup);
                 self.drag = Drag::MoveArtboard {
                     id,
                     start_doc,
                     last_doc: self.doc_point(self.pointer),
+                    dup,
                 };
                 self.request_main_redraw();
             }
@@ -1724,10 +1760,18 @@ impl App {
                 id,
                 start_doc,
                 last_doc,
+                dup,
             } => {
                 let delta = convert::vec2_to_core(last_doc - start_doc);
                 if delta.x != 0.0 || delta.y != 0.0 {
-                    let _ = self.editor.execute(Command::MoveArtboard { id, delta });
+                    let cmd = if dup {
+                        Command::DuplicateArtboard { id, delta }
+                    } else {
+                        Command::MoveArtboard { id, delta }
+                    };
+                    if let Ok(CommandOutcome::Artboard(new_id)) = self.editor.execute(cmd) {
+                        self.selected_artboard = Some(new_id);
+                    }
                     self.request_main_redraw();
                 }
             }
@@ -1976,6 +2020,7 @@ impl App {
                 id,
                 start_doc,
                 last_doc,
+                ..
             } => {
                 let d = *last_doc - *start_doc;
                 self.editor
@@ -2424,7 +2469,13 @@ impl ApplicationHandler for App {
                                 self.commit_pen(false);
                             }
                             KeyCode::Escape => {
-                                if self.picker.take().is_none() {
+                                if self.picker.take().is_some() {
+                                    // just dismissed the picker
+                                } else if self.active_tool == Tool::Artboard {
+                                    // Exit the Artboard tool back to the
+                                    // tool that was active before it.
+                                    self.set_tool(self.pre_artboard_tool);
+                                } else {
                                     self.pen.clear();
                                     self.pen_redo.clear();
                                     self.anchor_sel.clear();
