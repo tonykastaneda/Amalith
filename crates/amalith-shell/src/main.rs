@@ -171,6 +171,29 @@ enum Drag {
     },
 }
 
+/// A command reachable from the menu bar (native on macOS, and — later —
+/// an in-window bar elsewhere). Keyboard shortcuts still handle these
+/// directly; this is the same set routed through one dispatcher.
+#[derive(Clone, Copy, Debug)]
+enum MenuAction {
+    New,
+    Open,
+    Save,
+    SaveAs,
+    ImportSvg,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    SelectAll,
+    BringForward,
+    BringToFront,
+    SendBackward,
+    SendToBack,
+}
+
 struct App {
     context: RenderContext,
     hosts: HashMap<WindowId, WindowHost>,
@@ -229,6 +252,9 @@ struct App {
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
+    /// The macOS application menu bar, once the app has resumed.
+    #[cfg(target_os = "macos")]
+    native_menu: Option<NativeMenu>,
 }
 
 impl App {
@@ -273,6 +299,8 @@ impl App {
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
         }
     }
 
@@ -514,6 +542,84 @@ impl App {
             self.last_pen = Some((id, anchors, closed));
         }
         self.request_main_redraw();
+    }
+
+    /// Reset to a fresh, empty document.
+    fn new_document(&mut self) {
+        self.editor = Editor::new(amalith_core::Document::new("Untitled"));
+        self.asset_store = amalith_io::AssetStore::new();
+        self.file_path = None;
+        self.selection.clear();
+        self.anchor_sel.clear();
+        self.expanded_groups.clear();
+        self.pen.clear();
+        self.pen_redo.clear();
+        self.last_pen = None;
+        self.picker = None;
+        self.io_error = None;
+        self.view = CanvasView::default();
+        self.request_main_redraw();
+    }
+
+    /// Route one [`MenuAction`] to the matching operation. Mirrors the
+    /// keyboard shortcuts so the menu bar and the keys stay in step.
+    fn run_menu_action(&mut self, action: MenuAction) {
+        match action {
+            MenuAction::New => self.new_document(),
+            MenuAction::Open => self.open_document(),
+            MenuAction::Save => self.save_document(false),
+            MenuAction::SaveAs => self.save_document(true),
+            MenuAction::ImportSvg => self.import_svg(),
+            MenuAction::Undo => {
+                let _ = self.editor.undo();
+                self.prune_selection();
+                self.request_main_redraw();
+            }
+            MenuAction::Redo => {
+                let _ = self.editor.redo();
+                self.prune_selection();
+                self.request_main_redraw();
+            }
+            MenuAction::Cut => {
+                if !self.selection.is_empty() {
+                    let _ = self.editor.copy(&self.selection);
+                    let _ = self.editor.execute(Command::DeleteObjects {
+                        ids: std::mem::take(&mut self.selection),
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::Copy => {
+                let _ = self.editor.copy(&self.selection);
+            }
+            MenuAction::Paste => {
+                if self.editor.has_clipboard() {
+                    if let Ok(ids) = self
+                        .editor
+                        .paste(amalith_core::Vec2::new(16.0, 16.0), PasteStack::Top)
+                    {
+                        self.selection = ids;
+                    }
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::Duplicate => {
+                if !self.selection.is_empty() {
+                    if let Ok(ids) = self
+                        .editor
+                        .duplicate_objects(&self.selection, amalith_core::Vec2::new(16.0, 16.0))
+                    {
+                        self.selection = ids;
+                    }
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::SelectAll => self.select_all(),
+            MenuAction::BringForward => self.restack(1),
+            MenuAction::BringToFront => self.restack_extreme(true),
+            MenuAction::SendBackward => self.restack(-1),
+            MenuAction::SendToBack => self.restack_extreme(false),
+        }
     }
 
     /// ⌘] / ⌘[ — move the selection `steps` places forward (+) or back
@@ -1874,6 +1980,17 @@ impl ApplicationHandler for App {
     /// first frame paints even if the post-`resumed` `request_redraw` was
     /// dropped; once running it just tops up the vsync-throttled loop.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "macos")]
+        {
+            let actions = self
+                .native_menu
+                .as_ref()
+                .map(NativeMenu::drain)
+                .unwrap_or_default();
+            for action in actions {
+                self.run_menu_action(action);
+            }
+        }
         for host in self.hosts.values() {
             host.window.request_redraw();
         }
@@ -1902,6 +2019,10 @@ impl ApplicationHandler for App {
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
         self.main_id = Some(wid);
+        #[cfg(target_os = "macos")]
+        {
+            self.native_menu = Some(NativeMenu::build());
+        }
         self.hosts[&wid].window.request_redraw();
     }
 
@@ -2620,6 +2741,108 @@ fn floating_title(node: &Node) -> String {
             .map(|p| tab_label(*p))
             .unwrap_or_else(|| "Panel".to_string()),
         Node::Split { .. } => "Panel".to_string(),
+    }
+}
+
+/// The macOS application menu bar. Items carry the same accelerators as
+/// the in-app keyboard shortcuts; clicks arrive on `muda`'s global
+/// channel, drained each loop in `about_to_wait`.
+#[cfg(target_os = "macos")]
+struct NativeMenu {
+    items: Vec<(muda::MenuId, MenuAction)>,
+    // Kept alive for the process; dropping it tears the menu down.
+    _menu: muda::Menu,
+}
+
+#[cfg(target_os = "macos")]
+impl NativeMenu {
+    fn build() -> Self {
+        use muda::{
+            accelerator::{Accelerator, Code, Modifiers},
+            Menu, MenuItem, PredefinedMenuItem, Submenu,
+        };
+        let sup = Some(Modifiers::SUPER);
+        let sup_shift = Some(Modifiers::SUPER | Modifiers::SHIFT);
+        let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
+
+        let new_i = mk("New", sup, Code::KeyN);
+        let open_i = mk("Open…", sup, Code::KeyO);
+        let save_i = mk("Save", sup, Code::KeyS);
+        let save_as_i = mk("Save As…", sup_shift, Code::KeyS);
+        let import_i = mk("Import SVG…", sup_shift, Code::KeyI);
+        let undo_i = mk("Undo", sup, Code::KeyZ);
+        let redo_i = mk("Redo", sup_shift, Code::KeyZ);
+        let cut_i = mk("Cut", sup, Code::KeyX);
+        let copy_i = mk("Copy", sup, Code::KeyC);
+        let paste_i = mk("Paste", sup, Code::KeyV);
+        let dup_i = mk("Duplicate", sup, Code::KeyD);
+        let all_i = mk("Select All", sup, Code::KeyA);
+        let forward_i = mk("Bring Forward", sup, Code::BracketRight);
+        let front_i = mk("Bring to Front", sup_shift, Code::BracketRight);
+        let backward_i = mk("Send Backward", sup, Code::BracketLeft);
+        let back_i = mk("Send to Back", sup_shift, Code::BracketLeft);
+
+        let sep = PredefinedMenuItem::separator;
+        let app = Submenu::with_items(
+            "Amalith",
+            true,
+            &[&PredefinedMenuItem::quit(Some("Quit Amalith"))],
+        )
+        .expect("app menu");
+        let file = Submenu::with_items(
+            "File",
+            true,
+            &[
+                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i,
+            ],
+        )
+        .expect("file menu");
+        let edit = Submenu::with_items(
+            "Edit",
+            true,
+            &[
+                &undo_i, &redo_i, &sep(), &cut_i, &copy_i, &paste_i, &dup_i, &sep(), &all_i,
+                &sep(), &forward_i, &front_i, &backward_i, &back_i,
+            ],
+        )
+        .expect("edit menu");
+
+        let menu = Menu::new();
+        menu.append(&app).expect("append app menu");
+        menu.append(&file).expect("append file menu");
+        menu.append(&edit).expect("append edit menu");
+        menu.init_for_nsapp();
+
+        let items = vec![
+            (new_i.id().clone(), MenuAction::New),
+            (open_i.id().clone(), MenuAction::Open),
+            (save_i.id().clone(), MenuAction::Save),
+            (save_as_i.id().clone(), MenuAction::SaveAs),
+            (import_i.id().clone(), MenuAction::ImportSvg),
+            (undo_i.id().clone(), MenuAction::Undo),
+            (redo_i.id().clone(), MenuAction::Redo),
+            (cut_i.id().clone(), MenuAction::Cut),
+            (copy_i.id().clone(), MenuAction::Copy),
+            (paste_i.id().clone(), MenuAction::Paste),
+            (dup_i.id().clone(), MenuAction::Duplicate),
+            (all_i.id().clone(), MenuAction::SelectAll),
+            (forward_i.id().clone(), MenuAction::BringForward),
+            (front_i.id().clone(), MenuAction::BringToFront),
+            (backward_i.id().clone(), MenuAction::SendBackward),
+            (back_i.id().clone(), MenuAction::SendToBack),
+        ];
+        Self { items, _menu: menu }
+    }
+
+    /// Every menu click queued since the last call.
+    fn drain(&self) -> Vec<MenuAction> {
+        let mut out = Vec::new();
+        while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+            if let Some((_, action)) = self.items.iter().find(|(id, _)| *id == event.id) {
+                out.push(*action);
+            }
+        }
+        out
     }
 }
 

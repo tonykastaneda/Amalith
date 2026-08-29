@@ -191,6 +191,7 @@ dependencies = [
  "amalith-core",
  "amalith-io",
  "kurbo 0.11.3",
+ "muda",
  "parley",
  "pollster",
  "rfd",
