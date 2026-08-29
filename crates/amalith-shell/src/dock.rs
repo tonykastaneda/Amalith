@@ -77,14 +77,17 @@ impl Side {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct NodePath(pub Vec<usize>);
 
-/// A detached group living in its own OS window.
+/// A detached group living in its own OS window. The shell keeps a
+/// `id -> winit WindowId` map alongside; the model itself never touches
+/// windowing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Floating {
+    /// Stable within a `DockModel` for the life of the group.
+    pub id: u64,
     pub node: Node,
-    /// Global (virtual-desktop) screen rect, in logical points.
+    /// Top-left + size of the OS window, in virtual-desktop logical points:
+    /// `[x, y, w, h]`.
     pub rect: [f32; 4],
-    /// Set by the shell once an OS window backs this group.
-    pub window: Option<u64>,
 }
 
 /// The whole panel layout: the document window's tree plus any detached
@@ -93,6 +96,7 @@ pub struct Floating {
 pub struct DockModel {
     pub root: Option<Node>,
     pub floating: Vec<Floating>,
+    next_id: u64,
 }
 
 impl DockModel {
@@ -100,6 +104,7 @@ impl DockModel {
         Self {
             root: Some(root),
             floating: Vec::new(),
+            next_id: 1,
         }
     }
 
@@ -139,21 +144,106 @@ impl DockModel {
         removed
     }
 
-    /// Detaches `panel` into a new floating group at `rect`. No-op if the
-    /// panel isn't placed.
-    pub fn detach(&mut self, panel: PanelId, rect: [f32; 4]) {
+    /// Detaches `panel` into a new single-tab floating group at `rect`.
+    /// Returns the new group's id, or `None` if the panel wasn't placed.
+    pub fn detach(&mut self, panel: PanelId, rect: [f32; 4]) -> Option<u64> {
         if !self.contains(panel) {
-            return;
+            return None;
         }
         self.remove(panel);
+        let id = self.next_id;
+        self.next_id += 1;
         self.floating.push(Floating {
+            id,
             node: Node::Tabs {
                 panels: vec![panel],
                 active: 0,
             },
             rect,
-            window: None,
         });
+        Some(id)
+    }
+
+    pub fn floating(&self, id: u64) -> Option<&Floating> {
+        self.floating.iter().find(|f| f.id == id)
+    }
+
+    pub fn floating_mut(&mut self, id: u64) -> Option<&mut Floating> {
+        self.floating.iter_mut().find(|f| f.id == id)
+    }
+
+    /// Removes and returns the floating group `id`.
+    pub fn remove_floating(&mut self, id: u64) -> Option<Floating> {
+        let i = self.floating.iter().position(|f| f.id == id)?;
+        Some(self.floating.remove(i))
+    }
+
+    /// Docks floating group `id` back into the main tree: its active panel
+    /// lands at `target`, any siblings tab in beside it. Returns the panels
+    /// that were re-docked. No-op (empty vec) if `id` is unknown or
+    /// `target` is `Float`.
+    pub fn redock(&mut self, id: u64, target: DropTarget) -> Vec<PanelId> {
+        if matches!(target, DropTarget::Float) {
+            return Vec::new();
+        }
+        let Some(f) = self.remove_floating(id) else {
+            return Vec::new();
+        };
+        let mut panels = Vec::new();
+        collect(&f.node, &mut panels);
+        // Active panel first so it lands exactly on `target`.
+        if let Node::Tabs { active, .. } = &f.node {
+            if *active < panels.len() {
+                panels.swap(0, *active);
+            }
+        }
+        let mut it = panels.iter().copied();
+        if let Some(first) = it.next() {
+            self.dock(first, target);
+        }
+        for p in it {
+            // Siblings append to whatever group now holds the active panel.
+            if let Some(path) = self.path_of(panels[0]) {
+                let len = self.tab_len(&path).unwrap_or(0);
+                self.dock(p, DropTarget::Tab { path, index: len });
+            }
+        }
+        panels
+    }
+
+    /// Path to some tab group in the main tree — the first one a
+    /// breadth-first walk finds. Used as a fallback docking spot.
+    pub fn any_tab_path(&self) -> Option<NodePath> {
+        let root = self.root.as_ref()?;
+        walk(root)
+            .into_iter()
+            .find_map(|(path, node)| matches!(node, Node::Tabs { .. }).then_some(path))
+    }
+
+    /// Path to the tab group currently holding `panel`, if any.
+    pub fn path_of(&self, panel: PanelId) -> Option<NodePath> {
+        let root = self.root.as_ref()?;
+        for (path, node) in walk(root) {
+            if let Node::Tabs { panels, .. } = node {
+                if panels.contains(&panel) {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
+    fn tab_len(&self, path: &NodePath) -> Option<usize> {
+        let root = self.root.as_ref()?;
+        for (p, node) in walk(root) {
+            if &p == path {
+                return match node {
+                    Node::Tabs { panels, .. } => Some(panels.len()),
+                    _ => None,
+                };
+            }
+        }
+        None
     }
 
     /// Applies a resolved drop of `panel` onto the main tree. `Float`
@@ -493,6 +583,41 @@ mod tests {
         assert!(m.remove(B));
         assert_eq!(m.root, None);
         assert!(!m.remove(B), "second remove is a no-op");
+    }
+
+    #[test]
+    fn detach_hands_back_an_id_and_redock_puts_the_panel_where_asked() {
+        let mut m = DockModel::new(tabs(&[A, B, C]));
+        let id = m.detach(B, [40.0, 40.0, 220.0, 300.0]).expect("detached");
+        assert_eq!(m.floating.len(), 1);
+        assert_eq!(m.floating(id).unwrap().node, tabs(&[B]));
+
+        // Redock B by splitting the root to its left.
+        let moved = m.redock(
+            id,
+            DropTarget::Split {
+                path: NodePath(vec![]),
+                side: Side::Left,
+            },
+        );
+        assert_eq!(moved, vec![B]);
+        assert!(m.floating.is_empty());
+        match m.root.unwrap() {
+            Node::Split { axis, children } => {
+                assert_eq!(axis, Axis::Horizontal);
+                assert_eq!(children[0].node, tabs(&[B]));
+                assert_eq!(children[1].node, tabs(&[A, C]));
+            }
+            _ => panic!("expected a split with B on the left"),
+        }
+    }
+
+    #[test]
+    fn redock_with_a_float_target_is_a_no_op() {
+        let mut m = DockModel::new(tabs(&[A, B]));
+        let id = m.detach(B, [0.0; 4]).unwrap();
+        assert!(m.redock(id, DropTarget::Float).is_empty());
+        assert!(m.floating(id).is_some(), "still floating");
     }
 
     #[test]

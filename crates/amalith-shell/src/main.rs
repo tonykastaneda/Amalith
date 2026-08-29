@@ -1,25 +1,35 @@
 //! Amalith shell — entry point.
 //!
-//! Owns the winit event loop and the per-window render state (surface +
-//! vello renderer), holds the [`DockModel`], and routes pointer input into
-//! it: tab clicks switch the active tab, splitter drags re-weight a split.
-//! Panel detach/reattach and real panel content come next.
+//! Owns the winit event loop and every window's render state, holds the
+//! [`DockModel`], and routes pointer input:
+//!
+//! - click a tab           → activate it
+//! - drag a splitter       → re-weight the split, live
+//! - drag a tab off the rail → tear it into a borderless, app-styled OS
+//!   window that follows the cursor
+//! - release that window over the rail → an Illustrator-style blue line
+//!   shows the target; dropping there re-docks it
+//!
+//! The app tracks each floating window's position itself and moves it with
+//! raw mouse-motion deltas. It never reads an OS window rect back into a
+//! positioning command — that feedback path is what makes drag jitter.
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use amalith_shell::dock::{Axis, Child, DockModel, Node, NodePath, PanelId};
+use amalith_shell::dock::{Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId};
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::{chrome, layout, Theme};
-use vello::kurbo::{Affine, Point, Rect};
+use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
 use vello::wgpu;
 use vello::{AaConfig, Renderer, RendererOptions, Scene};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -27,13 +37,29 @@ use winit::window::{Window, WindowId};
 const RAIL_W: f64 = 320.0;
 /// Slack around a splitter's visual gap for grabbing it.
 const GRAB_SLOP: f64 = 3.0;
+/// Pointer travel before a press becomes a drag.
+const DRAG_THRESHOLD: f64 = 5.0;
+/// Default size of a torn-off panel window, logical points.
+const FLOAT_W: f64 = 264.0;
+const FLOAT_H: f64 = 320.0;
+/// Where the cursor sits inside a freshly torn-off window (on its strip).
+const TEAROFF_GRAB: Vec2 = Vec2::new(58.0, 13.0);
 
-/// One rendered window: the surface, the vello renderer for its device, and
-/// the winit handle.
-struct WindowState {
+const ID: Affine = Affine::IDENTITY;
+
+#[derive(Clone, Copy)]
+enum Role {
+    Main,
+    Floating(u64),
+}
+
+/// One rendered window: surface, its device's vello renderer, the winit
+/// handle, and what it shows.
+struct WindowHost {
     surface: RenderSurface<'static>,
     renderer: Renderer,
     window: Arc<Window>,
+    role: Role,
 }
 
 /// What the pointer is currently doing.
@@ -43,126 +69,114 @@ enum Drag {
     None,
     /// Re-weighting the split at `path`, boundary after child `gap`.
     Splitter { path: NodePath, gap: usize },
+    /// Pressed a tab in the main rail; a click activates it, a drag tears
+    /// it off.
+    PendingTearoff {
+        panel: PanelId,
+        path: NodePath,
+        tab: usize,
+        press: Point,
+    },
+    /// Pressed a floating window's tab strip; a click activates that tab, a
+    /// drag moves the window.
+    PendingFloatMove { id: u64, tab: usize, press: Point },
+    /// A floating window is following the cursor. `pos` is the app's
+    /// authoritative window top-left in virtual-desktop logical points;
+    /// `grab` is the constant cursor offset within it.
+    MovingFloating { id: u64, grab: Vec2, pos: Point },
 }
 
 struct App {
     context: RenderContext,
-    state: Option<WindowState>,
+    hosts: HashMap<WindowId, WindowHost>,
+    main_id: Option<WindowId>,
     scene: Scene,
     /// Chrome is drawn here in logical units, then appended to `scene`
-    /// scaled by the window's DPI factor.
+    /// scaled by the DPI factor.
     content: Scene,
     text: TextContext,
     dock: DockModel,
     theme: Theme,
+    scale: f64,
+    /// Pointer position within whichever window last reported it, logical.
     pointer: Point,
+    pointer_win: Option<WindowId>,
     drag: Drag,
+    /// Live re-dock target while a floating window is over the rail.
+    redock_preview: Option<DropTarget>,
+    /// Set by cursor-move handling (no `event_loop` in scope) so the
+    /// window-event dispatch can spawn the torn-off window.
+    pending_tearoff: Option<(PanelId, Point)>,
 }
 
 impl App {
     fn new() -> Self {
         Self {
             context: RenderContext::new(),
-            state: None,
+            hosts: HashMap::new(),
+            main_id: None,
             scene: Scene::new(),
             content: Scene::new(),
             text: TextContext::new(),
             dock: DockModel::new(demo_dock()),
             theme: Theme::default(),
+            scale: 1.0,
             pointer: Point::ZERO,
+            pointer_win: None,
             drag: Drag::None,
+            redock_preview: None,
+            pending_tearoff: None,
         }
     }
 
-    /// Logical size of the current window's surface, or `None` if there is
-    /// no window yet.
-    fn logical_size(&self) -> Option<(f64, f64)> {
-        let state = self.state.as_ref()?;
-        let scale = state.window.scale_factor();
-        Some((
-            state.surface.config.width as f64 / scale,
-            state.surface.config.height as f64 / scale,
-        ))
+    fn main_window(&self) -> Option<&Arc<Window>> {
+        self.hosts.get(&self.main_id?).map(|h| &h.window)
     }
 
-    fn request_redraw(&self) {
-        if let Some(state) = self.state.as_ref() {
-            state.window.request_redraw();
+    fn floating_window(&self, id: u64) -> Option<&Arc<Window>> {
+        self.hosts
+            .values()
+            .find(|h| matches!(h.role, Role::Floating(f) if f == id))
+            .map(|h| &h.window)
+    }
+
+    fn request_main_redraw(&self) {
+        if let Some(w) = self.main_window() {
+            w.request_redraw();
         }
     }
 
-    fn on_pointer_down(&mut self) {
-        let Some((w, h)) = self.logical_size() else {
-            return;
+    /// Global (virtual-desktop) logical position of the main window's
+    /// client-area origin. Read-only — never fed into a move command.
+    fn main_inner_origin(&self) -> Point {
+        self.main_window()
+            .and_then(|w| w.inner_position().ok())
+            .map(|p| Point::new(p.x as f64 / self.scale, p.y as f64 / self.scale))
+            .unwrap_or(Point::ZERO)
+    }
+
+    fn main_rail(&self) -> Option<(Rect, Rect)> {
+        let w = self.main_window()?;
+        let sz = w.inner_size();
+        let (wl, hl) = (sz.width as f64 / self.scale, sz.height as f64 / self.scale);
+        Some((Rect::new(0.0, 0.0, wl, hl), rail_rect(wl, hl)))
+    }
+
+    /// Resolve where the cursor (given in global logical coords) would
+    /// re-dock in the main rail.
+    fn resolve_redock(&mut self, global_cursor: Point) -> DropTarget {
+        let Some((bounds, rail)) = self.main_rail() else {
+            return DropTarget::Float;
         };
-        let rail = rail_rect(w, h);
+        let local = global_cursor - self.main_inner_origin().to_vec2();
+        if !bounds.contains(local) {
+            return DropTarget::Float;
+        }
         let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
-
-        // A splitter under the pointer wins — start a re-weight drag.
-        if let Some(sp) = laid
-            .splitters
-            .iter()
-            .find(|s| s.rect.inflate(GRAB_SLOP, GRAB_SLOP).contains(self.pointer))
-        {
-            self.drag = Drag::Splitter {
-                path: sp.path.clone(),
-                gap: sp.index,
-            };
-            return;
-        }
-
-        // Otherwise a tab click switches the active tab of its group.
-        for area in &laid.areas {
-            if !area.tab_strip.contains(self.pointer) {
-                continue;
-            }
-            if let Some(i) = area.tabs.iter().position(|t| t.rect.contains(self.pointer)) {
-                self.dock.activate_tab(&area.path, i);
-                self.request_redraw();
-            }
-            break;
-        }
+        layout::hit_test(&laid, rail, local, &self.theme)
     }
 
-    fn on_pointer_move(&mut self) {
-        let (path, gap) = match &self.drag {
-            Drag::Splitter { path, gap } => (path.clone(), *gap),
-            Drag::None => return,
-        };
-        let Some((w, h)) = self.logical_size() else {
-            return;
-        };
-        let rail = rail_rect(w, h);
-        let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
-        if let Some(sp) = laid
-            .splitters
-            .iter()
-            .find(|s| s.path == path && s.index == gap)
-        {
-            let frac = sp.frac_at(self.pointer);
-            self.dock.set_boundary(&path, gap, frac);
-            self.request_redraw();
-        }
-    }
-
-    fn on_pointer_up(&mut self) {
-        if !matches!(self.drag, Drag::None) {
-            self.drag = Drag::None;
-            self.request_redraw();
-        }
-    }
-}
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.state.is_some() {
-            return;
-        }
-        let attrs = Window::default_attributes()
-            .with_title("Amalith — shell")
-            .with_inner_size(LogicalSize::new(1280.0, 800.0));
-        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-
+    fn make_host(&mut self, window: Arc<Window>, role: Role) -> WindowHost {
         let size = window.inner_size();
         let surface = pollster::block_on(self.context.create_surface(
             window.clone(),
@@ -171,7 +185,6 @@ impl ApplicationHandler for App {
             wgpu::PresentMode::AutoVsync,
         ))
         .expect("create surface");
-
         let renderer = Renderer::new(
             &self.context.devices[surface.dev_id].device,
             RendererOptions {
@@ -182,89 +195,266 @@ impl ApplicationHandler for App {
             },
         )
         .expect("create renderer");
-
-        self.state = Some(WindowState {
+        WindowHost {
             surface,
             renderer,
             window,
-        });
+            role,
+        }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if self.state.is_none() {
+    /// Tear `panel` out of the main rail into a new borderless window that
+    /// starts under the cursor, and begin moving it.
+    fn tear_off(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, main_local_press: Point) {
+        let global = self.main_inner_origin() + main_local_press.to_vec2();
+        let pos = global - TEAROFF_GRAB;
+        let id = match self.dock.detach(
+            panel,
+            [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32],
+        ) {
+            Some(id) => id,
+            None => return,
+        };
+
+        let attrs = Window::default_attributes()
+            .with_title(tab_label(panel))
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_inner_size(LogicalSize::new(FLOAT_W, FLOAT_H))
+            .with_position(LogicalPosition::new(pos.x, pos.y));
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs)
+                .expect("create float window"),
+        );
+        let wid = window.id();
+        let host = self.make_host(window.clone(), Role::Floating(id));
+        self.hosts.insert(wid, host);
+
+        self.drag = Drag::MovingFloating {
+            id,
+            grab: TEAROFF_GRAB,
+            pos,
+        };
+        window.request_redraw();
+        self.request_main_redraw();
+    }
+
+    fn on_press(&mut self, id: WindowId) {
+        let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
+        };
+        match role {
+            Role::Main => {
+                let Some((_, rail)) = self.main_rail() else {
+                    return;
+                };
+                let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
+                if let Some(sp) = laid
+                    .splitters
+                    .iter()
+                    .find(|s| s.rect.inflate(GRAB_SLOP, GRAB_SLOP).contains(self.pointer))
+                {
+                    self.drag = Drag::Splitter {
+                        path: sp.path.clone(),
+                        gap: sp.index,
+                    };
+                    return;
+                }
+                for area in &laid.areas {
+                    if !area.tab_strip.contains(self.pointer) {
+                        continue;
+                    }
+                    if let Some(tab) = area.tabs.iter().position(|t| t.rect.contains(self.pointer))
+                    {
+                        self.drag = Drag::PendingTearoff {
+                            panel: area.tabs[tab].panel,
+                            path: area.path.clone(),
+                            tab,
+                            press: self.pointer,
+                        };
+                    }
+                    return;
+                }
+            }
+            Role::Floating(fid) => {
+                let laid = self.floating_layout(fid);
+                for area in &laid.areas {
+                    if !area.tab_strip.contains(self.pointer) {
+                        continue;
+                    }
+                    let tab = area
+                        .tabs
+                        .iter()
+                        .position(|t| t.rect.contains(self.pointer))
+                        .unwrap_or(0);
+                    self.drag = Drag::PendingFloatMove {
+                        id: fid,
+                        tab,
+                        press: self.pointer,
+                    };
+                    return;
+                }
+            }
         }
-        match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                let state = self.state.as_mut().unwrap();
-                self.context.resize_surface(
-                    &mut state.surface,
-                    size.width.max(1),
-                    size.height.max(1),
-                );
-                state.window.request_redraw();
+    }
+
+    fn on_cursor_move(&mut self) {
+        match &self.drag {
+            Drag::Splitter { path, gap } => {
+                let (path, gap) = (path.clone(), *gap);
+                let Some((_, rail)) = self.main_rail() else {
+                    return;
+                };
+                let laid = build_layout(&self.dock, &self.theme, &mut self.text, rail);
+                if let Some(sp) = laid
+                    .splitters
+                    .iter()
+                    .find(|s| s.path == path && s.index == gap)
+                {
+                    let frac = sp.frac_at(self.pointer);
+                    self.dock.set_boundary(&path, gap, frac);
+                    self.request_main_redraw();
+                }
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                let scale = self
-                    .state
-                    .as_ref()
-                    .map(|s| s.window.scale_factor())
-                    .unwrap_or(1.0);
-                self.pointer = Point::new(position.x / scale, position.y / scale);
-                self.on_pointer_move();
+            Drag::PendingTearoff { panel, press, .. } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let (panel, press) = (*panel, *press);
+                    // event_loop isn't handed to cursor events; defer the
+                    // actual spawn to the caller via a queued request.
+                    self.pending_tearoff = Some((panel, press));
+                }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => self.on_pointer_down(),
-            WindowEvent::MouseInput {
-                state: ElementState::Released,
-                button: MouseButton::Left,
-                ..
-            } => self.on_pointer_up(),
-            WindowEvent::RedrawRequested => self.redraw(),
+            Drag::PendingFloatMove { id, press, .. } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let id = *id;
+                    let pos = self
+                        .dock
+                        .floating(id)
+                        .map(|f| Point::new(f.rect[0] as f64, f.rect[1] as f64))
+                        .unwrap_or(Point::ZERO);
+                    self.drag = Drag::MovingFloating {
+                        id,
+                        grab: press.to_vec2(),
+                        pos,
+                    };
+                }
+            }
             _ => {}
         }
     }
-}
 
-impl App {
-    fn redraw(&mut self) {
-        let state = self.state.as_mut().unwrap();
-        let width = state.surface.config.width;
-        let height = state.surface.config.height;
-        let scale = state.window.scale_factor();
-        let (w_logical, h_logical) = (width as f64 / scale, height as f64 / scale);
+    fn on_release(&mut self) {
+        match std::mem::take(&mut self.drag) {
+            Drag::None | Drag::Splitter { .. } => {}
+            Drag::PendingTearoff { path, tab, .. } => {
+                self.dock.activate_tab(&path, tab);
+                self.request_main_redraw();
+            }
+            Drag::PendingFloatMove { id, tab, .. } => {
+                if let Some(f) = self.dock.floating_mut(id) {
+                    if let Node::Tabs { active, panels } = &mut f.node {
+                        *active = tab.min(panels.len().saturating_sub(1));
+                    }
+                }
+                if let Some(w) = self.floating_window(id) {
+                    w.request_redraw();
+                }
+            }
+            Drag::MovingFloating { id, grab, pos } => {
+                let global_cursor = pos + grab;
+                let target = self.resolve_redock(global_cursor);
+                if matches!(target, DropTarget::Float) {
+                    if let Some(f) = self.dock.floating_mut(id) {
+                        f.rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+                    }
+                } else {
+                    self.dock.redock(id, target);
+                    if let Some((wid, _)) = self
+                        .hosts
+                        .iter()
+                        .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == id))
+                    {
+                        let wid = *wid;
+                        self.hosts.remove(&wid); // Arc<Window> drops -> closes
+                    }
+                }
+                self.redock_preview = None;
+                self.request_main_redraw();
+            }
+        }
+    }
+
+    fn floating_layout(&mut self, id: u64) -> Layout {
+        let Some(f) = self.dock.floating(id) else {
+            return Layout::default();
+        };
+        let node = f.node.clone();
+        let sz = self
+            .floating_window(id)
+            .map(|w| w.inner_size())
+            .unwrap_or_default();
+        let (wl, hl) = (
+            (sz.width as f64 / self.scale).max(1.0),
+            (sz.height as f64 / self.scale).max(1.0),
+        );
+        let theme = self.theme.clone();
+        layout::layout(&node, Rect::new(0.0, 0.0, wl, hl), &theme, &mut |p| {
+            self.text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
+        })
+    }
+
+    fn redraw(&mut self, id: WindowId) {
+        let Some(host) = self.hosts.get_mut(&id) else {
+            return;
+        };
+        let width = host.surface.config.width;
+        let height = host.surface.config.height;
+        let scale = self.scale;
+        let (wl, hl) = (width as f64 / scale, height as f64 / scale);
+        let role = host.role;
 
         self.content.reset();
-        paint(
-            &mut self.content,
-            &mut self.text,
-            &self.dock,
-            &self.theme,
-            w_logical,
-            h_logical,
-        );
+        match role {
+            Role::Main => paint_main(
+                &mut self.content,
+                &mut self.text,
+                &self.dock,
+                &self.theme,
+                wl,
+                hl,
+                self.redock_preview.as_ref(),
+            ),
+            Role::Floating(fid) => {
+                if let Some(f) = self.dock.floating(fid) {
+                    let node = f.node.clone();
+                    paint_floating(
+                        &mut self.content,
+                        &mut self.text,
+                        &node,
+                        &self.theme,
+                        wl,
+                        hl,
+                    );
+                }
+            }
+        }
         self.scene.reset();
         self.scene.append(&self.content, Some(Affine::scale(scale)));
 
-        let device = &self.context.devices[state.surface.dev_id];
-        let surface_texture = match state.surface.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-            // Occluded / timed out / outdated / lost — skip this frame.
+        let host = self.hosts.get_mut(&id).unwrap();
+        let device = &self.context.devices[host.surface.dev_id];
+        let surface_texture = match host.surface.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             _ => return,
         };
-
-        state
-            .renderer
+        host.renderer
             .render_to_texture(
                 &device.device,
                 &device.queue,
                 &self.scene,
-                &state.surface.target_view,
+                &host.surface.target_view,
                 &vello::RenderParams {
                     base_color: palette::css::BLACK,
                     width,
@@ -273,22 +463,121 @@ impl App {
                 },
             )
             .expect("render");
-
         let mut encoder = device
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("surface blit"),
             });
-        state.surface.blitter.copy(
+        host.surface.blitter.copy(
             &device.device,
             &mut encoder,
-            &state.surface.target_view,
+            &host.surface.target_view,
             &surface_texture
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default()),
         );
         device.queue.submit([encoder.finish()]);
         surface_texture.present();
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.main_id.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("Amalith — shell")
+            .with_inner_size(LogicalSize::new(1280.0, 800.0));
+        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        self.scale = window.scale_factor();
+        let wid = window.id();
+        let host = self.make_host(window, Role::Main);
+        self.hosts.insert(wid, host);
+        self.main_id = Some(wid);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                if Some(id) == self.main_id {
+                    event_loop.exit();
+                } else if let Some(host) = self.hosts.remove(&id) {
+                    if let Role::Floating(fid) = host.role {
+                        // Closing a floating window folds its panels back
+                        // into the rail so nothing is lost.
+                        match self.dock.any_tab_path().map(|path| DropTarget::Tab {
+                            path,
+                            index: usize::MAX,
+                        }) {
+                            Some(target) => {
+                                self.dock.redock(fid, target);
+                            }
+                            None => {
+                                self.dock.remove_floating(fid);
+                            }
+                        }
+                    }
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::Resized(size) => {
+                if let Some(host) = self.hosts.get_mut(&id) {
+                    self.context.resize_surface(
+                        &mut host.surface,
+                        size.width.max(1),
+                        size.height.max(1),
+                    );
+                    host.window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if Some(id) == self.main_id {
+                    self.scale = scale_factor;
+                }
+                if let Some(host) = self.hosts.get(&id) {
+                    host.window.request_redraw();
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.pointer = Point::new(position.x / self.scale, position.y / self.scale);
+                self.pointer_win = Some(id);
+                self.on_cursor_move();
+                if let Some((panel, press)) = self.pending_tearoff.take() {
+                    self.tear_off(event_loop, panel, press);
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => self.on_press(id),
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => self.on_release(),
+            WindowEvent::RedrawRequested => self.redraw(id),
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _dev: DeviceId, event: DeviceEvent) {
+        let DeviceEvent::MouseMotion { delta } = event else {
+            return;
+        };
+        let Drag::MovingFloating { id, grab, pos } = &mut self.drag else {
+            return;
+        };
+        *pos += Vec2::new(delta.0, delta.1) / self.scale;
+        let (id, grab, pos) = (*id, *grab, *pos);
+
+        if let Some(w) = self.floating_window(id) {
+            w.set_outer_position(LogicalPosition::new(pos.x, pos.y));
+        }
+        let target = self.resolve_redock(pos + grab);
+        self.redock_preview = Some(target);
+        self.request_main_redraw();
     }
 }
 
@@ -339,27 +628,45 @@ fn build_layout(dock: &DockModel, theme: &Theme, text: &mut TextContext, rail: R
     }
 }
 
-/// The whole frame's drawing, in logical units: a canvas ground and the
-/// right-hand dock rail.
-fn paint(
+fn paint_main(
     scene: &mut Scene,
     text: &mut TextContext,
     dock: &DockModel,
     theme: &Theme,
     width: f64,
     height: f64,
+    preview: Option<&DropTarget>,
 ) {
     scene.fill(
         Fill::NonZero,
-        Affine::IDENTITY,
+        ID,
         theme.bg,
         None,
         &Rect::new(0.0, 0.0, width, height),
     );
-
     let rail = rail_rect(width, height);
     let laid = build_layout(dock, theme, text, rail);
     chrome::paint(scene, &laid, theme, text, &tab_label);
+    if let Some(target) = preview {
+        chrome::paint_drop(scene, target, &laid, rail, theme);
+    }
+}
+
+fn paint_floating(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    node: &Node,
+    theme: &Theme,
+    width: f64,
+    height: f64,
+) {
+    let full = Rect::new(0.0, 0.0, width, height);
+    let laid = layout::layout(node, full, theme, &mut |p| {
+        text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
+    });
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &full);
+    chrome::paint(scene, &laid, theme, text, &tab_label);
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &full);
 }
 
 fn main() {
