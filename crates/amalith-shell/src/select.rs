@@ -58,7 +58,7 @@ pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
     out
 }
 
-/// Union of the given objects' bounds — the selection box.
+/// Union of the given objects' bounds — the axis-aligned selection box.
 pub fn union_bounds(doc: &Document, ids: &[ObjectId]) -> Option<Rect> {
     let mut acc: Option<Rect> = None;
     for &id in ids {
@@ -67,4 +67,16 @@ pub fn union_bounds(doc: &Document, ids: &[ObjectId]) -> Option<Rect> {
         }
     }
     acc
+}
+
+/// The oriented selection box: a single object's rotated corner quad, or
+/// the axis-aligned union box (as a quad) for a multi-selection.
+pub fn selection_quad(doc: &Document, ids: &[ObjectId]) -> Option<[vello::kurbo::Point; 4]> {
+    if ids.len() == 1 {
+        let id = ids[0];
+        let local = convert::rect(doc.local_bounds_of(id)?);
+        let m = convert::affine(doc.world_transform(id));
+        return Some(crate::handles::rect_quad(local).map(|p| m * p));
+    }
+    union_bounds(doc, ids).map(crate::handles::rect_quad)
 }

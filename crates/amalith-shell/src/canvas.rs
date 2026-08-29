@@ -1,14 +1,17 @@
 //! The document canvas: renders an `amalith_core::Document` with vello in
 //! the region between the rails. No editing yet — just pan / zoom / paint.
 
+use std::collections::HashMap;
+
 use amalith_core::{Document, ObjectId, ObjectKind};
-use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
+use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
-use crate::convert;
+use crate::handles::{self, Handle};
 use crate::text::TextContext;
 use crate::theme::Theme;
+use crate::{convert, select};
 
 /// Pan (screen px) and zoom for the document view.
 #[derive(Clone, Copy, Debug)]
@@ -42,24 +45,34 @@ impl CanvasView {
     }
 }
 
-/// Live drag preview. For a move, the dragged objects render offset by
-/// `delta` (document space). For a duplicate (`dup`), the originals stay
-/// put and a translucent ghost is drawn at `delta` instead.
+/// Live drag preview.
+///
+/// - A move offsets the dragged objects by `delta` (document space).
+/// - A duplicate (`dup`) keeps the originals put and draws a copy at
+///   `delta`.
+/// - A scale/rotate supplies `xf`: a full replacement transform per
+///   dragged object, which wins over `delta`/`dup`.
 #[derive(Clone, Copy)]
 pub struct DragPreview<'a> {
     pub ids: &'a [ObjectId],
     pub delta: Vec2,
     pub dup: bool,
+    pub xf: Option<&'a HashMap<ObjectId, Affine>>,
 }
 
 impl DragPreview<'_> {
-    /// Transform for a dragged object's *own* rendering.
+    /// Transform for a dragged object's own rendering (translate only).
     fn object_offset(&self, id: ObjectId) -> Affine {
         if !self.dup && self.ids.contains(&id) {
             Affine::translate(self.delta)
         } else {
             Affine::IDENTITY
         }
+    }
+
+    /// Full replacement transform for `id` during a scale/rotate.
+    fn replacement(&self, id: ObjectId) -> Option<Affine> {
+        self.xf.and_then(|m| m.get(&id).copied())
     }
 
     fn is_dragged(&self, id: ObjectId) -> bool {
@@ -134,26 +147,59 @@ pub fn paint(
         }
     }
 
-    // Selection outline — follows the drag (where the move ends up, or
-    // where the duplicate lands).
-    for &id in selection {
-        if let Some(b) = crate::select::bounds(doc, id) {
-            let off = match drag {
-                Some(d) if d.is_dragged(id) => Affine::translate(d.delta),
+    // Selection box + transform handles.
+    if !selection.is_empty() {
+        // The oriented box, in screen px, transformed by any live
+        // scale/rotate preview.
+        let quad = select::selection_quad(doc, selection).map(|q| {
+            let extra = match drag {
+                Some(d) if d.xf.is_some() => xf_for_quad(doc, selection, d),
+                Some(d) if d.is_dragged(selection[0]) => Affine::translate(d.delta),
                 _ => Affine::IDENTITY,
             };
-            let screen = (vt * off).transform_rect_bbox(b);
+            q.map(|p| vt * extra * p)
+        });
+        if let Some(q) = quad {
+            let mut path = BezPath::new();
+            path.move_to(q[0]);
+            for p in &q[1..] {
+                path.line_to(*p);
+            }
+            path.close_path();
             scene.stroke(
                 &Stroke::new(1.0),
                 Affine::IDENTITY,
                 theme.drop_line,
                 None,
-                &screen,
+                &path,
             );
+            for h in Handle::ALL {
+                let c = handles::handle_pos(q, h);
+                let sq = Rect::from_center_size(c, (7.0, 7.0));
+                scene.fill(Fill::NonZero, Affine::IDENTITY, theme.canvas_bg, None, &sq);
+                scene.stroke(
+                    &Stroke::new(1.0),
+                    Affine::IDENTITY,
+                    theme.drop_line,
+                    None,
+                    &sq,
+                );
+            }
         }
     }
 
     scene.pop_layer();
+}
+
+/// The extra affine to apply to the whole selection quad given a
+/// scale/rotate preview — take the first dragged object's replacement
+/// relative to its start transform.
+fn xf_for_quad(doc: &Document, selection: &[ObjectId], d: DragPreview<'_>) -> Affine {
+    let id = selection[0];
+    match (d.replacement(id), doc.object(id)) {
+        (Some(new), Some(obj)) => new * convert::affine(obj.transform).inverse(),
+        _ => Affine::IDENTITY,
+    }
 }
 
 fn paint_object(
@@ -170,7 +216,11 @@ fn paint_object(
         return;
     }
     let off = drag.map_or(Affine::IDENTITY, |d| d.object_offset(id));
-    let m = vt * off * convert::affine(obj.transform);
+    let replacement = drag.and_then(|d| d.replacement(id));
+    let m = match replacement {
+        Some(a) => vt * a,
+        None => vt * off * convert::affine(obj.transform),
+    };
     let fill = obj.appearance.fill.color().map(convert::color);
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
@@ -191,8 +241,12 @@ fn paint_object(
             }
         }
         ObjectKind::Group(g) => {
+            let (child_vt, child_drag) = match replacement {
+                Some(a) => (vt * a, None),
+                None => (vt * off, drag),
+            };
             for &child in &g.children {
-                paint_object(scene, doc, child, vt * off, drag);
+                paint_object(scene, doc, child, child_vt, child_drag);
             }
         }
         other => {

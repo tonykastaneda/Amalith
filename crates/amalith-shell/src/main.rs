@@ -24,6 +24,7 @@ use amalith_shell::canvas::{self, CanvasView, DragPreview};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
+use amalith_shell::handles::{self, Handle};
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::{chrome, layout, sample, Theme};
@@ -116,6 +117,20 @@ enum Drag {
     },
     /// Rubber-band selection; `start` is the press point (screen px).
     Marquee { start: Point },
+    /// Scaling the selection from `handle`. Transforms are vello affines.
+    Scale {
+        handle: Handle,
+        start_bounds: Rect,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+    },
+    /// Rotating the selection about `center` (document space).
+    Rotate {
+        center: Point,
+        start_angle: f64,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+    },
 }
 
 struct App {
@@ -415,6 +430,55 @@ impl App {
                 // Selection tool (ported from amalith-app's `press`):
                 let dp = self.doc_point(self.pointer);
                 let visible = self.visible_doc_rect();
+
+                // Transform handles / rotation halo win over object hits.
+                if !self.selection.is_empty() {
+                    if let Some(quad) =
+                        select::selection_quad(self.editor.document(), &self.selection)
+                    {
+                        let to_screen = self.view.to_screen();
+                        let scr = quad.map(|p| to_screen * p);
+                        let start_xf: HashMap<ObjectId, Affine> = self
+                            .selection
+                            .iter()
+                            .filter_map(|id| {
+                                self.editor
+                                    .document()
+                                    .object(*id)
+                                    .map(|o| (*id, convert::affine(o.transform)))
+                            })
+                            .collect();
+                        if !start_xf.is_empty() {
+                            if let Some(handle) = handles::hit_handle(self.pointer, scr) {
+                                let start_bounds =
+                                    select::union_bounds(self.editor.document(), &self.selection)
+                                        .unwrap();
+                                self.drag = Drag::Scale {
+                                    handle,
+                                    start_bounds,
+                                    preview: start_xf.clone(),
+                                    start_xf,
+                                };
+                                self.request_main_redraw();
+                                return;
+                            }
+                            if handles::hit_rotate_halo(self.pointer, scr) {
+                                let center =
+                                    select::union_bounds(self.editor.document(), &self.selection)
+                                        .unwrap()
+                                        .center();
+                                self.drag = Drag::Rotate {
+                                    center,
+                                    start_angle: handles::angle_to(center, dp),
+                                    preview: start_xf.clone(),
+                                    start_xf,
+                                };
+                                self.request_main_redraw();
+                                return;
+                            }
+                        }
+                    }
+                }
                 let start_move = |dp: Point, dup: bool| Drag::MoveObjects {
                     start_doc: dp,
                     last_doc: dp,
@@ -539,6 +603,50 @@ impl App {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
                 self.request_main_redraw();
             }
+            Drag::Scale {
+                handle,
+                start_bounds,
+                start_xf,
+                ..
+            } => {
+                let (handle, start_bounds) = (*handle, *start_bounds);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                let m = handles::scaled_transform(
+                    start_bounds,
+                    handle,
+                    dp,
+                    self.shift_down,
+                    self.alt_down,
+                );
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                self.drag = Drag::Scale {
+                    handle,
+                    start_bounds,
+                    start_xf,
+                    preview,
+                };
+                self.request_main_redraw();
+            }
+            Drag::Rotate {
+                center,
+                start_angle,
+                start_xf,
+                ..
+            } => {
+                let (center, start_angle) = (*center, *start_angle);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                let m = handles::rotate_transform(center, start_angle, dp, self.shift_down);
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                self.drag = Drag::Rotate {
+                    center,
+                    start_angle,
+                    start_xf,
+                    preview,
+                };
+                self.request_main_redraw();
+            }
             Drag::PendingTearoff { panel, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (panel, press) = (*panel, *press);
@@ -618,6 +726,21 @@ impl App {
                             delta,
                         });
                     }
+                    self.request_main_redraw();
+                }
+            }
+            Drag::Scale {
+                start_xf, preview, ..
+            }
+            | Drag::Rotate {
+                start_xf, preview, ..
+            } => {
+                if preview != start_xf {
+                    let items = preview
+                        .into_iter()
+                        .map(|(id, a)| (id, convert::affine_to_core(a)))
+                        .collect();
+                    let _ = self.editor.execute(Command::SetTransforms { items });
                     self.request_main_redraw();
                 }
             }
@@ -723,6 +846,13 @@ impl App {
                 ids: &self.selection,
                 delta: *last_doc - *start_doc,
                 dup: *dup,
+                xf: None,
+            }),
+            Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
+                ids: &self.selection,
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: Some(preview),
             }),
             _ => None,
         };

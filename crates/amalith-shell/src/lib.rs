@@ -22,6 +22,7 @@ pub mod canvas;
 pub mod chrome;
 pub mod convert;
 pub mod dock;
+pub mod handles;
 pub mod layout;
 pub mod panel;
 pub mod sample;
