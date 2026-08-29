@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use amalith_commands::{Command, CommandOutcome, Editor};
+use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 use amalith_core::{Document, LayerId, ObjectId};
 use amalith_shell::canvas::{self, CanvasView, DragPreview};
 use amalith_shell::dock::{
@@ -243,6 +243,31 @@ impl App {
     fn prune_selection(&mut self) {
         let doc = self.editor.document();
         self.selection.retain(|id| doc.object(*id).is_some());
+    }
+
+    /// Move the selection by `(dx, dy) * step` document units as one
+    /// undoable command (arrow-key nudge; Shift = ×10).
+    fn nudge(&mut self, dx: f64, dy: f64) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let step = if self.shift_down { 10.0 } else { 1.0 };
+        let _ = self.editor.execute(Command::MoveObjects {
+            objects: self.selection.clone(),
+            delta: amalith_core::Vec2::new(dx * step, dy * step),
+        });
+        self.request_main_redraw();
+    }
+
+    fn select_all(&mut self) {
+        self.selection = self
+            .editor
+            .document()
+            .layers()
+            .iter()
+            .flat_map(|l| l.children.iter().copied())
+            .collect();
+        self.request_main_redraw();
     }
 
     /// The layer new shapes should land in — the topmost, creating one if
@@ -1157,17 +1182,82 @@ impl ApplicationHandler for App {
                         });
                         self.request_main_redraw();
                     }
-                    // Tool shortcuts — bare key, no modifier.
-                    PhysicalKey::Code(code) if pressed && !self.cmd_down && !self.alt_down => {
-                        let tool = match code {
-                            KeyCode::KeyV => Some(Tool::Select),
-                            KeyCode::KeyM => Some(Tool::Rectangle),
-                            KeyCode::KeyL => Some(Tool::Ellipse),
-                            _ => None,
-                        };
-                        if let Some(t) = tool {
-                            self.active_tool = t;
+                    // ⌘ shortcuts (copy / paste / duplicate / group / all).
+                    PhysicalKey::Code(code) if pressed && self.cmd_down => match code {
+                        KeyCode::KeyC => {
+                            let _ = self.editor.copy(&self.selection);
+                        }
+                        KeyCode::KeyX if !self.selection.is_empty() => {
+                            let _ = self.editor.copy(&self.selection);
+                            let _ = self.editor.execute(Command::DeleteObjects {
+                                ids: std::mem::take(&mut self.selection),
+                            });
                             self.request_main_redraw();
+                        }
+                        KeyCode::KeyV if self.editor.has_clipboard() => {
+                            if let Ok(ids) = self
+                                .editor
+                                .paste(amalith_core::Vec2::new(16.0, 16.0), PasteStack::Top)
+                            {
+                                self.selection = ids;
+                            }
+                            self.request_main_redraw();
+                        }
+                        KeyCode::KeyD if !self.selection.is_empty() => {
+                            if let Ok(ids) = self.editor.duplicate_objects(
+                                &self.selection,
+                                amalith_core::Vec2::new(16.0, 16.0),
+                            ) {
+                                self.selection = ids;
+                            }
+                            self.request_main_redraw();
+                        }
+                        KeyCode::KeyG if self.shift_down => {
+                            if let Ok(freed) = self.editor.ungroup(&self.selection) {
+                                if !freed.is_empty() {
+                                    self.selection = freed;
+                                }
+                            }
+                            self.request_main_redraw();
+                        }
+                        KeyCode::KeyG if self.selection.len() > 1 => {
+                            if let Ok(CommandOutcome::Object(g)) =
+                                self.editor.execute(Command::Group {
+                                    ids: self.selection.clone(),
+                                    name: None,
+                                })
+                            {
+                                self.selection = vec![g];
+                            }
+                            self.request_main_redraw();
+                        }
+                        KeyCode::KeyA => self.select_all(),
+                        _ => {}
+                    },
+                    // Bare-key: arrow nudge, Escape, tool shortcuts.
+                    PhysicalKey::Code(code) if pressed && !self.cmd_down && !self.alt_down => {
+                        match code {
+                            KeyCode::ArrowLeft => self.nudge(-1.0, 0.0),
+                            KeyCode::ArrowRight => self.nudge(1.0, 0.0),
+                            KeyCode::ArrowUp => self.nudge(0.0, -1.0),
+                            KeyCode::ArrowDown => self.nudge(0.0, 1.0),
+                            KeyCode::Escape => {
+                                self.selection.clear();
+                                self.request_main_redraw();
+                            }
+                            KeyCode::KeyV => {
+                                self.active_tool = Tool::Select;
+                                self.request_main_redraw();
+                            }
+                            KeyCode::KeyM => {
+                                self.active_tool = Tool::Rectangle;
+                                self.request_main_redraw();
+                            }
+                            KeyCode::KeyL => {
+                                self.active_tool = Tool::Ellipse;
+                                self.request_main_redraw();
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}
