@@ -59,6 +59,16 @@ pub struct DragPreview<'a> {
     pub delta: Vec2,
     pub dup: bool,
     pub xf: Option<&'a HashMap<ObjectId, Affine>>,
+    /// Live anchor drag: `(selected anchors, document-space delta)`.
+    pub anchors: Option<(&'a [(ObjectId, usize)], amalith_core::Vec2)>,
+}
+
+/// Anchor markers for the Direct Selection tool.
+#[derive(Clone, Copy)]
+pub struct AnchorView<'a> {
+    pub selected: &'a [(ObjectId, usize)],
+    /// Paths whose anchors to display.
+    pub paths: &'a [ObjectId],
 }
 
 /// In-progress Pen path preview (all points in document space).
@@ -103,6 +113,7 @@ pub fn paint(
     drag: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     pen: Option<PenPreview<'_>>,
+    anchor_view: Option<AnchorView<'_>>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -277,6 +288,36 @@ pub fn paint(
         }
     }
 
+    // Direct Selection: anchor markers.
+    if let Some(av) = anchor_view {
+        let white = Color::from_rgb8(0xff, 0xff, 0xff);
+        let drag_delta = drag
+            .and_then(|d| d.anchors)
+            .map(|(_, dv)| Vec2::new(dv.x * view.zoom, dv.y * view.zoom))
+            .unwrap_or(Vec2::ZERO);
+        for &id in av.paths {
+            for (idx, pos) in crate::anchors::anchors_of(doc, id) {
+                let sel = av.selected.contains(&(id, idx));
+                let p = if sel { pos + drag_delta } else { pos };
+                let sq = Rect::from_center_size(p, (7.0, 7.0));
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    if sel { theme.select_blue } else { white },
+                    None,
+                    &sq,
+                );
+                scene.stroke(
+                    &Stroke::new(1.0),
+                    Affine::IDENTITY,
+                    theme.select_blue,
+                    None,
+                    &sq,
+                );
+            }
+        }
+    }
+
     scene.pop_layer();
 }
 
@@ -376,7 +417,24 @@ fn paint_object(
     };
 
     match &obj.kind {
-        ObjectKind::Path(pd) => paint_path(scene, &convert::bez_path(&pd.geometry)),
+        ObjectKind::Path(pd) => {
+            // Live anchor drag: deform this path's geometry.
+            let idxs: Vec<usize> = drag
+                .and_then(|d| d.anchors)
+                .map(|(sel, _)| {
+                    sel.iter()
+                        .filter(|(o, _)| *o == id)
+                        .map(|(_, i)| *i)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let (false, Some((_, dv))) = (idxs.is_empty(), drag.and_then(|d| d.anchors)) {
+                let g = crate::anchors::deformed(&pd.geometry, &idxs, dv);
+                paint_path(scene, &convert::bez_path(&g));
+            } else {
+                paint_path(scene, &convert::bez_path(&pd.geometry));
+            }
+        }
         ObjectKind::CompoundPath(cp) => {
             for sub in &cp.subpaths {
                 paint_path(scene, &convert::bez_path(sub));

@@ -5,6 +5,7 @@ use crate::icons::Icon;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
+    DirectSelect,
     Pen,
     Rectangle,
     RoundedRect,
@@ -14,8 +15,9 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 8] = [
         Tool::Select,
+        Tool::DirectSelect,
         Tool::Pen,
         Tool::Rectangle,
         Tool::RoundedRect,
@@ -24,14 +26,18 @@ impl Tool {
         Tool::Star,
     ];
 
-    /// A drag-a-box shape tool (everything but Select and Pen).
+    /// A drag-a-box shape tool.
     pub fn is_shape(self) -> bool {
-        !matches!(self, Tool::Select | Tool::Pen)
+        matches!(
+            self,
+            Tool::Rectangle | Tool::RoundedRect | Tool::Ellipse | Tool::Polygon | Tool::Star
+        )
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Select => "Selection",
+            Tool::DirectSelect => "Direct Selection",
             Tool::Pen => "Pen",
             Tool::Rectangle => "Rectangle",
             Tool::RoundedRect => "Rounded Rectangle",
@@ -45,6 +51,7 @@ impl Tool {
     pub fn key(self) -> &'static str {
         match self {
             Tool::Select => "V",
+            Tool::DirectSelect => "A",
             Tool::Pen => "P",
             Tool::Rectangle => "M",
             Tool::Ellipse => "L",
@@ -55,6 +62,7 @@ impl Tool {
     pub fn icon(self) -> Icon {
         match self {
             Tool::Select => Icon::Select,
+            Tool::DirectSelect => Icon::DirectSelect,
             Tool::Pen => Icon::Pen,
             Tool::Rectangle => Icon::Rectangle,
             Tool::RoundedRect => Icon::RoundedRect,

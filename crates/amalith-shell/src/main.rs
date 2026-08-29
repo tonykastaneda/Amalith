@@ -21,7 +21,8 @@ use std::time::Instant;
 
 use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 use amalith_core::{Document, LayerId, ObjectId};
-use amalith_shell::canvas::{self, CanvasView, DragPreview, PenPreview};
+use amalith_shell::anchors;
+use amalith_shell::canvas::{self, AnchorView, CanvasView, DragPreview, PenPreview};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
@@ -142,6 +143,14 @@ enum Drag {
     },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
+    /// Direct Selection: dragging the selected path anchors.
+    MoveAnchors {
+        start_doc: Point,
+        last_doc: Point,
+        moved: bool,
+    },
+    /// Direct Selection: rubber-banding to select anchors.
+    AnchorMarquee { start: Point },
 }
 
 struct App {
@@ -156,6 +165,8 @@ struct App {
     dock: DockModel,
     editor: Editor,
     selection: Vec<ObjectId>,
+    /// Selected path anchors, for the Direct Selection tool.
+    anchor_sel: Vec<(ObjectId, usize)>,
     active_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
@@ -211,6 +222,7 @@ impl App {
             },
             editor: Editor::new(sample::document()),
             selection: Vec::new(),
+            anchor_sel: Vec::new(),
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             picker: None,
@@ -341,24 +353,37 @@ impl App {
             .map(|o| o.appearance)
     }
 
-    /// Drop selection ids that no longer exist (after undo/redo/delete).
+    /// Drop selection ids / anchors that no longer exist.
     fn prune_selection(&mut self) {
         let doc = self.editor.document();
         self.selection.retain(|id| doc.object(*id).is_some());
+        self.anchor_sel
+            .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
+                Some(amalith_core::ObjectKind::Path(pd)) => {
+                    amalith_core::geom::anchor_position(&pd.geometry, *i).is_some()
+                }
+                _ => false,
+            });
     }
 
-    /// Move the selection by `(dx, dy) * step` document units as one
-    /// undoable command (arrow-key nudge; Shift = ×10).
+    /// Arrow-key nudge (Shift = ×10). Moves the selected anchors when the
+    /// Direct Selection tool is active, otherwise the object selection.
     fn nudge(&mut self, dx: f64, dy: f64) {
-        if self.selection.is_empty() {
-            return;
-        }
         let step = if self.shift_down { 10.0 } else { 1.0 };
-        let _ = self.editor.execute(Command::MoveObjects {
-            objects: self.selection.clone(),
-            delta: amalith_core::Vec2::new(dx * step, dy * step),
-        });
-        self.request_main_redraw();
+        let delta = amalith_core::Vec2::new(dx * step, dy * step);
+        if self.active_tool == Tool::DirectSelect && !self.anchor_sel.is_empty() {
+            let _ = self.editor.execute(Command::MoveAnchors {
+                anchors: self.anchor_sel.clone(),
+                delta,
+            });
+            self.request_main_redraw();
+        } else if !self.selection.is_empty() {
+            let _ = self.editor.execute(Command::MoveObjects {
+                objects: self.selection.clone(),
+                delta,
+            });
+            self.request_main_redraw();
+        }
     }
 
     /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` makes
@@ -397,6 +422,9 @@ impl App {
         if t != Tool::Pen {
             self.pen.clear();
             self.pen_redo.clear();
+        }
+        if t != Tool::DirectSelect {
+            self.anchor_sel.clear();
         }
         self.last_pen = None;
         self.active_tool = t;
@@ -749,6 +777,41 @@ impl App {
                     return;
                 }
 
+                // Direct Selection: pick / drag individual anchors.
+                if self.active_tool == Tool::DirectSelect {
+                    let hit_r = 6.0 / self.view.zoom;
+                    match anchors::topmost_anchor_at(self.editor.document(), dp, hit_r) {
+                        Some(a) => {
+                            if self.shift_down {
+                                if let Some(i) = self.anchor_sel.iter().position(|x| *x == a) {
+                                    self.anchor_sel.remove(i);
+                                } else {
+                                    self.anchor_sel.push(a);
+                                }
+                            } else {
+                                if !self.anchor_sel.contains(&a) {
+                                    self.anchor_sel = vec![a];
+                                }
+                                self.drag = Drag::MoveAnchors {
+                                    start_doc: dp,
+                                    last_doc: dp,
+                                    moved: false,
+                                };
+                            }
+                        }
+                        None => {
+                            if !self.shift_down {
+                                self.anchor_sel.clear();
+                            }
+                            self.drag = Drag::AnchorMarquee {
+                                start: self.pointer,
+                            };
+                        }
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // Selection tool (ported from amalith-app's `press`):
                 let visible = self.visible_doc_rect();
 
@@ -920,8 +983,17 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::Marquee { start } => {
+            Drag::Marquee { start } | Drag::AnchorMarquee { start } => {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
+                self.request_main_redraw();
+            }
+            Drag::MoveAnchors { start_doc, .. } => {
+                let start_doc = *start_doc;
+                self.drag = Drag::MoveAnchors {
+                    start_doc,
+                    last_doc: self.doc_point(self.pointer),
+                    moved: true,
+                };
                 self.request_main_redraw();
             }
             Drag::PickColor { in_hue } => {
@@ -1103,7 +1175,7 @@ impl App {
                                 None => return,
                             }
                         }
-                        Tool::Select | Tool::Pen => return,
+                        Tool::Select | Tool::DirectSelect | Tool::Pen => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
                         self.selection = vec![id];
@@ -1142,6 +1214,39 @@ impl App {
                     }
                 } else {
                     self.selection = hits;
+                }
+                self.marquee = None;
+                self.request_main_redraw();
+            }
+            Drag::MoveAnchors {
+                start_doc,
+                last_doc,
+                moved,
+            } => {
+                if moved && !self.anchor_sel.is_empty() {
+                    let delta = convert::vec2_to_core(last_doc - start_doc);
+                    let _ = self.editor.execute(Command::MoveAnchors {
+                        anchors: self.anchor_sel.clone(),
+                        delta,
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::AnchorMarquee { start } => {
+                let r_doc = self
+                    .view
+                    .to_screen()
+                    .inverse()
+                    .transform_rect_bbox(Rect::from_points(start, self.pointer));
+                let hits = anchors::within(self.editor.document(), r_doc);
+                if self.shift_down {
+                    for a in hits {
+                        if !self.anchor_sel.contains(&a) {
+                            self.anchor_sel.push(a);
+                        }
+                    }
+                } else {
+                    self.anchor_sel = hits;
                 }
                 self.marquee = None;
                 self.request_main_redraw();
@@ -1229,12 +1334,28 @@ impl App {
                 delta: *last_doc - *start_doc,
                 dup: *dup,
                 xf: None,
+                anchors: None,
             }),
             Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
                 ids: &self.selection,
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: Some(preview),
+                anchors: None,
+            }),
+            Drag::MoveAnchors {
+                start_doc,
+                last_doc,
+                moved: true,
+            } => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                anchors: Some((
+                    self.anchor_sel.as_slice(),
+                    convert::vec2_to_core(*last_doc - *start_doc),
+                )),
             }),
             _ => None,
         };
@@ -1269,6 +1390,21 @@ impl App {
         } else {
             None
         };
+        let anchor_paths: Vec<ObjectId> = if self.active_tool == Tool::DirectSelect {
+            let mut seen = HashMap::new();
+            self.selection
+                .iter()
+                .copied()
+                .chain(self.anchor_sel.iter().map(|(id, _)| *id))
+                .filter(|id| seen.insert(*id, ()).is_none())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let anchor_view = (self.active_tool == Tool::DirectSelect).then_some(AnchorView {
+            selected: &self.anchor_sel,
+            paths: &anchor_paths,
+        });
 
         self.content.reset();
         let representative = self.representative();
@@ -1288,6 +1424,7 @@ impl App {
                 preview,
                 draw_shape,
                 pen_preview,
+                anchor_view,
                 self.marquee,
                 wl,
                 hl,
@@ -1594,11 +1731,13 @@ impl ApplicationHandler for App {
                                 if self.picker.take().is_none() {
                                     self.pen.clear();
                                     self.pen_redo.clear();
+                                    self.anchor_sel.clear();
                                     self.selection.clear();
                                 }
                                 self.request_main_redraw();
                             }
                             KeyCode::KeyV => self.set_tool(Tool::Select),
+                            KeyCode::KeyA => self.set_tool(Tool::DirectSelect),
                             KeyCode::KeyP => self.set_tool(Tool::Pen),
                             KeyCode::KeyM => self.set_tool(Tool::Rectangle),
                             KeyCode::KeyL => self.set_tool(Tool::Ellipse),
@@ -1785,6 +1924,7 @@ fn paint_main(
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     pen_preview: Option<PenPreview<'_>>,
+    anchor_view: Option<AnchorView<'_>>,
     marquee: Option<Rect>,
     width: f64,
     height: f64,
@@ -1821,6 +1961,7 @@ fn paint_main(
         drag_preview,
         draw_shape,
         pen_preview,
+        anchor_view,
     );
 
     if let Some(m) = marquee {
