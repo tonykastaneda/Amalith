@@ -152,9 +152,11 @@ struct App {
     editor: Editor,
     selection: Vec<ObjectId>,
     active_tool: Tool,
-    /// In-progress Pen path — committed anchors in document space. Empty
-    /// when not drawing.
+    /// In-progress Pen path — placed anchors in document space. Empty when
+    /// not drawing.
     pen: Vec<Point>,
+    /// Anchors popped by ⌘Z while drawing, for ⌘⇧Z to restore.
+    pen_redo: Vec<Point>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     view: CanvasView,
@@ -196,6 +198,7 @@ impl App {
             selection: Vec::new(),
             active_tool: Tool::Select,
             pen: Vec::new(),
+            pen_redo: Vec::new(),
             marquee: None,
             view: CanvasView::default(),
             theme: Theme::default(),
@@ -266,6 +269,7 @@ impl App {
     /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` makes
     /// it a polygon; otherwise an open polyline.
     fn commit_pen(&mut self, closed: bool) {
+        self.pen_redo.clear();
         if self.pen.len() < 2 {
             self.pen.clear();
             return;
@@ -295,6 +299,7 @@ impl App {
     fn set_tool(&mut self, t: Tool) {
         if t != Tool::Pen {
             self.pen.clear();
+            self.pen_redo.clear();
         }
         self.active_tool = t;
         self.request_main_redraw();
@@ -557,6 +562,7 @@ impl App {
                     } else {
                         let p = constrained(self.pen.last().copied(), dp, self.shift_down);
                         self.pen.push(p);
+                        self.pen_redo.clear();
                         self.request_main_redraw();
                     }
                     return;
@@ -1242,12 +1248,25 @@ impl ApplicationHandler for App {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Space) => self.space_down = pressed,
                     PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
-                        let _ = if self.shift_down {
-                            self.editor.redo()
+                        let drawing = self.active_tool == Tool::Pen;
+                        if drawing && !self.shift_down && !self.pen.is_empty() {
+                            // Step back one placed anchor instead of undoing
+                            // a committed shape.
+                            if let Some(p) = self.pen.pop() {
+                                self.pen_redo.push(p);
+                            }
+                        } else if drawing && self.shift_down && !self.pen_redo.is_empty() {
+                            if let Some(p) = self.pen_redo.pop() {
+                                self.pen.push(p);
+                            }
                         } else {
-                            self.editor.undo()
-                        };
-                        self.prune_selection();
+                            let _ = if self.shift_down {
+                                self.editor.redo()
+                            } else {
+                                self.editor.undo()
+                            };
+                            self.prune_selection();
+                        }
                         self.request_main_redraw();
                     }
                     PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
@@ -1342,6 +1361,7 @@ impl ApplicationHandler for App {
                             }
                             KeyCode::Escape => {
                                 self.pen.clear();
+                                self.pen_redo.clear();
                                 self.selection.clear();
                                 self.request_main_redraw();
                             }
