@@ -3748,24 +3748,26 @@ fn paint_main(
 
     // Tool glyph standing in for the OS cursor over the canvas.
     if let Some((tool, pen_closing)) = cursor_glyph {
-        let sz = 22.0;
+        let sz = 24.0;
         let (hx, hy) = cursor_hotspot(tool);
-        let box_ = Rect::new(
-            pointer.x - sz * hx,
-            pointer.y - sz * hy,
-            pointer.x - sz * hx + sz,
-            pointer.y - sz * hy + sz,
-        );
-        let tint = Color::from_rgb8(0xff, 0xff, 0xff);
-        if tool == Tool::Pen {
-            let src = if pen_closing {
-                icons::PEN_CLOSING_SVG
-            } else {
-                icons::PEN_DRAWING_SVG
-            };
-            icons::draw_svg(scene, src, box_, Color::from_rgb8(0xdc, 0xdb, 0xdb));
-        } else {
-            icons::draw(scene, tool.icon(), box_, tint);
+        let x0 = pointer.x - sz * hx;
+        let y0 = pointer.y - sz * hy;
+        let box_ = Rect::new(x0, y0, x0 + sz, y0 + sz);
+        match tool {
+            Tool::Select => icons::draw_cursor(scene, icons::CURSOR_SELECT_SVG, box_),
+            Tool::DirectSelect => {
+                icons::draw_cursor(scene, icons::CURSOR_DIRECT_SELECT_SVG, box_)
+            }
+            Tool::Pen => icons::draw_cursor(
+                scene,
+                if pen_closing {
+                    icons::CURSOR_PEN_CLOSING_SVG
+                } else {
+                    icons::CURSOR_PEN_DRAWING_SVG
+                },
+                box_,
+            ),
+            _ => icons::draw(scene, tool.icon(), box_, Color::from_rgb8(0xff, 0xff, 0xff)),
         }
     }
 

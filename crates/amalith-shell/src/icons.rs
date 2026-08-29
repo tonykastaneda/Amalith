@@ -15,14 +15,22 @@ const SELECT_SVG: &str = include_str!("../../../branding/SVG/V-selectio.svg");
 const DIRECT_SELECT_SVG: &str = include_str!("../../../branding/SVG/A-selection.svg");
 const PEN_SVG: &str = include_str!("../../../branding/SVG/Pen.svg");
 const RECT_SVG: &str = include_str!("../../../branding/SVG/Square.svg");
+const ROUND_RECT_SVG: &str = include_str!("../../../branding/SVG/round-square.svg");
 const ELLIPSE_SVG: &str = include_str!("../../../branding/SVG/Circle.svg");
 const POLYGON_SVG: &str = include_str!("../../../branding/SVG/Polygon.svg");
 const STAR_SVG: &str = include_str!("../../../branding/SVG/Start.svg");
 const ARTBOARD_SVG: &str = include_str!("../../../branding/SVG/Artboard Tool.svg");
 
-/// Pointer-cursor glyphs for the Pen tool while it's drawing.
-pub const PEN_DRAWING_SVG: &str = include_str!("../../../branding/SVG/Pen-drawingShape.svg");
-pub const PEN_CLOSING_SVG: &str = include_str!("../../../branding/SVG/Pen-closingShape.svg");
+// "-onDocument" variants: how a tool glyph is drawn as the canvas cursor
+// (a light body with a dark keyline, readable on any background).
+pub const CURSOR_SELECT_SVG: &str =
+    include_str!("../../../branding/SVG/V-selectio-onDocument.svg");
+pub const CURSOR_DIRECT_SELECT_SVG: &str =
+    include_str!("../../../branding/SVG/A-selection-onDocument.svg");
+pub const CURSOR_PEN_DRAWING_SVG: &str =
+    include_str!("../../../branding/SVG/Pen-drawingShape-onDocument.svg");
+pub const CURSOR_PEN_CLOSING_SVG: &str =
+    include_str!("../../../branding/SVG/Pen-closingShape-onDocument.svg");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
@@ -37,28 +45,81 @@ pub enum Icon {
     Artboard,
 }
 
-fn brand_svg(icon: Icon) -> Option<&'static str> {
-    Some(match icon {
+fn brand_svg(icon: Icon) -> &'static str {
+    match icon {
         Icon::Select => SELECT_SVG,
         Icon::DirectSelect => DIRECT_SELECT_SVG,
         Icon::Pen => PEN_SVG,
-        Icon::Rectangle | Icon::RoundedRect => RECT_SVG,
+        Icon::Rectangle => RECT_SVG,
+        Icon::RoundedRect => ROUND_RECT_SVG,
         Icon::Ellipse => ELLIPSE_SVG,
         Icon::Polygon => POLYGON_SVG,
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
-    })
+    }
 }
 
-/// Paint an arbitrary brand SVG (e.g. a pen cursor) into `box_`, tinted.
-pub fn draw_svg(scene: &mut Scene, src: &str, box_: Rect, color: Color) {
-    paint_brand(scene, src, box_, color, false);
-}
-
-/// Draw `icon` filling `box_` (screen px), tinted `color`.
+/// Draw `icon` filling `box_` (screen px), tinted `color` — the panel look.
 pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
-    if let Some(src) = brand_svg(icon) {
-        paint_brand(scene, src, box_, color, icon == Icon::DirectSelect);
+    paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// Draw a cursor SVG (`CURSOR_*`) at `box_`: a light body with a dark
+/// keyline, so it reads over any canvas colour.
+pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
+    let map = |x: f64, y: f64| {
+        Point::new(
+            box_.x0 + box_.width() * x / 100.0,
+            box_.y0 + box_.height() * y / 100.0,
+        )
+    };
+    let sw = (3.5 * box_.width() / 100.0).max(0.75);
+    let body = Color::from_rgb8(0xe4, 0xe3, 0xe3);
+    let keyline = Color::from_rgb8(0x12, 0x12, 0x12);
+
+    for tag in svg_tags(src, "polygon") {
+        let pts: Vec<Point> = svg_attr(tag, "points")
+            .map(svg_nums)
+            .unwrap_or_default()
+            .chunks_exact(2)
+            .map(|p| map(p[0], p[1]))
+            .collect();
+        if pts.len() < 3 {
+            continue;
+        }
+        let mut path = BezPath::new();
+        path.move_to(pts[0]);
+        for p in &pts[1..] {
+            path.line_to(*p);
+        }
+        path.close_path();
+        scene.fill(Fill::NonZero, ID, body, None, &path);
+        scene.stroke(&Stroke::new(sw), ID, keyline, None, &path);
+    }
+    for tag in svg_tags(src, "circle") {
+        if let (Some(cx), Some(cy), Some(r)) =
+            (svg_num(tag, "cx"), svg_num(tag, "cy"), svg_num(tag, "r"))
+        {
+            let c = Circle::new(map(cx, cy), r * box_.width() / 100.0);
+            scene.fill(Fill::NonZero, ID, body, None, &c);
+            scene.stroke(&Stroke::new(sw * 0.7), ID, keyline, None, &c);
+        }
+    }
+    for tag in svg_tags(src, "line") {
+        if let (Some(x1), Some(y1), Some(x2), Some(y2)) = (
+            svg_num(tag, "x1"),
+            svg_num(tag, "y1"),
+            svg_num(tag, "x2"),
+            svg_num(tag, "y2"),
+        ) {
+            scene.stroke(
+                &Stroke::new(sw),
+                ID,
+                keyline,
+                None,
+                &Line::new(map(x1, y1), map(x2, y2)),
+            );
+        }
     }
 }
 
