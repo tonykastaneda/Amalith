@@ -579,6 +579,7 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();
         let wid = window.id();
+        window.request_redraw();
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
         self.main_id = Some(wid);
