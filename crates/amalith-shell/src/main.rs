@@ -18,12 +18,14 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use amalith_core::Document;
+use amalith_shell::canvas::{self, CanvasView};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
-use amalith_shell::{chrome, layout, Theme};
+use amalith_shell::{chrome, layout, sample, Theme};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -31,7 +33,7 @@ use vello::wgpu;
 use vello::{AaConfig, Renderer, RendererOptions, Scene};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
@@ -99,6 +101,8 @@ enum Drag {
     MovingFloating { id: u64, grab: Vec2, pos: Point },
     /// Dragging a rail's inner edge to widen / narrow the whole rail.
     RailWidth { side: RailSide },
+    /// Panning the canvas; `last` is the previous cursor position.
+    Pan { last: Point },
 }
 
 struct App {
@@ -111,6 +115,8 @@ struct App {
     content: Scene,
     text: TextContext,
     dock: DockModel,
+    doc: Document,
+    view: CanvasView,
     theme: Theme,
     scale: f64,
     /// Pointer position within whichever window last reported it, logical.
@@ -135,6 +141,8 @@ impl App {
             content: Scene::new(),
             text: TextContext::new(),
             dock: DockModel::new(demo_dock()),
+            doc: sample::document(),
+            view: CanvasView::default(),
             theme: Theme::default(),
             scale: 1.0,
             pointer: Point::ZERO,
@@ -341,6 +349,8 @@ impl App {
                     }
                     return;
                 }
+                // Not on a rail — pan the canvas.
+                self.drag = Drag::Pan { last: self.pointer };
             }
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -402,6 +412,12 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            Drag::Pan { last } => {
+                let last = *last;
+                self.view.pan += self.pointer - last;
+                self.drag = Drag::Pan { last: self.pointer };
+                self.request_main_redraw();
+            }
             Drag::PendingTearoff { panel, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (panel, press) = (*panel, *press);
@@ -459,7 +475,7 @@ impl App {
 
     fn on_release(&mut self) {
         match std::mem::take(&mut self.drag) {
-            Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } => {}
+            Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } | Drag::Pan { .. } => {}
             Drag::PendingTearoff {
                 side, path, tab, ..
             } => {
@@ -538,6 +554,8 @@ impl App {
                 &mut self.content,
                 &mut self.text,
                 &self.dock,
+                &self.doc,
+                &self.view,
                 &self.theme,
                 wl,
                 hl,
@@ -679,6 +697,16 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => self.on_release(),
+            WindowEvent::MouseWheel { delta, .. } if Some(id) == self.main_id => {
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y as f64,
+                    MouseScrollDelta::PixelDelta(p) => p.y / self.scale / 40.0,
+                };
+                if dy != 0.0 {
+                    let factor = (1.0 + dy * 0.12).clamp(0.25, 4.0);
+                    self.view.zoom_at(factor, self.pointer);
+                }
+            }
             WindowEvent::RedrawRequested => self.redraw(id),
             _ => {}
         }
@@ -691,6 +719,13 @@ fn demo_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
         children: vec![
+            Child {
+                node: Node::Tabs {
+                    panels: vec![PanelId("tools")],
+                    active: 0,
+                },
+                weight: 0.7,
+            },
             Child {
                 node: Node::Tabs {
                     panels: vec![PanelId("layers")],
@@ -711,6 +746,7 @@ fn demo_dock() -> Node {
 
 fn tab_label(panel: PanelId) -> String {
     match panel.0 {
+        "tools" => "Tools",
         "layers" => "Layers",
         "artboards" => "Artboards",
         "swatches" => "Swatches",
@@ -744,10 +780,13 @@ fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: R
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_main(
     scene: &mut Scene,
     text: &mut TextContext,
     dock: &DockModel,
+    doc: &Document,
+    view: &CanvasView,
     theme: &Theme,
     width: f64,
     height: f64,
@@ -760,6 +799,21 @@ fn paint_main(
         None,
         &Rect::new(0.0, 0.0, width, height),
     );
+
+    // Canvas fills the gap between whatever rails are present.
+    let left_x = if dock.left.is_empty() {
+        0.0
+    } else {
+        rail_rect_for(RailSide::Left, dock.left.width as f64, width, height).x1
+    };
+    let right_x = if dock.right.is_empty() {
+        width
+    } else {
+        rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
+    };
+    let viewport = Rect::new(left_x, 0.0, right_x.max(left_x), height);
+    canvas::paint(scene, doc, view, viewport, theme, text);
+
     for side in [RailSide::Left, RailSide::Right] {
         let rail = dock.rail(side);
         let is_preview_target = preview.is_some_and(|(s, _)| *s == side);
