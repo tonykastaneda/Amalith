@@ -47,12 +47,13 @@ pub struct Layout {
 }
 
 /// Lay `root` out within `within`. `tab_width(panel)` gives each tab's
-/// pixel width (the caller measures text, or estimates).
+/// pixel width — it takes `&mut` because measuring text mutates the font
+/// cache; a pure estimate works too.
 pub fn layout(
     root: &Node,
     within: Rect,
     theme: &Theme,
-    tab_width: &dyn Fn(PanelId) -> f64,
+    tab_width: &mut dyn FnMut(PanelId) -> f64,
 ) -> Layout {
     let mut out = Layout::default();
     let mut path = Vec::new();
@@ -64,7 +65,7 @@ fn layout_node(
     node: &Node,
     rect: Rect,
     theme: &Theme,
-    tab_width: &dyn Fn(PanelId) -> f64,
+    tab_width: &mut dyn FnMut(PanelId) -> f64,
     path: &mut Vec<usize>,
     out: &mut Layout,
 ) {
@@ -264,7 +265,7 @@ mod tests {
     #[test]
     fn vertical_split_stacks_two_areas_with_a_splitter_between() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
 
         assert_eq!(lay.areas.len(), 2);
         assert_eq!(lay.splitters.len(), 1);
@@ -288,7 +289,7 @@ mod tests {
     #[test]
     fn cursor_near_left_edge_splits_the_whole_dock() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
         let t = hit_test(&lay, root, Point::new(6.0, 200.0), &theme());
         assert_eq!(
             t,
@@ -302,7 +303,7 @@ mod tests {
     #[test]
     fn cursor_in_a_tab_strip_inserts_a_tab_at_the_nearest_gap() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
         let bottom = &lay.areas[1];
         // Just past the midpoint of the first tab → insert before tab 1.
         let y = bottom.tab_strip.y0 + 4.0;
@@ -319,7 +320,7 @@ mod tests {
     #[test]
     fn cursor_in_a_group_body_centre_tabs_into_that_group() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
         let bottom = &lay.areas[1];
         let c = bottom.body.center();
         let t = hit_test(&lay, root, c, &theme());
@@ -335,7 +336,7 @@ mod tests {
     #[test]
     fn cursor_near_a_lower_group_body_top_splits_that_group() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
         let bottom = &lay.areas[1];
         // A few px below the body's top edge, mid-width, well clear of the
         // dock perimeter.
@@ -353,7 +354,7 @@ mod tests {
     #[test]
     fn cursor_outside_the_dock_floats() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &w80);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
         let t = hit_test(&lay, root, Point::new(-20.0, 200.0), &theme());
         assert_eq!(t, DropTarget::Float);
     }

@@ -1,31 +1,38 @@
 //! Draws a [`Layout`] into a vello [`Scene`]: panel bodies, tab strips,
-//! splitters, and the drop indicator. Text is not drawn yet — tab labels
-//! land when parley is wired in.
+//! tab labels, splitters, and the drop indicator.
 
 use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use crate::dock::{DropTarget, NodePath, Side};
+use crate::dock::{DropTarget, NodePath, PanelId, Side};
 use crate::layout::Layout;
+use crate::text::TextContext;
 use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
+const TAB_TEXT_PX: f32 = 12.0;
 
-/// Paint every group and splitter in `layout`.
-pub fn paint(scene: &mut Scene, layout: &Layout, theme: &Theme) {
+/// Paint every group and splitter in `layout`. `label(panel)` supplies the
+/// tab caption; `text` rasterizes it.
+pub fn paint(
+    scene: &mut Scene,
+    layout: &Layout,
+    theme: &Theme,
+    text: &mut TextContext,
+    label: &dyn Fn(PanelId) -> String,
+) {
     for area in &layout.areas {
         scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &area.body);
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &area.tab_strip);
 
         for (i, tab) in area.tabs.iter().enumerate() {
-            if i == area.active {
+            let active = i == area.active;
+            if active {
                 scene.fill(Fill::NonZero, ID, theme.strip_active, None, &tab.rect);
-                // Accent underline on the active tab.
                 let u = Rect::new(tab.rect.x0, tab.rect.y1 - 2.0, tab.rect.x1, tab.rect.y1);
                 scene.fill(Fill::NonZero, ID, theme.drop_line, None, &u);
             }
-            // Tab separators.
             if i > 0 {
                 let sep = Rect::new(
                     tab.rect.x0 - 0.5,
@@ -35,6 +42,17 @@ pub fn paint(scene: &mut Scene, layout: &Layout, theme: &Theme) {
                 );
                 scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
             }
+
+            let color = if active { theme.text } else { theme.text_dim };
+            let baseline = tab.rect.y0 + tab.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+            text.draw(
+                scene,
+                &label(tab.panel),
+                TAB_TEXT_PX,
+                color,
+                tab.rect.x0 + theme.tab_pad_x,
+                baseline,
+            );
         }
 
         scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);

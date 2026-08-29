@@ -9,6 +9,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use amalith_shell::dock::{Axis, Child, Node, PanelId};
+use amalith_shell::text::TextContext;
 use amalith_shell::{chrome, layout, Theme};
 use vello::kurbo::{Affine, Rect};
 use vello::peniko::{color::palette, Fill};
@@ -33,6 +34,7 @@ struct App {
     context: RenderContext,
     state: Option<WindowState>,
     scene: Scene,
+    text: TextContext,
 }
 
 impl App {
@@ -41,6 +43,7 @@ impl App {
             context: RenderContext::new(),
             state: None,
             scene: Scene::new(),
+            text: TextContext::new(),
         }
     }
 }
@@ -101,7 +104,7 @@ impl ApplicationHandler for App {
                 let height = state.surface.config.height;
 
                 self.scene.reset();
-                paint(&mut self.scene, width as f64, height as f64);
+                paint(&mut self.scene, &mut self.text, width as f64, height as f64);
 
                 let device = &self.context.devices[state.surface.dev_id];
                 let surface_texture = match state.surface.surface.get_current_texture() {
@@ -173,18 +176,19 @@ fn demo_dock() -> Node {
     }
 }
 
-fn tab_label(panel: PanelId) -> &'static str {
+fn tab_label(panel: PanelId) -> String {
     match panel.0 {
         "layers" => "Layers",
         "artboards" => "Artboards",
         "swatches" => "Swatches",
         other => other,
     }
+    .to_string()
 }
 
 /// The whole frame's drawing: a canvas ground and a right-hand dock rail
 /// laid out and rendered by `amalith_shell`.
-fn paint(scene: &mut Scene, width: f64, height: f64) {
+fn paint(scene: &mut Scene, text: &mut TextContext, width: f64, height: f64) {
     let theme = Theme::default();
 
     scene.fill(
@@ -197,10 +201,10 @@ fn paint(scene: &mut Scene, width: f64, height: f64) {
 
     let rail = Rect::new((width - 300.0).max(0.0), 0.0, width, height);
     let dock = demo_dock();
-    let laid = layout::layout(&dock, rail, &theme, &|p| {
-        theme.tab_pad_x * 2.0 + tab_label(p).chars().count() as f64 * 7.0
+    let laid = layout::layout(&dock, rail, &theme, &mut |p| {
+        text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
     });
-    chrome::paint(scene, &laid, &theme);
+    chrome::paint(scene, &laid, &theme, text, &tab_label);
 }
 
 fn main() {

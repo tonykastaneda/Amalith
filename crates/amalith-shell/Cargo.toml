@@ -18,11 +18,4 @@ vello = "0.10"
 winit = "0.30"
 pollster = "0.4"
 kurbo.workspace = true
-
-[dependencies.parley]
-version = "0.11"
-optional = true
-
-[features]
-default = []
-text = ["dep:parley"]
+parley = { version = "0.11", features = ["system"] }

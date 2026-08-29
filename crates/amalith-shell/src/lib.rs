@@ -22,6 +22,7 @@ pub mod chrome;
 pub mod dock;
 pub mod layout;
 pub mod panel;
+pub mod text;
 pub mod theme;
 
 pub use dock::{Axis, Child, DockModel, DropTarget, Floating, Node, NodePath, PanelId, Side};
