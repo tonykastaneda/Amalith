@@ -18,14 +18,16 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use amalith_core::Document;
-use amalith_shell::canvas::{self, CanvasView};
+use amalith_commands::{Command, Editor};
+use amalith_core::{Document, ObjectId};
+use amalith_shell::canvas::{self, CanvasView, DragPreview};
 use amalith_shell::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
 use amalith_shell::layout::Layout;
 use amalith_shell::text::TextContext;
 use amalith_shell::{chrome, layout, sample, Theme};
+use amalith_shell::{convert, select};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -104,6 +106,14 @@ enum Drag {
     RailWidth { side: RailSide },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
+    /// Moving the current selection. Deltas are in document space.
+    MoveObjects {
+        start_doc: Point,
+        last_doc: Point,
+        moved: bool,
+    },
+    /// Rubber-band selection; `start` is the press point (screen px).
+    Marquee { start: Point },
 }
 
 struct App {
@@ -116,7 +126,10 @@ struct App {
     content: Scene,
     text: TextContext,
     dock: DockModel,
-    doc: Document,
+    editor: Editor,
+    selection: Vec<ObjectId>,
+    /// Rubber-band rect (screen px) while a marquee drag is live.
+    marquee: Option<Rect>,
     view: CanvasView,
     theme: Theme,
     scale: f64,
@@ -125,6 +138,7 @@ struct App {
     pointer_win: Option<WindowId>,
     /// Held modifiers on the main window.
     cmd_down: bool,
+    shift_down: bool,
     space_down: bool,
     drag: Drag,
     /// Live re-dock target (which rail, and where in it) while a floating
@@ -145,13 +159,16 @@ impl App {
             content: Scene::new(),
             text: TextContext::new(),
             dock: DockModel::new(demo_dock()),
-            doc: sample::document(),
+            editor: Editor::new(sample::document()),
+            selection: Vec::new(),
+            marquee: None,
             view: CanvasView::default(),
             theme: Theme::default(),
             scale: 1.0,
             pointer: Point::ZERO,
             pointer_win: None,
             cmd_down: false,
+            shift_down: false,
             space_down: false,
             drag: Drag::None,
             redock_preview: None,
@@ -183,6 +200,11 @@ impl App {
             .and_then(|w| w.inner_position().ok())
             .map(|p| Point::new(p.x as f64 / self.scale, p.y as f64 / self.scale))
             .unwrap_or(Point::ZERO)
+    }
+
+    /// Screen (logical) point → document point.
+    fn doc_point(&self, screen: Point) -> Point {
+        self.view.to_screen().inverse() * screen
     }
 
     /// Logical size of the main window's client area.
@@ -355,11 +377,41 @@ impl App {
                     }
                     return;
                 }
-                // Not on a rail. Space+drag is a hand pan; otherwise this
-                // press belongs to the active tool (none wired yet).
+                // Not on a rail.
                 if self.space_down {
                     self.drag = Drag::Pan { last: self.pointer };
+                    return;
                 }
+                // Selection tool: hit an object → select + start a move;
+                // hit nothing → clear (unless shift) + start a marquee.
+                let dp = self.doc_point(self.pointer);
+                match select::hit(self.editor.document(), dp) {
+                    Some(id) => {
+                        if self.shift_down {
+                            if let Some(i) = self.selection.iter().position(|x| *x == id) {
+                                self.selection.remove(i);
+                            } else {
+                                self.selection.push(id);
+                            }
+                        } else if !self.selection.contains(&id) {
+                            self.selection = vec![id];
+                        }
+                        self.drag = Drag::MoveObjects {
+                            start_doc: dp,
+                            last_doc: dp,
+                            moved: false,
+                        };
+                    }
+                    None => {
+                        if !self.shift_down {
+                            self.selection.clear();
+                        }
+                        self.drag = Drag::Marquee {
+                            start: self.pointer,
+                        };
+                    }
+                }
+                self.request_main_redraw();
             }
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -427,6 +479,20 @@ impl App {
                 self.drag = Drag::Pan { last: self.pointer };
                 self.request_main_redraw();
             }
+            Drag::MoveObjects { start_doc, .. } => {
+                let start_doc = *start_doc;
+                let dp = self.doc_point(self.pointer);
+                self.drag = Drag::MoveObjects {
+                    start_doc,
+                    last_doc: dp,
+                    moved: true,
+                };
+                self.request_main_redraw();
+            }
+            Drag::Marquee { start } => {
+                self.marquee = Some(Rect::from_points(*start, self.pointer));
+                self.request_main_redraw();
+            }
             Drag::PendingTearoff { panel, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (panel, press) = (*panel, *press);
@@ -485,6 +551,40 @@ impl App {
     fn on_release(&mut self) {
         match std::mem::take(&mut self.drag) {
             Drag::None | Drag::Splitter { .. } | Drag::RailWidth { .. } | Drag::Pan { .. } => {}
+            Drag::MoveObjects {
+                start_doc,
+                last_doc,
+                moved,
+            } => {
+                if moved && !self.selection.is_empty() {
+                    let delta = convert::vec2_to_core(last_doc - start_doc);
+                    let _ = self.editor.execute(Command::MoveObjects {
+                        objects: self.selection.clone(),
+                        delta,
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::Marquee { start } => {
+                let r_screen = Rect::from_points(start, self.pointer);
+                let r_doc = self
+                    .view
+                    .to_screen()
+                    .inverse()
+                    .transform_rect_bbox(r_screen);
+                let hits = select::within(self.editor.document(), r_doc);
+                if self.shift_down {
+                    for id in hits {
+                        if !self.selection.contains(&id) {
+                            self.selection.push(id);
+                        }
+                    }
+                } else {
+                    self.selection = hits;
+                }
+                self.marquee = None;
+                self.request_main_redraw();
+            }
             Drag::PendingTearoff {
                 side, path, tab, ..
             } => {
@@ -557,15 +657,30 @@ impl App {
         let (wl, hl) = (width as f64 / scale, height as f64 / scale);
         let role = host.role;
 
+        let preview = match &self.drag {
+            Drag::MoveObjects {
+                start_doc,
+                last_doc,
+                moved: true,
+            } => Some(DragPreview {
+                ids: &self.selection,
+                delta: *last_doc - *start_doc,
+            }),
+            _ => None,
+        };
+
         self.content.reset();
         match role {
             Role::Main => paint_main(
                 &mut self.content,
                 &mut self.text,
                 &self.dock,
-                &self.doc,
+                self.editor.document(),
                 &self.view,
                 &self.theme,
+                &self.selection,
+                preview,
+                self.marquee,
                 wl,
                 hl,
                 self.redock_preview.as_ref(),
@@ -709,11 +824,30 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(m) => {
                 if Some(id) == self.main_id {
                     self.cmd_down = m.state().super_key();
+                    self.shift_down = m.state().shift_key();
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
-                if event.physical_key == PhysicalKey::Code(KeyCode::Space) {
-                    self.space_down = event.state.is_pressed();
+                let pressed = event.state.is_pressed();
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Space) => self.space_down = pressed,
+                    PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
+                        let _ = if self.shift_down {
+                            self.editor.redo()
+                        } else {
+                            self.editor.undo()
+                        };
+                        self.request_main_redraw();
+                    }
+                    PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                        if pressed && !self.selection.is_empty() =>
+                    {
+                        let _ = self.editor.execute(Command::DeleteObjects {
+                            ids: std::mem::take(&mut self.selection),
+                        });
+                        self.request_main_redraw();
+                    }
+                    _ => {}
                 }
             }
             WindowEvent::PinchGesture { delta, .. } if Some(id) == self.main_id => {
@@ -816,9 +950,12 @@ fn paint_main(
     doc: &Document,
     view: &CanvasView,
     theme: &Theme,
+    selection: &[ObjectId],
+    drag_preview: Option<DragPreview<'_>>,
+    marquee: Option<Rect>,
     width: f64,
     height: f64,
-    preview: Option<&(RailSide, DropTarget)>,
+    redock_preview: Option<&(RailSide, DropTarget)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -840,11 +977,31 @@ fn paint_main(
         rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
     };
     let viewport = Rect::new(left_x, 0.0, right_x.max(left_x), height);
-    canvas::paint(scene, doc, view, viewport, theme, text);
+    canvas::paint(
+        scene,
+        doc,
+        view,
+        viewport,
+        theme,
+        text,
+        selection,
+        drag_preview,
+    );
+
+    if let Some(m) = marquee {
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            theme.drop_line.with_alpha(0.12),
+            None,
+            &m,
+        );
+        scene.stroke(&Stroke::new(1.0), ID, theme.drop_line, None, &m);
+    }
 
     for side in [RailSide::Left, RailSide::Right] {
         let rail = dock.rail(side);
-        let is_preview_target = preview.is_some_and(|(s, _)| *s == side);
+        let is_preview_target = redock_preview.is_some_and(|(s, _)| *s == side);
         if rail.is_empty() && !is_preview_target {
             continue;
         }
@@ -861,7 +1018,7 @@ fn paint_main(
                 &rail_edge_bar(side, rect),
             );
         }
-        if let Some((_, target)) = preview.filter(|(s, _)| *s == side) {
+        if let Some((_, target)) = redock_preview.filter(|(s, _)| *s == side) {
             chrome::paint_drop(scene, target, &laid, rect, theme);
         }
     }

@@ -20,3 +20,4 @@ pollster = "0.4"
 kurbo.workspace = true
 parley = { version = "0.11", features = ["system"] }
 amalith-core = { path = "../amalith-core" }
+amalith-commands = { path = "../amalith-commands" }

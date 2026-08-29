@@ -25,6 +25,7 @@ pub mod dock;
 pub mod layout;
 pub mod panel;
 pub mod sample;
+pub mod select;
 pub mod text;
 pub mod theme;
 

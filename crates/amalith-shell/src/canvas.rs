@@ -42,7 +42,25 @@ impl CanvasView {
     }
 }
 
+/// Live drag preview: `ids` are drawn offset by `delta` (document space).
+#[derive(Clone, Copy)]
+pub struct DragPreview<'a> {
+    pub ids: &'a [ObjectId],
+    pub delta: Vec2,
+}
+
+impl DragPreview<'_> {
+    fn offset_for(&self, id: ObjectId) -> Affine {
+        if self.ids.contains(&id) {
+            Affine::translate(self.delta)
+        } else {
+            Affine::IDENTITY
+        }
+    }
+}
+
 /// Paint the document into `viewport` (the screen rect between the rails).
+#[allow(clippy::too_many_arguments)]
 pub fn paint(
     scene: &mut Scene,
     doc: &Document,
@@ -50,6 +68,8 @@ pub fn paint(
     viewport: Rect,
     theme: &Theme,
     text: &mut TextContext,
+    selection: &[ObjectId],
+    drag: Option<DragPreview<'_>>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -94,21 +114,43 @@ pub fn paint(
             continue;
         }
         for &id in &layer.children {
-            paint_object(scene, doc, id, vt);
+            paint_object(scene, doc, id, vt, drag);
+        }
+    }
+
+    // Selection outlines (blue box round each selected object's bounds).
+    for &id in selection {
+        if let Some(b) = crate::select::object_bbox(doc, id) {
+            let off = drag.map_or(Affine::IDENTITY, |d| d.offset_for(id));
+            let screen = (vt * off).transform_rect_bbox(b);
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                theme.drop_line,
+                None,
+                &screen,
+            );
         }
     }
 
     scene.pop_layer();
 }
 
-fn paint_object(scene: &mut Scene, doc: &Document, id: ObjectId, vt: Affine) {
+fn paint_object(
+    scene: &mut Scene,
+    doc: &Document,
+    id: ObjectId,
+    vt: Affine,
+    drag: Option<DragPreview<'_>>,
+) {
     let Some(obj) = doc.object(id) else {
         return;
     };
     if !obj.visible {
         return;
     }
-    let m = vt * convert::affine(obj.transform);
+    let off = drag.map_or(Affine::IDENTITY, |d| d.offset_for(id));
+    let m = vt * off * convert::affine(obj.transform);
     let fill = obj.appearance.fill.color().map(convert::color);
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
@@ -130,7 +172,7 @@ fn paint_object(scene: &mut Scene, doc: &Document, id: ObjectId, vt: Affine) {
         }
         ObjectKind::Group(g) => {
             for &child in &g.children {
-                paint_object(scene, doc, child, vt);
+                paint_object(scene, doc, child, vt * off, drag);
             }
         }
         other => {

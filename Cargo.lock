@@ -187,6 +187,7 @@ dependencies = [
 name = "amalith-shell"
 version = "0.1.0"
 dependencies = [
+ "amalith-commands",
  "amalith-core",
  "kurbo 0.11.3",
  "parley",

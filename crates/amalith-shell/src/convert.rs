@@ -19,6 +19,11 @@ pub fn affine(a: core::Affine) -> vk::Affine {
     vk::Affine::new(a.as_coeffs())
 }
 
+/// vello → core (for feeding deltas back into commands).
+pub fn vec2_to_core(v: vk::Vec2) -> core::Vec2 {
+    core::Vec2::new(v.x, v.y)
+}
+
 pub fn bez_path(src: &core::BezPath) -> vk::BezPath {
     let mut out = vk::BezPath::new();
     for el in src.elements() {
