@@ -114,7 +114,24 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
         if let (Some(cx), Some(cy), Some(r)) =
             (svg_num(tag, "cx"), svg_num(tag, "cy"), svg_num(tag, "r"))
         {
-            paint(scene, resolve(tag), scale, &Circle::new(map(cx, cy), r * scale));
+            let st = resolve(tag);
+            let circle = Circle::new(map(cx, cy), r * scale);
+            // A black, fill-less ring (the pen close-shape indicator) gets
+            // a white halo on both edges so it reads on the pasteboard
+            // *and* on a white artboard.
+            if st.fill == FillSpec::None && st.stroke == Some(Color::from_rgb8(0, 0, 0)) {
+                let w = (st.stroke_width.unwrap_or(3.0) * scale).max(1.4);
+                scene.stroke(
+                    &Stroke::new(w * 2.4),
+                    ID,
+                    Color::from_rgb8(0xff, 0xff, 0xff),
+                    None,
+                    &circle,
+                );
+                scene.stroke(&Stroke::new(w * 1.2), ID, Color::from_rgb8(0, 0, 0), None, &circle);
+            } else {
+                paint(scene, st, scale, &circle);
+            }
         }
     }
     for tag in svg_tags(src, "line") {
