@@ -409,9 +409,12 @@ impl DockModel {
         let Some(f) = self.remove_floating(id) else {
             return Vec::new();
         };
-        // The rail takes the width the group had while floating, so a
-        // panel re-docks at whatever size the user left it.
-        let float_w = f.rect[2];
+        // Width the group had while floating. It's used only when this
+        // dock ADDS a column — stacking a panel onto an existing column
+        // just adopts that column's width for visual consistency.
+        let float_w = f.rect[2].max(1.0);
+        let adds_column = matches!(target, DropTarget::Split { .. });
+        const GAP: f32 = 6.0;
         let mut panels = Vec::new();
         collect(&f.node, &mut panels);
         if let Node::Tabs { active, .. } = &f.node {
@@ -420,9 +423,28 @@ impl DockModel {
             }
         }
         let rail = self.rail_mut(side);
-        if float_w > 1.0 {
-            rail.width = float_w;
-        }
+
+        // Pixel widths of the columns already in the rail, before docking.
+        let existing_px: Vec<f32> = match &rail.tree {
+            Some(Node::Split {
+                axis: Axis::Horizontal,
+                children,
+            }) if !children.is_empty() => {
+                let wsum: f32 = children
+                    .iter()
+                    .map(|c| c.weight.max(0.0))
+                    .sum::<f32>()
+                    .max(1e-3);
+                let avail = (rail.width - GAP * (children.len() as f32 - 1.0)).max(1.0);
+                children
+                    .iter()
+                    .map(|c| (avail * c.weight.max(0.0) / wsum).max(48.0))
+                    .collect()
+            }
+            Some(_) => vec![rail.width.max(48.0)],
+            None => Vec::new(),
+        };
+
         let mut it = panels.iter().copied();
         if let Some(first) = it.next() {
             rail.dock(first, target);
@@ -433,6 +455,44 @@ impl DockModel {
                 rail.dock(p, DropTarget::Tab { path, index: len });
             }
         }
+
+        if existing_px.is_empty() {
+            // First panel in a previously-empty rail — take its own width.
+            rail.width = float_w;
+        } else if adds_column {
+            // New column: it gets `float_w`, every existing column keeps
+            // its pixel width, and the rail grows to fit.
+            if let Some(Node::Split {
+                axis: Axis::Horizontal,
+                children,
+            }) = &mut rail.tree
+            {
+                if children.len() == existing_px.len() + 1 {
+                    let n = children.len();
+                    let new_idx = children
+                        .iter()
+                        .position(|c| {
+                            let mut v = Vec::new();
+                            collect(&c.node, &mut v);
+                            v.contains(&panels[0])
+                        })
+                        .unwrap_or(n - 1);
+                    let mut old = existing_px.iter().copied();
+                    for (i, c) in children.iter_mut().enumerate() {
+                        c.weight = if i == new_idx {
+                            float_w
+                        } else {
+                            old.next().unwrap_or(48.0)
+                        };
+                    }
+                    rail.width =
+                        float_w + existing_px.iter().sum::<f32>() + GAP * (n as f32 - 1.0);
+                }
+            }
+        }
+        // Stacking onto an existing column: nothing to do — the panel
+        // adopts that column's width and the rail width is unchanged.
+
         panels
     }
 
