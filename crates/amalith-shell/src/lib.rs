@@ -26,6 +26,7 @@ pub mod dock;
 pub mod handles;
 pub mod icons;
 pub mod layout;
+pub mod newdoc;
 pub mod panel;
 pub mod panels;
 pub mod picker;

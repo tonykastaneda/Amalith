@@ -28,6 +28,7 @@ use amalith_shell::dock::{
 };
 use amalith_shell::handles::{self, Handle};
 use amalith_shell::layout::Layout;
+use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{chrome, convert, layout, panels, picker, sample, select, Theme};
@@ -240,6 +241,8 @@ struct App {
     selected_layer: Option<LayerId>,
     /// An in-progress inline rename in a panel.
     rename: Option<Rename>,
+    /// The New Document modal, when open.
+    newdoc: Option<newdoc::NewDocForm>,
     active_tool: Tool,
     /// The tool that was active when the Artboard tool was entered, so
     /// Escape can drop straight back to it.
@@ -313,6 +316,7 @@ impl App {
             selected_artboard: None,
             selected_layer: None,
             rename: None,
+            newdoc: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
@@ -729,20 +733,159 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Reset to a fresh, empty document.
-    fn new_document(&mut self) {
-        self.editor = Editor::new(amalith_core::Document::new("Untitled"));
+    /// Open the New Document modal (⌘N / File ▸ New).
+    fn open_new_doc(&mut self) {
+        self.newdoc = Some(newdoc::NewDocForm::default());
+        self.request_main_redraw();
+    }
+
+    /// Route a click on the New Document modal.
+    fn apply_newdoc_hit(&mut self, hit: newdoc::Hit) {
+        use newdoc::{Hit, Menu};
+        match hit {
+            Hit::Create => {
+                self.create_from_form();
+                return;
+            }
+            Hit::Close => {
+                self.newdoc = None;
+                self.request_main_redraw();
+                return;
+            }
+            _ => {}
+        }
+        let Some(form) = self.newdoc.as_mut() else {
+            return;
+        };
+        match hit {
+            Hit::Field(f) => {
+                form.commit_focus();
+                form.focus = Some(f);
+            }
+            Hit::ToggleMenu(m) => {
+                form.open_menu = (form.open_menu != Some(m)).then_some(m);
+            }
+            Hit::MenuItem(m, i) => {
+                match m {
+                    Menu::Unit => form.set_unit(newdoc::menu_unit(i)),
+                    Menu::Color => form.color_mode = newdoc::menu_color(i),
+                    Menu::Raster => form.raster = newdoc::menu_raster(i),
+                    Menu::Preview => form.preview = newdoc::menu_preview(i),
+                }
+                form.open_menu = None;
+            }
+            Hit::Orientation(portrait) => form.set_orientation(portrait),
+            Hit::ArtboardMinus => form.artboards = form.artboards.saturating_sub(1).max(1),
+            Hit::ArtboardPlus => form.artboards = (form.artboards + 1).min(100),
+            Hit::ToggleLink => {
+                let on = !form.bleed_linked;
+                form.set_link(on);
+            }
+            Hit::None | Hit::Backdrop | Hit::Create | Hit::Close => {}
+        }
+        self.request_main_redraw();
+    }
+
+    /// A key while the New Document modal is open.
+    fn newdoc_key(&mut self, event: &winit::event::KeyEvent) {
+        if !event.state.is_pressed() {
+            return;
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.newdoc = None;
+                self.request_main_redraw();
+                return;
+            }
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                if let Some(f) = self.newdoc.as_mut() {
+                    f.focus_next();
+                }
+                self.request_main_redraw();
+                return;
+            }
+            _ => {}
+        }
+        let Some(form) = self.newdoc.as_mut() else {
+            return;
+        };
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Tab) => form.focus_next(),
+            PhysicalKey::Code(KeyCode::Backspace) => form.backspace(),
+            _ => {
+                if let Some(txt) = &event.text {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        form.push_char(ch);
+                    }
+                }
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    /// Build a fresh document from the modal's form and swap it in.
+    fn create_from_form(&mut self) {
+        let Some(form) = self.newdoc.as_mut() else {
+            return;
+        };
+        form.commit_focus();
+        let (wpx, hpx) = (form.width_px(), form.height_px());
+        if wpx <= 0.0 || hpx <= 0.0 {
+            self.io_error = Some("Width and height must be greater than zero.".into());
+            self.request_main_redraw();
+            return;
+        }
+        let name = {
+            let n = form.name.trim();
+            if n.is_empty() { "Untitled".to_string() } else { n.to_string() }
+        };
+        let n_ab = form.artboards.max(1);
+        let [bt, bb, bl, br] = form.bleed_px();
+        let (unit, color_mode, raster, preview) =
+            (form.unit, form.color_mode, form.raster, form.preview);
+
+        let mut doc = amalith_core::Document::new(&name);
+        doc.settings.default_unit = unit;
+        doc.settings.color_mode = color_mode;
+        doc.settings.raster_effects = raster;
+        doc.settings.preview_mode = preview;
+        doc.settings.bleed = amalith_core::Bleed {
+            top: bt,
+            bottom: bb,
+            left: bl,
+            right: br,
+        };
+        let mut editor = Editor::new(doc);
+        let gap = 48.0;
+        for i in 0..n_ab {
+            let x = i as f64 * (wpx + gap);
+            let _ = editor.execute(Command::CreateArtboard {
+                name: format!("Artboard {}", i + 1),
+                rect: amalith_core::Rect::new(x, 0.0, x + wpx, hpx),
+                index: None,
+            });
+        }
+        let _ = editor.execute(Command::CreateLayer {
+            name: "Layer 1".into(),
+            index: None,
+        });
+
+        self.editor = editor;
         self.asset_store = amalith_io::AssetStore::new();
         self.file_path = None;
         self.selection.clear();
         self.anchor_sel.clear();
         self.expanded_groups.clear();
+        self.selected_artboard = None;
+        self.selected_layer = None;
+        self.rename = None;
         self.pen.clear();
         self.pen_redo.clear();
         self.last_pen = None;
         self.picker = None;
         self.io_error = None;
         self.view = CanvasView::default();
+        self.newdoc = None;
         self.request_main_redraw();
     }
 
@@ -750,7 +893,7 @@ impl App {
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
         match action {
-            MenuAction::New => self.new_document(),
+            MenuAction::New => self.open_new_doc(),
             MenuAction::Open => self.open_document(),
             MenuAction::Save => self.save_document(false),
             MenuAction::SaveAs => self.save_document(true),
@@ -1201,6 +1344,14 @@ impl App {
                 let Some((w, h)) = self.main_logical_size() else {
                     return;
                 };
+
+                // The New Document modal is, well, modal.
+                if let Some(form) = &self.newdoc {
+                    let l = newdoc::build(newdoc::panel_rect(w, h));
+                    let hit = newdoc::hit(form, &l, self.pointer);
+                    self.apply_newdoc_hit(hit);
+                    return;
+                }
 
                 // The app bar swallows clicks (unless the picker is up).
                 if self.picker.is_none() && self.pointer.y < APP_BAR_H {
@@ -2283,6 +2434,7 @@ impl App {
                 self.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                 self.selected_layer,
                 self.selected_artboard,
+                self.newdoc.as_ref(),
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2486,7 +2638,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
-                // An inline rename swallows all keyboard input.
+                // The New Document modal, then an inline rename, each
+                // swallow all keyboard input while active.
+                if self.newdoc.is_some() {
+                    self.newdoc_key(&event);
+                    return;
+                }
                 if self.rename.is_some() {
                     self.rename_key(&event);
                     return;
@@ -2596,6 +2753,7 @@ impl ApplicationHandler for App {
                         }
                         KeyCode::KeyA => self.select_all(),
                         // File I/O: open, save, save-as, import SVG.
+                        KeyCode::KeyN => self.open_new_doc(),
                         KeyCode::KeyO => self.open_document(),
                         KeyCode::KeyS => self.save_document(self.shift_down),
                         KeyCode::KeyI if self.shift_down => self.import_svg(),
@@ -3131,6 +3289,7 @@ fn paint_main(
     renaming: Option<(panels::RenameId, &str)>,
     selected_layer: Option<LayerId>,
     selected_artboard: Option<ArtboardId>,
+    newdoc_form: Option<&newdoc::NewDocForm>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3259,6 +3418,11 @@ fn paint_main(
             width - sw - 12.0,
             APP_BAR_H * 0.5 + 4.0,
         );
+    }
+
+    // The New Document modal sits over everything.
+    if let Some(form) = newdoc_form {
+        newdoc::paint(scene, text, theme, Rect::new(0.0, 0.0, width, height), form);
     }
 }
 
