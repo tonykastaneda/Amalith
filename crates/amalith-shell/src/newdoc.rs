@@ -68,6 +68,9 @@ pub struct NewDocForm {
     pub open_menu: Option<Menu>,
     /// Vertical scroll offset of the form's content, in px.
     pub scroll: f64,
+    /// The boot screen: rendered without the dim backdrop / modal card,
+    /// and Create replaces the empty document instead of opening a tab.
+    pub boot: bool,
 }
 
 impl Default for NewDocForm {
@@ -86,6 +89,17 @@ impl Default for NewDocForm {
             focus: Some(Field::Name),
             open_menu: None,
             scroll: 0.0,
+            boot: false,
+        }
+    }
+}
+
+impl NewDocForm {
+    /// The boot-screen variant.
+    pub fn boot() -> Self {
+        Self {
+            boot: true,
+            ..Self::default()
         }
     }
 }
@@ -564,16 +578,21 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     let x = l.name.x0;
     let right = l.name.x1;
 
-    // Dim backdrop + panel.
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        Color::from_rgb8(0, 0, 0).with_alpha(0.55),
-        None,
-        &win,
-    );
-    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &lay.panel);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &lay.panel);
+    if form.boot {
+        // Boot screen: the form fills the window, no dim, no card.
+        scene.fill(Fill::NonZero, ID, theme.bg, None, &win);
+    } else {
+        // Modal over a document: dim the canvas, draw a card.
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            Color::from_rgb8(0, 0, 0).with_alpha(0.55),
+            None,
+            &win,
+        );
+        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &lay.panel);
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &lay.panel);
+    }
 
     let caption = |scene: &mut Scene, text: &mut TextContext, s: &str, r: Rect| {
         text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 8.0);

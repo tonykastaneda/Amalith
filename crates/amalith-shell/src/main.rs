@@ -395,7 +395,8 @@ impl App {
             selected_artboard: None,
             selected_layer: None,
             rename: None,
-            newdoc: None,
+            // Boot straight into the New Document screen.
+            newdoc: Some(newdoc::NewDocForm::boot()),
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
@@ -1002,15 +1003,20 @@ impl App {
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => {
-                self.newdoc = None;
-                self.request_main_redraw();
+                // Escape does nothing on the boot screen (there's no
+                // document to fall back to).
+                if !self.newdoc.as_ref().is_some_and(|f| f.boot) {
+                    self.newdoc = None;
+                    self.request_main_redraw();
+                }
                 return;
             }
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                // Enter = the Create button.
                 if let Some(f) = self.newdoc.as_mut() {
-                    f.focus_next();
+                    f.commit_focus();
                 }
-                self.request_main_redraw();
+                self.create_from_form();
                 return;
             }
             _ => {}
@@ -1079,8 +1085,16 @@ impl App {
             index: None,
         });
 
+        let boot = self.newdoc.as_ref().is_some_and(|f| f.boot);
         self.newdoc = None;
-        self.add_doc(Doc::new(editor));
+        if boot {
+            // Boot screen: fill the sole empty tab rather than open one.
+            self.load_active_doc(Doc::new(editor));
+            self.pending_fit = true;
+            self.request_main_redraw();
+        } else {
+            self.add_doc(Doc::new(editor));
+        }
     }
 
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
