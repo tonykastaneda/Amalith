@@ -61,6 +61,44 @@ pub fn topmost_anchor_at(doc: &Document, p: Point, radius: f64) -> Option<(Objec
     None
 }
 
+/// Topmost anchor within `radius` document units of `p`, restricted to
+/// `ids` (the paths whose nodes are currently on screen). Illustrator's
+/// white arrow only grabs nodes of a path you've already selected.
+pub fn topmost_anchor_among(
+    doc: &Document,
+    ids: &[ObjectId],
+    p: Point,
+    radius: f64,
+) -> Option<(ObjectId, usize)> {
+    let r2 = radius * radius;
+    for &id in ids.iter().rev() {
+        let best = anchors_of(doc, id)
+            .into_iter()
+            .filter_map(|(i, ap)| {
+                let d2 = (ap - p).hypot2();
+                (d2 <= r2).then_some((i, d2))
+            })
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        if let Some((i, _)) = best {
+            return Some((id, i));
+        }
+    }
+    None
+}
+
+/// Every anchor of `ids` whose position falls inside `doc_rect`.
+pub fn within_of(doc: &Document, ids: &[ObjectId], doc_rect: Rect) -> Vec<(ObjectId, usize)> {
+    let mut out = Vec::new();
+    for &id in ids {
+        for (i, ap) in anchors_of(doc, id) {
+            if doc_rect.contains(ap) {
+                out.push((id, i));
+            }
+        }
+    }
+    out
+}
+
 /// Every anchor whose position falls inside `doc_rect`.
 pub fn within(doc: &Document, doc_rect: Rect) -> Vec<(ObjectId, usize)> {
     let mut out = Vec::new();

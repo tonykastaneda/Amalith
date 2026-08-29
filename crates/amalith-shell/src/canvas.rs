@@ -239,8 +239,10 @@ pub fn paint(
         }
     }
 
-    // Selection box + transform handles.
-    if !selection.is_empty() {
+    // Selection box + transform handles. Direct Selection replaces these
+    // with the path contour + node markers below, matching Illustrator's
+    // white arrow (no bounding box, no scale/rotate handles).
+    if !selection.is_empty() && anchor_view.is_none() {
         // The oriented box, in screen px, transformed by any live
         // scale/rotate preview.
         let quad = select::selection_quad(doc, selection).map(|q| {
@@ -298,7 +300,8 @@ pub fn paint(
             .unwrap_or(Vec2::ZERO);
         let core_dv = amalith_core::Vec2::new(dv.x, dv.y);
 
-        // Outline every path that has a selected anchor.
+        // Outline every selected path (deformed live by any of its
+        // anchors currently being dragged).
         for &id in av.paths {
             let idxs: Vec<usize> = av
                 .selected
@@ -306,9 +309,6 @@ pub fn paint(
                 .filter(|(o, _)| *o == id)
                 .map(|(_, i)| *i)
                 .collect();
-            if idxs.is_empty() {
-                continue;
-            }
             if let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) {
                 let g = crate::anchors::deformed(&pd.geometry, &idxs, core_dv);
                 let m = vt * convert::affine(doc.world_transform(id));

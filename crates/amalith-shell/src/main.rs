@@ -366,6 +366,26 @@ impl App {
             });
     }
 
+    /// Paths whose anchors are currently on screen for Direct Selection:
+    /// the object selection, plus anything with a live anchor selection.
+    /// Illustrator's white arrow shows nodes only after you've picked an
+    /// object — it never lights up every path in the document.
+    fn node_paths(&self) -> Vec<ObjectId> {
+        let mut out = self.selection.clone();
+        for (id, _) in &self.anchor_sel {
+            if !out.contains(id) {
+                out.push(*id);
+            }
+        }
+        out.retain(|id| {
+            matches!(
+                self.editor.document().object(*id).map(|o| &o.kind),
+                Some(amalith_core::ObjectKind::Path(_))
+            )
+        });
+        out
+    }
+
     /// Arrow-key nudge (Shift = ×10). Moves the selected anchors when the
     /// Direct Selection tool is active, otherwise the object selection.
     fn nudge(&mut self, dx: f64, dy: f64) {
@@ -777,37 +797,59 @@ impl App {
                     return;
                 }
 
-                // Direct Selection: pick / drag individual anchors.
+                // Direct Selection (Illustrator white arrow): nodes show
+                // only for objects you've already picked. A click grabs a
+                // node of such an object, else selects the object under the
+                // cursor (its nodes then appear), else clears + marquees.
                 if self.active_tool == Tool::DirectSelect {
                     let hit_r = 6.0 / self.view.zoom;
-                    match anchors::topmost_anchor_at(self.editor.document(), dp, hit_r) {
-                        Some(a) => {
-                            if self.shift_down {
-                                if let Some(i) = self.anchor_sel.iter().position(|x| *x == a) {
-                                    self.anchor_sel.remove(i);
-                                } else {
-                                    self.anchor_sel.push(a);
-                                }
+                    let shown = self.node_paths();
+                    if let Some(a) =
+                        anchors::topmost_anchor_among(self.editor.document(), &shown, dp, hit_r)
+                    {
+                        if self.shift_down {
+                            if let Some(i) = self.anchor_sel.iter().position(|x| *x == a) {
+                                self.anchor_sel.remove(i);
                             } else {
-                                if !self.anchor_sel.contains(&a) {
-                                    self.anchor_sel = vec![a];
-                                }
-                                self.drag = Drag::MoveAnchors {
-                                    start_doc: dp,
-                                    last_doc: dp,
-                                    moved: false,
-                                };
+                                self.anchor_sel.push(a);
                             }
-                        }
-                        None => {
-                            if !self.shift_down {
-                                self.anchor_sel.clear();
+                        } else {
+                            if !self.anchor_sel.contains(&a) {
+                                self.anchor_sel = vec![a];
                             }
-                            self.drag = Drag::AnchorMarquee {
-                                start: self.pointer,
+                            self.drag = Drag::MoveAnchors {
+                                start_doc: dp,
+                                last_doc: dp,
+                                moved: false,
                             };
                         }
+                        self.request_main_redraw();
+                        return;
                     }
+
+                    let visible = self.visible_doc_rect();
+                    if let Some(id) =
+                        select::topmost_selectable_at(self.editor.document(), dp, visible)
+                    {
+                        if self.shift_down {
+                            if !self.selection.contains(&id) {
+                                self.selection.push(id);
+                            }
+                        } else {
+                            self.selection = vec![id];
+                        }
+                        self.anchor_sel.clear();
+                        self.request_main_redraw();
+                        return;
+                    }
+
+                    if !self.shift_down {
+                        self.selection.clear();
+                        self.anchor_sel.clear();
+                    }
+                    self.drag = Drag::AnchorMarquee {
+                        start: self.pointer,
+                    };
                     self.request_main_redraw();
                     return;
                 }
@@ -1238,7 +1280,8 @@ impl App {
                     .to_screen()
                     .inverse()
                     .transform_rect_bbox(Rect::from_points(start, self.pointer));
-                let hits = anchors::within(self.editor.document(), r_doc);
+                let shown = self.node_paths();
+                let hits = anchors::within_of(self.editor.document(), &shown, r_doc);
                 if self.shift_down {
                     for a in hits {
                         if !self.anchor_sel.contains(&a) {
@@ -1390,9 +1433,10 @@ impl App {
         } else {
             None
         };
-        // Direct Selection shows every path's anchors, like amalith-app.
+        // Direct Selection shows anchors only for objects that have been
+        // selected (Illustrator's white arrow), not every path.
         let anchor_paths: Vec<ObjectId> = if self.active_tool == Tool::DirectSelect {
-            anchors::path_leaves(self.editor.document())
+            self.node_paths()
         } else {
             Vec::new()
         };
