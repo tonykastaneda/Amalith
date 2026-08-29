@@ -69,10 +69,6 @@ pub struct AnchorView<'a> {
     pub selected: &'a [(ObjectId, usize)],
     /// Paths whose anchors to display.
     pub paths: &'a [ObjectId],
-    /// The persistent `A` tool fills every node solid blue; the
-    /// temporary ⌘ gesture leaves unselected nodes white with a blue
-    /// outline.
-    pub filled: bool,
 }
 
 /// In-progress Pen path preview (all points in document space).
@@ -296,7 +292,6 @@ pub fn paint(
 
     // Direct Selection: contour highlight + anchor markers.
     if let Some(av) = anchor_view {
-        let white = Color::from_rgb8(0xff, 0xff, 0xff);
         // Document-space drag delta for the selected anchors.
         let dv = drag
             .and_then(|d| d.anchors)
@@ -326,6 +321,9 @@ pub fn paint(
             }
         }
 
+        // Every Direct Selection node renders solid blue (selected or
+        // not); the white-fill/blue-outline square is the Selection
+        // tool's transform handle, a different thing.
         for &id in av.paths {
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));
@@ -333,17 +331,6 @@ pub fn paint(
                 let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
                 scene.fill(
                     Fill::NonZero,
-                    Affine::IDENTITY,
-                    if sel || av.filled {
-                        theme.select_blue
-                    } else {
-                        white
-                    },
-                    None,
-                    &sq,
-                );
-                scene.stroke(
-                    &Stroke::new(1.0),
                     Affine::IDENTITY,
                     theme.select_blue,
                     None,
