@@ -596,6 +596,11 @@ impl App {
         );
         device.queue.submit([encoder.finish()]);
         surface_texture.present();
+
+        // Keep the window pumping frames. Cheap under AutoVsync and it
+        // sidesteps a class of "first RedrawRequested was dropped" bugs
+        // where the window opens blank until an event happens to arrive.
+        host.window.request_redraw();
     }
 }
 
@@ -610,10 +615,10 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         self.scale = window.scale_factor();
         let wid = window.id();
-        window.request_redraw();
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
         self.main_id = Some(wid);
+        self.hosts[&wid].window.request_redraw();
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
