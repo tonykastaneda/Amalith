@@ -114,6 +114,8 @@ pub fn paint(
     draw_shape: Option<(Tool, Rect)>,
     artboard_ghost: Option<Rect>,
     artboard_handles: Option<[Point; 4]>,
+    // Artboard tool active — lighten the pasteboard, like main.
+    artboard_mode: bool,
     pen: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
 ) {
@@ -122,7 +124,11 @@ pub fn paint(
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
-        theme.canvas_bg,
+        if artboard_mode {
+            theme.pasteboard
+        } else {
+            theme.canvas_bg
+        },
         None,
         &viewport,
     );
@@ -197,21 +203,23 @@ pub fn paint(
             outline.line_to(*p);
         }
         outline.close_path();
+        // Dashed light-blue selected-artboard border, like main.
         scene.stroke(
-            &Stroke::new(1.25),
+            &Stroke::new(1.25).with_dashes(0.0, [4.0, 3.0]),
             Affine::IDENTITY,
-            theme.select_blue,
+            Color::from_rgb8(0x6e, 0xbf, 0xff),
             None,
             &outline,
         );
-        let white = Color::from_rgb8(0xff, 0xff, 0xff);
+        let handle_fill = Color::from_rgb8(0xe1, 0xf1, 0xff);
+        let handle_border = Color::from_rgb8(0x2d, 0x8b, 0xf2);
         for h in handles::Handle::ALL {
             let sq = Rect::from_center_size(handles::handle_pos(q, h), (8.0, 8.0));
-            scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, handle_fill, None, &sq);
             scene.stroke(
                 &Stroke::new(1.25),
                 Affine::IDENTITY,
-                theme.select_blue,
+                handle_border,
                 None,
                 &sq,
             );

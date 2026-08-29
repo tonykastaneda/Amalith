@@ -11,6 +11,8 @@ pub struct Theme {
     pub app_bar: Color,
     /// The canvas area behind the artboards.
     pub canvas_bg: Color,
+    /// The lighter canvas fill shown while the Artboard tool is active.
+    pub pasteboard: Color,
     /// A panel body.
     pub panel_bg: Color,
     /// Tab strip background (inactive).
@@ -49,6 +51,7 @@ impl Default for Theme {
             bg: Color::from_rgb8(0x1e, 0x1e, 0x1e),
             app_bar: Color::from_rgb8(0x30, 0x30, 0x30),
             canvas_bg: Color::from_rgb8(0x33, 0x33, 0x33),
+            pasteboard: Color::from_rgb8(0x5b, 0x5b, 0x5b),
             panel_bg: Color::from_rgb8(0x2b, 0x2b, 0x2b),
             strip_bg: Color::from_rgb8(0x24, 0x24, 0x24),
             strip_active: Color::from_rgb8(0x2b, 0x2b, 0x2b),

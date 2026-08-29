@@ -2952,6 +2952,7 @@ fn paint_main(
         draw_shape,
         artboard_ghost,
         artboard_handles,
+        active_tool == Tool::Artboard,
         pen_preview,
         anchor_view,
     );
