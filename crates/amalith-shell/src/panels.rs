@@ -4,7 +4,11 @@
 //! the `Panel` trait — until the set of panels and the state they need
 //! settles.
 
-use amalith_core::{Appearance, Color as CoreColor, Document, ObjectId, ObjectKind, Paint};
+use std::collections::HashSet;
+
+use amalith_core::{
+    Appearance, Color as CoreColor, Document, ObjectId, ObjectKind, ObjectParent, Paint,
+};
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
@@ -61,6 +65,8 @@ pub struct Ctx<'a> {
     /// Appearance of the first selected object, if any (for the swatches).
     pub representative: Option<Appearance>,
     pub active_slot: PaintSlot,
+    /// Group ids the Layers panel currently shows expanded.
+    pub expanded: &'a HashSet<ObjectId>,
 }
 
 /// What a click in a panel body asks the app to do.
@@ -74,6 +80,13 @@ pub enum Action {
     OpenPicker(PaintSlot),
     SetPaint(Paint),
     SetStrokeWidth(f64),
+    /// Layers panel: flip an object's `visible` / `locked` flag.
+    ToggleVisible(ObjectId),
+    ToggleLocked(ObjectId),
+    /// Layers panel: expand / collapse a group row.
+    ToggleExpand(ObjectId),
+    /// Layers panel: the "+" button.
+    NewLayer,
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -119,6 +132,9 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             return Action::OpenPicker(PaintSlot::Stroke);
         }
     }
+    if id.0 == "layers" {
+        return layers_hit(body, local, ctx);
+    }
     let unit = if id.0 == "tools" { TOOL_BTN } else { ROW_H };
     let row = ((local.y - body.y0) / unit).floor();
     if row < 0.0 {
@@ -130,12 +146,37 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             .get(row)
             .map(|t| Action::SetTool(*t))
             .unwrap_or(Action::None),
-        "layers" => layer_rows(ctx.doc)
-            .get(row)
-            .and_then(|r| r.object)
-            .map(Action::Select)
-            .unwrap_or(Action::None),
         _ => Action::None,
+    }
+}
+
+/// Resolve a click in the Layers panel: the "+" button, a disclosure
+/// triangle, the eye / lock columns, or the name (select).
+fn layers_hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
+    let rows = layer_rows(ctx.doc, ctx.expanded);
+    let i = ((local.y - body.y0) / ROW_H).floor();
+    if i < 0.0 {
+        return Action::None;
+    }
+    let Some(row) = rows.get(i as usize) else {
+        return Action::None;
+    };
+    match row.kind {
+        RowKind::NewButton => Action::NewLayer,
+        RowKind::Layer => Action::None,
+        RowKind::Object { id, is_group } => {
+            let indent = PAD + row.depth as f64 * INDENT;
+            let x = local.x - body.x0;
+            if is_group && x < indent + COL {
+                Action::ToggleExpand(id)
+            } else if x < indent + COL * 2.0 {
+                Action::ToggleVisible(id)
+            } else if x < indent + COL * 3.0 {
+                Action::ToggleLocked(id)
+            } else {
+                Action::Select(id)
+            }
+        }
     }
 }
 
@@ -201,33 +242,74 @@ fn paint_tools(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx
     );
 }
 
-struct LayerRow {
-    label: String,
-    object: Option<ObjectId>,
-    indent: f64,
+/// Per-depth indent, and the width of each icon column (triangle, eye,
+/// lock) in a Layers row.
+const INDENT: f64 = 14.0;
+const COL: f64 = 16.0;
+
+enum RowKind {
+    Layer,
+    Object { id: ObjectId, is_group: bool },
+    NewButton,
 }
 
-fn layer_rows(doc: &Document) -> Vec<LayerRow> {
-    let mut rows = Vec::new();
-    for layer in doc.layers() {
-        let n = layer.children.len();
-        rows.push(LayerRow {
-            label: format!("{}  ({n})", layer.name),
-            object: None,
-            indent: 0.0,
-        });
-        for &id in &layer.children {
-            let name = doc
-                .object(id)
-                .and_then(|o| o.name.clone())
-                .unwrap_or_else(|| kind_name(doc, id));
+struct LayerRow {
+    label: String,
+    kind: RowKind,
+    depth: usize,
+    visible: bool,
+    locked: bool,
+    /// Groups only: whether this row is currently expanded.
+    expanded: bool,
+}
+
+fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
+    fn walk(
+        doc: &Document,
+        parent: ObjectParent,
+        depth: usize,
+        expanded: &HashSet<ObjectId>,
+        rows: &mut Vec<LayerRow>,
+    ) {
+        // Frontmost object on top, like Illustrator's Layers panel.
+        for &id in doc.children_of(parent).iter().rev() {
+            let Some(obj) = doc.object(id) else { continue };
+            let is_group = matches!(obj.kind, ObjectKind::Group(_));
+            let is_expanded = is_group && expanded.contains(&id);
             rows.push(LayerRow {
-                label: name,
-                object: Some(id),
-                indent: 16.0,
+                label: obj.name.clone().unwrap_or_else(|| kind_name(doc, id)),
+                kind: RowKind::Object { id, is_group },
+                depth,
+                visible: obj.visible,
+                locked: obj.locked,
+                expanded: is_expanded,
             });
+            if is_expanded {
+                walk(doc, ObjectParent::Group(id), depth + 1, expanded, rows);
+            }
         }
     }
+
+    let mut rows = Vec::new();
+    for layer in doc.layers() {
+        rows.push(LayerRow {
+            label: format!("{}  ({})", layer.name, layer.children.len()),
+            kind: RowKind::Layer,
+            depth: 0,
+            visible: layer.visible,
+            locked: layer.locked,
+            expanded: false,
+        });
+        walk(doc, ObjectParent::Layer(layer.id), 1, expanded, &mut rows);
+    }
+    rows.push(LayerRow {
+        label: "+  New Layer".into(),
+        kind: RowKind::NewButton,
+        depth: 0,
+        visible: true,
+        locked: false,
+        expanded: false,
+    });
     rows
 }
 
@@ -245,32 +327,131 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
 }
 
 fn paint_layers(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
-    for (i, row) in layer_rows(ctx.doc).into_iter().enumerate() {
+    let hot_row = if body.contains(ctx.pointer) {
+        Some(((ctx.pointer.y - body.y0) / ROW_H).floor() as i64)
+    } else {
+        None
+    };
+    for (i, row) in layer_rows(ctx.doc, ctx.expanded).into_iter().enumerate() {
         let r = row_rect(body, i);
-        let selected = row.object.is_some_and(|id| ctx.selection.contains(&id));
-        if selected {
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                ctx.theme.select_blue.with_alpha(0.22),
-                None,
-                &r,
-            );
+        let baseline = r.y0 + ROW_H * 0.5 + 4.0;
+        let indent = body.x0 + PAD + row.depth as f64 * INDENT;
+
+        match row.kind {
+            RowKind::NewButton => {
+                if hot_row == Some(i as i64) {
+                    scene.fill(
+                        Fill::NonZero,
+                        ID,
+                        ctx.theme.select_blue.with_alpha(0.14),
+                        None,
+                        &r,
+                    );
+                }
+                text.draw(
+                    scene,
+                    &row.label,
+                    12.0,
+                    ctx.theme.select_blue,
+                    body.x0 + PAD,
+                    baseline,
+                );
+            }
+            RowKind::Layer => {
+                scene.fill(Fill::NonZero, ID, ctx.theme.strip_bg, None, &r);
+                text.draw(
+                    scene,
+                    &row.label,
+                    12.0,
+                    ctx.theme.text,
+                    body.x0 + PAD,
+                    baseline,
+                );
+            }
+            RowKind::Object { id, is_group } => {
+                let selected = ctx.selection.contains(&id);
+                if selected {
+                    scene.fill(
+                        Fill::NonZero,
+                        ID,
+                        ctx.theme.select_blue.with_alpha(0.22),
+                        None,
+                        &r,
+                    );
+                }
+                let cy = r.y0 + ROW_H * 0.5;
+                if is_group {
+                    draw_triangle(scene, indent + COL * 0.5, cy, row.expanded, ctx.theme.text_dim);
+                }
+                let eye_c = if row.visible {
+                    ctx.theme.text_dim
+                } else {
+                    ctx.theme.border
+                };
+                draw_eye(scene, indent + COL * 1.5, cy, row.visible, eye_c);
+                if row.locked {
+                    draw_lock(scene, indent + COL * 2.5, cy, ctx.theme.text);
+                } else if hot_row == Some(i as i64) {
+                    draw_lock(scene, indent + COL * 2.5, cy, ctx.theme.border);
+                }
+                let name_c = if !row.visible || row.locked {
+                    ctx.theme.border
+                } else if selected {
+                    ctx.theme.text
+                } else {
+                    ctx.theme.text_dim
+                };
+                text.draw(scene, &row.label, 12.0, name_c, indent + COL * 3.0, baseline);
+            }
         }
-        let color = if row.object.is_none() {
-            ctx.theme.text
-        } else {
-            ctx.theme.text_dim
-        };
-        text.draw(
-            scene,
-            &row.label,
-            12.0,
-            color,
-            body.x0 + PAD + row.indent,
-            r.y0 + ROW_H * 0.5 + 4.0,
-        );
     }
+}
+
+/// A disclosure triangle centred at `(cx, cy)`: pointing right when
+/// collapsed, down when expanded.
+fn draw_triangle(scene: &mut Scene, cx: f64, cy: f64, expanded: bool, color: Color) {
+    let mut p = BezPath::new();
+    if expanded {
+        p.move_to((cx - 3.5, cy - 2.5));
+        p.line_to((cx + 3.5, cy - 2.5));
+        p.line_to((cx, cy + 3.5));
+    } else {
+        p.move_to((cx - 2.5, cy - 3.5));
+        p.line_to((cx + 3.5, cy));
+        p.line_to((cx - 2.5, cy + 3.5));
+    }
+    p.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &p);
+}
+
+/// A small eye centred at `(cx, cy)`, with a slash through it when `off`.
+fn draw_eye(scene: &mut Scene, cx: f64, cy: f64, on: bool, color: Color) {
+    use vello::kurbo::Ellipse;
+    let outer = Ellipse::new((cx, cy), (5.0, 3.2), 0.0);
+    scene.stroke(&Stroke::new(1.2), ID, color, None, &outer);
+    if on {
+        let pupil = Ellipse::new((cx, cy), (1.6, 1.6), 0.0);
+        scene.fill(Fill::NonZero, ID, color, None, &pupil);
+    } else {
+        let mut slash = BezPath::new();
+        slash.move_to((cx - 5.5, cy + 4.0));
+        slash.line_to((cx + 5.5, cy - 4.0));
+        scene.stroke(&Stroke::new(1.4), ID, color, None, &slash);
+    }
+}
+
+/// A small padlock centred at `(cx, cy)`.
+fn draw_lock(scene: &mut Scene, cx: f64, cy: f64, color: Color) {
+    let body = Rect::new(cx - 3.5, cy - 0.5, cx + 3.5, cy + 4.5);
+    scene.fill(Fill::NonZero, ID, color, None, &body);
+    let shackle = vello::kurbo::Arc::new(
+        (cx, cy - 0.5),
+        (2.4, 2.4),
+        std::f64::consts::PI,
+        std::f64::consts::PI,
+        0.0,
+    );
+    scene.stroke(&Stroke::new(1.2), ID, color, None, &shackle);
 }
 
 fn paint_artboards(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {

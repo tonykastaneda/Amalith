@@ -180,6 +180,16 @@ pub enum Command {
         objects: Vec<ObjectId>,
         opacity: f32,
     },
+    /// Sets every listed object's `visible` flag, one undo group.
+    SetVisible {
+        objects: Vec<ObjectId>,
+        visible: bool,
+    },
+    /// Sets every listed object's `locked` flag, one undo group.
+    SetLocked {
+        objects: Vec<ObjectId>,
+        locked: bool,
+    },
 }
 
 /// Where a pasted clone lands in its target parent's paint order. See

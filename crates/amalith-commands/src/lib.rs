@@ -2010,4 +2010,55 @@ mod tests {
             0.35
         );
     }
+
+    #[test]
+    fn set_visible_and_locked_roundtrip_through_undo() {
+        let mut editor = Editor::new(Document::new("Flags"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(editor.document().object(id).unwrap().visible);
+        assert!(!editor.document().object(id).unwrap().locked);
+
+        editor
+            .execute(Command::SetVisible {
+                objects: vec![id],
+                visible: false,
+            })
+            .unwrap();
+        editor
+            .execute(Command::SetLocked {
+                objects: vec![id],
+                locked: true,
+            })
+            .unwrap();
+        assert!(!editor.document().object(id).unwrap().visible);
+        assert!(editor.document().object(id).unwrap().locked);
+
+        editor.undo().unwrap();
+        editor.undo().unwrap();
+        assert!(editor.document().object(id).unwrap().visible);
+        assert!(!editor.document().object(id).unwrap().locked);
+
+        editor.redo().unwrap();
+        editor.redo().unwrap();
+        assert!(!editor.document().object(id).unwrap().visible);
+        assert!(editor.document().object(id).unwrap().locked);
+    }
 }

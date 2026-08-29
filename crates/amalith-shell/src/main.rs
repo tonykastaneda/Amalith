@@ -178,6 +178,8 @@ struct App {
     selection: Vec<ObjectId>,
     /// Selected path anchors, for the Direct Selection tool.
     anchor_sel: Vec<(ObjectId, usize)>,
+    /// Group ids shown expanded in the Layers panel.
+    expanded_groups: std::collections::HashSet<ObjectId>,
     active_tool: Tool,
     /// Which paint slot the Swatches panel targets.
     active_slot: panels::PaintSlot,
@@ -237,6 +239,7 @@ impl App {
             io_error: None,
             selection: Vec::new(),
             anchor_sel: Vec::new(),
+            expanded_groups: std::collections::HashSet::new(),
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             picker: None,
@@ -354,6 +357,37 @@ impl App {
                         width,
                     });
                 }
+            }
+            panels::Action::ToggleVisible(id) => {
+                if let Some(cur) = self.editor.document().object(id).map(|o| o.visible) {
+                    let _ = self.editor.execute(Command::SetVisible {
+                        objects: vec![id],
+                        visible: !cur,
+                    });
+                }
+            }
+            panels::Action::ToggleLocked(id) => {
+                if let Some(cur) = self.editor.document().object(id).map(|o| o.locked) {
+                    let _ = self.editor.execute(Command::SetLocked {
+                        objects: vec![id],
+                        locked: !cur,
+                    });
+                    if !cur {
+                        self.selection.retain(|s| *s != id);
+                    }
+                }
+            }
+            panels::Action::ToggleExpand(id) => {
+                if !self.expanded_groups.remove(&id) {
+                    self.expanded_groups.insert(id);
+                }
+            }
+            panels::Action::NewLayer => {
+                let n = self.editor.document().layers().len() + 1;
+                let _ = self.editor.execute(Command::CreateLayer {
+                    name: format!("Layer {n}"),
+                    index: None,
+                });
             }
         }
         self.request_main_redraw();
@@ -889,6 +923,7 @@ impl App {
                                         pointer: self.pointer,
                                         representative: rep,
                                         active_slot: self.active_slot,
+                                        expanded: &self.expanded_groups,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -1621,6 +1656,7 @@ impl App {
                 hl,
                 self.redock_preview.as_ref(),
                 status_text.as_deref(),
+                &self.expanded_groups,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -2147,6 +2183,7 @@ fn paint_main(
     height: f64,
     redock_preview: Option<&(RailSide, DropTarget)>,
     status: Option<&str>,
+    expanded: &std::collections::HashSet<ObjectId>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -2205,6 +2242,7 @@ fn paint_main(
                 pointer,
                 representative,
                 active_slot,
+                expanded,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

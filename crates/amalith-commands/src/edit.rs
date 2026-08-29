@@ -87,6 +87,14 @@ pub(crate) enum Edit {
         id: ObjectId,
         opacity: f32,
     },
+    SetVisible {
+        id: ObjectId,
+        visible: bool,
+    },
+    SetLocked {
+        id: ObjectId,
+        locked: bool,
+    },
 }
 
 /// Applies `edit` to `doc`, returning its inverse (to file for undo/redo)
@@ -239,6 +247,16 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 },
                 None,
             ))
+        }
+        Edit::SetVisible { id, visible } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old = std::mem::replace(&mut object.visible, visible);
+            Ok((Edit::SetVisible { id, visible: old }, None))
+        }
+        Edit::SetLocked { id, locked } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old = std::mem::replace(&mut object.locked, locked);
+            Ok((Edit::SetLocked { id, locked: old }, None))
         }
     }
 }

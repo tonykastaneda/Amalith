@@ -29,7 +29,7 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
         }
         for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
             let Some(obj) = doc.object(id) else { continue };
-            if !obj.visible {
+            if !obj.visible || obj.locked {
                 continue;
             }
             if let Some(b) = bounds(doc, id) {
@@ -50,6 +50,9 @@ pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
             continue;
         }
         for &id in doc.children_of(ObjectParent::Layer(layer.id)) {
+            if doc.object(id).is_some_and(|o| !o.visible || o.locked) {
+                continue;
+            }
             if bounds(doc, id).is_some_and(|b| overlaps(b, marquee)) {
                 out.push(id);
             }
