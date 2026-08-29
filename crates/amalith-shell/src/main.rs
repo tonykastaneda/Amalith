@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 use amalith_core::{Document, LayerId, ObjectId};
@@ -158,6 +159,8 @@ struct App {
     active_slot: panels::PaintSlot,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
+    /// Time + position of the last left press, for double-click detection.
+    last_click: Option<(Instant, Point)>,
     /// In-progress Pen path — placed anchors in document space. Empty when
     /// not drawing.
     pen: Vec<Point>,
@@ -209,6 +212,7 @@ impl App {
             active_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             picker: None,
+            last_click: None,
             pen: Vec::new(),
             pen_redo: Vec::new(),
             last_pen: None,
@@ -278,12 +282,15 @@ impl App {
         self.request_main_redraw();
     }
 
-    fn apply_panel_action(&mut self, action: panels::Action) {
+    fn apply_panel_action(&mut self, action: panels::Action, double: bool) {
         match action {
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
             panels::Action::Select(id) => self.selection = vec![id],
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
+            // Single click just picks the slot; double click opens the
+            // colour picker (Illustrator behaviour).
+            panels::Action::OpenPicker(slot) if !double => self.active_slot = slot,
             panels::Action::OpenPicker(slot) => {
                 self.active_slot = slot;
                 let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
@@ -579,7 +586,7 @@ impl App {
         self.request_main_redraw();
     }
 
-    fn on_press(&mut self, id: WindowId) {
+    fn on_press(&mut self, id: WindowId, double: bool) {
         let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
         };
@@ -691,7 +698,7 @@ impl App {
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
-                                self.apply_panel_action(action);
+                                self.apply_panel_action(action, double);
                             }
                             return;
                         }
@@ -1414,7 +1421,14 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => self.on_press(id),
+            } => {
+                let now = Instant::now();
+                let double = self.last_click.is_some_and(|(t, p)| {
+                    now.duration_since(t).as_millis() < 400 && (self.pointer - p).hypot() < 5.0
+                });
+                self.last_click = Some((now, self.pointer));
+                self.on_press(id, double);
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
