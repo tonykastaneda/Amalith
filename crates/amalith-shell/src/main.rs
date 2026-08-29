@@ -3769,7 +3769,7 @@ fn paint_main(
 
     // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, pen_closing)) = cursor_glyph {
-        let sz = 24.0;
+        let sz = 30.0;
         let (hx, hy) = cursor_hotspot(tool);
         let x0 = pointer.x - sz * hx;
         let y0 = pointer.y - sz * hy;

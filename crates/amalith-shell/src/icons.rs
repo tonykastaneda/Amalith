@@ -78,11 +78,16 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
             .unwrap_or_default()
     };
     fn paint<S: vello::kurbo::Shape>(scene: &mut Scene, st: Style, scale: f64, shape: &S) {
-        if let FillSpec::Solid(c) = st.fill {
-            scene.fill(Fill::NonZero, ID, c, None, shape);
+        // SVG's default fill is black; only an explicit `fill:none` skips it.
+        match st.fill {
+            FillSpec::Solid(c) => scene.fill(Fill::NonZero, ID, c, None, shape),
+            FillSpec::Unset => {
+                scene.fill(Fill::NonZero, ID, Color::from_rgb8(0, 0, 0), None, shape)
+            }
+            FillSpec::None => {}
         }
         if let Some(c) = st.stroke {
-            let w = (st.stroke_width.unwrap_or(3.0) * scale).max(0.6);
+            let w = (st.stroke_width.unwrap_or(3.0) * scale).max(1.1);
             scene.stroke(&Stroke::new(w), ID, c, None, shape);
         }
     }
@@ -119,7 +124,17 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
             svg_num(tag, "x2"),
             svg_num(tag, "y2"),
         ) {
-            paint(scene, resolve(tag), scale, &Line::new(map(x1, y1), map(x2, y2)));
+            let st = resolve(tag);
+            if let Some(c) = st.stroke {
+                let w = (st.stroke_width.unwrap_or(3.0) * scale).max(1.1);
+                scene.stroke(
+                    &Stroke::new(w),
+                    ID,
+                    c,
+                    None,
+                    &Line::new(map(x1, y1), map(x2, y2)),
+                );
+            }
         }
     }
 }
