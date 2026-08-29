@@ -1072,7 +1072,7 @@ impl App {
                 start_doc,
                 cur_doc,
             } => {
-                let r = shape_rect(start_doc, cur_doc, self.shift_down);
+                let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 0.5 && r.height() > 0.5 {
                     let layer = self.ensure_layer();
                     let cmd = match tool {
@@ -1238,7 +1238,12 @@ impl App {
                 cur_doc,
             } => Some((
                 *tool,
-                convert::rect(shape_rect(*start_doc, *cur_doc, self.shift_down)),
+                convert::rect(shape_rect(
+                    *start_doc,
+                    *cur_doc,
+                    self.shift_down,
+                    self.alt_down,
+                )),
             )),
             _ => None,
         };
@@ -1693,14 +1698,21 @@ fn primitive_path(tool: Tool, r: amalith_core::Rect) -> Option<amalith_core::Pat
     }
 }
 
-fn shape_rect(a: Point, b: Point, square: bool) -> amalith_core::Rect {
+/// Box between two document-space points. `square` (Shift) locks it to
+/// the larger dimension; `from_center` (Alt) treats `a` as the centre.
+fn shape_rect(a: Point, b: Point, square: bool, from_center: bool) -> amalith_core::Rect {
     let (mut ex, mut ey) = (b.x, b.y);
     if square {
         let s = (b.x - a.x).abs().max((b.y - a.y).abs());
         ex = a.x + s.copysign(b.x - a.x);
         ey = a.y + s.copysign(b.y - a.y);
     }
-    amalith_core::Rect::new(a.x.min(ex), a.y.min(ey), a.x.max(ex), a.y.max(ey))
+    if from_center {
+        let (hx, hy) = ((ex - a.x).abs(), (ey - a.y).abs());
+        amalith_core::Rect::new(a.x - hx, a.y - hy, a.x + hx, a.y + hy)
+    } else {
+        amalith_core::Rect::new(a.x.min(ex), a.y.min(ey), a.x.max(ex), a.y.max(ey))
+    }
 }
 
 fn tab_label(panel: PanelId) -> String {
