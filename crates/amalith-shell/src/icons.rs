@@ -64,18 +64,28 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
 }
 
-/// Draw a cursor SVG (`CURSOR_*`) at `box_`: a light body with a dark
-/// keyline, so it reads over any canvas colour.
+/// Draw a cursor SVG (`CURSOR_*`) at `box_`, honouring the fill / stroke
+/// / stroke-width the artwork declares per CSS class — those colours are
+/// chosen deliberately (a light body, a white halo, a black keyline) so
+/// the cursor reads over any object it's on.
 pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
-    let map = |x: f64, y: f64| {
-        Point::new(
-            box_.x0 + box_.width() * x / 100.0,
-            box_.y0 + box_.height() * y / 100.0,
-        )
+    let styles = parse_styles(src);
+    let scale = box_.width() / 100.0;
+    let map = |x: f64, y: f64| Point::new(box_.x0 + x * scale, box_.y0 + box_.height() * y / 100.0);
+    let resolve = |tag: &str| -> Style {
+        svg_attr(tag, "class")
+            .and_then(|c| c.split_whitespace().find_map(|cls| styles.get(cls).copied()))
+            .unwrap_or_default()
     };
-    let sw = (3.5 * box_.width() / 100.0).max(0.75);
-    let body = Color::from_rgb8(0xe4, 0xe3, 0xe3);
-    let keyline = Color::from_rgb8(0x12, 0x12, 0x12);
+    fn paint<S: vello::kurbo::Shape>(scene: &mut Scene, st: Style, scale: f64, shape: &S) {
+        if let FillSpec::Solid(c) = st.fill {
+            scene.fill(Fill::NonZero, ID, c, None, shape);
+        }
+        if let Some(c) = st.stroke {
+            let w = (st.stroke_width.unwrap_or(3.0) * scale).max(0.6);
+            scene.stroke(&Stroke::new(w), ID, c, None, shape);
+        }
+    }
 
     for tag in svg_tags(src, "polygon") {
         let pts: Vec<Point> = svg_attr(tag, "points")
@@ -93,16 +103,13 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
             path.line_to(*p);
         }
         path.close_path();
-        scene.fill(Fill::NonZero, ID, body, None, &path);
-        scene.stroke(&Stroke::new(sw), ID, keyline, None, &path);
+        paint(scene, resolve(tag), scale, &path);
     }
     for tag in svg_tags(src, "circle") {
         if let (Some(cx), Some(cy), Some(r)) =
             (svg_num(tag, "cx"), svg_num(tag, "cy"), svg_num(tag, "r"))
         {
-            let c = Circle::new(map(cx, cy), r * box_.width() / 100.0);
-            scene.fill(Fill::NonZero, ID, body, None, &c);
-            scene.stroke(&Stroke::new(sw * 0.7), ID, keyline, None, &c);
+            paint(scene, resolve(tag), scale, &Circle::new(map(cx, cy), r * scale));
         }
     }
     for tag in svg_tags(src, "line") {
@@ -112,15 +119,83 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
             svg_num(tag, "x2"),
             svg_num(tag, "y2"),
         ) {
-            scene.stroke(
-                &Stroke::new(sw),
-                ID,
-                keyline,
-                None,
-                &Line::new(map(x1, y1), map(x2, y2)),
-            );
+            paint(scene, resolve(tag), scale, &Line::new(map(x1, y1), map(x2, y2)));
         }
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct Style {
+    fill: FillSpec,
+    stroke: Option<Color>,
+    stroke_width: Option<f64>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+enum FillSpec {
+    #[default]
+    Unset,
+    None,
+    Solid(Color),
+}
+
+/// CSS-class → resolved style, from the `<style>` block. Comma selectors
+/// and repeated rules for one class are merged (later wins).
+fn parse_styles(src: &str) -> std::collections::HashMap<&str, Style> {
+    let mut out: std::collections::HashMap<&str, Style> = std::collections::HashMap::new();
+    let Some(a) = src.find("<style>") else {
+        return out;
+    };
+    let block = &src[a + 7..src[a..].find("</style>").map_or(src.len(), |e| a + e)];
+    for rule in block.split('}') {
+        let Some((sels, decls)) = rule.split_once('{') else {
+            continue;
+        };
+        for sel in sels.split(',') {
+            let name = sel.trim().trim_start_matches('.');
+            if name.is_empty() {
+                continue;
+            }
+            let st = out.entry(name).or_default();
+            for decl in decls.split(';') {
+                let Some((k, v)) = decl.split_once(':') else {
+                    continue;
+                };
+                let (k, v) = (k.trim(), v.trim());
+                match k {
+                    "fill" if v == "none" => st.fill = FillSpec::None,
+                    "fill" => {
+                        if let Some(c) = parse_color(v) {
+                            st.fill = FillSpec::Solid(c);
+                        }
+                    }
+                    "stroke" if v == "none" => st.stroke = None,
+                    "stroke" => st.stroke = parse_color(v),
+                    "stroke-width" => {
+                        st.stroke_width = v.trim_end_matches("px").parse().ok();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
+fn parse_color(s: &str) -> Option<Color> {
+    let h = s.trim().strip_prefix('#')?;
+    let (r, g, b) = match h.len() {
+        3 => {
+            let d = |i: usize| u8::from_str_radix(&h[i..i + 1], 16).ok().map(|n| n * 17);
+            (d(0)?, d(1)?, d(2)?)
+        }
+        6 => {
+            let d = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+            (d(0)?, d(2)?, d(4)?)
+        }
+        _ => return None,
+    };
+    Some(Color::from_rgb8(r, g, b))
 }
 
 /// Paint the primitive shapes of a brand-icon SVG into `box_`.

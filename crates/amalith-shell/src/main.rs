@@ -260,6 +260,17 @@ impl Doc {
     }
 }
 
+/// What the pointer shows over the main window.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CanvasCursor {
+    /// Normal OS pointer — over chrome, or a modal is up.
+    Default,
+    /// OS cursor hidden; the active tool's on-document glyph is drawn.
+    Glyph,
+    /// OS crosshair — the primitive/shape drawing tools.
+    Crosshair,
+}
+
 struct App {
     context: RenderContext,
     hosts: HashMap<WindowId, WindowHost>,
@@ -337,9 +348,8 @@ struct App {
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
-    /// Whether the pointer is over the canvas (OS cursor hidden, tool
-    /// glyph drawn instead).
-    cursor_over_canvas: bool,
+    /// What the pointer looks like right now (see [`CanvasCursor`]).
+    cursor_mode: CanvasCursor,
     /// The macOS application menu bar, once the app has resumed.
     #[cfg(target_os = "macos")]
     native_menu: Option<NativeMenu>,
@@ -396,7 +406,7 @@ impl App {
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
-            cursor_over_canvas: false,
+            cursor_mode: CanvasCursor::Default,
             #[cfg(target_os = "macos")]
             native_menu: None,
         }
@@ -1382,17 +1392,28 @@ impl App {
         Rect::new(left, CHROME_TOP, right, h)
     }
 
-    /// Refresh whether the pointer is over the canvas, hiding the OS
-    /// cursor there so the tool glyph can stand in for it.
+    /// Recompute the pointer style and, on change, tell the OS.
     fn update_canvas_cursor(&mut self) {
         let over = self.pointer_win == self.main_id
             && self.picker.is_none()
             && self.newdoc.is_none()
             && self.canvas_viewport().contains(self.pointer);
-        if over != self.cursor_over_canvas {
-            self.cursor_over_canvas = over;
+        let mode = if !over {
+            CanvasCursor::Default
+        } else {
+            match self.effective_tool() {
+                Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
+                _ => CanvasCursor::Crosshair,
+            }
+        };
+        if mode != self.cursor_mode {
+            self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
-                w.set_cursor_visible(!over);
+                w.set_cursor_visible(mode != CanvasCursor::Glyph);
+                w.set_cursor(match mode {
+                    CanvasCursor::Crosshair => winit::window::CursorIcon::Crosshair,
+                    _ => winit::window::CursorIcon::Default,
+                });
             }
             self.request_main_redraw();
         }
@@ -1949,7 +1970,7 @@ impl App {
     fn on_cursor_move(&mut self) {
         self.update_canvas_cursor();
         // Redraw so the tool glyph tracks the pointer.
-        if self.cursor_over_canvas {
+        if self.cursor_mode == CanvasCursor::Glyph {
             self.request_main_redraw();
         }
         match &self.drag {
@@ -2620,7 +2641,7 @@ impl App {
         });
         let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
         let active_tab = self.active;
-        let cursor_glyph = self.cursor_over_canvas.then(|| {
+        let cursor_glyph = (self.cursor_mode == CanvasCursor::Glyph).then(|| {
             let pen_closing = self.active_tool == Tool::Pen && self.pen.len() >= 3 && {
                 let hover = self.doc_point(self.pointer);
                 self.pen
@@ -3746,29 +3767,20 @@ fn paint_main(
         cur_opacity,
     );
 
-    // Tool glyph standing in for the OS cursor over the canvas.
+    // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, pen_closing)) = cursor_glyph {
         let sz = 24.0;
         let (hx, hy) = cursor_hotspot(tool);
         let x0 = pointer.x - sz * hx;
         let y0 = pointer.y - sz * hy;
         let box_ = Rect::new(x0, y0, x0 + sz, y0 + sz);
-        match tool {
-            Tool::Select => icons::draw_cursor(scene, icons::CURSOR_SELECT_SVG, box_),
-            Tool::DirectSelect => {
-                icons::draw_cursor(scene, icons::CURSOR_DIRECT_SELECT_SVG, box_)
-            }
-            Tool::Pen => icons::draw_cursor(
-                scene,
-                if pen_closing {
-                    icons::CURSOR_PEN_CLOSING_SVG
-                } else {
-                    icons::CURSOR_PEN_DRAWING_SVG
-                },
-                box_,
-            ),
-            _ => icons::draw(scene, tool.icon(), box_, Color::from_rgb8(0xff, 0xff, 0xff)),
-        }
+        let src = match tool {
+            Tool::DirectSelect => icons::CURSOR_DIRECT_SELECT_SVG,
+            Tool::Pen if pen_closing => icons::CURSOR_PEN_CLOSING_SVG,
+            Tool::Pen => icons::CURSOR_PEN_DRAWING_SVG,
+            _ => icons::CURSOR_SELECT_SVG,
+        };
+        icons::draw_cursor(scene, src, box_);
     }
 
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
