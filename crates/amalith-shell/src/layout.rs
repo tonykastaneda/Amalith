@@ -37,6 +37,30 @@ pub struct SplitterHandle {
     /// The gap sits after child `index`.
     pub index: usize,
     pub rect: Rect,
+    /// Full extent of the child before the gap.
+    pub before: Rect,
+    /// Full extent of the child after the gap.
+    pub after: Rect,
+}
+
+impl SplitterHandle {
+    /// Fraction (0..1) along the axis that a pointer at `p` implies for the
+    /// boundary between the two children — feed straight to
+    /// [`crate::dock::DockModel::set_boundary`].
+    pub fn frac_at(&self, p: Point) -> f32 {
+        match self.axis {
+            Axis::Horizontal => {
+                let lo = self.before.x0;
+                let hi = self.after.x1;
+                (((p.x - lo) / (hi - lo)) as f32).clamp(0.0, 1.0)
+            }
+            Axis::Vertical => {
+                let lo = self.before.y0;
+                let hi = self.after.y1;
+                (((p.y - lo) / (hi - lo)) as f32).clamp(0.0, 1.0)
+            }
+        }
+    }
 }
 
 /// Everything needed to draw and hit-test a dock tree in a given rect.
@@ -114,31 +138,39 @@ fn layout_node(
             };
             let avail = (span - gap * (n as f64 - 1.0)).max(0.0);
 
+            // Place every child rect first, so splitters can reference both
+            // neighbours.
+            let mut child_rects = Vec::with_capacity(n);
             let mut cursor = along_lo;
             for (i, child) in children.iter().enumerate() {
-                let frac = (child.weight.max(0.0) as f64) / weight_sum;
-                let seg = avail * frac;
-                let child_rect = match axis {
+                let seg = avail * (child.weight.max(0.0) as f64) / weight_sum;
+                let r = match axis {
                     Axis::Horizontal => Rect::new(cursor, cross_lo, cursor + seg, cross_hi),
                     Axis::Vertical => Rect::new(cross_lo, cursor, cross_hi, cursor + seg),
                 };
+                child_rects.push(r);
+                cursor += seg + if i + 1 < n { gap } else { 0.0 };
+            }
+
+            for (i, child) in children.iter().enumerate() {
                 path.push(i);
-                layout_node(&child.node, child_rect, theme, tab_width, path, out);
+                layout_node(&child.node, child_rects[i], theme, tab_width, path, out);
                 path.pop();
-                cursor += seg;
 
                 if i + 1 < n {
+                    let (a, b) = (child_rects[i], child_rects[i + 1]);
                     let sp = match axis {
-                        Axis::Horizontal => Rect::new(cursor, cross_lo, cursor + gap, cross_hi),
-                        Axis::Vertical => Rect::new(cross_lo, cursor, cross_hi, cursor + gap),
+                        Axis::Horizontal => Rect::new(a.x1, cross_lo, b.x0, cross_hi),
+                        Axis::Vertical => Rect::new(cross_lo, a.y1, cross_hi, b.y0),
                     };
                     out.splitters.push(SplitterHandle {
                         path: NodePath(path.clone()),
                         axis: *axis,
                         index: i,
                         rect: sp,
+                        before: a,
+                        after: b,
                     });
-                    cursor += gap;
                 }
             }
         }
@@ -284,6 +316,21 @@ mod tests {
         assert_eq!(bottom.tabs.len(), 2);
         assert_eq!(bottom.tabs[0].rect.x0, 0.0);
         assert_eq!(bottom.tabs[1].rect.x0, 80.0);
+    }
+
+    #[test]
+    fn splitter_frac_at_maps_a_pointer_to_a_boundary_fraction() {
+        let root = Rect::new(0.0, 0.0, 300.0, 400.0);
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let sp = &lay.splitters[0];
+        assert_eq!(sp.axis, Axis::Vertical);
+        // Combined span is the whole 0..400 height. A pointer a quarter of
+        // the way down implies a 25% boundary.
+        let f = sp.frac_at(Point::new(150.0, 100.0));
+        assert!((f - 0.25).abs() < 1e-4, "got {f}");
+        // Clamped past the ends.
+        assert_eq!(sp.frac_at(Point::new(150.0, -50.0)), 0.0);
+        assert_eq!(sp.frac_at(Point::new(150.0, 999.0)), 1.0);
     }
 
     #[test]

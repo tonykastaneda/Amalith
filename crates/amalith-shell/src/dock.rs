@@ -189,6 +189,44 @@ impl DockModel {
         }
     }
 
+    /// Make tab `index` the active one in the tab group at `path`.
+    /// Returns `true` if `path` pointed at a tab group.
+    pub fn activate_tab(&mut self, path: &NodePath, index: usize) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        if let Some(Node::Tabs { panels, active }) = node_at_mut(root, path) {
+            if !panels.is_empty() {
+                *active = index.min(panels.len() - 1);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Move the boundary after child `gap` of the split at `path` so that
+    /// child `gap` takes `frac` (clamped to 5%–95%) of the combined span of
+    /// children `gap` and `gap + 1`. Their weight sum is preserved, so every
+    /// other child keeps its size. Returns `true` on success.
+    pub fn set_boundary(&mut self, path: &NodePath, gap: usize, frac: f32) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let Some(Node::Split { children, .. }) = node_at_mut(root, path) else {
+            return false;
+        };
+        if gap + 1 >= children.len() {
+            return false;
+        }
+        let frac = frac.clamp(0.05, 0.95);
+        let pair = children[gap].weight.max(0.0) + children[gap + 1].weight.max(0.0);
+        let pair = if pair <= 0.0 { 2.0 } else { pair };
+        children[gap].weight = pair * frac;
+        children[gap + 1].weight = pair * (1.0 - frac);
+        true
+    }
+
     /// Round-trip for workspace persistence lives in the app for now; the
     /// tree derives `serde` when that crate is added.
     #[doc(hidden)]
@@ -455,6 +493,72 @@ mod tests {
         assert!(m.remove(B));
         assert_eq!(m.root, None);
         assert!(!m.remove(B), "second remove is a no-op");
+    }
+
+    #[test]
+    fn activate_tab_clamps_and_reports_hits() {
+        let mut m = DockModel::new(Node::Split {
+            axis: Axis::Horizontal,
+            children: vec![
+                Child {
+                    node: tabs(&[A]),
+                    weight: 1.0,
+                },
+                Child {
+                    node: tabs(&[B, C]),
+                    weight: 1.0,
+                },
+            ],
+        });
+        assert!(m.activate_tab(&NodePath(vec![1]), 1));
+        // Out-of-range index clamps to the last tab.
+        assert!(m.activate_tab(&NodePath(vec![1]), 9));
+        match &m.root {
+            Some(Node::Split { children, .. }) => match &children[1].node {
+                Node::Tabs { active, .. } => assert_eq!(*active, 1),
+                _ => panic!(),
+            },
+            _ => panic!(),
+        }
+        // Path lands on a split, not a tab group.
+        assert!(!m.activate_tab(&NodePath(vec![]), 0));
+    }
+
+    #[test]
+    fn set_boundary_reweights_one_pair_and_leaves_the_rest() {
+        let mut m = DockModel::new(Node::Split {
+            axis: Axis::Horizontal,
+            children: vec![
+                Child {
+                    node: tabs(&[A]),
+                    weight: 1.0,
+                },
+                Child {
+                    node: tabs(&[B]),
+                    weight: 1.0,
+                },
+                Child {
+                    node: tabs(&[C]),
+                    weight: 1.0,
+                },
+            ],
+        });
+        // Drag the first boundary to the 25% mark: pair sum 2.0 -> 0.5 / 1.5.
+        assert!(m.set_boundary(&NodePath(vec![]), 0, 0.25));
+        match m.root.unwrap() {
+            Node::Split { children, .. } => {
+                assert!((children[0].weight - 0.5).abs() < 1e-6);
+                assert!((children[1].weight - 1.5).abs() < 1e-6);
+                assert!((children[2].weight - 1.0).abs() < 1e-6);
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn set_boundary_rejects_a_nonexistent_gap() {
+        let mut m = DockModel::new(tabs(&[A]));
+        assert!(!m.set_boundary(&NodePath(vec![]), 0, 0.5));
     }
 
     #[test]
