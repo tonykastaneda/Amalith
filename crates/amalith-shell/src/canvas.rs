@@ -3,7 +3,7 @@
 
 use amalith_core::{Document, ObjectId, ObjectKind};
 use vello::kurbo::{Affine, Point, Rect, Stroke, Vec2};
-use vello::peniko::{BlendMode, Color, Compose, Fill, Mix};
+use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 use crate::convert;
@@ -126,19 +126,12 @@ pub fn paint(
         }
     }
 
-    // Duplicate drag: a translucent ghost of the selection at the offset.
+    // Duplicate drag: draw the copy-to-be at the offset, full opacity —
+    // the originals stay put underneath and the blue outline marks it.
     if let Some(d) = drag.filter(|d| d.dup) {
-        scene.push_layer(
-            Fill::NonZero,
-            BlendMode::new(Mix::Normal, Compose::SrcOver),
-            0.55,
-            Affine::IDENTITY,
-            &viewport,
-        );
         for &id in d.ids {
             paint_object(scene, doc, id, vt * Affine::translate(d.delta), None);
         }
-        scene.pop_layer();
     }
 
     // Selection outline — follows the drag (where the move ends up, or
