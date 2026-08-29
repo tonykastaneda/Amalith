@@ -1203,6 +1203,26 @@ impl ApplicationHandler for App {
                             }
                             self.request_main_redraw();
                         }
+                        // Paste in Front / in Back: same position as the
+                        // source, stacked just above / below it.
+                        KeyCode::KeyF if self.editor.has_clipboard() => {
+                            if let Ok(ids) = self
+                                .editor
+                                .paste(amalith_core::Vec2::ZERO, PasteStack::InFront)
+                            {
+                                self.selection = ids;
+                            }
+                            self.request_main_redraw();
+                        }
+                        KeyCode::KeyB if self.editor.has_clipboard() => {
+                            if let Ok(ids) = self
+                                .editor
+                                .paste(amalith_core::Vec2::ZERO, PasteStack::Behind)
+                            {
+                                self.selection = ids;
+                            }
+                            self.request_main_redraw();
+                        }
                         KeyCode::KeyD if !self.selection.is_empty() => {
                             if let Ok(ids) = self.editor.duplicate_objects(
                                 &self.selection,
