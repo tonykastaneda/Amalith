@@ -169,6 +169,12 @@ struct App {
     text: TextContext,
     dock: DockModel,
     editor: Editor,
+    /// Path this document was last opened from / saved to, for ⌘S.
+    file_path: Option<std::path::PathBuf>,
+    /// Embedded assets that travel with the `.amalith` container.
+    asset_store: amalith_io::AssetStore,
+    /// Last file error, shown in the app bar until the next action.
+    io_error: Option<String>,
     selection: Vec<ObjectId>,
     /// Selected path anchors, for the Direct Selection tool.
     anchor_sel: Vec<(ObjectId, usize)>,
@@ -226,6 +232,9 @@ impl App {
                 d
             },
             editor: Editor::new(sample::document()),
+            file_path: None,
+            asset_store: amalith_io::AssetStore::new(),
+            io_error: None,
             selection: Vec::new(),
             anchor_sel: Vec::new(),
             active_tool: Tool::Select,
@@ -456,6 +465,85 @@ impl App {
         }) {
             self.selection = vec![id];
             self.last_pen = Some((id, anchors, closed));
+        }
+        self.request_main_redraw();
+    }
+
+    /// ⌘O — pick a `.amalith` file and load it, replacing the document.
+    fn open_document(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Amalith document", &["amalith"])
+            .pick_file()
+        else {
+            return;
+        };
+        match amalith_io::load(&path) {
+            Ok((document, assets)) => {
+                self.editor = Editor::new(document);
+                self.asset_store = assets;
+                self.file_path = Some(path);
+                self.selection.clear();
+                self.anchor_sel.clear();
+                self.pen.clear();
+                self.pen_redo.clear();
+                self.last_pen = None;
+                self.picker = None;
+                self.io_error = None;
+                self.view = CanvasView::default();
+            }
+            Err(err) => self.io_error = Some(format!("Open failed: {err}")),
+        }
+        self.request_main_redraw();
+    }
+
+    /// ⌘S / ⌘⇧S — write the document to its `.amalith` file, prompting for
+    /// a path when there isn't one yet or `save_as` forces it.
+    fn save_document(&mut self, save_as: bool) {
+        let path = if save_as { None } else { self.file_path.clone() }.or_else(|| {
+            rfd::FileDialog::new()
+                .add_filter("Amalith document", &["amalith"])
+                .set_file_name("Untitled.amalith")
+                .save_file()
+        });
+        let Some(path) = path else {
+            return;
+        };
+        match amalith_io::save(self.editor.document(), &self.asset_store, &path) {
+            Ok(()) => {
+                self.file_path = Some(path);
+                self.io_error = None;
+            }
+            Err(err) => self.io_error = Some(format!("Save failed: {err}")),
+        }
+        self.request_main_redraw();
+    }
+
+    /// ⌘⇧I — pick an `.svg` file and paste its shapes into the document.
+    fn import_svg(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SVG", &["svg"])
+            .pick_file()
+        else {
+            return;
+        };
+        let svg = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(err) => {
+                self.io_error = Some(format!("Import failed: {err}"));
+                self.request_main_redraw();
+                return;
+            }
+        };
+        match self.editor.copy_from_svg(&svg) {
+            Ok(()) => match self.editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
+                Ok(ids) => {
+                    self.selection = ids;
+                    self.anchor_sel.clear();
+                    self.io_error = None;
+                }
+                Err(err) => self.io_error = Some(format!("Import failed: {err}")),
+            },
+            Err(err) => self.io_error = Some(format!("Import failed: {err}")),
         }
         self.request_main_redraw();
     }
@@ -1476,6 +1564,13 @@ impl App {
 
         self.content.reset();
         let representative = self.representative();
+        // App-bar status: a file error wins, else the current file name.
+        let status_text: Option<String> = self.io_error.clone().or_else(|| {
+            self.file_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+        });
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -1497,6 +1592,7 @@ impl App {
                 wl,
                 hl,
                 self.redock_preview.as_ref(),
+                status_text.as_deref(),
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -1789,6 +1885,10 @@ impl ApplicationHandler for App {
                             self.request_main_redraw();
                         }
                         KeyCode::KeyA => self.select_all(),
+                        // File I/O: open, save, save-as, import SVG.
+                        KeyCode::KeyO => self.open_document(),
+                        KeyCode::KeyS => self.save_document(self.shift_down),
+                        KeyCode::KeyI if self.shift_down => self.import_svg(),
                         _ => {}
                     },
                     // Bare-key: arrow nudge, Escape, tool shortcuts.
@@ -2003,6 +2103,7 @@ fn paint_main(
     width: f64,
     height: f64,
     redock_preview: Option<&(RailSide, DropTarget)>,
+    status: Option<&str>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -2102,6 +2203,17 @@ fn paint_main(
         (width - tw) * 0.5,
         APP_BAR_H * 0.5 + 4.5,
     );
+    if let Some(status) = status {
+        let sw = text.measure(status, 11.5);
+        text.draw(
+            scene,
+            status,
+            11.5,
+            Color::from_rgb8(0x9a, 0x9a, 0x9a),
+            width - sw - 12.0,
+            APP_BAR_H * 0.5 + 4.0,
+        );
+    }
 }
 
 /// A torn-off window: dark body, a header strip that always names the
