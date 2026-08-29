@@ -1,0 +1,28 @@
+[package]
+name = "amalith-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amalith's custom UI shell: winit + wgpu + vello. Windows, input, the dock system, and panels — no widget toolkit."
+
+[lib]
+name = "amalith_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "amalith-shell"
+path = "src/main.rs"
+
+[dependencies]
+vello = "0.10"
+winit = "0.30"
+pollster = "0.4"
+kurbo.workspace = true
+
+[dependencies.parley]
+version = "0.11"
+optional = true
+
+[features]
+default = []
+text = ["dep:parley"]

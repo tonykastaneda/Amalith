@@ -5,6 +5,7 @@ members = [
     "crates/amalith-core",
     "crates/amalith-commands",
     "crates/amalith-io",
+    "crates/amalith-shell",
 ]
 
 [workspace.package]
