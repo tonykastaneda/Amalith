@@ -183,7 +183,12 @@ impl App {
             scene: Scene::new(),
             content: Scene::new(),
             text: TextContext::new(),
-            dock: DockModel::new(demo_dock()),
+            dock: {
+                let mut d = DockModel::new(demo_right_dock());
+                d.left = Rail::with(demo_left_dock());
+                d.left.width = 190.0;
+                d
+            },
             editor: Editor::new(sample::document()),
             selection: Vec::new(),
             active_tool: Tool::Select,
@@ -1150,6 +1155,19 @@ impl ApplicationHandler for App {
                         });
                         self.request_main_redraw();
                     }
+                    // Tool shortcuts — bare key, no modifier.
+                    PhysicalKey::Code(code) if pressed && !self.cmd_down && !self.alt_down => {
+                        let tool = match code {
+                            KeyCode::KeyV => Some(Tool::Select),
+                            KeyCode::KeyM => Some(Tool::Rectangle),
+                            KeyCode::KeyL => Some(Tool::Ellipse),
+                            _ => None,
+                        };
+                        if let Some(t) = tool {
+                            self.active_tool = t;
+                            self.request_main_redraw();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1178,19 +1196,11 @@ impl ApplicationHandler for App {
     }
 }
 
-/// A stand-in dock tree until real workspace state exists: Layers on top,
-/// an Artboards/Swatches tab group below it.
-fn demo_dock() -> Node {
+/// Right rail: Layers over an Artboards/Swatches tab group.
+fn demo_right_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
         children: vec![
-            Child {
-                node: Node::Tabs {
-                    panels: vec![PanelId("tools")],
-                    active: 0,
-                },
-                weight: 0.7,
-            },
             Child {
                 node: Node::Tabs {
                     panels: vec![PanelId("layers")],
@@ -1206,6 +1216,14 @@ fn demo_dock() -> Node {
                 weight: 1.0,
             },
         ],
+    }
+}
+
+/// Left rail: the Tools panel, like amalith-app.
+fn demo_left_dock() -> Node {
+    Node::Tabs {
+        panels: vec![PanelId("tools")],
+        active: 0,
     }
 }
 
