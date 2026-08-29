@@ -27,7 +27,6 @@ use crate::tool::Tool;
 
 const ID: Affine = Affine::IDENTITY;
 const ROW_H: f64 = 26.0;
-const TOOL_BTN: f64 = 40.0;
 const PAD: f64 = 10.0;
 const SWATCH: f64 = 22.0;
 /// Height of a panel's bottom button strip.
