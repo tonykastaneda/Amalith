@@ -1513,37 +1513,12 @@ impl App {
                     return;
                 }
 
-                // The document-tab strip: switch tabs / close a tab.
+                // The options / context bar (full width): chips + steppers.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
-                    && self.pointer.y < APP_BAR_H + TAB_BAR_H
+                    && self.pointer.y < APP_BAR_H + OPT_BAR_H
                 {
-                    let (left_x, right_x) = self.canvas_x_span();
-                    let strip = Rect::new(left_x, APP_BAR_H, right_x, APP_BAR_H + TAB_BAR_H);
-                    let labels: Vec<String> =
-                        (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
-                    for (i, (whole, close)) in
-                        layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
-                    {
-                        if close.contains(self.pointer) {
-                            self.close_tab(i);
-                            return;
-                        }
-                        if whole.contains(self.pointer) {
-                            self.switch_to(i);
-                            return;
-                        }
-                    }
-                    return;
-                }
-
-                // The tool options strip: fill/stroke chips + steppers.
-                if self.picker.is_none()
-                    && self.pointer.y >= APP_BAR_H + TAB_BAR_H
-                    && self.pointer.y < CHROME_TOP
-                {
-                    let (left_x, right_x) = self.canvas_x_span();
-                    let ob = opt_bar_layout(opt_bar_rect(left_x, right_x));
+                    let ob = opt_bar_layout(opt_bar_rect(w));
                     let p = self.pointer;
                     if ob.fill.contains(p) {
                         self.apply_panel_action(
@@ -1563,6 +1538,30 @@ impl App {
                         self.step_opacity(1);
                     } else if ob.opacity_down.contains(p) {
                         self.step_opacity(-1);
+                    }
+                    return;
+                }
+
+                // The document-tab strip: switch tabs / close a tab.
+                if self.picker.is_none()
+                    && self.pointer.y >= APP_BAR_H + OPT_BAR_H
+                    && self.pointer.y < APP_BAR_H + OPT_BAR_H + TAB_BAR_H
+                {
+                    let (left_x, right_x) = self.canvas_x_span();
+                    let strip = tab_bar_rect(left_x, right_x);
+                    let labels: Vec<String> =
+                        (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+                    for (i, (whole, close)) in
+                        layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
+                    {
+                        if close.contains(self.pointer) {
+                            self.close_tab(i);
+                            return;
+                        }
+                        if whole.contains(self.pointer) {
+                            self.switch_to(i);
+                            return;
+                        }
                     }
                     return;
                 }
@@ -3012,12 +3011,12 @@ impl ApplicationHandler for App {
                 }
                 // Scrolling over a Weight / Opacity field nudges it.
                 if self.picker.is_none()
-                    && self.pointer.y >= APP_BAR_H + TAB_BAR_H
-                    && self.pointer.y < CHROME_TOP
+                    && self.pointer.y >= APP_BAR_H
+                    && self.pointer.y < APP_BAR_H + OPT_BAR_H
                     && dy.abs() > 0.5
                 {
-                    let (lx, rx) = self.canvas_x_span();
-                    let ob = opt_bar_layout(opt_bar_rect(lx, rx));
+                    let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+                    let ob = opt_bar_layout(opt_bar_rect(w));
                     let dir = if dy > 0.0 { 1 } else { -1 };
                     if ob.weight_field.contains(self.pointer) {
                         self.step_weight(dir);
@@ -3190,7 +3189,8 @@ fn tab_label(panel: PanelId) -> String {
 
 fn rail_rect_for(side: RailSide, rail_w: f64, width: f64, height: f64) -> Rect {
     let rw = rail_w.clamp(RAIL_MIN_W, (width * 0.7).max(RAIL_MIN_W));
-    let top = APP_BAR_H;
+    // Rails sit below the full-width app bar + options bar.
+    let top = APP_BAR_H + OPT_BAR_H;
     match side {
         RailSide::Left => Rect::new(0.0, top, rw, height),
         RailSide::Right => Rect::new(width - rw, top, width, height),
@@ -3214,10 +3214,21 @@ fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: R
     }
 }
 
-/// The options-bar strip rect for a given canvas x-span (below the tab
-/// strip, above the canvas).
-fn opt_bar_rect(left_x: f64, right_x: f64) -> Rect {
-    Rect::new(left_x, APP_BAR_H + TAB_BAR_H, right_x.max(left_x), CHROME_TOP)
+/// The options / context bar: full window width, directly under the app
+/// bar and above both the tools rail and the tab strip.
+fn opt_bar_rect(width: f64) -> Rect {
+    Rect::new(0.0, APP_BAR_H, width, APP_BAR_H + OPT_BAR_H)
+}
+
+/// The document-tab strip: the canvas x-span, between the options bar and
+/// the canvas.
+fn tab_bar_rect(left_x: f64, right_x: f64) -> Rect {
+    Rect::new(
+        left_x,
+        APP_BAR_H + OPT_BAR_H,
+        right_x.max(left_x),
+        APP_BAR_H + OPT_BAR_H + TAB_BAR_H,
+    )
 }
 
 /// Lay `labels` out as document tabs across `strip`, left to right.
@@ -3549,20 +3560,8 @@ fn paint_main(
         scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &m);
     }
 
-    paint_options_bar(
-        scene,
-        text,
-        opt_bar_rect(left_x, right_x),
-        theme,
-        representative,
-        active_slot,
-        selection.len(),
-        cur_weight,
-        cur_opacity,
-    );
-
-    // Document-tab strip.
-    let tab_strip = Rect::new(left_x, APP_BAR_H, right_x, APP_BAR_H + TAB_BAR_H);
+    // Document-tab strip (canvas x-span, between options bar and canvas).
+    let tab_strip = tab_bar_rect(left_x, right_x);
     scene.fill(Fill::NonZero, ID, theme.app_bar, None, &tab_strip);
     scene.fill(
         Fill::NonZero,
@@ -3653,6 +3652,19 @@ fn paint_main(
             chrome::paint_drop(scene, target, &laid, rect, theme);
         }
     }
+
+    // Options / context bar: full width, above the rails.
+    paint_options_bar(
+        scene,
+        text,
+        opt_bar_rect(width),
+        theme,
+        representative,
+        active_slot,
+        selection.len(),
+        cur_weight,
+        cur_opacity,
+    );
 
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
     // traffic lights floating over its left end.
