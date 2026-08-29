@@ -1589,28 +1589,29 @@ impl App {
                     return;
                 }
 
-                // The document-tab strip: switch tabs / close a tab.
-                if self.picker.is_none()
-                    && self.pointer.y >= APP_BAR_H + OPT_BAR_H
-                    && self.pointer.y < APP_BAR_H + OPT_BAR_H + TAB_BAR_H
+                // The document-tab strip (only across the canvas x-span —
+                // the rails' own tab strips share this y band and must
+                // still be reachable for panel tear-off).
                 {
                     let (left_x, right_x) = self.canvas_x_span();
                     let strip = tab_bar_rect(left_x, right_x);
-                    let labels: Vec<String> =
-                        (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
-                    for (i, (whole, close)) in
-                        layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
-                    {
-                        if close.contains(self.pointer) {
-                            self.close_tab(i);
-                            return;
+                    if self.picker.is_none() && strip.contains(self.pointer) {
+                        let labels: Vec<String> =
+                            (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+                        for (i, (whole, close)) in
+                            layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
+                        {
+                            if close.contains(self.pointer) {
+                                self.close_tab(i);
+                                return;
+                            }
+                            if whole.contains(self.pointer) {
+                                self.switch_to(i);
+                                return;
+                            }
                         }
-                        if whole.contains(self.pointer) {
-                            self.switch_to(i);
-                            return;
-                        }
+                        return;
                     }
-                    return;
                 }
 
                 // The colour picker is modal while open.
