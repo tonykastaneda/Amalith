@@ -3000,8 +3000,11 @@ impl App {
             None
         };
         // Direct Selection shows anchors only for objects that have been
-        // selected (Illustrator's white arrow), not every path.
-        let direct = self.effective_tool() == Tool::DirectSelect;
+        // selected (Illustrator's white arrow), not every path. A live
+        // anchor selection keeps this view (and suppresses the Selection
+        // tool's bounding box) even after a ⌘-marquee releases ⌘.
+        let direct =
+            self.effective_tool() == Tool::DirectSelect || !self.anchor_sel.is_empty();
         let anchor_paths: Vec<ObjectId> = if direct {
             self.node_paths()
         } else {
@@ -3330,9 +3333,13 @@ impl ApplicationHandler for App {
                     // Toggling the temporary white-arrow gesture shows or
                     // hides the node overlay; a live drag reacts to
                     // Shift-lock / Alt-copy changing under it.
-                    if (self.effective_tool() == Tool::DirectSelect) != was_direct
-                        || !matches!(self.drag, Drag::None)
-                    {
+                    let now_direct = self.effective_tool() == Tool::DirectSelect;
+                    if !now_direct && was_direct && matches!(self.drag, Drag::None) {
+                        // The ⌘ gesture ended: drop the node selection so
+                        // the plain arrow's bounding box comes back.
+                        self.anchor_sel.clear();
+                    }
+                    if now_direct != was_direct || !matches!(self.drag, Drag::None) {
                         self.request_main_redraw();
                     }
                 }

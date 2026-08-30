@@ -373,21 +373,29 @@ pub fn paint(
             }
         }
 
-        // Every Direct Selection node renders solid blue (selected or
-        // not); the white-fill/blue-outline square is the Selection
-        // tool's transform handle, a different thing.
+        // Anchor markers. When some of a path's anchors are individually
+        // selected (a click or a marquee), the rest go hollow —
+        // Illustrator's white arrow. With none selected the path is just
+        // "shown", and every anchor is solid blue.
+        let white = Color::from_rgb8(0xff, 0xff, 0xff);
         for &id in av.paths {
+            let any_sel = av.selected.iter().any(|(o, _)| *o == id);
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));
                 let doc_pos = if sel { pos + dv } else { pos };
                 let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    theme.select_blue,
-                    None,
-                    &sq,
-                );
+                if sel || !any_sel {
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.select_blue, None, &sq);
+                } else {
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
+                    scene.stroke(
+                        &Stroke::new(1.25),
+                        Affine::IDENTITY,
+                        theme.select_blue,
+                        None,
+                        &sq,
+                    );
+                }
             }
         }
     }
