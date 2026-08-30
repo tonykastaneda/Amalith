@@ -582,12 +582,13 @@ fn paint_object(
             }
         }
         ObjectKind::Group(g) => {
-            let (child_vt, child_drag) = match replacement {
-                Some(a) => (vt * a, None),
-                None => (vt * off, drag),
-            };
+            // `m` already folds in this group's own transform (committed
+            // or previewed) plus any drag offset — children render
+            // relative to it. Dropping it here is what made a
+            // scaled/rotated/moved group snap back on release.
+            let child_drag = if replacement.is_some() { None } else { drag };
             for &child in &g.children {
-                paint_object(scene, doc, child, child_vt, child_drag);
+                paint_object(scene, doc, child, m, child_drag);
             }
         }
         other => {
