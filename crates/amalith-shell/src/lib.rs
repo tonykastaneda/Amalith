@@ -18,18 +18,22 @@
 //! The binary (`main.rs`) owns the winit event loop and per-window render
 //! state, and drives these modules.
 
+pub mod about;
 pub mod anchors;
+pub mod appicon;
 pub mod canvas;
 pub mod chrome;
 pub mod convert;
 pub mod dock;
 pub mod handles;
+pub mod home;
 pub mod icons;
 pub mod layout;
 pub mod newdoc;
 pub mod panel;
 pub mod panels;
 pub mod picker;
+pub mod recent;
 pub mod sample;
 pub mod select;
 pub mod stroke_panel;

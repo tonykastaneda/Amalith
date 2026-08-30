@@ -69,6 +69,9 @@ pub struct AnchorView<'a> {
     pub selected: &'a [(ObjectId, usize)],
     /// Paths whose anchors to display.
     pub paths: &'a [ObjectId],
+    /// A read-only "hold Space to see the nodes" peek from the Selection
+    /// tool — keep the bounding box drawn underneath.
+    pub peek: bool,
 }
 
 /// In-progress Pen path preview (all points in document space).
@@ -290,7 +293,7 @@ pub fn paint(
     // Selection box + transform handles. Direct Selection replaces these
     // with the path contour + node markers below, matching Illustrator's
     // white arrow (no bounding box, no scale/rotate handles).
-    if !selection.is_empty() && anchor_view.is_none() {
+    if !selection.is_empty() && anchor_view.map_or(true, |av| av.peek) {
         // The oriented box, in screen px, transformed by any live
         // scale/rotate preview.
         let quad = select::selection_quad(doc, selection).map(|q| {

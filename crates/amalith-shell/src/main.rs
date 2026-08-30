@@ -32,7 +32,8 @@ use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{
-    chrome, convert, icons, layout, panels, picker, sample, select, stroke_panel, Theme,
+    about, appicon, chrome, convert, home, icons, layout, panels, picker, recent, sample, select,
+    stroke_panel, Theme,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
@@ -73,7 +74,7 @@ const TEAROFF_GRAB: Vec2 = Vec2::new(58.0, 13.0);
 
 const ID: Affine = Affine::IDENTITY;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
     Main,
     Floating(u64),
@@ -192,6 +193,7 @@ enum Drag {
 /// directly; this is the same set routed through one dispatcher.
 #[derive(Clone, Copy, Debug)]
 enum MenuAction {
+    About,
     New,
     Open,
     Save,
@@ -327,6 +329,9 @@ struct App {
     rename: Option<Rename>,
     /// The New Document modal, when open.
     newdoc: Option<newdoc::NewDocForm>,
+    /// The Home / Welcome screen. `Some` on launch and after the last tab is
+    /// closed; while it's up the canvas takes no input.
+    home: Option<home::Home>,
     active_tool: Tool,
     /// The tool that was active when the Artboard tool was entered, so
     /// Escape can drop straight back to it.
@@ -391,6 +396,9 @@ struct App {
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
+    /// The "About Amalith" panel: a modal card centred over the main window,
+    /// with live text selection. `Some` while it's showing.
+    about: Option<about::About>,
     /// What the pointer looks like right now (see [`CanvasCursor`]).
     cursor_mode: CanvasCursor,
     /// Which of our windows currently hold OS focus. Non-empty ⇒ Amalith
@@ -428,8 +436,9 @@ impl App {
             selected_artboard: None,
             selected_layer: None,
             rename: None,
-            // Boot straight into the New Document screen.
-            newdoc: Some(newdoc::NewDocForm::boot()),
+            // Boot into the Home screen; New Document opens from there.
+            newdoc: None,
+            home: home::Home::new(recent::load()),
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
@@ -461,6 +470,7 @@ impl App {
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
+            about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
             #[cfg(target_os = "macos")]
@@ -555,13 +565,15 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Close tab `i`. Closing the last one leaves a fresh Untitled.
+    /// Close tab `i`. Closing the last one drops back to the Home screen.
     fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
         }
         if self.tabs.len() == 1 {
             self.load_active_doc(Doc::placeholder());
+            self.selection.clear();
+            self.home = home::Home::new(recent::load());
             self.request_main_redraw();
             return;
         }
@@ -932,6 +944,38 @@ impl App {
         out
     }
 
+    /// Every descendant `Path` of the current object selection — used by the
+    /// hold-Space "show all nodes" peek, which unlike Direct Selection also
+    /// reaches into selected groups.
+    fn peek_paths(&self) -> Vec<ObjectId> {
+        fn walk(doc: &amalith_core::Document, id: ObjectId, out: &mut Vec<ObjectId>) {
+            match doc.object(id).map(|o| &o.kind) {
+                Some(amalith_core::ObjectKind::Path(_)) => out.push(id),
+                Some(amalith_core::ObjectKind::Group(g)) => {
+                    for &c in &g.children {
+                        walk(doc, c, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let doc = self.editor.document();
+        let mut out = Vec::new();
+        for &id in &self.selection {
+            walk(doc, id, &mut out);
+        }
+        out
+    }
+
+    /// Whether the hold-Space anchor peek is active: the Selection tool, a
+    /// non-empty object selection, Space held (but not the ⌘ zoom combo).
+    fn space_peek(&self) -> bool {
+        self.space_down
+            && !self.cmd_down
+            && self.active_tool == Tool::Select
+            && !self.selection.is_empty()
+    }
+
     /// Arrow-key nudge (Shift = ×10). Moves the selected anchors when the
     /// Direct Selection tool is active, otherwise the object selection.
     fn nudge(&mut self, dx: f64, dy: f64) {
@@ -986,7 +1030,11 @@ impl App {
 
     /// Open the New Document modal (⌘N / File ▸ New).
     fn open_new_doc(&mut self) {
-        self.newdoc = Some(newdoc::NewDocForm::default());
+        let mut form = newdoc::NewDocForm::default();
+        // From Home there's no open document — Create should fill the parked
+        // placeholder tab, not add a second one.
+        form.boot = self.home.is_some();
+        self.newdoc = Some(form);
         self.request_main_redraw();
     }
 
@@ -1048,12 +1096,9 @@ impl App {
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => {
-                // Escape does nothing on the boot screen (there's no
-                // document to fall back to).
-                if !self.newdoc.as_ref().is_some_and(|f| f.boot) {
-                    self.newdoc = None;
-                    self.request_main_redraw();
-                }
+                // Cancel — back to Home (or the document that was open).
+                self.newdoc = None;
+                self.request_main_redraw();
                 return;
             }
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
@@ -1132,8 +1177,10 @@ impl App {
 
         let boot = self.newdoc.as_ref().is_some_and(|f| f.boot);
         self.newdoc = None;
+        // Leaving Home for the editor.
+        self.home = None;
         if boot {
-            // Boot screen: fill the sole empty tab rather than open one.
+            // No open document yet: fill the parked placeholder tab.
             self.load_active_doc(Doc::new(editor));
             self.pending_fit = true;
             self.request_main_redraw();
@@ -1146,6 +1193,12 @@ impl App {
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
         match action {
+            MenuAction::About => {
+                if self.about.is_none() {
+                    self.about = about::About::load();
+                }
+                self.request_main_redraw();
+            }
             MenuAction::New => self.open_new_doc(),
             MenuAction::Open => self.open_document(),
             MenuAction::Save => self.save_document(false),
@@ -1377,12 +1430,26 @@ impl App {
         else {
             return;
         };
-        match amalith_io::load(&path) {
+        self.open_path(&path);
+    }
+
+    /// Load `path` into a tab (filling the Home placeholder if we're on Home,
+    /// otherwise a new tab) and record it in the recent list.
+    fn open_path(&mut self, path: &std::path::Path) {
+        match amalith_io::load(path) {
             Ok((document, assets)) => {
                 let mut doc = Doc::new(Editor::new(document));
                 doc.asset_store = assets;
-                doc.file_path = Some(path);
-                self.add_doc(doc);
+                doc.file_path = Some(path.to_path_buf());
+                let from_home = self.home.take().is_some();
+                if from_home {
+                    self.load_active_doc(doc);
+                    self.pending_fit = true;
+                    self.request_main_redraw();
+                } else {
+                    self.add_doc(doc);
+                }
+                recent::push(path);
             }
             Err(err) => {
                 self.io_error = Some(format!("Open failed: {err}"));
@@ -1405,6 +1472,7 @@ impl App {
         };
         match amalith_io::save(self.editor.document(), &self.asset_store, &path) {
             Ok(()) => {
+                recent::push(&path);
                 self.file_path = Some(path);
                 self.io_error = None;
             }
@@ -1672,6 +1740,8 @@ impl App {
         let over = self.pointer_win == self.main_id
             && self.picker.is_none()
             && self.newdoc.is_none()
+            && self.about.is_none()
+            && self.home.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -1821,6 +1891,13 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Dismiss the "About Amalith" panel.
+    fn close_about(&mut self) {
+        if self.about.take().is_some() {
+            self.request_main_redraw();
+        }
+    }
+
     fn on_press(&mut self, id: WindowId, double: bool) {
         let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
@@ -1838,11 +1915,61 @@ impl App {
                     return;
                 };
 
+                // The About panel is modal — it captures every press.
+                if self.about.is_some() {
+                    let hit = self
+                        .about
+                        .as_mut()
+                        .map(|a| a.on_press(&mut self.text, self.pointer.to_vec2()));
+                    match hit {
+                        Some(about::Hit::Backdrop) => self.close_about(),
+                        Some(about::Hit::Github) => {
+                            if let Some(a) = &self.about {
+                                about::open_url(a.github_url());
+                            }
+                        }
+                        Some(about::Hit::Toggle) => {
+                            if let Some(a) = &mut self.about {
+                                a.toggle();
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // The New Document modal is, well, modal.
                 if let Some(form) = &self.newdoc {
                     let lay = newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll);
                     let hit = newdoc::hit(form, &lay, self.pointer);
                     self.apply_newdoc_hit(hit);
+                    return;
+                }
+
+                // The Home screen captures every press.
+                if self.home.is_some() {
+                    let hit = self
+                        .home
+                        .as_ref()
+                        .map(|hm| hm.on_press(self.pointer.to_vec2()));
+                    match hit {
+                        Some(home::Hit::NewDocument) => self.open_new_doc(),
+                        Some(home::Hit::Youtube) => about::open_url(home::YOUTUBE_URL),
+                        Some(home::Hit::Github) => about::open_url(home::GITHUB_URL),
+                        Some(home::Hit::Recent(i)) => {
+                            let path = self
+                                .home
+                                .as_ref()
+                                .and_then(|hm| hm.recent_path(i))
+                                .map(|p| p.to_path_buf());
+                            if let Some(path) = path {
+                                self.open_path(&path);
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.request_main_redraw();
                     return;
                 }
 
@@ -2323,6 +2450,14 @@ impl App {
     }
 
     fn on_cursor_move(&mut self) {
+        // A live text-selection drag in the About panel.
+        if self.about.as_ref().is_some_and(about::About::is_dragging) {
+            if let Some(a) = &mut self.about {
+                a.on_drag(&mut self.text, self.pointer.to_vec2());
+            }
+            self.request_main_redraw();
+            return;
+        }
         self.update_canvas_cursor();
         // Redraw so a drawn cursor glyph tracks the pointer.
         if matches!(self.cursor_mode, CanvasCursor::Glyph | CanvasCursor::Zoom) {
@@ -2566,6 +2701,10 @@ impl App {
     }
 
     fn on_release(&mut self) {
+        // End any About-window text-selection drag.
+        if let Some(a) = &mut self.about {
+            a.on_release();
+        }
         // A quick tap on the Shape slot (released before the hold opened
         // the flyout) just re-activates the last shape tool.
         if self.shape_press.take().is_some() && self.shape_flyout.is_none() {
@@ -3005,14 +3144,20 @@ impl App {
         // tool's bounding box) even after a ⌘-marquee releases ⌘.
         let direct =
             self.effective_tool() == Tool::DirectSelect || !self.anchor_sel.is_empty();
-        let anchor_paths: Vec<ObjectId> = if direct {
+        // Hold Space with the Selection tool to peek at every node (read-only;
+        // the bounding box stays). Direct Selection proper takes precedence.
+        let peek = !direct && self.space_peek();
+        let anchor_paths: Vec<ObjectId> = if peek {
+            self.peek_paths()
+        } else if direct {
             self.node_paths()
         } else {
             Vec::new()
         };
-        let anchor_view = direct.then_some(AnchorView {
+        let anchor_view = (direct || peek).then_some(AnchorView {
             selected: &self.anchor_sel,
             paths: &anchor_paths,
+            peek,
         });
 
         self.content.reset();
@@ -3069,7 +3214,9 @@ impl App {
                 self.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                 self.selected_layer,
                 self.selected_artboard,
-                self.newdoc.as_ref(),
+                // On Home, the modal is drawn in the overlay pass below so it
+                // lands on top of the Home screen.
+                self.newdoc.as_ref().filter(|_| self.home.is_none()),
                 &tab_labels,
                 active_tab,
                 cursor_glyph,
@@ -3103,6 +3250,23 @@ impl App {
                     &self.theme,
                     &mut self.text,
                 );
+            }
+            // The Home screen covers the canvas; the New Document modal and
+            // the About panel each sit on top of that.
+            if let Some(hm) = &mut self.home {
+                hm.paint(&mut self.content, &mut self.text, wl, hl);
+                if let Some(form) = &self.newdoc {
+                    newdoc::paint(
+                        &mut self.content,
+                        &mut self.text,
+                        &self.theme,
+                        Rect::new(0.0, 0.0, wl, hl),
+                        form,
+                    );
+                }
+            }
+            if let Some(a) = &mut self.about {
+                a.paint(&mut self.content, &mut self.text, wl, hl);
             }
         }
         self.scene.reset();
@@ -3192,6 +3356,7 @@ impl ApplicationHandler for App {
         }
         let attrs = Window::default_attributes()
             .with_title("Amalith Ver. Alpha")
+            .with_window_icon(appicon::window_icon())
             .with_inner_size(LogicalSize::new(1280.0, 800.0));
         #[cfg(target_os = "macos")]
         let attrs = {
@@ -3204,6 +3369,8 @@ impl ApplicationHandler for App {
                 .with_title_hidden(true)
         };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        // No `.app` bundle yet, so set the Dock / Cmd-Tab icon at runtime.
+        appicon::set_dock_icon();
         self.scale = window.scale_factor();
         let wid = window.id();
         let host = self.make_host(window, Role::Main);
@@ -3345,10 +3512,35 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
+                // The About panel is modal: it swallows every key, handling
+                // only Esc (dismiss) and ⌘/Ctrl+C (copy the selection).
+                if self.about.is_some() {
+                    if event.state.is_pressed() {
+                        match event.physical_key {
+                            PhysicalKey::Code(KeyCode::Escape) => self.close_about(),
+                            PhysicalKey::Code(KeyCode::KeyC) if self.cmd_down => {
+                                let text =
+                                    self.about.as_ref().and_then(|a| a.selected_text());
+                                if let (Some(text), Some(cb)) =
+                                    (text, self.clipboard.as_mut())
+                                {
+                                    let _ = cb.set_text(text);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return;
+                }
                 // The New Document modal, then an inline rename, each
                 // swallow all keyboard input while active.
                 if self.newdoc.is_some() {
                     self.newdoc_key(&event);
+                    return;
+                }
+                // The Home screen swallows tool keys, but lets ⌘-shortcuts
+                // (⌘N, ⌘O, …) through to their handlers below.
+                if self.home.is_some() && !self.cmd_down {
                     return;
                 }
                 if self.rename.is_some() {
@@ -3373,6 +3565,8 @@ impl ApplicationHandler for App {
                     PhysicalKey::Code(KeyCode::Space) => {
                         self.space_down = pressed;
                         self.update_canvas_cursor();
+                        // Toggle the hold-Space node peek.
+                        self.request_main_redraw();
                     }
                     PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
                         let redo = self.shift_down;
@@ -4419,10 +4613,15 @@ impl NativeMenu {
         let back_i = mk("Send to Back", sup_shift, Code::BracketLeft);
 
         let sep = PredefinedMenuItem::separator;
+        let about_i = MenuItem::new("About Amalith", true, None);
         let app = Submenu::with_items(
             "Amalith",
             true,
-            &[&PredefinedMenuItem::quit(Some("Quit Amalith"))],
+            &[
+                &about_i,
+                &sep(),
+                &PredefinedMenuItem::quit(Some("Quit Amalith")),
+            ],
         )
         .expect("app menu");
         let file = Submenu::with_items(
@@ -4450,6 +4649,7 @@ impl NativeMenu {
         menu.init_for_nsapp();
 
         let items = vec![
+            (about_i.id().clone(), MenuAction::About),
             (new_i.id().clone(), MenuAction::New),
             (open_i.id().clone(), MenuAction::Open),
             (save_i.id().clone(), MenuAction::Save),

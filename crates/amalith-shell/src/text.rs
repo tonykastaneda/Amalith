@@ -6,7 +6,8 @@
 //! into a vello scene.
 
 use parley::{
-    FontContext, GenericFamily, Layout, LayoutContext, PositionedLayoutItem, StyleProperty,
+    FontContext, GenericFamily, Layout, LayoutContext, LineHeight, PositionedLayoutItem,
+    StyleProperty,
 };
 use vello::kurbo::Affine;
 use vello::peniko::{Brush, Color, Fill};
@@ -49,6 +50,79 @@ impl TextContext {
     /// Advance width of `text` at `size`, in logical px.
     pub fn measure(&mut self, text: &str, size: f32) -> f64 {
         self.build(text, size, Color::WHITE).width() as f64
+    }
+
+    /// Lay `text` out wrapped to `wrap_width` px, `line_height` as a multiple
+    /// of the font size. The caller keeps the [`Layout`] for drawing and for
+    /// hit-testing / selection.
+    pub fn wrap(
+        &mut self,
+        text: &str,
+        size: f32,
+        color: Color,
+        wrap_width: f32,
+        line_height: f32,
+    ) -> Layout<Brush> {
+        let mut builder = self.layout.ranged_builder(&mut self.fonts, text, 1.0, true);
+        builder.push_default(StyleProperty::FontSize(size));
+        builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
+            line_height,
+        )));
+        builder.push_default(GenericFamily::SystemUi);
+        builder.push_default(StyleProperty::Brush(Brush::Solid(color)));
+        let mut layout = builder.build(text);
+        layout.break_all_lines(Some(wrap_width));
+        layout
+    }
+
+    /// Draw an already-built [`Layout`] with its top-left corner at `(x, y)`.
+    pub fn draw_layout(
+        &self,
+        scene: &mut Scene,
+        layout: &Layout<Brush>,
+        color: Color,
+        x: f64,
+        y: f64,
+    ) {
+        let transform = Affine::translate((x, y));
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                    continue;
+                };
+                let mut gx = glyph_run.offset();
+                let gy = glyph_run.baseline();
+                let run = glyph_run.run();
+                let font = run.font();
+                let font_size = run.font_size();
+                let coords = run.normalized_coords();
+                let synthesis = run.synthesis();
+                let glyph_xform = synthesis
+                    .skew()
+                    .map(|angle| Affine::skew(angle.to_radians().tan() as f64, 0.0));
+                scene
+                    .draw_glyphs(font)
+                    .brush(&Brush::Solid(color))
+                    .hint(true)
+                    .transform(transform)
+                    .glyph_transform(glyph_xform)
+                    .font_size(font_size)
+                    .normalized_coords(coords)
+                    .draw(
+                        Fill::NonZero,
+                        glyph_run.glyphs().map(|g| {
+                            let x = gx + g.x;
+                            let y = gy - g.y;
+                            gx += g.advance;
+                            Glyph {
+                                id: g.id as u32,
+                                x,
+                                y,
+                            }
+                        }),
+                    );
+            }
+        }
     }
 
     /// Draw `text` at `size` in `color`, with its left edge at `x` and its
