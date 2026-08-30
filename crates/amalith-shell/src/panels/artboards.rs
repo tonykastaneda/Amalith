@@ -81,6 +81,13 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     let row = ((local.y - body.y0) / ROW_H).floor();
     if row >= 0.0 {
         if let Some(ab) = ctx.doc.artboards().get(row as usize) {
+            // The number column (before the name field) is the "snap the
+            // view back onto this artboard" target; the rest of the row
+            // just selects / renames.
+            let num_x1 = body.x0 + PAD + 30.0;
+            if local.x < num_x1 {
+                return Action::FocusArtboard(ab.id);
+            }
             return Action::SelectArtboard(ab.id);
         }
     }

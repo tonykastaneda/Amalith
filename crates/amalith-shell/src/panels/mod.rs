@@ -100,6 +100,9 @@ pub enum Action {
     SelectLayer(LayerId),
     /// Artboards panel: an artboard row was clicked.
     SelectArtboard(ArtboardId),
+    /// Artboards panel: the artboard's number was clicked — double-click
+    /// snaps the view back onto it.
+    FocusArtboard(ArtboardId),
     SetActiveSlot(PaintSlot),
     /// Open the colour picker for this slot.
     OpenPicker(PaintSlot),

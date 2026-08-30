@@ -664,6 +664,12 @@ impl App {
                     self.begin_rename(panels::RenameId::Artboard(id));
                 }
             }
+            panels::Action::FocusArtboard(id) => {
+                self.selected_artboard = Some(id);
+                if double {
+                    self.focus_artboard(id);
+                }
+            }
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
             // Single click just picks the slot; double click opens the
             // colour picker (Illustrator behaviour).
@@ -1623,6 +1629,14 @@ impl App {
         for a in &boards[1..] {
             b = b.union(a.rect);
         }
+        self.fit_view_to(b);
+        self.pending_fit = false;
+    }
+
+    /// Centre the view on `b` (document space) and zoom so it fills most
+    /// of the canvas. Shared by "fit all artboards" and the Artboards
+    /// panel's double-click-the-number "snap this one back into view".
+    fn fit_view_to(&mut self, b: amalith_core::geom::Rect) {
         let vp = self.canvas_viewport();
         if vp.width() < 10.0 || vp.height() < 10.0 || b.width() < 1.0 || b.height() < 1.0 {
             return;
@@ -1631,8 +1645,22 @@ impl App {
         let (bc, vc) = (b.center(), vp.center());
         self.view.zoom = zoom;
         self.view.pan = Vec2::new(vc.x - zoom * bc.x, vc.y - zoom * bc.y);
-        self.pending_fit = false;
         self.request_main_redraw();
+    }
+
+    /// Snap the view onto one artboard (Artboards panel, double-click its
+    /// number).
+    fn focus_artboard(&mut self, id: ArtboardId) {
+        if let Some(ab) = self
+            .editor
+            .document()
+            .artboards()
+            .iter()
+            .find(|a| a.id == id)
+        {
+            let rect = ab.rect;
+            self.fit_view_to(rect);
+        }
     }
 
     /// Recompute the pointer style and, on change, tell the OS.
@@ -3420,6 +3448,7 @@ impl ApplicationHandler for App {
                         KeyCode::KeyO => self.open_document(),
                         KeyCode::KeyS => self.save_document(self.shift_down),
                         KeyCode::KeyI if self.shift_down => self.import_svg(),
+                        KeyCode::KeyW => self.close_tab(self.active),
                         // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
                         KeyCode::BracketRight => {
                             if self.alt_down {
