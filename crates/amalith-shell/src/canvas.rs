@@ -359,12 +359,16 @@ pub fn paint(
             if let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) {
                 let g = crate::anchors::deformed(&pd.geometry, &idxs, core_dv);
                 let m = vt * convert::affine(doc.world_transform(id));
+                // Bake the view transform into the geometry and stroke in
+                // screen space, so the contour stays a hairline at any
+                // zoom instead of scaling with it.
+                let screen = m * convert::bez_path(&g);
                 scene.stroke(
                     &Stroke::new(1.5),
-                    m,
+                    Affine::IDENTITY,
                     theme.select_blue,
                     None,
-                    &convert::bez_path(&g),
+                    &screen,
                 );
             }
         }
