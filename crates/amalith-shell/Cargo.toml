@@ -23,6 +23,8 @@ amalith-core = { path = "../amalith-core" }
 amalith-commands = { path = "../amalith-commands" }
 amalith-io = { path = "../amalith-io" }
 rfd.workspace = true
+# Text-only OS clipboard, for SVG copy/paste with Illustrator & the web.
+arboard = { version = "3.6", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.19"

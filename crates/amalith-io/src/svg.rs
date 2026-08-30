@@ -16,8 +16,8 @@
 //! so pasting a complex real-world SVG still recovers whatever Amalith
 //! *can* represent instead of failing outright.
 use amalith_core::{
-    Affine, Appearance, Color, Document, GroupData, LayerId, Object, ObjectId, ObjectKind,
-    ObjectParent, Paint, PathData, Rect,
+    Affine, Appearance, Color, Document, GroupData, LayerId, LineCap, LineJoin, Object, ObjectId,
+    ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
 };
 use kurbo::BezPath;
 use std::collections::HashMap;
@@ -124,6 +124,31 @@ fn paint_attrs(appearance: &Appearance) -> String {
     attrs.push_str(&paint_attr("stroke", appearance.stroke));
     if appearance.stroke.color().is_some() {
         attrs.push_str(&format!(" stroke-width=\"{}\"", appearance.stroke_width));
+        let style = &appearance.stroke_style;
+        attrs.push_str(match style.cap {
+            LineCap::Butt => " stroke-linecap=\"butt\"",
+            LineCap::Round => " stroke-linecap=\"round\"",
+            LineCap::Square => " stroke-linecap=\"square\"",
+        });
+        attrs.push_str(match style.join {
+            LineJoin::Miter => " stroke-linejoin=\"miter\"",
+            LineJoin::Round => " stroke-linejoin=\"round\"",
+            LineJoin::Bevel => " stroke-linejoin=\"bevel\"",
+        });
+        if style.join == LineJoin::Miter {
+            attrs.push_str(&format!(" stroke-miterlimit=\"{}\"", style.miter_limit));
+        }
+        if let Some(pattern) = style.dash_pattern() {
+            let dash = pattern
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            attrs.push_str(&format!(" stroke-dasharray=\"{dash}\""));
+            if style.dash_offset != 0.0 {
+                attrs.push_str(&format!(" stroke-dashoffset=\"{}\"", style.dash_offset));
+            }
+        }
     }
     if appearance.opacity != 1.0 {
         attrs.push_str(&format!(
@@ -286,6 +311,11 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     let stroke_opacity = resolve_property(node, &inline_style, class_styles, "stroke-opacity");
     let stroke_width = resolve_property(node, &inline_style, class_styles, "stroke-width");
     let opacity = resolve_property(node, &inline_style, class_styles, "opacity");
+    let linecap = resolve_property(node, &inline_style, class_styles, "stroke-linecap");
+    let linejoin = resolve_property(node, &inline_style, class_styles, "stroke-linejoin");
+    let miterlimit = resolve_property(node, &inline_style, class_styles, "stroke-miterlimit");
+    let dasharray = resolve_property(node, &inline_style, class_styles, "stroke-dasharray");
+    let dashoffset = resolve_property(node, &inline_style, class_styles, "stroke-dashoffset");
 
     if let Some(fill) = fill.as_deref() {
         appearance.fill = parse_paint(fill, fill_opacity.as_deref());
@@ -299,7 +329,61 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     if let Some(opacity) = opacity.and_then(|opacity| opacity.trim().parse().ok()) {
         appearance.opacity = opacity;
     }
+    appearance.stroke_style = parse_stroke_style(
+        linecap.as_deref(),
+        linejoin.as_deref(),
+        miterlimit.as_deref(),
+        dasharray.as_deref(),
+        dashoffset.as_deref(),
+    );
     appearance
+}
+
+/// Maps SVG's `stroke-linecap` / `-linejoin` / `-miterlimit` /
+/// `-dasharray` / `-dashoffset` onto a [`StrokeStyle`]. Anything absent
+/// or unrecognised keeps its default.
+fn parse_stroke_style(
+    linecap: Option<&str>,
+    linejoin: Option<&str>,
+    miterlimit: Option<&str>,
+    dasharray: Option<&str>,
+    dashoffset: Option<&str>,
+) -> StrokeStyle {
+    let mut style = StrokeStyle::default();
+    match linecap.map(str::trim) {
+        Some("round") => style.cap = LineCap::Round,
+        Some("square") => style.cap = LineCap::Square,
+        Some("butt") => style.cap = LineCap::Butt,
+        _ => {}
+    }
+    match linejoin.map(str::trim) {
+        Some("round") => style.join = LineJoin::Round,
+        Some("bevel") => style.join = LineJoin::Bevel,
+        Some("miter") | Some("miter-clip") | Some("arcs") => style.join = LineJoin::Miter,
+        _ => {}
+    }
+    if let Some(limit) = miterlimit.and_then(|v| v.trim().parse().ok()) {
+        style.miter_limit = limit;
+    }
+    // `none` / empty / all-zero → solid. Otherwise take the first three
+    // dash/gap lengths (comma or whitespace separated, per SVG).
+    if let Some(list) = dasharray.map(str::trim).filter(|v| !v.is_empty() && *v != "none") {
+        let nums: Vec<f64> = list
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if nums.iter().any(|n| *n > 0.0) {
+            style.dashed = true;
+            for (slot, value) in style.dash.iter_mut().zip(nums.iter()) {
+                *slot = value.max(0.0);
+            }
+        }
+    }
+    if let Some(offset) = dashoffset.and_then(|v| v.trim().parse().ok()) {
+        style.dash_offset = offset;
+    }
+    style
 }
 
 /// Collects the small CSS subset Illustrator places in `<defs><style>`.
@@ -355,7 +439,17 @@ fn parse_declarations(value: &str) -> Declarations {
             let value = value.trim();
             matches!(
                 property,
-                "fill" | "stroke" | "stroke-width" | "fill-opacity" | "stroke-opacity" | "opacity"
+                "fill"
+                    | "stroke"
+                    | "stroke-width"
+                    | "fill-opacity"
+                    | "stroke-opacity"
+                    | "opacity"
+                    | "stroke-linecap"
+                    | "stroke-linejoin"
+                    | "stroke-miterlimit"
+                    | "stroke-dasharray"
+                    | "stroke-dashoffset"
             )
             .then(|| (property.to_string(), value.to_string()))
         })
@@ -634,6 +728,48 @@ mod tests {
         assert!(svg.contains("fill=\"#00ff00\""), "svg was: {svg}");
         assert!(svg.contains("stroke=\"#ff0000\""), "svg was: {svg}");
         assert!(svg.contains("stroke-width=\"10\""), "svg was: {svg}");
+    }
+
+    #[test]
+    fn stroke_style_round_trips_through_svg() {
+        use amalith_core::{StrokeAlign, StrokeStyle};
+        let mut document = Document::new("Test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+        );
+        object.appearance.stroke = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
+        object.appearance.stroke_style = StrokeStyle {
+            cap: LineCap::Round,
+            join: LineJoin::Bevel,
+            miter_limit: 8.0,
+            // Align has no SVG representation — it should reset on import.
+            align: StrokeAlign::Outside,
+            dashed: true,
+            dash: [6.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+            dash_offset: 2.0,
+        };
+        let id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[id]).unwrap();
+        assert!(svg.contains("stroke-linecap=\"round\""), "svg was: {svg}");
+        assert!(svg.contains("stroke-linejoin=\"bevel\""), "svg was: {svg}");
+        assert!(svg.contains("stroke-dasharray=\"6,3\""), "svg was: {svg}");
+        assert!(svg.contains("stroke-dashoffset=\"2\""), "svg was: {svg}");
+
+        let imported = import_svg(&svg).unwrap();
+        let style = imported.objects[&imported.roots[0]].appearance.stroke_style;
+        assert_eq!(style.cap, LineCap::Round);
+        assert_eq!(style.join, LineJoin::Bevel);
+        assert!(style.dashed);
+        assert_eq!(style.dash_pattern(), Some(vec![6.0, 3.0]));
+        assert_eq!(style.dash_offset, 2.0);
+        assert_eq!(style.align, StrokeAlign::Center);
     }
 
     #[test]

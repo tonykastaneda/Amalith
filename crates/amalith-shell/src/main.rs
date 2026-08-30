@@ -210,6 +210,15 @@ enum MenuAction {
     SendToBack,
 }
 
+/// Where a paste drops. `Plain` recentres on the view; the other two keep
+/// exact coordinates and only change stacking.
+#[derive(Clone, Copy)]
+enum PastePlace {
+    Plain,
+    InFront,
+    Behind,
+}
+
 /// An inline panel rename: what's being renamed, the edit buffer, and
 /// whether the buffer is still the untouched original (so the first
 /// keystroke replaces it, like Illustrator's select-all-on-focus).
@@ -346,6 +355,9 @@ struct App {
     stroke_style: StrokeStyle,
     /// Whether the Stroke flyout (opened from the options bar) is showing.
     stroke_popover: bool,
+    /// Handle to the OS clipboard, for SVG copy/paste with other apps
+    /// (Illustrator, browsers). `None` if the platform wouldn't give us one.
+    clipboard: Option<arboard::Clipboard>,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
     /// Time + position of the last left press, for double-click detection.
@@ -430,6 +442,7 @@ impl App {
             opacity: 1.0,
             stroke_style: StrokeStyle::default(),
             stroke_popover: false,
+            clipboard: None,
             picker: None,
             last_click: None,
             pen: Vec::new(),
@@ -1144,7 +1157,8 @@ impl App {
             }
             MenuAction::Cut => {
                 if !self.selection.is_empty() {
-                    let _ = self.editor.copy(&self.selection);
+                    let ids = self.selection.clone();
+                    self.copy_selection(&ids);
                     let _ = self.editor.execute(Command::DeleteObjects {
                         ids: std::mem::take(&mut self.selection),
                     });
@@ -1152,19 +1166,12 @@ impl App {
                 }
             }
             MenuAction::Copy => {
-                let _ = self.editor.copy(&self.selection);
-            }
-            MenuAction::Paste => {
-                if self.editor.has_clipboard() {
-                    if let Ok(ids) = self
-                        .editor
-                        .paste(amalith_core::Vec2::new(16.0, 16.0), PasteStack::Top)
-                    {
-                        self.selection = ids;
-                    }
-                    self.request_main_redraw();
+                if !self.selection.is_empty() {
+                    let ids = self.selection.clone();
+                    self.copy_selection(&ids);
                 }
             }
+            MenuAction::Paste => self.paste_clipboard(PastePlace::Plain),
             MenuAction::Duplicate => {
                 if !self.selection.is_empty() {
                     if let Ok(ids) = self
@@ -1489,6 +1496,72 @@ impl App {
             .iter()
             .flat_map(|l| l.children.iter().copied())
             .collect();
+        self.request_main_redraw();
+    }
+
+    /// The OS clipboard handle, created on first use (some platforms only
+    /// hand one out once the app is fully up).
+    fn clipboard(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        self.clipboard.as_mut()
+    }
+
+    /// Copy `ids` into the `Editor`'s own clipboard *and* mirror them to
+    /// the OS clipboard as a portable `<svg>` document, so the same copy
+    /// can be pasted into Illustrator, a browser, Figma, etc.
+    fn copy_selection(&mut self, ids: &[ObjectId]) {
+        let _ = self.editor.copy(ids);
+        let svg = amalith_io::export_svg(self.editor.document(), ids);
+        if let (Some(svg), Some(cb)) = (svg, self.clipboard()) {
+            let _ = cb.set_text(svg);
+        }
+    }
+
+    /// If the OS clipboard holds SVG text (Illustrator with "SVG Code"
+    /// clipboard handling, an SVG copied from a browser, our own last
+    /// copy), load it into the `Editor` clipboard. Non-SVG text is left
+    /// alone, so an unrelated clipboard doesn't clobber the last in-app
+    /// copy.
+    fn pull_svg_from_clipboard(&mut self) {
+        let Some(text) = self.clipboard().and_then(|cb| cb.get_text().ok()) else {
+            return;
+        };
+        let head = text.trim_start();
+        if head.starts_with("<svg") || head.starts_with("<?xml") {
+            let _ = self.editor.copy_from_svg(&text);
+        }
+    }
+
+    /// Paste the clipboard. `place` decides where it lands: `Plain` drops
+    /// the copied bounds' centre on the visible view (Illustrator's
+    /// "somewhere new" paste); `InFront` / `Behind` keep exact document
+    /// coordinates and only restack.
+    fn paste_clipboard(&mut self, place: PastePlace) {
+        self.pull_svg_from_clipboard();
+        if !self.editor.has_clipboard() {
+            return;
+        }
+        let (delta, stack) = match place {
+            PastePlace::Plain => {
+                let vc = self.visible_doc_rect().center();
+                let delta = self
+                    .editor
+                    .clipboard_bounds()
+                    .map(|b| {
+                        let bc = b.center();
+                        amalith_core::Vec2::new(vc.x - bc.x, vc.y - bc.y)
+                    })
+                    .unwrap_or(amalith_core::Vec2::ZERO);
+                (delta, PasteStack::Top)
+            }
+            PastePlace::InFront => (amalith_core::Vec2::ZERO, PasteStack::InFront),
+            PastePlace::Behind => (amalith_core::Vec2::ZERO, PasteStack::Behind),
+        };
+        if let Ok(ids) = self.editor.paste(delta, stack) {
+            self.selection = ids;
+        }
         self.request_main_redraw();
     }
 
@@ -3295,45 +3368,24 @@ impl ApplicationHandler for App {
                     }
                     // ⌘ shortcuts (copy / paste / duplicate / group / all).
                     PhysicalKey::Code(code) if pressed && self.cmd_down => match code {
-                        KeyCode::KeyC => {
-                            let _ = self.editor.copy(&self.selection);
+                        KeyCode::KeyC if !self.selection.is_empty() => {
+                            let ids = self.selection.clone();
+                            self.copy_selection(&ids);
                         }
                         KeyCode::KeyX if !self.selection.is_empty() => {
-                            let _ = self.editor.copy(&self.selection);
+                            let ids = self.selection.clone();
+                            self.copy_selection(&ids);
                             let _ = self.editor.execute(Command::DeleteObjects {
                                 ids: std::mem::take(&mut self.selection),
                             });
                             self.request_main_redraw();
                         }
-                        KeyCode::KeyV if self.editor.has_clipboard() => {
-                            if let Ok(ids) = self
-                                .editor
-                                .paste(amalith_core::Vec2::new(16.0, 16.0), PasteStack::Top)
-                            {
-                                self.selection = ids;
-                            }
-                            self.request_main_redraw();
-                        }
-                        // Paste in Front / in Back: same position as the
-                        // source, stacked just above / below it.
-                        KeyCode::KeyF if self.editor.has_clipboard() => {
-                            if let Ok(ids) = self
-                                .editor
-                                .paste(amalith_core::Vec2::ZERO, PasteStack::InFront)
-                            {
-                                self.selection = ids;
-                            }
-                            self.request_main_redraw();
-                        }
-                        KeyCode::KeyB if self.editor.has_clipboard() => {
-                            if let Ok(ids) = self
-                                .editor
-                                .paste(amalith_core::Vec2::ZERO, PasteStack::Behind)
-                            {
-                                self.selection = ids;
-                            }
-                            self.request_main_redraw();
-                        }
+                        // Plain paste recentres on the view; ⌘F / ⌘B keep
+                        // the source coordinates. Each first checks the OS
+                        // clipboard for SVG (paste from Illustrator etc.).
+                        KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
+                        KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
+                        KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
                         KeyCode::KeyD if !self.selection.is_empty() => {
                             if let Ok(ids) = self.editor.duplicate_objects(
                                 &self.selection,

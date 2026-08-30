@@ -190,6 +190,7 @@ dependencies = [
  "amalith-commands",
  "amalith-core",
  "amalith-io",
+ "arboard",
  "kurbo 0.11.3",
  "muda",
  "parley",
