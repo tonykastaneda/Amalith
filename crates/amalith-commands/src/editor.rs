@@ -647,6 +647,10 @@ impl Editor {
                 .into_iter()
                 .map(|id| Edit::SetStrokeWidth { id, width })
                 .collect(),
+            Command::SetStrokeStyle { objects, style } => objects
+                .into_iter()
+                .map(|id| Edit::SetStrokeStyle { id, style })
+                .collect(),
             Command::SetOpacity { objects, opacity } => objects
                 .into_iter()
                 .map(|id| Edit::SetOpacity { id, opacity })

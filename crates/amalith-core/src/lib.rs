@@ -21,7 +21,7 @@ pub mod object;
 pub mod swatch;
 pub mod units;
 
-pub use appearance::{Appearance, Paint};
+pub use appearance::{Appearance, LineCap, LineJoin, Paint, StrokeAlign, StrokeStyle};
 pub use artboard::Artboard;
 pub use asset::{Asset, AssetKind, AssetSource};
 pub use document::Document;

@@ -274,7 +274,7 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
         fill: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
         stroke: Paint::None,
         stroke_width: Appearance::DEFAULT_STROKE_WIDTH,
-        opacity: 1.0,
+        ..Appearance::default()
     };
     let inline_style = node
         .attribute("style")
@@ -624,7 +624,7 @@ mod tests {
             fill: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
             stroke: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)),
             stroke_width: 10.0,
-            opacity: 1.0,
+            ..Appearance::default()
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();
@@ -651,7 +651,7 @@ mod tests {
             fill: Paint::None,
             stroke: Paint::None,
             stroke_width: 10.0,
-            opacity: 1.0,
+            ..Appearance::default()
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();
@@ -679,7 +679,7 @@ mod tests {
             fill: Paint::Solid(Color::rgb(0.2, 0.4, 0.6)),
             stroke: Paint::None,
             stroke_width: 10.0,
-            opacity: 1.0,
+            ..Appearance::default()
         };
         let id = object.id;
         document.insert_object(object, 0).unwrap();

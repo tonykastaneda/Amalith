@@ -5,7 +5,9 @@
 //! (`crate::edit`) that turns intent into an actual, undoable document
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
-use amalith_core::{Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, Vec2};
+use amalith_core::{
+    Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle, Vec2,
+};
 
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +176,12 @@ pub enum Command {
     SetStrokeWidth {
         objects: Vec<ObjectId>,
         width: f64,
+    },
+    /// Sets every listed object's full stroke style (cap / join / miter
+    /// limit / alignment / dash pattern), one undo group.
+    SetStrokeStyle {
+        objects: Vec<ObjectId>,
+        style: StrokeStyle,
     },
     /// Sets every listed object's compositing opacity, one undo group.
     SetOpacity {

@@ -2012,6 +2012,60 @@ mod tests {
     }
 
     #[test]
+    fn set_stroke_style_applies_to_every_object_and_roundtrips_through_undo() {
+        use amalith_core::{LineCap, LineJoin, StrokeAlign, StrokeStyle};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let create = |editor: &mut Editor| match editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        {
+            CommandOutcome::Object(id) => id,
+            _ => panic!(),
+        };
+        let a = create(&mut editor);
+        let b = create(&mut editor);
+        let original = editor.document().object(a).unwrap().appearance.stroke_style;
+
+        let style = StrokeStyle {
+            cap: LineCap::Round,
+            join: LineJoin::Bevel,
+            miter_limit: 4.0,
+            align: StrokeAlign::Outside,
+            dashed: true,
+            dash: [6.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+            dash_offset: 1.0,
+        };
+        editor
+            .execute(Command::SetStrokeStyle {
+                objects: vec![a, b],
+                style,
+            })
+            .unwrap();
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, style);
+        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style, style);
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, original);
+        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style, original);
+
+        editor.redo().unwrap();
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, style);
+    }
+
+    #[test]
     fn set_visible_and_locked_roundtrip_through_undo() {
         let mut editor = Editor::new(Document::new("Flags"));
         let CommandOutcome::Layer(layer) = editor

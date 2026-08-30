@@ -17,7 +17,7 @@
 use crate::error::CommandError;
 use amalith_core::{
     geom::BezPath, Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint,
+    ObjectKind, ObjectParent, Paint, StrokeStyle,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,6 +82,10 @@ pub(crate) enum Edit {
     SetStrokeWidth {
         id: ObjectId,
         width: f64,
+    },
+    SetStrokeStyle {
+        id: ObjectId,
+        style: StrokeStyle,
     },
     SetOpacity {
         id: ObjectId,
@@ -236,6 +240,11 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 },
                 None,
             ))
+        }
+        Edit::SetStrokeStyle { id, style } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_style = std::mem::replace(&mut object.appearance.stroke_style, style);
+            Ok((Edit::SetStrokeStyle { id, style: old_style }, None))
         }
         Edit::SetOpacity { id, opacity } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;

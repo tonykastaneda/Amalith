@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use amalith_core::{Document, ObjectId, ObjectKind};
-use vello::kurbo::{Affine, BezPath, Point, Rect, Shape, Stroke, Vec2};
+use amalith_core::{Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign, StrokeStyle};
+use vello::kurbo::{Affine, BezPath, Cap, Join, Point, Rect, Shape, Stroke, Vec2};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -448,6 +448,72 @@ fn xf_for_quad(doc: &Document, selection: &[ObjectId], d: DragPreview<'_>) -> Af
     }
 }
 
+fn kurbo_cap(c: LineCap) -> Cap {
+    match c {
+        LineCap::Butt => Cap::Butt,
+        LineCap::Round => Cap::Round,
+        LineCap::Square => Cap::Square,
+    }
+}
+
+fn kurbo_join(j: LineJoin) -> Join {
+    match j {
+        LineJoin::Miter => Join::Miter,
+        LineJoin::Round => Join::Round,
+        LineJoin::Bevel => Join::Bevel,
+    }
+}
+
+/// A vello `Stroke` for `width` under `style` — cap, join, miter limit,
+/// and dash pattern. Alignment is applied separately by [`stroke_path`].
+fn stroke_spec(width: f64, style: &StrokeStyle) -> Stroke {
+    let mut s = Stroke::new(width)
+        .with_caps(kurbo_cap(style.cap))
+        .with_join(kurbo_join(style.join))
+        .with_miter_limit(style.miter_limit.max(1.0));
+    if let Some(pattern) = style.dash_pattern() {
+        s = s.with_dashes(style.dash_offset, pattern);
+    }
+    s
+}
+
+/// Stroke `bp` (object-local space; `m` maps it to the screen) at `width`
+/// under `style`. For a closed path with `align` set to Inside / Outside,
+/// a double-width stroke is clipped to the wanted side of the outline.
+fn stroke_path(
+    scene: &mut Scene,
+    m: Affine,
+    color: Color,
+    bp: &BezPath,
+    width: f64,
+    style: &StrokeStyle,
+    closed: bool,
+) {
+    if !closed || style.align == StrokeAlign::Center || width <= 0.0 {
+        scene.stroke(&stroke_spec(width, style), m, color, None, bp);
+        return;
+    }
+    let wide = stroke_spec(width * 2.0, style);
+    match style.align {
+        StrokeAlign::Inside => {
+            scene.push_clip_layer(Fill::NonZero, m, bp);
+            scene.stroke(&wide, m, color, None, bp);
+            scene.pop_layer();
+        }
+        StrokeAlign::Outside => {
+            let pad = width + 2.0;
+            let outer = bp.bounding_box().inflate(pad, pad);
+            let mut ring = BezPath::new();
+            ring.extend(outer.path_elements(0.1));
+            ring.extend(bp.elements().iter().copied());
+            scene.push_clip_layer(Fill::EvenOdd, m, &ring);
+            scene.stroke(&wide, m, color, None, bp);
+            scene.pop_layer();
+        }
+        StrokeAlign::Center => unreachable!(),
+    }
+}
+
 fn paint_object(
     scene: &mut Scene,
     doc: &Document,
@@ -470,6 +536,7 @@ fn paint_object(
     let fill = obj.appearance.fill.color().map(convert::color);
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
+    let style = obj.appearance.stroke_style;
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
         // Open paths (a line, an unclosed pen path) don't get a fill.
         let closed = bp
@@ -482,7 +549,7 @@ fn paint_object(
             }
         }
         if let Some(c) = stroke {
-            scene.stroke(&Stroke::new(sw), m, c, None, bp);
+            stroke_path(scene, m, c, bp, sw, &style, closed);
         }
     };
 

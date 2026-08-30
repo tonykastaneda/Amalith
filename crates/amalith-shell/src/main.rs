@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
-use amalith_core::{ArtboardId, Document, LayerId, ObjectId};
+use amalith_core::{ArtboardId, Document, LayerId, ObjectId, StrokeStyle};
 use amalith_shell::anchors;
 use amalith_shell::canvas::{self, AnchorView, CanvasView, DragPreview, PenPreview};
 use amalith_shell::dock::{
@@ -31,7 +31,9 @@ use amalith_shell::layout::Layout;
 use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
-use amalith_shell::{chrome, convert, icons, layout, panels, picker, sample, select, Theme};
+use amalith_shell::{
+    chrome, convert, icons, layout, panels, picker, sample, select, stroke_panel, Theme,
+};
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
 use vello::util::{RenderContext, RenderSurface};
@@ -233,6 +235,7 @@ struct Doc {
     selected_layer: Option<LayerId>,
     rename: Option<Rename>,
     stroke_w: f64,
+    stroke_style: StrokeStyle,
     opacity: f32,
     view: CanvasView,
 }
@@ -251,6 +254,7 @@ impl Doc {
             selected_layer: None,
             rename: None,
             stroke_w: 1.0,
+            stroke_style: StrokeStyle::default(),
             opacity: 1.0,
             view: CanvasView::default(),
         }
@@ -337,6 +341,11 @@ struct App {
     /// steppers edit these; new shapes and any selection pick them up.
     stroke_w: f64,
     opacity: f32,
+    /// Cap / join / miter / align / dash for new shapes and the current
+    /// selection — the Stroke flyout edits this.
+    stroke_style: StrokeStyle,
+    /// Whether the Stroke flyout (opened from the options bar) is showing.
+    stroke_popover: bool,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
     /// Time + position of the last left press, for double-click detection.
@@ -419,6 +428,8 @@ impl App {
             zoom_sign: 1,
             stroke_w: 1.0,
             opacity: 1.0,
+            stroke_style: StrokeStyle::default(),
+            stroke_popover: false,
             picker: None,
             last_click: None,
             pen: Vec::new(),
@@ -478,6 +489,7 @@ impl App {
             selected_layer: self.selected_layer.take(),
             rename: self.rename.take(),
             stroke_w: self.stroke_w,
+            stroke_style: self.stroke_style,
             opacity: self.opacity,
             view: self.view,
         }
@@ -496,6 +508,7 @@ impl App {
         self.selected_layer = doc.selected_layer;
         self.rename = doc.rename;
         self.stroke_w = doc.stroke_w;
+        self.stroke_style = doc.stroke_style;
         self.opacity = doc.opacity;
         self.view = doc.view;
         // Transient interaction state doesn't cross documents.
@@ -1212,13 +1225,99 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Push the options-bar Weight / Opacity onto a freshly created
-    /// object, so those fields mean something with nothing selected.
+    /// The stroke style the Stroke flyout should show: the first selected
+    /// object's, or the stored default when nothing is selected.
+    fn stroke_style_repr(&self) -> StrokeStyle {
+        self.selection
+            .first()
+            .and_then(|id| self.editor.document().object(*id))
+            .map(|o| o.appearance.stroke_style)
+            .unwrap_or(self.stroke_style)
+    }
+
+    /// Where the Stroke flyout sits: hanging off the "Stroke" link in the
+    /// options bar, clamped to the window.
+    fn stroke_flyout_layout(&self, win_w: f64) -> stroke_panel::Layout {
+        let ob = opt_bar_layout(opt_bar_rect(win_w));
+        let x = (ob.stroke_link.x0 - 4.0)
+            .min(win_w - stroke_panel::W - 6.0)
+            .max(6.0);
+        stroke_panel::layout(Point::new(x, APP_BAR_H + OPT_BAR_H + 3.0))
+    }
+
+    /// Read the current stroke style (from the first selected object, or
+    /// the stored default), let `f` mutate it, then write it back onto the
+    /// whole selection and remember it for new shapes. Drives the Stroke
+    /// flyout.
+    fn edit_stroke_style(&mut self, f: impl FnOnce(&mut StrokeStyle)) {
+        let mut style = self
+            .selection
+            .first()
+            .and_then(|id| self.editor.document().object(*id))
+            .map(|o| o.appearance.stroke_style)
+            .unwrap_or(self.stroke_style);
+        f(&mut style);
+        self.stroke_style = style;
+        if !self.selection.is_empty() {
+            let _ = self.editor.execute(Command::SetStrokeStyle {
+                objects: self.selection.clone(),
+                style,
+            });
+        }
+        self.request_main_redraw();
+    }
+
+    /// Apply one Stroke-flyout [`stroke_panel::Hit`]. `dir` is the scroll /
+    /// stepper direction (already `+1` / `-1`).
+    fn apply_stroke_flyout(&mut self, hit: stroke_panel::Hit, dir: i32) {
+        use stroke_panel::Hit;
+        match hit {
+            Hit::Inside => {}
+            Hit::Outside => {
+                self.stroke_popover = false;
+                self.request_main_redraw();
+            }
+            Hit::WeightStep(_) => self.step_weight(dir),
+            Hit::LimitStep(_) => self.edit_stroke_style(|s| {
+                s.miter_limit = (s.miter_limit + dir as f64).clamp(1.0, 500.0);
+            }),
+            Hit::Cap(cap) => self.edit_stroke_style(|s| s.cap = cap),
+            Hit::Join(join) => self.edit_stroke_style(|s| s.join = join),
+            Hit::Align(align) => self.edit_stroke_style(|s| s.align = align),
+            Hit::ToggleDashed => self.edit_stroke_style(|s| {
+                s.dashed = !s.dashed;
+                if s.dashed && s.dash[0] <= 0.0 && s.dash[1] <= 0.0 {
+                    let (d, g) = stroke_panel::dash_gap(s);
+                    s.dash[0] = d;
+                    s.dash[1] = g;
+                }
+            }),
+            Hit::DashStep(_) => self.edit_stroke_style(|s| {
+                let (d, g) = stroke_panel::dash_gap(s);
+                s.dash[0] = (d + dir as f64).max(0.0);
+                s.dash[1] = g;
+            }),
+            Hit::GapStep(_) => self.edit_stroke_style(|s| {
+                let (d, g) = stroke_panel::dash_gap(s);
+                s.dash[0] = d;
+                s.dash[1] = (g + dir as f64).max(0.0);
+            }),
+        }
+    }
+
+    /// Push the options-bar Weight / Opacity / Stroke style onto a freshly
+    /// created object, so those fields mean something with nothing selected.
     fn apply_new_appearance(&mut self, id: ObjectId) {
         if (self.stroke_w - 1.0).abs() > f64::EPSILON {
             let _ = self.editor.execute(Command::SetStrokeWidth {
                 objects: vec![id],
                 width: self.stroke_w,
+            });
+        }
+        if self.stroke_style != StrokeStyle::default() {
+            let _ = self.editor.execute(Command::SetStrokeStyle {
+                objects: vec![id],
+                style: self.stroke_style,
             });
         }
         if (self.opacity - 1.0).abs() > f32::EPSILON {
@@ -1465,9 +1564,14 @@ impl App {
 
     /// Recompute the pointer style and, on change, tell the OS.
     fn update_canvas_cursor(&mut self) {
+        let over_stroke_flyout = self.stroke_popover && {
+            let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+            self.stroke_flyout_layout(w).panel.contains(self.pointer)
+        };
         let over = self.pointer_win == self.main_id
             && self.picker.is_none()
             && self.newdoc.is_none()
+            && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
             CanvasCursor::Default
@@ -1657,6 +1761,30 @@ impl App {
                     return;
                 }
 
+                // The Stroke flyout captures clicks while it's open.
+                if self.stroke_popover {
+                    let lay = self.stroke_flyout_layout(w);
+                    let repr = self.stroke_style_repr();
+                    match stroke_panel::hit(&lay, &repr, self.pointer) {
+                        stroke_panel::Hit::Outside => {
+                            self.stroke_popover = false;
+                            self.request_main_redraw();
+                            return;
+                        }
+                        hit => {
+                            let dir = match hit {
+                                stroke_panel::Hit::WeightStep(d)
+                                | stroke_panel::Hit::LimitStep(d)
+                                | stroke_panel::Hit::DashStep(d)
+                                | stroke_panel::Hit::GapStep(d) => d,
+                                _ => 0,
+                            };
+                            self.apply_stroke_flyout(hit, dir);
+                            return;
+                        }
+                    }
+                }
+
                 // The app bar swallows clicks (unless the picker is up).
                 if self.picker.is_none() && self.pointer.y < APP_BAR_H {
                     return;
@@ -1669,7 +1797,10 @@ impl App {
                 {
                     let ob = opt_bar_layout(opt_bar_rect(w));
                     let p = self.pointer;
-                    if ob.fill.contains(p) {
+                    if ob.stroke_link.contains(p) {
+                        self.stroke_popover = !self.stroke_popover;
+                        self.request_main_redraw();
+                    } else if ob.fill.contains(p) {
                         self.apply_panel_action(
                             panels::Action::OpenPicker(panels::PaintSlot::Fill),
                             double,
@@ -2802,6 +2933,8 @@ impl App {
             };
             (self.effective_tool(), pen_closing)
         });
+        let stroke_flyout = self.stroke_flyout_layout(wl);
+        let stroke_style_shown = self.stroke_style_repr();
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -2839,6 +2972,9 @@ impl App {
                 zoom_cursor,
                 self.last_shape_tool,
                 self.shape_flyout,
+                self.stroke_popover,
+                stroke_style_shown,
+                stroke_flyout,
             ),
             Role::Floating(fid) => {
                 if let Some(f) = self.dock.floating(fid) {
@@ -3111,6 +3247,15 @@ impl ApplicationHandler for App {
                     self.rename_key(&event);
                     return;
                 }
+                // Escape closes the Stroke flyout before anything else acts.
+                if self.stroke_popover
+                    && event.state.is_pressed()
+                    && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+                {
+                    self.stroke_popover = false;
+                    self.request_main_redraw();
+                    return;
+                }
                 let pressed = event.state.is_pressed();
                 // Any key other than ⌘Z ends the pen re-open window.
                 if pressed && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyZ)) {
@@ -3292,6 +3437,17 @@ impl ApplicationHandler for App {
                     form.scroll = (form.scroll - dy).max(0.0);
                     self.request_main_redraw();
                     return;
+                }
+                // Scrolling over a Stroke-flyout field nudges it.
+                if self.stroke_popover && dy.abs() > 0.5 {
+                    let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+                    let lay = self.stroke_flyout_layout(w);
+                    let repr = self.stroke_style_repr();
+                    if let Some(hit) = stroke_panel::scroll_hit(&lay, &repr, self.pointer) {
+                        let dir = if dy > 0.0 { 1 } else { -1 };
+                        self.apply_stroke_flyout(hit, dir);
+                        return;
+                    }
                 }
                 // Scrolling over a Weight / Opacity field nudges it.
                 if self.picker.is_none()
@@ -3576,6 +3732,9 @@ struct OptBar {
     label_stroke: f64,
     stroke: Rect,
     label_weight: f64,
+    /// Clickable bounds of the "Stroke" word before the weight field —
+    /// opens the Stroke flyout.
+    stroke_link: Rect,
     weight_field: Rect,
     weight_up: Rect,
     weight_down: Rect,
@@ -3598,12 +3757,16 @@ fn opt_bar_layout(bar: Rect) -> OptBar {
     let fill = chip(x + 9.0);
     x += 18.0 + 8.0 + 12.0 + 16.0; // chip + gap + indicator square + gap
 
+    // The stroke colour chip carries no word of its own — it reads as
+    // "stroke" by sitting beside the Fill chip. The clickable "Stroke"
+    // label lives on the weight field instead.
     let label_stroke = x;
-    x += 42.0;
+    x += 6.0;
     let stroke = chip(x + 9.0);
     x += 18.0 + 8.0 + 12.0 + 18.0;
 
     let label_weight = x;
+    let stroke_link = Rect::new(x - 4.0, cy - 9.0, x + 42.0, cy + 9.0);
     x += 46.0;
     let weight_field = field(x, 56.0);
     x += 56.0;
@@ -3624,6 +3787,7 @@ fn opt_bar_layout(bar: Rect) -> OptBar {
         label_stroke,
         stroke,
         label_weight,
+        stroke_link,
         weight_field,
         weight_up,
         weight_down,
@@ -3685,6 +3849,7 @@ fn paint_options_bar(
     selection_count: usize,
     cur_weight: f64,
     cur_opacity: f32,
+    stroke_open: bool,
 ) {
     scene.fill(Fill::NonZero, ID, theme.strip_active, None, &bar);
     scene.fill(
@@ -3735,14 +3900,7 @@ fn paint_options_bar(
         active_slot == panels::PaintSlot::Fill,
     );
     indicator(scene, ob.fill);
-    text.draw(
-        scene,
-        "Stroke",
-        11.5,
-        theme.text_dim,
-        ob.label_stroke,
-        baseline,
-    );
+    let _ = ob.label_stroke;
     panels::draw_paint_swatch(
         scene,
         theme,
@@ -3755,15 +3913,20 @@ fn paint_options_bar(
     indicator(scene, ob.stroke);
     sep(scene, ob.label_weight - 12.0);
 
-    // Weight.
+    // Weight — labelled "Stroke", and the label opens the Stroke flyout.
     let w = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
-    text.draw(
-        scene,
-        "Weight",
-        11.5,
-        theme.text_dim,
-        ob.label_weight,
-        baseline,
+    let link_color = if stroke_open { theme.select_blue } else { theme.text };
+    text.draw(scene, "Stroke", 11.5, link_color, ob.label_weight, baseline);
+    let uw = text.measure("Stroke", 11.5);
+    scene.stroke(
+        &Stroke::new(1.0),
+        ID,
+        link_color.with_alpha(if stroke_open { 1.0 } else { 0.5 }),
+        None,
+        &vello::kurbo::Line::new(
+            (ob.label_weight, baseline + 2.0),
+            (ob.label_weight + uw, baseline + 2.0),
+        ),
     );
     draw_opt_field(
         scene,
@@ -3834,6 +3997,9 @@ fn paint_main(
     zoom_cursor: Option<bool>,
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
+    stroke_popover: bool,
+    stroke_style: StrokeStyle,
+    stroke_flyout: stroke_panel::Layout,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -3982,7 +4148,14 @@ fn paint_main(
         selection.len(),
         cur_weight,
         cur_opacity,
+        stroke_popover,
     );
+
+    // The Stroke flyout hangs off the options bar's "Stroke" link.
+    if stroke_popover {
+        let shown_weight = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
+        stroke_panel::paint(scene, text, theme, &stroke_flyout, &stroke_style, shown_weight);
+    }
 
     // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, pen_closing)) = cursor_glyph {
