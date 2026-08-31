@@ -518,9 +518,37 @@ impl App {
                 if self.effective_tool() == Tool::DirectSelect {
                     let hit_r = 6.0 / self.doc.view.zoom;
                     let shown = self.node_paths();
+
+                    // A bezier handle wins over everything — drag it to
+                    // bend the curve.
+                    if let Some((id, n, side)) =
+                        anchors::handle_at(self.doc.editor.document(), &shown, dp, hit_r)
+                    {
+                        self.doc.anchor_sel = vec![(id, n)];
+                        self.drag = Drag::MoveHandle {
+                            object: id,
+                            anchor: n,
+                            side,
+                            start_doc: dp,
+                            last_doc: dp,
+                        };
+                        self.request_main_redraw();
+                        return;
+                    }
+
                     if let Some(a) =
                         anchors::topmost_anchor_among(self.doc.editor.document(), &shown, dp, hit_r)
                     {
+                        // Alt-click an anchor toggles smooth / corner.
+                        if self.alt_down {
+                            let _ = self.doc.editor.execute(Command::ToggleAnchorSmooth {
+                                object: a.0,
+                                anchor: a.1,
+                            });
+                            self.doc.anchor_sel = vec![a];
+                            self.request_main_redraw();
+                            return;
+                        }
                         if self.shift_down {
                             if let Some(i) = self.doc.anchor_sel.iter().position(|x| *x == a) {
                                 self.doc.anchor_sel.remove(i);
@@ -531,6 +559,33 @@ impl App {
                             if !self.doc.anchor_sel.contains(&a) {
                                 self.doc.anchor_sel = vec![a];
                             }
+                            self.drag = Drag::MoveAnchors {
+                                start_doc: dp,
+                                last_doc: dp,
+                                moved: false,
+                            };
+                        }
+                        self.request_main_redraw();
+                        return;
+                    }
+
+                    // Click on a segment inserts an anchor there, then
+                    // drags it.
+                    if let Some((id, seg, t)) =
+                        anchors::segment_at(self.doc.editor.document(), &shown, dp, hit_r)
+                    {
+                        let _ = self.doc.editor.execute(Command::InsertAnchor {
+                            object: id,
+                            segment: seg,
+                            t,
+                        });
+                        if let Some(a) = anchors::topmost_anchor_among(
+                            self.doc.editor.document(),
+                            &[id],
+                            dp,
+                            hit_r * 2.0,
+                        ) {
+                            self.doc.anchor_sel = vec![a];
                             self.drag = Drag::MoveAnchors {
                                 start_doc: dp,
                                 last_doc: dp,

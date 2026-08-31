@@ -33,6 +33,7 @@ impl App {
                 dup: self.alt_down,
                 xf: None,
                 anchors: None,
+                handle: None,
             }),
             Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
                 ids: &self.doc.selection,
@@ -40,6 +41,7 @@ impl App {
                 dup: false,
                 xf: Some(preview),
                 anchors: None,
+                handle: None,
             }),
             Drag::MoveAnchors {
                 start_doc,
@@ -52,6 +54,26 @@ impl App {
                 xf: None,
                 anchors: Some((
                     self.doc.anchor_sel.as_slice(),
+                    convert::vec2_to_core(*last_doc - *start_doc),
+                )),
+                handle: None,
+            }),
+            Drag::MoveHandle {
+                object,
+                anchor,
+                side,
+                start_doc,
+                last_doc,
+            } => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                anchors: None,
+                handle: Some((
+                    *object,
+                    *anchor,
+                    *side,
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
             }),

@@ -181,6 +181,14 @@ enum Drag {
         last_doc: Point,
         moved: bool,
     },
+    /// Direct Selection: dragging one bezier handle of an anchor.
+    MoveHandle {
+        object: ObjectId,
+        anchor: usize,
+        side: amalith_core::HandleSide,
+        start_doc: Point,
+        last_doc: Point,
+    },
     /// Direct Selection: rubber-banding to select anchors. `candidate` is
     /// the object under the press — selected on release if the pointer
     /// never moved far enough to count as a marquee.
@@ -1064,7 +1072,7 @@ impl App {
         self.doc.anchor_sel
             .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
                 Some(amalith_core::ObjectKind::Path(pd)) => {
-                    amalith_core::geom::anchor_position(&pd.geometry, *i).is_some()
+                    *i < amalith_core::anchor_count(pd.subpaths())
                 }
                 _ => false,
             });

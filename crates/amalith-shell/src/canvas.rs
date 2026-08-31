@@ -61,6 +61,8 @@ pub struct DragPreview<'a> {
     pub xf: Option<&'a HashMap<ObjectId, Affine>>,
     /// Live anchor drag: `(selected anchors, document-space delta)`.
     pub anchors: Option<(&'a [(ObjectId, usize)], amalith_core::Vec2)>,
+    /// Live handle drag: `(object, anchor ordinal, side, local-space delta)`.
+    pub handle: Option<(ObjectId, usize, amalith_core::HandleSide, amalith_core::Vec2)>,
 }
 
 /// Anchor markers for the Direct Selection tool.
@@ -400,29 +402,57 @@ pub fn paint(
             .unwrap_or(Vec2::ZERO);
         let core_dv = amalith_core::Vec2::new(dv.x, dv.y);
 
-        // Outline every selected path (deformed live by any of its
-        // anchors currently being dragged).
+        let hdrag = drag.and_then(|d| d.handle);
+        let white = Color::from_rgb8(0xff, 0xff, 0xff);
+
+        // Outline every selected path, deformed live by an anchor drag or a
+        // handle drag in progress.
         for &id in av.paths {
-            let idxs: Vec<usize> = av
-                .selected
-                .iter()
-                .filter(|(o, _)| *o == id)
-                .map(|(_, i)| *i)
-                .collect();
-            if let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) {
-                let g = crate::anchors::deformed(&pd.geometry, &idxs, core_dv);
-                let m = vt * convert::affine(doc.world_transform(id));
-                // Bake the view transform into the geometry and stroke in
-                // screen space, so the contour stays a hairline at any
-                // zoom instead of scaling with it.
-                let screen = m * convert::bez_path(&g);
-                scene.stroke(
-                    &Stroke::new(1.5),
-                    Affine::IDENTITY,
-                    theme.accent,
-                    None,
-                    &screen,
-                );
+            let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) else {
+                continue;
+            };
+            let m = vt * convert::affine(doc.world_transform(id));
+            let preview_pd = hdrag
+                .filter(|&(o, ..)| o == id)
+                .map(|(_, n, side, hd)| crate::anchors::deformed_handle(pd, n, side, hd));
+            let g = if let Some(ppd) = &preview_pd {
+                ppd.geometry.clone()
+            } else {
+                let idxs: Vec<usize> = av
+                    .selected
+                    .iter()
+                    .filter(|(o, _)| *o == id)
+                    .map(|(_, i)| *i)
+                    .collect();
+                crate::anchors::deformed(pd, &idxs, core_dv)
+            };
+            // Bake the view transform into the geometry and stroke in
+            // screen space, so the contour stays a hairline at any zoom.
+            let screen = m * convert::bez_path(&g);
+            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, theme.accent, None, &screen);
+
+            // Bezier handle sticks + round dots for selected anchors.
+            let src = preview_pd.as_ref().map(|p| p.subpaths()).unwrap_or(pd.subpaths());
+            for (n, a) in src.iter().flat_map(|s| s.anchors.iter()).enumerate() {
+                if !av.selected.contains(&(id, n)) {
+                    continue;
+                }
+                let anchor_shift = if preview_pd.is_none() { core_dv } else { amalith_core::Vec2::ZERO };
+                let ap = m * convert::point(amalith_core::geom::Point::new(
+                    a.point.x + anchor_shift.x,
+                    a.point.y + anchor_shift.y,
+                ));
+                for h in [a.handle_in, a.handle_out].into_iter().flatten() {
+                    let hp = m * convert::point(amalith_core::geom::Point::new(
+                        h.x + anchor_shift.x,
+                        h.y + anchor_shift.y,
+                    ));
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.accent, None,
+                        &vello::kurbo::Line::new(ap, hp));
+                    let dot = vello::kurbo::Circle::new(hp, 3.0);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &dot);
+                    scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &dot);
+                }
             }
         }
 
@@ -430,12 +460,12 @@ pub fn paint(
         // selected (a click or a marquee), the rest go hollow —
         // Illustrator's white arrow. With none selected the path is just
         // "shown", and every anchor is solid blue.
-        let white = Color::from_rgb8(0xff, 0xff, 0xff);
         for &id in av.paths {
             let any_sel = av.selected.iter().any(|(o, _)| *o == id);
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));
-                let doc_pos = if sel { pos + dv } else { pos };
+                let moved = sel && hdrag.is_none_or(|(o, ..)| o != id);
+                let doc_pos = if moved { pos + dv } else { pos };
                 let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
                 if sel || !any_sel {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &sq);
@@ -623,7 +653,7 @@ fn paint_object(
 
     match &obj.kind {
         ObjectKind::Path(pd) => {
-            // Live anchor drag: deform this path's geometry.
+            // Live anchor drag / handle drag: deform this path's geometry.
             let idxs: Vec<usize> = drag
                 .and_then(|d| d.anchors)
                 .map(|(sel, _)| {
@@ -633,8 +663,14 @@ fn paint_object(
                         .collect()
                 })
                 .unwrap_or_default();
-            if let (false, Some((_, dv))) = (idxs.is_empty(), drag.and_then(|d| d.anchors)) {
-                let g = crate::anchors::deformed(&pd.geometry, &idxs, dv);
+            let hdrag = drag.and_then(|d| d.handle).filter(|&(o, ..)| o == id);
+            if let Some((_, n, side, hd)) = hdrag {
+                let g = crate::anchors::deformed_handle(pd, n, side, hd);
+                paint_path(scene, &convert::bez_path(&g.geometry));
+            } else if let (false, Some((_, dv))) =
+                (idxs.is_empty(), drag.and_then(|d| d.anchors))
+            {
+                let g = crate::anchors::deformed(pd, &idxs, dv);
                 paint_path(scene, &convert::bez_path(&g));
             } else {
                 paint_path(scene, &convert::bez_path(&pd.geometry));

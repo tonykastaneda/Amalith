@@ -167,6 +167,23 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            // Delete with an anchor selection removes those anchors, not
+            // the whole object. Highest ordinal first so earlier removals
+            // don't shift the rest.
+            PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                if pressed && !self.doc.anchor_sel.is_empty() =>
+            {
+                let mut sel = std::mem::take(&mut self.doc.anchor_sel);
+                sel.sort_by(|a, b| b.1.cmp(&a.1));
+                for (object, anchor) in sel {
+                    let _ = self
+                        .doc
+                        .editor
+                        .execute(Command::DeleteAnchor { object, anchor });
+                }
+                self.prune_selection();
+                self.request_main_redraw();
+            }
             PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                 if pressed && !self.doc.selection.is_empty() =>
             {

@@ -129,6 +129,23 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::MoveHandle {
+                object,
+                anchor,
+                side,
+                start_doc,
+                ..
+            } => {
+                let (object, anchor, side, start_doc) = (*object, *anchor, *side, *start_doc);
+                self.drag = Drag::MoveHandle {
+                    object,
+                    anchor,
+                    side,
+                    start_doc,
+                    last_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::PickColor { in_hue } => {
                 let in_hue = *in_hue;
                 if let Some(pk) = self.picker {
@@ -543,6 +560,24 @@ impl App {
                     let delta = convert::vec2_to_core(last_doc - start_doc);
                     let _ = self.doc.editor.execute(Command::MoveAnchors {
                         anchors: self.doc.anchor_sel.clone(),
+                        delta,
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::MoveHandle {
+                object,
+                anchor,
+                side,
+                start_doc,
+                last_doc,
+            } => {
+                let delta = convert::vec2_to_core(last_doc - start_doc);
+                if delta.x != 0.0 || delta.y != 0.0 {
+                    let _ = self.doc.editor.execute(Command::MoveHandle {
+                        object,
+                        anchor,
+                        side,
                         delta,
                     });
                     self.request_main_redraw();

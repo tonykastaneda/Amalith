@@ -108,12 +108,34 @@ pub enum Command {
         delta: Vec2,
     },
     /// Translates whole path anchors (and their cubic handles) by one shared
-    /// local-space delta. Multiple anchors on one or several paths form one
-    /// undoable gesture.
+    /// local-space delta. Anchors are flat ordinals across all subpaths.
+    /// Multiple anchors on one or several paths form one undoable gesture.
     MoveAnchors {
         anchors: Vec<(ObjectId, usize)>,
         delta: Vec2,
     },
+    /// Moves one bezier handle of anchor `anchor` (flat ordinal) on
+    /// `object` by `delta` (local space). When the anchor is a smooth /
+    /// symmetric point its opposite handle stays mirrored.
+    MoveHandle {
+        object: ObjectId,
+        anchor: usize,
+        side: amalith_core::HandleSide,
+        delta: Vec2,
+    },
+    /// Toggles anchor `anchor` (flat ordinal) on `object` between a sharp
+    /// corner (no handles) and a smooth point (mirrored handles from the
+    /// neighbour directions).
+    ToggleAnchorSmooth { object: ObjectId, anchor: usize },
+    /// Splits segment `segment` (flat ordinal) of `object` at parameter
+    /// `t`, keeping the curve shape.
+    InsertAnchor {
+        object: ObjectId,
+        segment: usize,
+        t: f64,
+    },
+    /// Removes anchor `anchor` (flat ordinal) from `object`.
+    DeleteAnchor { object: ObjectId, anchor: usize },
     /// Duplicates one object as a top child of its existing parent and moves
     /// only the copy by `delta`.
     DuplicateObject {

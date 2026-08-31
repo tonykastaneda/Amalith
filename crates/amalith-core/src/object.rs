@@ -8,7 +8,7 @@
 //! complexity in Inkscape; Amalith has no reason to take it on, since the
 //! native format is not "serialized DOM" (see `DESIGN.md`).
 use crate::appearance::Appearance;
-use crate::geom::{Affine, BezPath, PathEl, Point, Rect};
+use crate::geom::{Affine, BezPath, PathEl, Point, Rect, Vec2};
 use crate::ids::{AssetId, LayerId, ObjectId};
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +69,13 @@ impl Anchor {
             mode: HandleMode::Corner,
         }
     }
+}
+
+/// Which of an anchor's two handles an edit targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HandleSide {
+    In,
+    Out,
 }
 
 /// A single open or closed contour: an ordered run of [`Anchor`]s.
@@ -246,6 +253,197 @@ pub fn bezpath_to_subpaths(path: &BezPath) -> Vec<Subpath> {
         }
     }
     out
+}
+
+// --- anchor-model editing (flat ordinal across all subpaths, walk order) ---
+
+/// Total anchor count across every subpath.
+pub fn anchor_count(subpaths: &[Subpath]) -> usize {
+    subpaths.iter().map(|s| s.anchors.len()).sum()
+}
+
+/// The anchor at flat ordinal `n`.
+pub fn anchor_at(subpaths: &[Subpath], n: usize) -> Option<Anchor> {
+    subpaths.iter().flat_map(|s| s.anchors.iter()).nth(n).copied()
+}
+
+/// `(subpath index, index within that subpath)` for flat ordinal `n`.
+fn locate(subpaths: &[Subpath], n: usize) -> Option<(usize, usize)> {
+    let mut acc = 0;
+    for (si, s) in subpaths.iter().enumerate() {
+        if n < acc + s.anchors.len() {
+            return Some((si, n - acc));
+        }
+        acc += s.anchors.len();
+    }
+    None
+}
+
+fn anchor_at_mut(subpaths: &mut [Subpath], n: usize) -> Option<&mut Anchor> {
+    let (si, ai) = locate(subpaths, n)?;
+    subpaths[si].anchors.get_mut(ai)
+}
+
+/// Translate anchor `n` and both its handles by `delta` (local space).
+pub fn translate_anchor_n(subpaths: &mut [Subpath], n: usize, delta: Vec2) {
+    if let Some(a) = anchor_at_mut(subpaths, n) {
+        a.point += delta;
+        if let Some(h) = &mut a.handle_in {
+            *h += delta;
+        }
+        if let Some(h) = &mut a.handle_out {
+            *h += delta;
+        }
+    }
+}
+
+/// Set one handle of anchor `n` to `pos` (`None` clears it). When the
+/// anchor's [`HandleMode`] is `Smooth` / `Symmetric`, the opposite handle
+/// is kept mirrored — `Smooth` preserves the partner's own length,
+/// `Symmetric` matches it.
+pub fn set_handle(subpaths: &mut [Subpath], n: usize, side: HandleSide, pos: Option<Point>) {
+    let Some(a) = anchor_at_mut(subpaths, n) else {
+        return;
+    };
+    match side {
+        HandleSide::In => a.handle_in = pos,
+        HandleSide::Out => a.handle_out = pos,
+    }
+    let Some(new) = pos else {
+        return;
+    };
+    let partner = match side {
+        HandleSide::In => a.handle_out,
+        HandleSide::Out => a.handle_in,
+    };
+    let mirrored = match a.mode {
+        HandleMode::Corner => return,
+        HandleMode::Symmetric => Some(a.point + (a.point - new)),
+        HandleMode::Smooth => {
+            let plen = partner.map(|p| (p - a.point).hypot()).unwrap_or(0.0);
+            let dir = a.point - new;
+            let dl = dir.hypot();
+            if plen < 1e-9 || dl < 1e-9 {
+                partner
+            } else {
+                Some(a.point + dir * (plen / dl))
+            }
+        }
+    };
+    match side {
+        HandleSide::In => a.handle_out = mirrored,
+        HandleSide::Out => a.handle_in = mirrored,
+    }
+}
+
+/// Toggle anchor `n` between a sharp corner (no handles) and a smooth
+/// point whose mirrored handles are synthesised from the directions to
+/// its neighbouring anchors.
+pub fn toggle_anchor_smooth(subpaths: &mut [Subpath], n: usize) {
+    let Some((si, ai)) = locate(subpaths, n) else {
+        return;
+    };
+    let sp = &mut subpaths[si];
+    let a = sp.anchors[ai];
+    if a.handle_in.is_some() || a.handle_out.is_some() {
+        let a = &mut sp.anchors[ai];
+        a.handle_in = None;
+        a.handle_out = None;
+        a.mode = HandleMode::Corner;
+        return;
+    }
+    let m = sp.anchors.len();
+    let p = a.point;
+    let prev = if ai > 0 {
+        Some(sp.anchors[ai - 1].point)
+    } else if sp.closed && m > 1 {
+        Some(sp.anchors[m - 1].point)
+    } else {
+        None
+    };
+    let next = if ai + 1 < m {
+        Some(sp.anchors[ai + 1].point)
+    } else if sp.closed && m > 1 {
+        Some(sp.anchors[0].point)
+    } else {
+        None
+    };
+    let tangent = match (prev, next) {
+        (Some(pv), Some(nx)) => nx - pv,
+        (Some(pv), None) => p - pv,
+        (None, Some(nx)) => nx - p,
+        (None, None) => return,
+    };
+    let tl = tangent.hypot();
+    if tl < 1e-9 {
+        return;
+    }
+    let t = tangent / tl;
+    let din = prev.map(|pv| (p - pv).hypot() / 3.0).unwrap_or(tl / 3.0);
+    let dout = next.map(|nx| (nx - p).hypot() / 3.0).unwrap_or(tl / 3.0);
+    let a = &mut sp.anchors[ai];
+    a.handle_in = Some(p - t * din);
+    a.handle_out = Some(p + t * dout);
+    a.mode = HandleMode::Smooth;
+}
+
+/// Split segment `seg` (flat ordinal; open subpaths contribute
+/// `anchors-1`, closed contribute `anchors`) at parameter `t` in `0..=1`,
+/// preserving the curve. Returns the new anchor's flat ordinal.
+#[allow(clippy::needless_range_loop)] // index reused for a later &mut borrow
+pub fn insert_anchor(subpaths: &mut [Subpath], seg: usize, t: f64) -> Option<usize> {
+    let t = t.clamp(0.0, 1.0);
+    let mut acc_seg = 0;
+    let mut acc_anchor = 0;
+    for si in 0..subpaths.len() {
+        let m = subpaths[si].anchors.len();
+        let nseg = if subpaths[si].closed { m } else { m.saturating_sub(1) };
+        if seg < acc_seg + nseg {
+            let li = seg - acc_seg;
+            let sp = &mut subpaths[si];
+            let a = sp.anchors[li];
+            let b = sp.anchors[(li + 1) % m];
+            let straight = a.handle_out.is_none() && b.handle_in.is_none();
+            let c1 = a.handle_out.unwrap_or(a.point);
+            let c2 = b.handle_in.unwrap_or(b.point);
+            let p01 = a.point.lerp(c1, t);
+            let p12 = c1.lerp(c2, t);
+            let p23 = c2.lerp(b.point, t);
+            let p012 = p01.lerp(p12, t);
+            let p123 = p12.lerp(p23, t);
+            let mid = p012.lerp(p123, t);
+            let new = Anchor {
+                point: mid,
+                handle_in: (!straight).then_some(p012),
+                handle_out: (!straight).then_some(p123),
+                mode: if straight {
+                    HandleMode::Corner
+                } else {
+                    HandleMode::Smooth
+                },
+            };
+            if !straight {
+                sp.anchors[li].handle_out = Some(p01);
+                sp.anchors[(li + 1) % m].handle_in = Some(p23);
+            }
+            sp.anchors.insert(li + 1, new);
+            return Some(acc_anchor + li + 1);
+        }
+        acc_seg += nseg;
+        acc_anchor += m;
+    }
+    None
+}
+
+/// Remove anchor `n`. Neighbouring handles are left as-is (a curvature
+/// re-fit is future polish). Subpaths that fall below two anchors are
+/// dropped.
+pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
+    let Some((si, ai)) = locate(subpaths, n) else {
+        return;
+    };
+    subpaths[si].anchors.remove(ai);
+    subpaths.retain(|s| s.anchors.len() >= 2);
 }
 
 impl PathData {
@@ -666,6 +864,91 @@ mod path_data_tests {
         assert_eq!(loaded.geometry.elements(), reference.geometry.elements());
         assert_eq!(loaded.subpaths().len(), 1);
         assert_eq!(loaded.subpaths()[0].anchors.len(), 4);
+    }
+
+    fn open_curve() -> Vec<Subpath> {
+        // Two anchors joined by one cubic, the join point smooth.
+        vec![Subpath {
+            anchors: vec![
+                Anchor {
+                    point: Point::new(0.0, 0.0),
+                    handle_in: None,
+                    handle_out: Some(Point::new(10.0, 0.0)),
+                    mode: HandleMode::Corner,
+                },
+                Anchor {
+                    point: Point::new(30.0, 0.0),
+                    handle_in: Some(Point::new(20.0, 10.0)),
+                    handle_out: Some(Point::new(40.0, -10.0)),
+                    mode: HandleMode::Smooth,
+                },
+            ],
+            closed: false,
+        }]
+    }
+
+    #[test]
+    fn translate_anchor_n_moves_point_and_handles() {
+        let mut sp = open_curve();
+        translate_anchor_n(&mut sp, 1, crate::geom::Vec2::new(5.0, 2.0));
+        let a = anchor_at(&sp, 1).unwrap();
+        assert_eq!(a.point, Point::new(35.0, 2.0));
+        assert_eq!(a.handle_in, Some(Point::new(25.0, 12.0)));
+        assert_eq!(a.handle_out, Some(Point::new(45.0, -8.0)));
+    }
+
+    #[test]
+    fn set_handle_mirrors_symmetric_partner() {
+        let mut sp = open_curve();
+        sp[0].anchors[1].mode = HandleMode::Symmetric;
+        set_handle(&mut sp, 1, HandleSide::Out, Some(Point::new(30.0, 12.0)));
+        let a = anchor_at(&sp, 1).unwrap();
+        // partner is the exact reflection through the anchor.
+        assert_eq!(a.handle_in, Some(Point::new(30.0, -12.0)));
+    }
+
+    #[test]
+    fn toggle_smooth_then_corner() {
+        let mut sp = open_curve();
+        // anchor 0 is a bare corner (only an out handle -> counts as handles).
+        // Use a truly bare anchor instead.
+        sp[0].anchors[0].handle_out = None;
+        toggle_anchor_smooth(&mut sp, 0);
+        assert!(sp[0].anchors[0].handle_out.is_some());
+        assert_eq!(sp[0].anchors[0].mode, HandleMode::Smooth);
+        toggle_anchor_smooth(&mut sp, 0);
+        assert!(sp[0].anchors[0].handle_in.is_none() && sp[0].anchors[0].handle_out.is_none());
+        assert_eq!(sp[0].anchors[0].mode, HandleMode::Corner);
+    }
+
+    #[test]
+    fn insert_anchor_splits_curve_on_it() {
+        use kurbo::{CubicBez, ParamCurve};
+        let mut sp = open_curve();
+        let a = sp[0].anchors[0];
+        let b = sp[0].anchors[1];
+        let orig = CubicBez::new(
+            a.point,
+            a.handle_out.unwrap(),
+            b.handle_in.unwrap(),
+            b.point,
+        );
+        let new_ord = insert_anchor(&mut sp, 0, 0.5).unwrap();
+        assert_eq!(new_ord, 1);
+        assert_eq!(anchor_count(&sp), 3);
+        // The inserted anchor sits on the original curve at t = 0.5.
+        let mid = sp[0].anchors[1].point;
+        assert!((mid - orig.eval(0.5)).hypot() < 1e-9);
+        // Endpoints are untouched.
+        assert_eq!(sp[0].anchors[0].point, a.point);
+        assert_eq!(sp[0].anchors[2].point, b.point);
+    }
+
+    #[test]
+    fn delete_anchor_drops_degenerate_subpath() {
+        let mut sp = open_curve();
+        delete_anchor(&mut sp, 0);
+        assert!(sp.is_empty(), "a 1-anchor subpath is dropped");
     }
 
     #[test]

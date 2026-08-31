@@ -328,6 +328,20 @@ impl Editor {
     /// Compiles a public `Command` into the low-level `Edit` it performs.
     /// May read (but must not mutate) the document to resolve defaults
     /// like "append at the end" or "translate from the current transform".
+    /// A clone of `id`'s [`PathData`](amalith_core::PathData), or an error
+    /// if `id` is missing or not a path. The clone is the working copy the
+    /// anchor-editing commands mutate before emitting `Edit::SetPathData`.
+    fn path_data(&self, id: ObjectId) -> Result<amalith_core::PathData, CommandError> {
+        let object = self
+            .document
+            .object(id)
+            .ok_or(CommandError::ObjectNotFound(id))?;
+        match &object.kind {
+            ObjectKind::Path(pd) => Ok(pd.clone()),
+            _ => Err(CommandError::NotAPath(id)),
+        }
+    }
+
     fn compile(&self, command: Command) -> Result<Vec<Edit>, CommandError> {
         let edits = match command {
             Command::CreateArtboard { name, rect, index } => {
@@ -502,24 +516,60 @@ impl Editor {
                     anchors_by_object.entry(id).or_default().insert(index);
                 }
                 let mut edits = Vec::with_capacity(anchors_by_object.len());
-                for (id, indices) in anchors_by_object {
-                    let object = self
-                        .document
-                        .object(id)
-                        .ok_or(CommandError::ObjectNotFound(id))?;
-                    let ObjectKind::Path(path) = &object.kind else {
-                        return Err(CommandError::NotAPath(id));
-                    };
-                    let mut geometry = path.geometry.clone();
-                    for index in indices {
-                        amalith_core::geom::translate_anchor(&mut geometry, index, delta);
-                    }
-                    // TODO(stage 3): translate the anchor model directly so
-                    // per-anchor HandleMode is carried instead of re-inferred.
-                    let data = amalith_core::PathData::from_bezpath(geometry);
+                for (id, ordinals) in anchors_by_object {
+                    let mut data = self.path_data(id)?;
+                    data.edit_subpaths(|sp| {
+                        for n in ordinals {
+                            amalith_core::translate_anchor_n(sp, n, delta);
+                        }
+                    });
                     edits.push(Edit::SetPathData { id, data });
                 }
                 edits
+            }
+            Command::MoveHandle {
+                object,
+                anchor,
+                side,
+                delta,
+            } => {
+                let mut data = self.path_data(object)?;
+                let base = amalith_core::anchor_at(data.subpaths(), anchor)
+                    .and_then(|a| match side {
+                        amalith_core::HandleSide::In => a.handle_in,
+                        amalith_core::HandleSide::Out => a.handle_out,
+                    })
+                    .unwrap_or_else(|| {
+                        amalith_core::anchor_at(data.subpaths(), anchor)
+                            .map(|a| a.point)
+                            .unwrap_or_default()
+                    });
+                let target = base + delta;
+                data.edit_subpaths(|sp| {
+                    amalith_core::set_handle(sp, anchor, side, Some(target));
+                });
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::ToggleAnchorSmooth { object, anchor } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| amalith_core::toggle_anchor_smooth(sp, anchor));
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::InsertAnchor {
+                object,
+                segment,
+                t,
+            } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| {
+                    amalith_core::insert_anchor(sp, segment, t);
+                });
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::DeleteAnchor { object, anchor } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| amalith_core::delete_anchor(sp, anchor));
+                vec![Edit::SetPathData { id: object, data }]
             }
             Command::DuplicateObject { object, delta } => {
                 let source = self
