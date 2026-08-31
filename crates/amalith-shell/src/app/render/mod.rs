@@ -141,7 +141,7 @@ impl App {
                 && self
                     .pen
                     .first()
-                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.doc.view.zoom);
+                    .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom);
             Some(PenPreview {
                 anchors: &self.pen,
                 hover,
@@ -190,7 +190,7 @@ impl App {
                 let hover = self.doc_point(self.pointer);
                 self.pen
                     .first()
-                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.doc.view.zoom)
+                    .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom)
             };
             (self.effective_tool(), pen_closing)
         });

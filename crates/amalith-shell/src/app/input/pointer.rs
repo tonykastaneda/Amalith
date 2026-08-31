@@ -160,6 +160,37 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::PenHandle { anchor, from } => {
+                let (anchor, from) = (*anchor, *from);
+                let dp = self.doc_point(self.pointer);
+                let slop = 3.0 / self.doc.view.zoom;
+                if let Some(a) = self.pen.get_mut(anchor) {
+                    if (dp - from).hypot() > slop {
+                        let h = if self.shift_down {
+                            constrained(Some(a.point), dp, true)
+                        } else {
+                            dp
+                        };
+                        a.handle_out = Some(h);
+                        if self.alt_down {
+                            // Break the mirror — the outgoing curve is
+                            // independent of whatever comes next.
+                            a.mode = amalith_core::HandleMode::Corner;
+                            a.handle_in = None;
+                        } else {
+                            a.mode = amalith_core::HandleMode::Symmetric;
+                            a.handle_in =
+                                Some(Point::new(a.point.x * 2.0 - h.x, a.point.y * 2.0 - h.y));
+                        }
+                    } else {
+                        // Not dragged far enough — keep it a corner.
+                        a.handle_out = None;
+                        a.handle_in = None;
+                        a.mode = amalith_core::HandleMode::Corner;
+                    }
+                }
+                self.request_main_redraw();
+            }
             Drag::DrawText { start_doc, .. } => {
                 let start_doc = *start_doc;
                 self.drag = Drag::DrawText {
@@ -347,6 +378,9 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            // The handle drag has already been written into `self.pen` by
+            // `on_cursor_move`; the anchor stays placed either way.
+            Drag::PenHandle { .. } => {}
             Drag::DrawShape {
                 tool,
                 start_doc,

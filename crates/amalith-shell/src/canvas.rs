@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use amalith_core::{Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign, StrokeStyle};
-use vello::kurbo::{Affine, BezPath, Cap, Join, Point, Rect, Shape, Stroke, Vec2};
+use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -74,10 +74,21 @@ pub struct AnchorView<'a> {
     pub peek: bool,
 }
 
+/// One placed anchor of an in-progress Pen path, in document space.
+/// `handle_in` / `handle_out` are absolute control points; `None` means
+/// that side of the anchor is a straight segment.
+#[derive(Clone, Copy)]
+pub struct PenAnchor {
+    pub point: Point,
+    pub handle_in: Option<Point>,
+    pub handle_out: Option<Point>,
+    pub mode: amalith_core::HandleMode,
+}
+
 /// In-progress Pen path preview (all points in document space).
 #[derive(Clone, Copy)]
 pub struct PenPreview<'a> {
-    pub anchors: &'a [Point],
+    pub anchors: &'a [PenAnchor],
     pub hover: Point,
     /// The cursor is close enough to the first anchor to close the path.
     pub near_close: bool,
@@ -262,27 +273,61 @@ pub fn paint(
         }
     }
 
-    // Pen: in-progress path.
+    // Pen: in-progress path (real bezier segments, matching how
+    // `amalith_core::subpaths_to_bezpath` will flatten the committed path).
     if let Some(pen) = pen {
-        if let Some((&first, rest)) = pen.anchors.split_first() {
+        if let Some((first, rest)) = pen.anchors.split_first() {
+            let seg = |path: &mut BezPath, a: &PenAnchor, b: &PenAnchor| {
+                match (a.handle_out, b.handle_in) {
+                    (None, None) => path.line_to(vt * b.point),
+                    _ => path.curve_to(
+                        vt * a.handle_out.unwrap_or(a.point),
+                        vt * b.handle_in.unwrap_or(b.point),
+                        vt * b.point,
+                    ),
+                }
+            };
             let mut path = BezPath::new();
-            path.move_to(vt * first);
-            for &a in rest {
-                path.line_to(vt * a);
+            path.move_to(vt * first.point);
+            let mut prev = first;
+            for a in rest {
+                seg(&mut path, prev, a);
+                prev = a;
             }
-            path.line_to(vt * pen.hover);
-            scene.stroke(
-                &Stroke::new(1.5),
-                Affine::IDENTITY,
-                theme.accent,
-                None,
-                &path,
-            );
+            if !pen.near_close {
+                let cursor = PenAnchor {
+                    point: pen.hover,
+                    handle_in: None,
+                    handle_out: None,
+                    mode: amalith_core::HandleMode::Corner,
+                };
+                seg(&mut path, prev, &cursor);
+            }
+            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, theme.accent, None, &path);
+
             let white = Color::from_rgb8(0xff, 0xff, 0xff);
-            for (i, &a) in pen.anchors.iter().enumerate() {
+            // Handle sticks + round handle dots.
+            for a in pen.anchors {
+                let ps = vt * a.point;
+                for h in [a.handle_in, a.handle_out].into_iter().flatten() {
+                    let hs = vt * h;
+                    scene.stroke(
+                        &Stroke::new(1.0),
+                        Affine::IDENTITY,
+                        theme.accent,
+                        None,
+                        &Line::new(ps, hs),
+                    );
+                    let dot = Circle::new(hs, 3.0);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &dot);
+                    scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &dot);
+                }
+            }
+            // Square anchor markers.
+            for (i, a) in pen.anchors.iter().enumerate() {
                 let hot = i == 0 && pen.near_close;
                 let sz = if hot { 9.0 } else { 6.0 };
-                let sq = Rect::from_center_size(vt * a, (sz, sz));
+                let sq = Rect::from_center_size(vt * a.point, (sz, sz));
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
@@ -290,13 +335,7 @@ pub fn paint(
                     None,
                     &sq,
                 );
-                scene.stroke(
-                    &Stroke::new(1.25),
-                    Affine::IDENTITY,
-                    theme.accent,
-                    None,
-                    &sq,
-                );
+                scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &sq);
             }
         }
     }

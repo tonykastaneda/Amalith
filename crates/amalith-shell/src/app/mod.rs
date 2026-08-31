@@ -27,7 +27,7 @@ pub(crate) use std::time::Instant;
 pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 pub(crate) use amalith_core::{ArtboardId, Document, LayerId, ObjectId, StrokeStyle};
 pub(crate) use crate::anchors;
-pub(crate) use crate::canvas::{self, AnchorView, CanvasView, DragPreview, PenPreview};
+pub(crate) use crate::canvas::{self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview};
 pub(crate) use crate::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
@@ -169,6 +169,10 @@ enum Drag {
         start_doc: Point,
         cur_doc: Point,
     },
+    /// Pen tool: dragging a bezier handle out of the anchor just placed.
+    /// `from` is that anchor's point (document space), for the drag-slop
+    /// test and Shift constraint.
+    PenHandle { anchor: usize, from: Point },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
     /// Direct Selection: dragging the selected path anchors.
@@ -477,15 +481,15 @@ struct App {
     picker: Option<picker::Picker>,
     /// Time + position of the last left press, for double-click detection.
     last_click: Option<(Instant, Point)>,
-    /// In-progress Pen path — placed anchors in document space. Empty when
-    /// not drawing.
-    pen: Vec<Point>,
+    /// In-progress Pen path — placed anchors (with bezier handles) in
+    /// document space. Empty when not drawing.
+    pen: Vec<PenAnchor>,
     /// Anchors popped by ⌘Z while drawing, for ⌘⇧Z to restore.
-    pen_redo: Vec<Point>,
+    pen_redo: Vec<PenAnchor>,
     /// The path just committed by the Pen, so ⌘Z can re-open it a point
     /// shorter instead of undoing the whole object. Cleared by any other
     /// action.
-    last_pen: Option<(ObjectId, Vec<Point>, bool)>,
+    last_pen: Option<(ObjectId, Vec<PenAnchor>, bool)>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     theme: Theme,
@@ -1169,8 +1173,8 @@ impl App {
         }
     }
 
-    /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` makes
-    /// it a polygon; otherwise an open polyline.
+    /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` joins
+    /// the last anchor back to the first.
     fn commit_pen(&mut self, closed: bool) {
         self.pen_redo.clear();
         if self.pen.len() < 2 {
@@ -1178,16 +1182,21 @@ impl App {
             self.last_pen = None;
             return;
         }
-        let anchors: Vec<Point> = std::mem::take(&mut self.pen);
-        let pts: Vec<amalith_core::Point> = anchors
-            .iter()
-            .map(|p| amalith_core::Point::new(p.x, p.y))
-            .collect();
-        let path = if closed {
-            amalith_core::PathData::polygon(&pts)
-        } else {
-            amalith_core::PathData::polyline(&pts)
+        let anchors: Vec<PenAnchor> = std::mem::take(&mut self.pen);
+        let cp = |p: Point| amalith_core::Point::new(p.x, p.y);
+        let subpath = amalith_core::Subpath {
+            anchors: anchors
+                .iter()
+                .map(|a| amalith_core::Anchor {
+                    point: cp(a.point),
+                    handle_in: a.handle_in.map(cp),
+                    handle_out: a.handle_out.map(cp),
+                    mode: a.mode,
+                })
+                .collect(),
+            closed,
         };
+        let path = amalith_core::PathData::from_subpaths(vec![subpath]);
         let layer = self.ensure_layer();
         if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(Command::CreatePath {
             layer,

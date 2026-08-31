@@ -425,23 +425,32 @@ impl App {
                     return;
                 }
 
-                // Pen: click to place anchors; click the first anchor to
-                // close and commit.
+                // Pen: press to place an anchor, then drag to pull bezier
+                // handles out of it. Click the first anchor to close.
                 if self.active_tool == Tool::Pen {
                     let close_r = 8.0 / self.doc.view.zoom;
                     if self.pen.len() >= 3
                         && self
                             .pen
                             .first()
-                            .is_some_and(|f| (*f - dp).hypot() <= close_r)
+                            .is_some_and(|f| (f.point - dp).hypot() <= close_r)
                     {
                         self.commit_pen(true);
-                    } else {
-                        let p = constrained(self.pen.last().copied(), dp, self.shift_down);
-                        self.pen.push(p);
-                        self.pen_redo.clear();
-                        self.request_main_redraw();
+                        return;
                     }
+                    let p = constrained(self.pen.last().map(|a| a.point), dp, self.shift_down);
+                    self.pen.push(PenAnchor {
+                        point: p,
+                        handle_in: None,
+                        handle_out: None,
+                        mode: amalith_core::HandleMode::Corner,
+                    });
+                    self.pen_redo.clear();
+                    self.drag = Drag::PenHandle {
+                        anchor: self.pen.len() - 1,
+                        from: p,
+                    };
+                    self.request_main_redraw();
                     return;
                 }
 
