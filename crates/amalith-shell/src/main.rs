@@ -80,6 +80,10 @@ const TEAROFF_GRAB: Vec2 = Vec2::new(58.0, 13.0);
 
 const ID: Affine = Affine::IDENTITY;
 
+/// Placeholder dropped into a freshly created text object, selected so the
+/// first keystroke overwrites it.
+const TEXT_PLACEHOLDER: &str = "Lorem ipsum";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
     Main,
@@ -413,6 +417,9 @@ struct App {
     /// holds keyboard focus.
     layer_query: String,
     layer_search_focused: bool,
+    /// Last resizability pushed to the main window — false while the Home
+    /// screen (a fixed-size card) is up.
+    main_resizable: bool,
     /// Application settings (Amalith ▸ Preferences).
     settings: prefs::Settings,
     /// The Preferences modal, when open.
@@ -533,6 +540,7 @@ impl App {
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
+            main_resizable: true,
             settings: prefs::Settings::default(),
             prefs: None,
             active_tool: Tool::Select,
@@ -2058,8 +2066,11 @@ impl App {
     /// and open it for editing.
     fn create_text(&mut self, kind: amalith_core::TextKind, origin: Point) {
         let layer = self.ensure_layer();
+        // Seed with placeholder text, selected on open (see `enter_text_edit`),
+        // so the first keystroke replaces it — and so a click-away leaves a
+        // visible object behind instead of nothing.
         let data = amalith_core::TextData {
-            content: String::new(),
+            content: TEXT_PLACEHOLDER.to_string(),
             kind,
             style: self.text_defaults.clone(),
             align: amalith_core::TextAlign::Start,
@@ -2118,13 +2129,14 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Write the open text edit back to the document (empty & untouched →
-    /// delete the object) and leave edit mode.
+    /// Write the open text edit back to the document (an empty object is
+    /// discarded — a placeholder left untouched still has its text) and
+    /// leave edit mode.
     fn commit_text_edit(&mut self) {
         let Some(mut te) = self.text_edit.take() else {
             return;
         };
-        if te.is_empty() && !te.touched {
+        if te.is_empty() {
             let _ = self.editor.execute(Command::DeleteObject { id: te.object });
             self.selection.retain(|s| *s != te.object);
         } else {
@@ -4430,6 +4442,15 @@ impl ApplicationHandler for App {
         if self.pending_fit {
             self.fit_view();
         }
+        // The Home screen is a fixed card — lock the main window's size
+        // while it's up, restore resizing once a document is open.
+        let want_resizable = self.home.is_none();
+        if want_resizable != self.main_resizable {
+            self.main_resizable = want_resizable;
+            if let Some(h) = self.main_id.and_then(|id| self.hosts.get(&id)) {
+                h.window.set_resizable(want_resizable);
+            }
+        }
         // Modal / picker open+close changes whether the OS cursor hides.
         self.update_canvas_cursor();
         // A held Shape-slot press opens the primitive flyout.
@@ -4683,7 +4704,18 @@ impl ApplicationHandler for App {
                     match self.text_edit_key(&event) {
                         textedit::KeyResult::Handled => return,
                         textedit::KeyResult::Commit => {
+                            let obj = self.text_edit.as_ref().map(|t| t.object);
                             self.commit_text_edit();
+                            // Illustrator: Esc / ⌘Return out of the Type
+                            // tool drops to Selection with the text object
+                            // just made selected.
+                            self.set_tool(Tool::Select);
+                            if let Some(id) = obj
+                                .filter(|id| self.editor.document().object(*id).is_some())
+                            {
+                                self.selection = vec![id];
+                            }
+                            self.request_main_redraw();
                             return;
                         }
                         // ⌘Z / ⌘S / … — commit, then let the shell handle it.
