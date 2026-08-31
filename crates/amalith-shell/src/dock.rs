@@ -136,6 +136,11 @@ impl Rail {
         self.tree.is_none()
     }
 
+    /// The node reached by `path` from this rail's root, if any.
+    pub fn node_at(&self, path: &NodePath) -> Option<&Node> {
+        self.tree.as_ref().and_then(|t| node_at(t, path))
+    }
+
     pub fn panels(&self) -> Vec<PanelId> {
         let mut out = Vec::new();
         if let Some(t) = &self.tree {
@@ -614,6 +619,53 @@ fn node_at_mut<'a>(node: &'a mut Node, path: &NodePath) -> Option<&'a mut Node> 
         }
     }
     Some(cur)
+}
+
+fn node_at<'a>(node: &'a Node, path: &NodePath) -> Option<&'a Node> {
+    let mut cur = node;
+    for &i in &path.0 {
+        match cur {
+            Node::Split { children, .. } => cur = &children.get(i)?.node,
+            Node::Tabs { .. } => return None,
+        }
+    }
+    Some(cur)
+}
+
+impl Node {
+    /// Shortest height (logical px) this subtree can take before a panel's
+    /// content is clipped. `panel_min(id, width)` is a panel's natural body
+    /// height; `strip_h` the tab strip; `gap` the splitter thickness;
+    /// `width` the space available across the subtree.
+    pub fn min_height(
+        &self,
+        width: f64,
+        strip_h: f64,
+        gap: f64,
+        panel_min: &dyn Fn(PanelId, f64) -> f64,
+    ) -> f64 {
+        match self {
+            Node::Tabs { panels, active } => {
+                let body = panels
+                    .get(*active)
+                    .map_or(0.0, |p| panel_min(*p, (width - 2.0).max(0.0)));
+                strip_h + body
+            }
+            Node::Split { axis, children } => match axis {
+                Axis::Vertical => {
+                    let inner = children
+                        .iter()
+                        .map(|c| c.node.min_height(width, strip_h, gap, panel_min))
+                        .sum::<f64>();
+                    inner + gap * children.len().saturating_sub(1) as f64
+                }
+                Axis::Horizontal => children
+                    .iter()
+                    .map(|c| c.node.min_height(width, strip_h, gap, panel_min))
+                    .fold(0.0, f64::max),
+            },
+        }
+    }
 }
 
 /// Splits the node reached by `path` (from `root`), inserting `panel` on

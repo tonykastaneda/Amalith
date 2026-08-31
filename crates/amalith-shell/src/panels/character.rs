@@ -59,6 +59,8 @@ struct L {
     baseline: Field,
     rotation: Field,
     toggles: [Rect; 6],
+    /// Y of the content's bottom edge — everything above fits above this.
+    bottom: f64,
 }
 
 struct Field {
@@ -110,6 +112,7 @@ fn layout(body: Rect) -> L {
         let tx = x + i as f64 * (tw + tgap);
         Rect::new(tx, y, tx + tw, y + 26.0)
     });
+    let bottom = y + 26.0 + PAD;
 
     L {
         family,
@@ -123,7 +126,17 @@ fn layout(body: Rect) -> L {
         baseline,
         rotation,
         toggles,
+        bottom,
     }
+}
+
+/// The shortest body this panel can occupy with every control visible.
+/// The splitter drag clamps to this so a stacked panel can't be dragged
+/// down over its own contents.
+pub fn natural_height() -> f64 {
+    // Width doesn't affect the vertical layout; any sane value works.
+    let l = layout(Rect::new(0.0, 0.0, 240.0, 4000.0));
+    l.bottom
 }
 
 fn fmt_pt(v: f64) -> String {

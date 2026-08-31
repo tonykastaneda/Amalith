@@ -50,6 +50,15 @@ fn cols(body: Rect) -> usize {
     }
 }
 
+/// Shortest body that still shows every tool plus the fill / stroke chips,
+/// for the splitter-drag minimum. Depends on width via the column reflow.
+pub(super) fn natural_height(width: f64) -> f64 {
+    let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
+    let rows = 6usize.div_ceil(cols) as f64;
+    // grid + the bottom-anchored fill / stroke chip block (see `tool_chips`).
+    TOP + rows * CELL + 12.0 + 44.0
+}
+
 /// Button rect for slot index `i`, row-major, grid centred in `body`.
 fn cell(body: Rect, i: usize, cols: usize) -> Rect {
     let grid_w = cols as f64 * CELL;

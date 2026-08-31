@@ -261,7 +261,34 @@ struct FontMenuState {
     /// The field the menu drops from, in screen coords.
     anchor: Rect,
     items: Vec<String>,
+    /// Type-to-filter text. Empty ⇒ the whole list, no filter header.
+    query: String,
     scroll: f64,
+}
+
+impl FontMenuState {
+    /// Entries after the type-to-filter query (all of them when blank),
+    /// case-insensitive substring match.
+    fn matches(&self) -> Vec<String> {
+        let q = self.query.trim().to_lowercase();
+        if q.is_empty() {
+            return self.items.clone();
+        }
+        self.items
+            .iter()
+            .filter(|it| it.to_lowercase().contains(&q))
+            .cloned()
+            .collect()
+    }
+
+    /// Height of the filter header row (0 when there's no query).
+    fn header_h(&self, row: f64) -> f64 {
+        if self.query.trim().is_empty() {
+            0.0
+        } else {
+            row
+        }
+    }
 }
 
 /// One open document's worth of state. The *active* tab's copy lives
@@ -382,6 +409,10 @@ struct App {
     font_menu: Option<FontMenuState>,
     /// Hover tooltip, if the pointer has been resting on a labelled control.
     tooltip: Option<Tooltip>,
+    /// Layers panel search: the current filter text, and whether the field
+    /// holds keyboard focus.
+    layer_query: String,
+    layer_search_focused: bool,
     /// Application settings (Amalith ▸ Preferences).
     settings: prefs::Settings,
     /// The Preferences modal, when open.
@@ -500,6 +531,8 @@ impl App {
             font_families: Vec::new(),
             font_menu: None,
             tooltip: None,
+            layer_query: String::new(),
+            layer_search_focused: false,
             settings: prefs::Settings::default(),
             prefs: None,
             active_tool: Tool::Select,
@@ -747,6 +780,11 @@ impl App {
                     self.focus_artboard(id);
                 }
             }
+            panels::Action::FocusLayerSearch => {
+                self.rename = None;
+                self.layer_search_focused = true;
+                self.request_main_redraw();
+            }
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
             // Single click just picks the slot; double click opens the
             // colour picker (Illustrator behaviour).
@@ -982,6 +1020,7 @@ impl App {
             kind,
             anchor,
             items,
+            query: String::new(),
             scroll: 0.0,
         });
         self.request_main_redraw();
@@ -992,10 +1031,15 @@ impl App {
 
     fn font_menu_rect(m: &FontMenuState) -> Rect {
         let w = m.anchor.width().max(190.0);
-        let rows = m.items.len().min(Self::FM_ROWS).max(1) as f64;
+        let rows = m.matches().len().min(Self::FM_ROWS).max(1) as f64;
         let x = m.anchor.x0;
         let y = m.anchor.y1 + 2.0;
-        Rect::new(x, y, x + w, y + rows * Self::FM_ROW + 6.0)
+        Rect::new(
+            x,
+            y,
+            x + w,
+            y + m.header_h(Self::FM_ROW) + rows * Self::FM_ROW + 6.0,
+        )
     }
 
     /// A click while a font dropdown is open. Returns true if consumed.
@@ -1009,37 +1053,89 @@ impl App {
             self.request_main_redraw();
             return true;
         }
-        let idx = ((p.y - outer.y0 - 3.0 + m.scroll) / Self::FM_ROW).floor() as isize;
-        if idx >= 0 && (idx as usize) < m.items.len() {
+        let header = m.header_h(Self::FM_ROW);
+        let items = m.matches();
+        let idx =
+            ((p.y - outer.y0 - 3.0 - header + m.scroll) / Self::FM_ROW).floor() as isize;
+        if idx >= 0 && (idx as usize) < items.len() {
             let kind = m.kind;
-            let label = m.items[idx as usize].clone();
+            let label = items[idx as usize].clone();
             self.font_menu = None;
-            match kind {
-                panels::FontMenu::Family => {
-                    self.apply_panel_action(panels::Action::SetFontFamily(label), false);
+            self.apply_font_choice(kind, label);
+        }
+        self.request_main_redraw();
+        true
+    }
+
+    /// Commit a chosen dropdown label back to the text style.
+    fn apply_font_choice(&mut self, kind: panels::FontMenu, label: String) {
+        match kind {
+            panels::FontMenu::Family => {
+                self.apply_panel_action(panels::Action::SetFontFamily(label), false);
+            }
+            panels::FontMenu::Size => {
+                if let Ok(v) = label.parse::<f64>() {
+                    self.apply_panel_action(panels::Action::SetFontSize(v), false);
                 }
-                panels::FontMenu::Size => {
-                    if let Ok(v) = label.parse::<f64>() {
-                        self.apply_panel_action(panels::Action::SetFontSize(v), false);
+            }
+            panels::FontMenu::Style => {
+                // Resolve the label back to weight/italic via the family's faces.
+                let fam = self.active_text_style().family;
+                let (fc, _) = self.text.parts();
+                let face = fc.collection.family_by_name(&fam).and_then(|info| {
+                    info.fonts().iter().find_map(|font| {
+                        let w = font.weight().value().round() as u16;
+                        let italic = !matches!(font.style(), parley::style::FontStyle::Normal);
+                        (panels::character::face_label(w, italic) == label).then_some((w, italic))
+                    })
+                });
+                if let Some((weight, italic)) = face {
+                    self.apply_panel_action(
+                        panels::Action::SetFontFace { weight, italic },
+                        false,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Keyboard while a font dropdown is open: type to filter, Backspace to
+    /// trim, Enter to take the top match, Escape to dismiss.
+    fn font_menu_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.font_menu.is_none() {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.font_menu = None;
+            }
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                if let Some(m) = &self.font_menu {
+                    let pick = m.matches().into_iter().next();
+                    let kind = m.kind;
+                    self.font_menu = None;
+                    if let Some(label) = pick {
+                        self.apply_font_choice(kind, label);
                     }
                 }
-                panels::FontMenu::Style => {
-                    // Resolve the label back to weight/italic via the family's faces.
-                    let fam = self.active_text_style().family;
-                    let (fc, _) = self.text.parts();
-                    let face = fc.collection.family_by_name(&fam).and_then(|info| {
-                        info.fonts().iter().find_map(|font| {
-                            let w = font.weight().value().round() as u16;
-                            let italic = !matches!(font.style(), parley::style::FontStyle::Normal);
-                            (panels::character::face_label(w, italic) == label)
-                                .then_some((w, italic))
-                        })
-                    });
-                    if let Some((weight, italic)) = face {
-                        self.apply_panel_action(
-                            panels::Action::SetFontFace { weight, italic },
-                            false,
-                        );
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some(m) = &mut self.font_menu {
+                    m.query.pop();
+                    m.scroll = 0.0;
+                }
+            }
+            _ => {
+                if let Some(txt) = event.text.as_ref() {
+                    let add: String = txt.chars().filter(|c| !c.is_control()).collect();
+                    if !add.is_empty() {
+                        if let Some(m) = &mut self.font_menu {
+                            m.query.push_str(&add);
+                            m.scroll = 0.0;
+                        }
                     }
                 }
             }
@@ -1075,8 +1171,10 @@ impl App {
                 format!("{}", self.active_text_style().size.round() as i64)
             }
         };
-        for (i, label) in m.items.iter().enumerate() {
-            let y = outer.y0 + 3.0 + i as f64 * Self::FM_ROW - m.scroll;
+        let header = m.header_h(Self::FM_ROW);
+        let items = m.matches();
+        for (i, label) in items.iter().enumerate() {
+            let y = outer.y0 + 3.0 + header + i as f64 * Self::FM_ROW - m.scroll;
             if y + Self::FM_ROW < outer.y0 || y > outer.y1 {
                 continue;
             }
@@ -1094,6 +1192,41 @@ impl App {
                 if sel { th.accent } else { th.text },
                 row.x0 + 10.0,
                 row.center().y + 4.0,
+            );
+        }
+        // The type-to-filter row, drawn last so scrolled entries can't
+        // bleed over it.
+        if header > 0.0 {
+            let hrow = Rect::new(
+                outer.x0,
+                outer.y0 + 3.0,
+                outer.x1,
+                outer.y0 + 3.0 + Self::FM_ROW,
+            );
+            self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &hrow);
+            self.content.fill(
+                Fill::NonZero,
+                ID,
+                th.border,
+                None,
+                &Rect::new(outer.x0, hrow.y1, outer.x1, hrow.y1 + 1.0),
+            );
+            let qx = hrow.x0 + 10.0;
+            let qw = self.text.measure(&m.query, 12.0);
+            self.text.draw(
+                &mut self.content,
+                &m.query,
+                12.0,
+                th.text,
+                qx,
+                hrow.center().y + 4.0,
+            );
+            self.content.fill(
+                Fill::NonZero,
+                ID,
+                th.accent,
+                None,
+                &Rect::new(qx + qw + 1.0, hrow.y0 + 4.0, qx + qw + 2.4, hrow.y1 - 4.0),
             );
         }
         self.content.pop_layer();
@@ -1174,6 +1307,43 @@ impl App {
                 }
             }
         }
+        true
+    }
+
+    /// Keyboard while the Layers search field has focus. Mirrors
+    /// [`Self::rename_key`]: printable chars extend the query, Backspace
+    /// trims it, Enter / Escape blur the field (Escape on an empty query
+    /// clears the filter). Always consumes the key while focused.
+    fn layer_search_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if !self.layer_search_focused {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.layer_search_focused = false;
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                if self.layer_query.is_empty() {
+                    self.layer_search_focused = false;
+                } else {
+                    self.layer_query.clear();
+                }
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                self.layer_query.pop();
+            }
+            _ => {
+                if let Some(txt) = event.text.as_ref() {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        self.layer_query.push(ch);
+                    }
+                }
+            }
+        }
+        self.request_main_redraw();
         true
     }
 
@@ -2190,6 +2360,8 @@ impl App {
             text_style: amalith_core::TextStyle::default(),
             text_editing: false,
             font_families: &self.font_families,
+            layer_query: &self.layer_query,
+            layer_search_focused: self.layer_search_focused,
         }
     }
 
@@ -2459,15 +2631,43 @@ impl App {
         }
     }
 
+    /// The on-screen size of `panel` while it's docked in a rail, if it is.
+    fn panel_dock_size(&mut self, panel: PanelId) -> Option<(f64, f64)> {
+        let (w, h) = self.main_logical_size()?;
+        for side in [RailSide::Left, RailSide::Right] {
+            let rail = self.dock.rail(side);
+            if rail.is_empty() {
+                continue;
+            }
+            let rect = rail_rect_for(side, rail.width as f64, w, h);
+            let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+            if let Some(area) = laid
+                .areas
+                .iter()
+                .find(|a| a.tabs.iter().any(|t| t.panel == panel))
+            {
+                return Some((area.bounds.width(), area.bounds.height()));
+            }
+        }
+        None
+    }
+
     /// Tear `panel` out of the main rail into a new borderless window that
-    /// starts under the cursor, and begin moving it.
+    /// starts under the cursor, and begin moving it. The window keeps the
+    /// size the panel had while docked.
     fn tear_off(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, main_local_press: Point) {
         let global = self.main_inner_origin() + main_local_press.to_vec2();
-        let pos = global - TEAROFF_GRAB;
-        let id = match self.dock.detach(
-            panel,
-            [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32],
-        ) {
+        let (fw, fh) = self
+            .panel_dock_size(panel)
+            .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
+            .unwrap_or((FLOAT_W, FLOAT_H));
+        // Keep the cursor grip inside the (possibly narrow) torn-off window.
+        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let pos = global - grab;
+        let id = match self
+            .dock
+            .detach(panel, [pos.x as f32, pos.y as f32, fw as f32, fh as f32])
+        {
             Some(id) => id,
             None => return,
         };
@@ -2477,7 +2677,7 @@ impl App {
             .with_decorations(false)
             .with_resizable(true)
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-            .with_inner_size(LogicalSize::new(FLOAT_W, FLOAT_H))
+            .with_inner_size(LogicalSize::new(fw, fh))
             .with_position(LogicalPosition::new(pos.x, pos.y));
         let window = Arc::new(
             event_loop
@@ -2488,11 +2688,7 @@ impl App {
         let host = self.make_host(window.clone(), Role::Floating(id));
         self.hosts.insert(wid, host);
 
-        self.drag = Drag::MovingFloating {
-            id,
-            grab: TEAROFF_GRAB,
-            pos,
-        };
+        self.drag = Drag::MovingFloating { id, grab, pos };
         window.request_redraw();
         self.request_main_redraw();
     }
@@ -2511,6 +2707,9 @@ impl App {
         // Any press ends the "⌘Z re-opens the last pen path" window.
         self.last_pen = None;
         self.tooltip = None;
+        // A press anywhere blurs the Layers search field; a hit on the
+        // field itself re-focuses it later in this handler.
+        self.layer_search_focused = false;
         // An open Character-panel dropdown is topmost — it eats the press.
         if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
             return;
@@ -2831,6 +3030,8 @@ impl App {
                                         text_style: self.active_text_style(),
                                         text_editing: self.text_edit.is_some(),
                                         font_families: &self.font_families,
+                                        layer_query: &self.layer_query,
+                                        layer_search_focused: self.layer_search_focused,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -3178,6 +3379,8 @@ impl App {
                                     text_style: self.active_text_style(),
                                     text_editing: self.text_edit.is_some(),
                                     font_families: &self.font_families,
+                                    layer_query: &self.layer_query,
+                                    layer_search_focused: self.layer_search_focused,
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };
@@ -3237,7 +3440,36 @@ impl App {
                     .iter()
                     .find(|s| s.path == path && s.index == gap)
                 {
-                    let frac = sp.frac_at(self.pointer);
+                    let mut frac = sp.frac_at(self.pointer);
+                    // A vertical drag must not crush either neighbour below
+                    // its active panel's own content height.
+                    if sp.axis == Axis::Vertical {
+                        if let Some(Node::Split { children, .. }) =
+                            self.dock.rail(side).node_at(&path)
+                        {
+                            if let (Some(a), Some(b)) =
+                                (children.get(gap), children.get(gap + 1))
+                            {
+                                let strip_h = self.theme.tab_strip_h;
+                                let g = self.theme.splitter_thickness;
+                                let w = sp.before.width();
+                                let min_a =
+                                    a.node.min_height(w, strip_h, g, &panels::min_body_height);
+                                let min_b =
+                                    b.node.min_height(w, strip_h, g, &panels::min_body_height);
+                                let span = sp.after.y1 - sp.before.y0;
+                                if span > 0.0 {
+                                    let lo = (min_a / span) as f32;
+                                    let hi = 1.0 - (min_b / span) as f32;
+                                    frac = if lo <= hi {
+                                        frac.clamp(lo, hi)
+                                    } else {
+                                        (lo + hi) * 0.5
+                                    };
+                                }
+                            }
+                        }
+                    }
                     self.dock.rail_mut(side).set_boundary(&path, gap, frac);
                     self.request_main_redraw();
                 }
@@ -4013,6 +4245,8 @@ impl App {
                 panel_text_style,
                 panel_text_editing,
                 &self.font_families,
+                &self.layer_query,
+                self.layer_search_focused,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -4045,6 +4279,8 @@ impl App {
                             text_style: panel_text_style.clone(),
                             text_editing: panel_text_editing,
                             font_families: &self.font_families,
+                            layer_query: &self.layer_query,
+                            layer_search_focused: self.layer_search_focused,
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -4429,8 +4665,17 @@ impl ApplicationHandler for App {
                 if self.home.is_some() && !self.cmd_down {
                     return;
                 }
+                // An open font dropdown takes keys to type-to-filter.
+                if self.font_menu.is_some() {
+                    self.font_menu_key(&event);
+                    return;
+                }
                 if self.rename.is_some() {
                     self.rename_key(&event);
+                    return;
+                }
+                if self.layer_search_focused {
+                    self.layer_search_key(&event);
                     return;
                 }
                 // The Type tool's live editor gets first crack at every key.
@@ -4621,10 +4866,10 @@ impl ApplicationHandler for App {
                     self.request_main_redraw();
                     return;
                 }
-                // An open font dropdown scrolls its list.
+                // An open font dropdown scrolls its (filtered) list.
                 if let Some(m) = &mut self.font_menu {
-                    let max = (m.items.len() as f64 * Self::FM_ROW
-                        - Self::FM_ROWS as f64 * Self::FM_ROW)
+                    let shown = m.matches().len();
+                    let max = ((shown.saturating_sub(Self::FM_ROWS)) as f64 * Self::FM_ROW)
                         .max(0.0);
                     m.scroll = (m.scroll - dy).clamp(0.0, max);
                     self.request_main_redraw();
@@ -4674,18 +4919,11 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Right rail: Layers over an Artboards/Swatches tab group.
+/// Right rail: a Character/Swatches tab group over a Layers/Artboards one.
 fn demo_right_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
         children: vec![
-            Child {
-                node: Node::Tabs {
-                    panels: vec![PanelId("layers")],
-                    active: 0,
-                },
-                weight: 1.6,
-            },
             Child {
                 node: Node::Tabs {
                     panels: vec![PanelId("character"), PanelId("swatches")],
@@ -4695,10 +4933,10 @@ fn demo_right_dock() -> Node {
             },
             Child {
                 node: Node::Tabs {
-                    panels: vec![PanelId("artboards")],
+                    panels: vec![PanelId("layers"), PanelId("artboards")],
                     active: 0,
                 },
-                weight: 0.8,
+                weight: 1.6,
             },
         ],
     }
@@ -5254,6 +5492,8 @@ fn paint_main(
     text_style: amalith_core::TextStyle,
     text_editing: bool,
     font_families: &[String],
+    layer_query: &str,
+    layer_search_focused: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -5375,10 +5615,17 @@ fn paint_main(
                 text_style: text_style.clone(),
                 text_editing,
                 font_families,
+                layer_query,
+                layer_search_focused,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                    // Clip to the body so a panel dragged shorter than its
+                    // content spills nothing past the splitter — matches
+                    // the floating-panel path.
+                    scene.push_clip_layer(Fill::NonZero, ID, &area.body);
                     panels::paint(scene, text, pid, area.body, &ctx);
+                    scene.pop_layer();
                 }
             }
             // Bar on the canvas-facing edge — the whole-rail resize handle.

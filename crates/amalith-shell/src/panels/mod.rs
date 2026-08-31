@@ -96,6 +96,10 @@ pub struct Ctx<'a> {
     pub text_editing: bool,
     /// Installed font family names, sorted (for the family dropdown).
     pub font_families: &'a [String],
+    /// Layers panel: the current filter text (empty = show everything).
+    pub layer_query: &'a str,
+    /// Layers panel: whether the search field holds keyboard focus.
+    pub layer_search_focused: bool,
 }
 
 /// A character-attribute flag toggled from the Character panel.
@@ -140,6 +144,8 @@ pub enum Action {
     ToggleLocked(ObjectId),
     /// Layers panel: expand / collapse a group row.
     ToggleExpand(ObjectId),
+    /// Layers panel: the search field was clicked — give it keyboard focus.
+    FocusLayerSearch,
     /// Tools panel: the Shape slot was clicked (tap = last shape tool,
     /// hold = flyout).
     ShapeSlot,
@@ -186,6 +192,21 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
         _ => Action::None,
+    }
+}
+
+/// A panel's natural body height — the shortest it can be before its
+/// content would be clipped. The dock uses this to stop a splitter drag
+/// from shrinking a stacked panel down over its own contents. Fixed-layout
+/// panels report their full height; list panels report a short floor and
+/// clip past it.
+pub fn min_body_height(id: PanelId, width: f64) -> f64 {
+    match id.0 {
+        "character" => character::natural_height(),
+        "tools" => tools::natural_height(width),
+        "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
+        "artboards" | "swatches" => 132.0,
+        _ => 60.0,
     }
 }
 

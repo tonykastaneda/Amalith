@@ -20,6 +20,75 @@ use super::{
 const INDENT: f64 = 14.0;
 const COL: f64 = 16.0;
 
+/// Height reserved at the top of the panel body for the search field.
+pub(super) const SEARCH_H: f64 = 34.0;
+
+/// The layer / object rows to show, after the search filter. A blank
+/// query shows the whole tree; otherwise only rows whose name contains
+/// the query (case-insensitive), flattened.
+fn visible_rows(ctx: &Ctx) -> Vec<LayerRow> {
+    let rows = layer_rows(ctx.doc, ctx.expanded);
+    let q = ctx.layer_query.trim().to_lowercase();
+    if q.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|r| r.label.to_lowercase().contains(&q))
+        .collect()
+}
+
+/// The search field box, inset from the panel edges.
+fn search_box(body: Rect) -> Rect {
+    Rect::new(body.x0 + PAD, body.y0 + 7.0, body.x1 - PAD, body.y0 + SEARCH_H - 7.0)
+}
+
+fn draw_search(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
+    let th = ctx.theme;
+    let box_ = search_box(body);
+    scene.fill(Fill::NonZero, ID, th.bg, None, &box_);
+    let border = if ctx.layer_search_focused {
+        th.accent
+    } else {
+        th.border
+    };
+    scene.stroke(&Stroke::new(1.25), ID, border, None, &box_);
+
+    // Magnifier: a ring plus a short handle.
+    let cy = box_.y0 + box_.height() * 0.5;
+    let gx = box_.x0 + 12.0;
+    let ring = vello::kurbo::Circle::new((gx, cy - 0.5), 4.0);
+    scene.stroke(&Stroke::new(1.4), ID, th.text_dim, None, &ring);
+    let mut handle = BezPath::new();
+    handle.move_to((gx + 3.0, cy + 2.5));
+    handle.line_to((gx + 6.5, cy + 6.0));
+    scene.stroke(&Stroke::new(1.4), ID, th.text_dim, None, &handle);
+
+    let tx = box_.x0 + 24.0;
+    let baseline = cy + 4.0;
+    let (label, color): (&str, Color) = if ctx.layer_query.is_empty() {
+        ("Search All", th.text_dim)
+    } else {
+        (ctx.layer_query, th.text)
+    };
+    text.draw(scene, label, 12.0, color, tx, baseline);
+
+    if ctx.layer_search_focused {
+        let after = if ctx.layer_query.is_empty() {
+            0.0
+        } else {
+            text.measure(ctx.layer_query, 12.0)
+        };
+        let cx = tx + after + 1.0;
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            th.text,
+            None,
+            &Rect::new(cx, box_.y0 + 4.0, cx + 1.4, box_.y1 - 4.0),
+        );
+    }
+}
+
 enum RowKind {
     Layer(LayerId),
     Object { id: ObjectId, is_group: bool },
@@ -101,13 +170,15 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
 }
 
 pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
-    let hot_row = if body.contains(ctx.pointer) {
-        Some(((ctx.pointer.y - body.y0) / ROW_H).floor() as i64)
+    draw_search(scene, text, ctx, body);
+    let list = Rect::new(body.x0, body.y0 + SEARCH_H, body.x1, body.y1);
+    let hot_row = if list.contains(ctx.pointer) {
+        Some(((ctx.pointer.y - list.y0) / ROW_H).floor() as i64)
     } else {
         None
     };
-    for (i, row) in layer_rows(ctx.doc, ctx.expanded).into_iter().enumerate() {
-        let r = row_rect(body, i);
+    for (i, row) in visible_rows(ctx).into_iter().enumerate() {
+        let r = row_rect(list, i);
         let indent = body.x0 + PAD + row.depth as f64 * INDENT;
 
         match row.kind {
@@ -228,8 +299,12 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             Action::None
         };
     }
-    let rows = layer_rows(ctx.doc, ctx.expanded);
-    let i = ((local.y - body.y0) / ROW_H).floor();
+    // The search field owns the top strip.
+    if local.y < body.y0 + SEARCH_H {
+        return Action::FocusLayerSearch;
+    }
+    let rows = visible_rows(ctx);
+    let i = ((local.y - (body.y0 + SEARCH_H)) / ROW_H).floor();
     if i < 0.0 {
         return Action::None;
     }
