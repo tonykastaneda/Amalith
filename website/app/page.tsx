@@ -86,7 +86,7 @@ export default function Home() {
 
         <section className="principles section-shell">
           <p className="section-number">05 / Built in public</p>
-          <h2>Free to use.<br />Open by default.<br /><em>Yours to shape.</em></h2>
+          <h2>Open to All.<br /><em>Yours to shape.</em></h2>
           <div className="principles__grid">
             <p>No subscription</p><p>No mandatory account</p><p>No proprietary cloud</p>
             <p>Open document format</p><p>macOS, Windows &amp; Linux</p><p>MIT or Apache 2.0</p>
