@@ -53,7 +53,7 @@ export function Header({ basePath }: { basePath: string }) {
         <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
       <a className="get-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">
-        Get Amalith
+        Coming Soon
       </a>
       <details className="mobile-nav">
         <summary>Menu</summary>
