@@ -168,6 +168,15 @@ pub enum Action {
     ToggleTextFlag(TextFlag),
     /// Open a Character-panel dropdown, anchored at the given screen rect.
     OpenFontMenu(FontMenu, Rect),
+    // --- context bar ---
+    /// Nudge the options-bar stroke Weight (`+1` / `-1`).
+    StepWeight(i32),
+    /// Nudge the options-bar Opacity (`+1` / `-1`).
+    StepOpacity(i32),
+    /// Nudge the options-bar font size by this many points.
+    StepFontSize(f64),
+    /// Open / close the Stroke flyout from its "Stroke" link.
+    ToggleStrokeFlyout,
 }
 
 /// Draw panel `id`'s body into `body`.

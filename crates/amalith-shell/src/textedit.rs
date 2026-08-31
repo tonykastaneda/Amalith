@@ -9,8 +9,14 @@
 
 use std::borrow::Cow;
 
+use amalith_core::geom as cg;
 use amalith_core::{TextAlign, TextData, TextKind, TextPosition, TextStyle};
 use parley::layout::PositionedLayoutItem;
+use skrifa::{
+    instance::{LocationRef, Size},
+    outline::{DrawSettings, OutlinePen},
+    GlyphId, MetadataProvider,
+};
 use parley::style::{
     FontFamily, FontFamilyName, FontFeatures, FontStyle, FontWeight, LineHeight, StyleProperty,
 };
@@ -570,6 +576,133 @@ pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::
             amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h).max(h))
         }
     }
+}
+
+/// Sinks one glyph's contours into a core [`BezPath`], each point pushed
+/// through `xf`.
+struct OutlineSink<'a> {
+    path: &'a mut cg::BezPath,
+    xf: cg::Affine,
+    started: bool,
+}
+
+impl OutlinePen for OutlineSink<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        if self.started {
+            self.path.close_path();
+        }
+        self.path.move_to(self.xf * cg::Point::new(x as f64, y as f64));
+        self.started = true;
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.path.line_to(self.xf * cg::Point::new(x as f64, y as f64));
+    }
+    fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
+        self.path.quad_to(
+            self.xf * cg::Point::new(cx as f64, cy as f64),
+            self.xf * cg::Point::new(x as f64, y as f64),
+        );
+    }
+    fn curve_to(&mut self, c0x: f32, c0y: f32, c1x: f32, c1y: f32, x: f32, y: f32) {
+        self.path.curve_to(
+            self.xf * cg::Point::new(c0x as f64, c0y as f64),
+            self.xf * cg::Point::new(c1x as f64, c1y as f64),
+            self.xf * cg::Point::new(x as f64, y as f64),
+        );
+    }
+    fn close(&mut self) {
+        if self.started {
+            self.path.close_path();
+            self.started = false;
+        }
+    }
+}
+
+/// Convert a committed [`TextData`]'s glyphs into one filled path in the
+/// text object's local space — the same frame [`paint_text_data`] draws
+/// in, so the result drops straight under the text object's transform.
+/// Used by Type ▸ Create Outlines (⌘⇧O).
+pub fn outline_text_data(td: &TextData, tcx: &mut TextContext) -> cg::BezPath {
+    let mut out = cg::BezPath::new();
+    if td.content.is_empty() {
+        return out;
+    }
+    let width = match td.kind {
+        TextKind::Area { width, .. } => Some(width as f32),
+        TextKind::Point => None,
+    };
+    let (fc, lc) = tcx.parts();
+    let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
+    b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
+        FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
+    ]))));
+    b.push_default(StyleProperty::FontSize(td.style.size as f32));
+    b.push_default(StyleProperty::FontWeight(FontWeight::new(
+        td.style.weight as f32,
+    )));
+    b.push_default(StyleProperty::FontStyle(if td.style.italic {
+        FontStyle::Italic
+    } else {
+        FontStyle::Normal
+    }));
+    b.push_default(StyleProperty::LineHeight(line_height(&td.style)));
+    b.push_default(StyleProperty::LetterSpacing(
+        (td.style.tracking / 1000.0 * td.style.size) as f32,
+    ));
+    b.push_default(StyleProperty::FontFeatures(FontFeatures::from(features(
+        &td.style,
+    ))));
+    let mut layout = b.build(&td.content);
+    layout.break_all_lines(width);
+    layout.align(
+        alignment(td.align),
+        parley::layout::AlignmentOptions::default(),
+    );
+
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(run) = item else {
+                continue;
+            };
+            let mut gx = run.offset();
+            let gy = run.baseline();
+            let r = run.run();
+            let font = r.font();
+            let font_size = r.font_size();
+            // parley hands back the raw fixed-point bits; skrifa wants its
+            // `NormalizedCoord` newtype. Usually empty (non-variable font).
+            let loc: Vec<skrifa::instance::NormalizedCoord> = r
+                .normalized_coords()
+                .iter()
+                .map(|&c| skrifa::instance::NormalizedCoord::from_bits(c))
+                .collect();
+            let Ok(font_ref) = skrifa::FontRef::from_index(font.data.as_ref(), font.index) else {
+                continue;
+            };
+            let glyphs = font_ref.outline_glyphs();
+            for g in run.glyphs() {
+                let x = (gx + g.x) as f64;
+                let y = (gy - g.y) as f64;
+                gx += g.advance;
+                let Some(glyph) = glyphs.get(GlyphId::new(g.id as u32)) else {
+                    continue;
+                };
+                // skrifa emits px, y-up, glyph origin; the layout frame is
+                // y-down with this glyph's baseline at `y`.
+                let xf = cg::Affine::new([1.0, 0.0, 0.0, -1.0, x, y]);
+                let mut sink = OutlineSink {
+                    path: &mut out,
+                    xf,
+                    started: false,
+                };
+                let settings =
+                    DrawSettings::unhinted(Size::new(font_size), LocationRef::new(&loc));
+                let _ = glyph.draw(settings, &mut sink);
+                sink.close();
+            }
+        }
+    }
+    out
 }
 
 /// The shared vello glyph-run loop.

@@ -28,8 +28,13 @@ pub struct Theme {
     /// The solid Illustrator-style insertion line.
     pub drop_line: Color,
     /// App accent — selection box, transform handles, active-tab underline,
-    /// drop indicator, focus rings. Amalith gold.
+    /// drop indicator, focus rings. User-settable in Preferences; blue by
+    /// default. Set via [`Theme::set_accent`] so the derived tokens below
+    /// stay in step.
     pub accent: Color,
+    /// Legible ink for text / glyphs drawn *on* `accent` — near-black on a
+    /// light accent, white on a dark one.
+    pub on_accent: Color,
     /// Faint fill inside a live marquee.
     pub marquee_fill: Color,
     /// Artboard hairline and its name label.
@@ -46,6 +51,25 @@ pub struct Theme {
     pub tab_pad_x: f64,
 }
 
+impl Theme {
+    /// Point the accent at `c` and refresh every token derived from it
+    /// (drop indicator wash + line, marquee fill, and the on-accent ink).
+    pub fn set_accent(&mut self, c: Color) {
+        self.accent = c;
+        self.drop_line = c;
+        self.drop_fill = c.with_alpha(0.20);
+        self.marquee_fill = c.with_alpha(0.12);
+        // Perceptual-ish luma in sRGB space; light accent → dark ink.
+        let [r, g, b, _] = c.components;
+        let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+        self.on_accent = if luma > 0.6 {
+            Color::from_rgb8(0x14, 0x14, 0x16)
+        } else {
+            Color::WHITE
+        };
+    }
+}
+
 impl Default for Theme {
     fn default() -> Self {
         Self {
@@ -59,10 +83,11 @@ impl Default for Theme {
             border: Color::from_rgb8(0x15, 0x15, 0x15),
             // Light enough to read as a grabbable groove against panel_bg.
             splitter: Color::from_rgb8(0x3d, 0x3d, 0x3d),
-            drop_fill: Color::from_rgb8(0xf4, 0xbe, 0x18).with_alpha(0.20),
-            drop_line: Color::from_rgb8(0xf4, 0xbe, 0x18),
-            accent: Color::from_rgb8(0xf4, 0xbe, 0x18),
-            marquee_fill: Color::from_rgb8(0xf4, 0xbe, 0x18).with_alpha(0.12),
+            drop_fill: Color::from_rgb8(0x1d, 0x7a, 0xf0).with_alpha(0.20),
+            drop_line: Color::from_rgb8(0x1d, 0x7a, 0xf0),
+            accent: Color::from_rgb8(0x3b, 0x9b, 0xff),
+            on_accent: Color::WHITE,
+            marquee_fill: Color::from_rgb8(0x3b, 0x9b, 0xff).with_alpha(0.12),
             artboard_border: Color::from_rgb8(0x23, 0x23, 0x23),
             artboard_label: Color::from_rgb8(0xe1, 0xe1, 0xe1),
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),

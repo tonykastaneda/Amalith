@@ -5,7 +5,7 @@
 
 use amalith_core::{Color as CoreColor, Paint};
 use vello::kurbo::{BezPath, Point, Rect};
-use vello::peniko::{Color, Fill};
+use vello::peniko::Fill;
 use vello::Scene;
 
 use crate::icons;
@@ -99,7 +99,7 @@ pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx:
         }
         // Dark glyph over the gold accent so it stays legible.
         let color = if active {
-            Color::from_rgb8(0x1a, 0x14, 0x00)
+            ctx.theme.on_accent
         } else {
             ctx.theme.text_dim
         };

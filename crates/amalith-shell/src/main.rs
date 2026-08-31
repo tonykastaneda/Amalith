@@ -32,8 +32,8 @@ use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{
-    about, appicon, chrome, convert, home, icons, layout, panels, picker, prefs, recent, sample,
-    select, stroke_panel, textedit, Theme,
+    about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
+    recent, sample, select, stroke_panel, textedit, Theme,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
@@ -948,6 +948,13 @@ impl App {
             panels::Action::OpenFontMenu(kind, anchor) => {
                 self.open_font_menu(kind, anchor);
             }
+            // --- context bar ---
+            panels::Action::StepWeight(d) => self.step_weight(d),
+            panels::Action::StepOpacity(d) => self.step_opacity(d),
+            panels::Action::StepFontSize(d) => self.step_font_size(d),
+            panels::Action::ToggleStrokeFlyout => {
+                self.stroke_popover = !self.stroke_popover;
+            }
         }
         self.request_main_redraw();
     }
@@ -1796,10 +1803,14 @@ impl App {
     /// Where the Stroke flyout sits: hanging off the "Stroke" link in the
     /// options bar, clamped to the window.
     fn stroke_flyout_layout(&self, win_w: f64) -> stroke_panel::Layout {
-        let ob = opt_bar_layout(opt_bar_rect(win_w));
-        let x = (ob.stroke_link.x0 - 4.0)
-            .min(win_w - stroke_panel::W - 6.0)
-            .max(6.0);
+        let cx = self.context_bar_ctx();
+        let anchor = context_bar::segment_rect(
+            opt_bar_rect(win_w),
+            &cx,
+            context_bar::SegKind::Stroke,
+        )
+        .map_or(200.0, |r| r.x0 - 4.0);
+        let x = anchor.min(win_w - stroke_panel::W - 6.0).max(6.0);
         stroke_panel::layout(Point::new(x, APP_BAR_H + OPT_BAR_H + 3.0))
     }
 
@@ -2004,6 +2015,14 @@ impl App {
     }
 
     /// Switch tools, discarding any in-progress Pen path.
+    /// Push `settings.accent` into the live theme (and its derived tokens).
+    fn apply_theme_accent(&mut self) {
+        let [r, g, b] = self.settings.accent;
+        self.theme
+            .set_accent(vello::peniko::Color::from_rgb8(r, g, b));
+        self.request_main_redraw();
+    }
+
     fn set_tool(&mut self, t: Tool) {
         // Leaving the Type tool commits whatever's being typed.
         if t != Tool::Text && self.text_edit.is_some() {
@@ -2048,6 +2067,41 @@ impl App {
         self.text_defaults.clone()
     }
 
+    /// True while text is the editing focus — the caret is in a text
+    /// object, or the whole selection is text objects. Drives the
+    /// options-bar Character cluster.
+    fn text_context(&self) -> bool {
+        self.text_edit.is_some()
+            || (!self.selection.is_empty()
+                && self.selection.iter().all(|id| {
+                    matches!(
+                        self.editor.document().object(*id).map(|o| &o.kind),
+                        Some(amalith_core::ObjectKind::Text(_))
+                    )
+                }))
+    }
+
+    /// Options-bar / scroll size step for the Character cluster.
+    fn step_font_size(&mut self, delta: f64) {
+        let next = (self.active_text_style().size + delta).clamp(1.0, 1296.0);
+        self.apply_panel_action(panels::Action::SetFontSize(next), false);
+    }
+
+    /// The read-only slice of state the context bar's segments draw from.
+    fn context_bar_ctx(&self) -> context_bar::Ctx<'_> {
+        context_bar::Ctx {
+            theme: &self.theme,
+            selection_len: self.selection.len(),
+            text_context: self.text_context(),
+            representative: self.representative(),
+            active_slot: self.active_slot,
+            cur_weight: self.stroke_w,
+            cur_opacity: self.opacity,
+            stroke_open: self.stroke_popover,
+            text_style: self.active_text_style(),
+        }
+    }
+
     /// Whether the caret is in its visible blink phase.
     fn text_blink_on(&self) -> bool {
         self.text_blink.elapsed().as_millis() % 1060 < 530
@@ -2085,6 +2139,95 @@ impl App {
         if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
             self.selection = vec![id];
             self.enter_text_edit(id, origin, None);
+        }
+    }
+
+    /// Type ▸ Create Outlines (⌘⇧O): replace each selected text object with
+    /// an editable path of its glyph contours, keeping the object's place
+    /// and fill. Multi-step undo for now — no batch command yet.
+    fn create_outlines(&mut self) {
+        if self.text_edit.is_some() {
+            self.commit_text_edit();
+        }
+        let targets: Vec<ObjectId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(
+                    self.editor.document().object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Text(_))
+                )
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        let mut new_ids = Vec::new();
+        for tid in targets {
+            let Some((td, transform, appearance, name, layer)) =
+                self.editor.document().object(tid).and_then(|o| {
+                    let amalith_core::ObjectKind::Text(td) = &o.kind else {
+                        return None;
+                    };
+                    let layer = self.owning_layer(tid)?;
+                    Some((td.clone(), o.transform, o.appearance, o.name.clone(), layer))
+                })
+            else {
+                continue;
+            };
+            let geometry = textedit::outline_text_data(&td, &mut self.text);
+            if geometry.elements().is_empty() {
+                continue;
+            }
+            let Ok(CommandOutcome::Object(pid)) = self.editor.execute(Command::CreatePath {
+                layer,
+                path: amalith_core::PathData { geometry },
+                name,
+            }) else {
+                continue;
+            };
+            let _ = self.editor.execute(Command::SetTransform {
+                object: pid,
+                transform,
+            });
+            // Carry the text's own paint — don't inherit CreatePath's
+            // visible-stroke default.
+            let _ = self.editor.execute(Command::SetFill {
+                objects: vec![pid],
+                paint: appearance.fill,
+            });
+            let _ = self.editor.execute(Command::SetStroke {
+                objects: vec![pid],
+                paint: appearance.stroke,
+            });
+            if appearance.stroke != amalith_core::Paint::None {
+                let _ = self.editor.execute(Command::SetStrokeWidth {
+                    objects: vec![pid],
+                    width: appearance.stroke_width,
+                });
+                let _ = self.editor.execute(Command::SetStrokeStyle {
+                    objects: vec![pid],
+                    style: appearance.stroke_style,
+                });
+            }
+            let _ = self.editor.execute(Command::DeleteObject { id: tid });
+            new_ids.push(pid);
+        }
+        if !new_ids.is_empty() {
+            self.selection = new_ids;
+            self.anchor_sel.clear();
+            self.request_main_redraw();
+        }
+    }
+
+    /// The layer that ultimately owns `id`, walking out through any groups.
+    fn owning_layer(&self, mut id: ObjectId) -> Option<LayerId> {
+        loop {
+            match self.editor.document().object(id)?.parent {
+                amalith_core::ObjectParent::Layer(l) => return Some(l),
+                amalith_core::ObjectParent::Group(g) => id = g,
+            }
         }
     }
 
@@ -2731,7 +2874,15 @@ impl App {
             let hit = self.prefs.as_mut().unwrap().on_press(self.pointer);
             match hit {
                 prefs::Hit::Backdrop | prefs::Hit::Cancel => self.prefs = None,
-                prefs::Hit::Ok => self.settings = self.prefs.take().unwrap().working,
+                prefs::Hit::Ok => {
+                    self.settings = self.prefs.take().unwrap().working;
+                    self.apply_theme_accent();
+                }
+                prefs::Hit::SetAccent(rgb) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.accent = rgb;
+                    }
+                }
                 prefs::Hit::Category(i) => {
                     if let Some(p) = &mut self.prefs {
                         p.category = i;
@@ -2871,34 +3022,17 @@ impl App {
                     return;
                 }
 
-                // The options / context bar (full width): chips + steppers.
+                // The context / control bar — one hit walk over its segments.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
                     && self.pointer.y < APP_BAR_H + OPT_BAR_H
                 {
-                    let ob = opt_bar_layout(opt_bar_rect(w));
-                    let p = self.pointer;
-                    if ob.stroke_link.contains(p) {
-                        self.stroke_popover = !self.stroke_popover;
-                        self.request_main_redraw();
-                    } else if ob.fill.contains(p) {
-                        self.apply_panel_action(
-                            panels::Action::OpenPicker(panels::PaintSlot::Fill),
-                            double,
-                        );
-                    } else if ob.stroke.contains(p) {
-                        self.apply_panel_action(
-                            panels::Action::OpenPicker(panels::PaintSlot::Stroke),
-                            double,
-                        );
-                    } else if ob.weight_up.contains(p) {
-                        self.step_weight(1);
-                    } else if ob.weight_down.contains(p) {
-                        self.step_weight(-1);
-                    } else if ob.opacity_up.contains(p) {
-                        self.step_opacity(1);
-                    } else if ob.opacity_down.contains(p) {
-                        self.step_opacity(-1);
+                    let action = {
+                        let cx = self.context_bar_ctx();
+                        context_bar::hit(opt_bar_rect(w), self.pointer, &cx)
+                    };
+                    if !matches!(action, panels::Action::None) {
+                        self.apply_panel_action(action, double);
                     }
                     return;
                 }
@@ -4336,7 +4470,7 @@ impl App {
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that.
             if let Some(hm) = &mut self.home {
-                hm.paint(&mut self.content, &mut self.text, wl, hl);
+                hm.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
                 if let Some(form) = &self.newdoc {
                     newdoc::paint(
                         &mut self.content,
@@ -4470,6 +4604,7 @@ impl ApplicationHandler for App {
         if self.main_id.is_some() {
             return;
         }
+        self.apply_theme_accent();
         if self.font_families.is_empty() {
             let (fc, _) = self.text.parts();
             let mut names: Vec<String> =
@@ -4823,6 +4958,8 @@ impl ApplicationHandler for App {
                         KeyCode::KeyA => self.select_all(),
                         // File I/O: open, save, save-as, import SVG.
                         KeyCode::KeyN => self.open_new_doc(),
+                        // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
+                        KeyCode::KeyO if self.shift_down => self.create_outlines(),
                         KeyCode::KeyO => self.open_document(),
                         KeyCode::KeyS => self.save_document(self.shift_down),
                         KeyCode::KeyI if self.shift_down => self.import_svg(),
@@ -4918,21 +5055,37 @@ impl ApplicationHandler for App {
                         return;
                     }
                 }
-                // Scrolling over a Weight / Opacity field nudges it.
+                // Scrolling over a context-bar Stroke / Opacity / Character
+                // segment nudges that segment's value.
                 if self.picker.is_none()
                     && self.pointer.y >= APP_BAR_H
                     && self.pointer.y < APP_BAR_H + OPT_BAR_H
                     && dy.abs() > 0.5
                 {
                     let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
-                    let ob = opt_bar_layout(opt_bar_rect(w));
+                    let bar = opt_bar_rect(w);
+                    let p = self.pointer;
+                    let cx = self.context_bar_ctx();
+                    let over = |k| {
+                        context_bar::segment_rect(bar, &cx, k).is_some_and(|r| r.contains(p))
+                    };
+                    let (sw, so, sc) = (
+                        over(context_bar::SegKind::Stroke),
+                        over(context_bar::SegKind::Opacity),
+                        over(context_bar::SegKind::Character),
+                    );
+                    drop(cx);
                     let dir = if dy > 0.0 { 1 } else { -1 };
-                    if ob.weight_field.contains(self.pointer) {
+                    if sw {
                         self.step_weight(dir);
                         return;
                     }
-                    if ob.opacity_field.contains(self.pointer) {
+                    if so {
                         self.step_opacity(dir);
+                        return;
+                    }
+                    if sc {
+                        self.step_font_size(dir as f64);
                         return;
                     }
                 }
@@ -5244,242 +5397,6 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
     out
 }
 
-/// Interactive rects along the options bar. `label_*` are where the
-/// preceding text label starts, so paint and hit stay in lockstep.
-struct OptBar {
-    label_fill: f64,
-    fill: Rect,
-    label_stroke: f64,
-    stroke: Rect,
-    label_weight: f64,
-    /// Clickable bounds of the "Stroke" word before the weight field —
-    /// opens the Stroke flyout.
-    stroke_link: Rect,
-    weight_field: Rect,
-    weight_up: Rect,
-    weight_down: Rect,
-    label_opacity: f64,
-    opacity_field: Rect,
-    opacity_up: Rect,
-    opacity_down: Rect,
-}
-
-fn opt_bar_layout(bar: Rect) -> OptBar {
-    let cy = bar.y0 + bar.height() * 0.5;
-    let chip = |cx: f64| Rect::from_center_size(Point::new(cx, cy), (18.0, 18.0));
-    let field = |x: f64, w: f64| Rect::new(x, cy - 10.0, x + w, cy + 10.0);
-
-    let mut x = bar.x0 + 12.0;
-    x += 82.0 + 14.0; // "No Selection" + separator gap
-
-    let label_fill = x;
-    x += 28.0;
-    let fill = chip(x + 9.0);
-    x += 18.0 + 8.0 + 12.0 + 16.0; // chip + gap + indicator square + gap
-
-    // The stroke colour chip carries no word of its own — it reads as
-    // "stroke" by sitting beside the Fill chip. The clickable "Stroke"
-    // label lives on the weight field instead.
-    let label_stroke = x;
-    x += 6.0;
-    let stroke = chip(x + 9.0);
-    x += 18.0 + 8.0 + 12.0 + 18.0;
-
-    let label_weight = x;
-    let stroke_link = Rect::new(x - 4.0, cy - 9.0, x + 42.0, cy + 9.0);
-    x += 46.0;
-    let weight_field = field(x, 56.0);
-    x += 56.0;
-    let weight_up = Rect::new(x, cy - 10.0, x + 13.0, cy);
-    let weight_down = Rect::new(x, cy, x + 13.0, cy + 10.0);
-    x += 13.0 + 20.0;
-
-    let label_opacity = x;
-    x += 52.0;
-    let opacity_field = field(x, 46.0);
-    x += 46.0;
-    let opacity_up = Rect::new(x, cy - 10.0, x + 13.0, cy);
-    let opacity_down = Rect::new(x, cy, x + 13.0, cy + 10.0);
-
-    OptBar {
-        label_fill,
-        fill,
-        label_stroke,
-        stroke,
-        label_weight,
-        stroke_link,
-        weight_field,
-        weight_up,
-        weight_down,
-        label_opacity,
-        opacity_field,
-        opacity_up,
-        opacity_down,
-    }
-}
-
-/// A boxed numeric readout plus an up / down stepper column, matching
-/// Illustrator's control bar.
-fn draw_opt_field(
-    scene: &mut Scene,
-    text: &mut TextContext,
-    theme: &Theme,
-    field: Rect,
-    up: Rect,
-    down: Rect,
-    value: &str,
-) {
-    let border = theme.text_dim.with_alpha(0.5);
-    scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &field);
-    text.draw(
-        scene,
-        value,
-        11.5,
-        theme.text,
-        field.x0 + 6.0,
-        field.y0 + field.height() * 0.5 + 4.0,
-    );
-    let stepper = Rect::new(up.x0, up.y0, up.x1, down.y1);
-    scene.fill(Fill::NonZero, ID, theme.bg, None, &stepper);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &stepper);
-    let cx = stepper.x0 + stepper.width() * 0.5;
-    let mut tri = BezPath::new();
-    tri.move_to((cx - 3.0, up.y1 - 3.0));
-    tri.line_to((cx + 3.0, up.y1 - 3.0));
-    tri.line_to((cx, up.y0 + 3.0));
-    tri.close_path();
-    scene.fill(Fill::NonZero, ID, theme.text_dim, None, &tri);
-    let mut tri = BezPath::new();
-    tri.move_to((cx - 3.0, down.y0 + 3.0));
-    tri.line_to((cx + 3.0, down.y0 + 3.0));
-    tri.line_to((cx, down.y1 - 3.0));
-    tri.close_path();
-    scene.fill(Fill::NonZero, ID, theme.text_dim, None, &tri);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn paint_options_bar(
-    scene: &mut Scene,
-    text: &mut TextContext,
-    bar: Rect,
-    theme: &Theme,
-    representative: Option<amalith_core::Appearance>,
-    active_slot: panels::PaintSlot,
-    selection_count: usize,
-    cur_weight: f64,
-    cur_opacity: f32,
-    stroke_open: bool,
-) {
-    scene.fill(Fill::NonZero, ID, theme.strip_active, None, &bar);
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        theme.border,
-        None,
-        &Rect::new(bar.x0, bar.y1 - 1.0, bar.x1, bar.y1),
-    );
-    let baseline = bar.y0 + bar.height() * 0.5 + 4.0;
-    let ob = opt_bar_layout(bar);
-
-    // Selection status.
-    let status = match selection_count {
-        0 => "No Selection".to_string(),
-        1 => "1 Selected".to_string(),
-        n => format!("{n} Selected"),
-    };
-    text.draw(scene, &status, 11.5, theme.text_dim, bar.x0 + 12.0, baseline);
-
-    let sep = |scene: &mut Scene, x: f64| {
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            theme.border,
-            None,
-            &Rect::new(x, bar.y0 + 7.0, x + 1.0, bar.y1 - 7.0),
-        );
-    };
-    sep(scene, ob.label_fill - 12.0);
-
-    // Fill / Stroke.
-    let indicator = |scene: &mut Scene, chip: Rect| {
-        let s = Rect::from_center_size(
-            Point::new(chip.x1 + 12.0, chip.center().y),
-            (11.0, 11.0),
-        );
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim, None, &s);
-    };
-    text.draw(scene, "Fill", 11.5, theme.text_dim, ob.label_fill, baseline);
-    panels::draw_paint_swatch(
-        scene,
-        theme,
-        ob.fill,
-        representative
-            .map(|a| a.fill)
-            .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
-        active_slot == panels::PaintSlot::Fill,
-    );
-    indicator(scene, ob.fill);
-    let _ = ob.label_stroke;
-    panels::draw_paint_swatch(
-        scene,
-        theme,
-        ob.stroke,
-        representative
-            .map(|a| a.stroke)
-            .unwrap_or(amalith_core::Paint::None),
-        active_slot == panels::PaintSlot::Stroke,
-    );
-    indicator(scene, ob.stroke);
-    sep(scene, ob.label_weight - 12.0);
-
-    // Weight — labelled "Stroke", and the label opens the Stroke flyout.
-    let w = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
-    let link_color = if stroke_open { theme.accent } else { theme.text };
-    text.draw(scene, "Stroke", 11.5, link_color, ob.label_weight, baseline);
-    let uw = text.measure("Stroke", 11.5);
-    scene.stroke(
-        &Stroke::new(1.0),
-        ID,
-        link_color.with_alpha(if stroke_open { 1.0 } else { 0.5 }),
-        None,
-        &vello::kurbo::Line::new(
-            (ob.label_weight, baseline + 2.0),
-            (ob.label_weight + uw, baseline + 2.0),
-        ),
-    );
-    draw_opt_field(
-        scene,
-        text,
-        theme,
-        ob.weight_field,
-        ob.weight_up,
-        ob.weight_down,
-        &format!("{w:.1} px"),
-    );
-    sep(scene, ob.label_opacity - 12.0);
-
-    // Opacity.
-    let op = representative.map(|a| a.opacity).unwrap_or(cur_opacity);
-    text.draw(
-        scene,
-        "Opacity",
-        11.5,
-        theme.text_dim,
-        ob.label_opacity,
-        baseline,
-    );
-    draw_opt_field(
-        scene,
-        text,
-        theme,
-        ob.opacity_field,
-        ob.opacity_up,
-        ob.opacity_down,
-        &format!("{:.0}%", op * 100.0),
-    );
-}
-
 #[allow(clippy::too_many_arguments)]
 fn paint_main(
     scene: &mut Scene,
@@ -5674,19 +5591,29 @@ fn paint_main(
         }
     }
 
-    // Options / context bar: full width, above the rails.
-    paint_options_bar(
-        scene,
-        text,
-        opt_bar_rect(width),
+    // Context / control bar — a strip of self-contained segments; which
+    // ones appear is decided per-segment by `applies(ctx)`. See the
+    // `context_bar` module.
+    let text_ctx = text_editing
+        || (!selection.is_empty()
+            && selection.iter().all(|id| {
+                matches!(
+                    doc.object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Text(_))
+                )
+            }));
+    let cbar = context_bar::Ctx {
         theme,
+        selection_len: selection.len(),
+        text_context: text_ctx,
         representative,
         active_slot,
-        selection.len(),
         cur_weight,
         cur_opacity,
-        stroke_popover,
-    );
+        stroke_open: stroke_popover,
+        text_style: text_style.clone(),
+    };
+    context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
 
     // The Stroke flyout hangs off the options bar's "Stroke" link.
     if stroke_popover {

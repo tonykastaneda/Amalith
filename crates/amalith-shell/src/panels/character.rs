@@ -230,7 +230,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
         // Dark glyph over the gold accent, light otherwise.
         let col = if on {
-            Color::from_rgb8(0x1a, 0x14, 0x00)
+            th.on_accent
         } else {
             th.text
         };

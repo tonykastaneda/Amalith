@@ -16,6 +16,7 @@ use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use crate::text::TextContext;
+use crate::theme::Theme;
 
 const MARK_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/mark.png");
 const WELCOME_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/welcome.png");
@@ -39,8 +40,6 @@ const INK: Color = Color::from_rgb8(238, 238, 240);
 const DIM: Color = Color::from_rgb8(138, 138, 144);
 const DIVIDER: Color = Color::from_rgb8(48, 48, 51);
 const TILE_RECENT: Color = Color::from_rgb8(46, 46, 48);
-/// App accent — Amalith gold.
-const SEL: Color = Color::from_rgb8(0xf4, 0xbe, 0x18);
 
 /// What a press on the Home screen landed on.
 pub enum Hit {
@@ -140,12 +139,19 @@ impl Home {
         Hit::None
     }
 
-    pub fn paint(&mut self, scene: &mut Scene, tcx: &mut TextContext, wl: f64, hl: f64) {
+    pub fn paint(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        theme: &Theme,
+        wl: f64,
+        hl: f64,
+    ) {
         let split = (wl * SPLIT).round();
         scene.fill(Fill::NonZero, Affine::IDENTITY, BG_RIGHT, None, &Rect::new(0.0, 0.0, wl, hl));
         scene.fill(Fill::NonZero, Affine::IDENTITY, BG_LEFT, None, &Rect::new(0.0, 0.0, split, hl));
         self.paint_left(scene, tcx, split);
-        self.paint_grid(scene, tcx, split, wl, hl);
+        self.paint_grid(scene, tcx, theme, split, wl, hl);
     }
 
     fn paint_left(&mut self, scene: &mut Scene, tcx: &mut TextContext, split: f64) {
@@ -210,6 +216,7 @@ impl Home {
         &mut self,
         scene: &mut Scene,
         tcx: &mut TextContext,
+        theme: &Theme,
         split: f64,
         wl: f64,
         hl: f64,
@@ -239,7 +246,7 @@ impl Home {
             if idx == 0 {
                 image_into(scene, &self.tile, tile_rect);
                 self.hit_new = tile_rect;
-                label(scene, tcx, "New Document", tile_rect, label_gap, true);
+                label(scene, tcx, theme, "New Document", tile_rect, label_gap, true);
             } else {
                 scene.fill(
                     Fill::NonZero,
@@ -249,7 +256,7 @@ impl Home {
                     &RoundedRect::from_rect(tile_rect, 18.0),
                 );
                 let name = self.recents[idx - 1].1.clone();
-                label(scene, tcx, &name, tile_rect, label_gap, false);
+                label(scene, tcx, theme, &name, tile_rect, label_gap, false);
                 self.hit_recents.push(tile_rect);
             }
         }
@@ -276,8 +283,16 @@ fn link_row(
     Rect::new(PAD - 6.0, y - 6.0, split - PAD, y + BADGE + 6.0)
 }
 
-/// Centred caption under a tile. `selected` draws the blue highlight pill.
-fn label(scene: &mut Scene, tcx: &mut TextContext, s: &str, tile: Rect, gap: f64, selected: bool) {
+/// Centred caption under a tile. `selected` draws the accent highlight pill.
+fn label(
+    scene: &mut Scene,
+    tcx: &mut TextContext,
+    theme: &Theme,
+    s: &str,
+    tile: Rect,
+    gap: f64,
+    selected: bool,
+) {
     let w = tcx.measure(s, 14.0);
     let cx = tile.x0 + tile.width() / 2.0;
     let baseline = tile.y1 + gap + 14.0;
@@ -286,16 +301,11 @@ fn label(scene: &mut Scene, tcx: &mut TextContext, s: &str, tile: Rect, gap: f64
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            SEL,
+            theme.accent,
             None,
             &RoundedRect::from_rect(pill, 4.0),
         );
     }
-    // Dark text over the gold pill, light text otherwise.
-    let col = if selected {
-        Color::from_rgb8(0x1a, 0x14, 0x00)
-    } else {
-        INK
-    };
+    let col = if selected { theme.on_accent } else { INK };
     tcx.draw(scene, s, 14.0, col, cx - w / 2.0, baseline);
 }

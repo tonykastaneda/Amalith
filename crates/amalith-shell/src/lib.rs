@@ -23,6 +23,7 @@ pub mod anchors;
 pub mod appicon;
 pub mod canvas;
 pub mod chrome;
+pub mod context_bar;
 pub mod convert;
 pub mod dock;
 pub mod handles;

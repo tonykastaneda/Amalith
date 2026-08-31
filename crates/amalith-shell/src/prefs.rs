@@ -22,6 +22,8 @@ pub struct Settings {
     pub show_tooltips: bool,
     /// Show the Home screen when the last document tab closes.
     pub home_on_last_close: bool,
+    /// App accent colour, sRGB. Feeds [`crate::theme::Theme::set_accent`].
+    pub accent: [u8; 3],
 }
 
 impl Default for Settings {
@@ -30,9 +32,20 @@ impl Default for Settings {
             nudge_step: 1.0,
             show_tooltips: true,
             home_on_last_close: true,
+            accent: ACCENTS[0].1,
         }
     }
 }
+
+/// Selectable accent presets (label, sRGB). The first is the default.
+pub const ACCENTS: [(&str, [u8; 3]); 6] = [
+    ("Blue", [0x3b, 0x9b, 0xff]),
+    ("Gold", [0xf4, 0xbe, 0x18]),
+    ("Green", [0x4c, 0xb7, 0x6b]),
+    ("Red", [0xe0, 0x50, 0x50]),
+    ("Violet", [0x9b, 0x6c, 0xf0]),
+    ("Graphite", [0x9a, 0x9a, 0x9a]),
+];
 
 pub const CATEGORIES: [&str; 1] = ["General"];
 
@@ -51,6 +64,7 @@ pub struct Prefs {
     inc_down: Rect,
     check_tips: Rect,
     check_home: Rect,
+    accent_swatches: Vec<(Rect, [u8; 3])>,
     cancel: Rect,
     ok: Rect,
 }
@@ -62,6 +76,7 @@ pub enum Hit {
     IncStep(f64),
     ToggleTips,
     ToggleHome,
+    SetAccent([u8; 3]),
     Cancel,
     Ok,
 }
@@ -77,6 +92,7 @@ impl Prefs {
             inc_down: Rect::ZERO,
             check_tips: Rect::ZERO,
             check_home: Rect::ZERO,
+            accent_swatches: Vec::new(),
             cancel: Rect::ZERO,
             ok: Rect::ZERO,
         }
@@ -106,6 +122,11 @@ impl Prefs {
         }
         if self.check_home.contains(p) {
             return Hit::ToggleHome;
+        }
+        for (r, rgb) in &self.accent_swatches {
+            if r.contains(p) {
+                return Hit::SetAccent(*rgb);
+            }
         }
         if self.cancel.contains(p) {
             return Hit::Cancel;
@@ -154,7 +175,7 @@ impl Prefs {
                 // no-op
             }
             let col = if i == self.category {
-                Color::from_rgb8(0x1a, 0x14, 0x00)
+                theme.on_accent
             } else {
                 theme.text
             };
@@ -206,6 +227,33 @@ impl Prefs {
             "Show the Home Screen when the last document closes",
             self.working.home_on_last_close,
         );
+        cy += 40.0;
+
+        // Accent colour swatches.
+        tcx.draw(scene, "Accent Color", 12.0, theme.text_dim, px, cy + 12.0);
+        self.accent_swatches.clear();
+        let mut sx = px + 170.0;
+        for (_, rgb) in ACCENTS {
+            let sw = Rect::new(sx, cy, sx + 20.0, cy + 20.0);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::from_rgb8(rgb[0], rgb[1], rgb[2]),
+                None,
+                &sw.to_rounded_rect(4.0),
+            );
+            if rgb == self.working.accent {
+                scene.stroke(
+                    &Stroke::new(2.0),
+                    Affine::IDENTITY,
+                    theme.text,
+                    None,
+                    &sw.inflate(2.5, 2.5).to_rounded_rect(6.0),
+                );
+            }
+            self.accent_swatches.push((sw, rgb));
+            sx += 30.0;
+        }
 
         // Footer buttons.
         let by = oy + H - 40.0;
@@ -264,7 +312,7 @@ fn checkbox(
         scene.stroke(
             &Stroke::new(1.8),
             Affine::IDENTITY,
-            Color::from_rgb8(0x1a, 0x14, 0x00),
+            theme.on_accent,
             None,
             &tick,
         );
@@ -293,7 +341,7 @@ fn button(
     );
     scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &r.to_rounded_rect(5.0));
     let col = if primary {
-        Color::from_rgb8(0x1a, 0x14, 0x00)
+        theme.on_accent
     } else {
         theme.text
     };

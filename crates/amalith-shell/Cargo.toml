@@ -21,6 +21,8 @@ winit = "0.30"
 pollster = "0.4"
 kurbo.workspace = true
 parley = { version = "0.11", features = ["system"] }
+# Glyph outline extraction for Type ▸ Create Outlines (matches parley's).
+skrifa = "0.44"
 amalith-core = { path = "../amalith-core" }
 amalith-commands = { path = "../amalith-commands" }
 amalith-io = { path = "../amalith-io" }
