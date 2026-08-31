@@ -11,7 +11,7 @@ const features = [
   },
   {
     eyebrow: "One command engine",
-    title: "Draw it. Script it. Ask an agent to do it.",
+    title: "Draw it. Script it. Agent it.",
     body: "The mouse, keyboard, plugins, scripts, CLI, and agents all speak the same operation language. Every change remains undoable and every workflow stays consistent.",
     tone: "yellow",
     label: "Command engine diagram placeholder",
