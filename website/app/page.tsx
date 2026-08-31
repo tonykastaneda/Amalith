@@ -109,7 +109,7 @@ export default function Home() {
           <div className="cta__art" aria-hidden="true">
             <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
           </div>
-          <p>Open source vector design,<br />without the compromise.</p>
+          <p>The Open source vector design,<br />suite without the compromise.</p>
           <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Get Amalith <ArrowUpRight /></a>
         </section>
       </main>
