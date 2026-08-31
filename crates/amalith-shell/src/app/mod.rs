@@ -314,6 +314,14 @@ struct Doc {
     expanded_groups: std::collections::HashSet<ObjectId>,
     selected_artboard: Option<ArtboardId>,
     selected_layer: Option<LayerId>,
+    /// The artboard the user last clicked inside (any tool). Targets
+    /// artboard-relative Paste in Front / Back.
+    current_artboard: Option<ArtboardId>,
+    /// The artboard this document's clipboard was copied from, if any.
+    clip_artboard: Option<ArtboardId>,
+    /// The SVG we last wrote to the OS clipboard — so a following paste
+    /// doesn't round-trip our own copy back through the SVG importer.
+    last_svg: Option<String>,
     rename: Option<Rename>,
     stroke_w: f64,
     stroke_style: StrokeStyle,
@@ -333,6 +341,9 @@ impl Doc {
             expanded_groups: std::collections::HashSet::new(),
             selected_artboard: None,
             selected_layer: None,
+            current_artboard: None,
+            clip_artboard: None,
+            last_svg: None,
             rename: None,
             stroke_w: 1.0,
             stroke_style: StrokeStyle::default(),
@@ -2040,10 +2051,23 @@ impl App {
     /// can be pasted into Illustrator, a browser, Figma, etc.
     fn copy_selection(&mut self, ids: &[ObjectId]) {
         let _ = self.doc.editor.copy(ids);
+        // Remember which artboard the copy sits in, for artboard-relative
+        // Paste in Front / Back.
+        self.doc.clip_artboard = self.doc.editor.clipboard_bounds().and_then(|b| {
+            let c = b.center();
+            artboard_at(self.doc.editor.document(), Point::new(c.x, c.y))
+        });
         let svg = amalith_io::export_svg(self.doc.editor.document(), ids);
+        self.doc.last_svg = svg.clone();
         if let (Some(svg), Some(cb)) = (svg, self.clipboard()) {
             let _ = cb.set_text(svg);
         }
+    }
+
+    /// The artboard a paste should target: the last one clicked inside,
+    /// else the one the Artboard tool has selected.
+    fn current_artboard(&self) -> Option<ArtboardId> {
+        self.doc.current_artboard.or(self.doc.selected_artboard)
     }
 
     /// If the OS clipboard holds SVG text (Illustrator with "SVG Code"
@@ -2057,19 +2081,45 @@ impl App {
         };
         let head = text.trim_start();
         if head.starts_with("<svg") || head.starts_with("<?xml") {
+            // Our own last copy is already in the Editor clipboard (with a
+            // known source artboard) — don't round-trip it back in.
+            if self.doc.last_svg.as_deref() == Some(text.as_str()) {
+                return;
+            }
             let _ = self.doc.editor.copy_from_svg(&text);
+            // Externally-sourced content has no source artboard.
+            self.doc.clip_artboard = None;
         }
     }
 
     /// Paste the clipboard. `place` decides where it lands: `Plain` drops
     /// the copied bounds' centre on the visible view (Illustrator's
-    /// "somewhere new" paste); `InFront` / `Behind` keep exact document
-    /// coordinates and only restack.
+    /// "somewhere new" paste); `InFront` / `Behind` reproduce the copy's
+    /// offset within its source artboard inside the current artboard
+    /// (falling back to exact coordinates when either artboard is unknown).
     fn paste_clipboard(&mut self, place: PastePlace) {
         self.pull_svg_from_clipboard();
         if !self.doc.editor.has_clipboard() {
             return;
         }
+        // Delta between the source artboard and the current one, for the
+        // in-front / behind pastes.
+        let artboard_delta = {
+            let doc = self.doc.editor.document();
+            let src = self
+                .doc
+                .clip_artboard
+                .and_then(|id| doc.artboard(id))
+                .map(|a| a.rect.origin());
+            let dst = self
+                .current_artboard()
+                .and_then(|id| doc.artboard(id))
+                .map(|a| a.rect.origin());
+            match (src, dst) {
+                (Some(s), Some(d)) => amalith_core::Vec2::new(d.x - s.x, d.y - s.y),
+                _ => amalith_core::Vec2::ZERO,
+            }
+        };
         let (delta, stack) = match place {
             PastePlace::Plain => {
                 let vc = self.visible_doc_rect().center();
@@ -2083,8 +2133,8 @@ impl App {
                     .unwrap_or(amalith_core::Vec2::ZERO);
                 (delta, PasteStack::Top)
             }
-            PastePlace::InFront => (amalith_core::Vec2::ZERO, PasteStack::InFront),
-            PastePlace::Behind => (amalith_core::Vec2::ZERO, PasteStack::Behind),
+            PastePlace::InFront => (artboard_delta, PasteStack::InFront),
+            PastePlace::Behind => (artboard_delta, PasteStack::Behind),
         };
         if let Ok(ids) = self.doc.editor.paste(delta, stack) {
             self.doc.selection = ids;

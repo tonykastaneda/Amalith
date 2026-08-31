@@ -376,6 +376,13 @@ impl App {
                 }
                 let dp = self.doc_point(self.pointer);
 
+                // Track the artboard being worked in (any tool) for
+                // artboard-relative Paste in Front / Back. A press on the
+                // pasteboard keeps the previous value.
+                if let Some(id) = artboard_at(self.doc.editor.document(), dp) {
+                    self.doc.current_artboard = Some(id);
+                }
+
                 // Type tool.
                 if self.active_tool == Tool::Text {
                     if self.text_edit.is_some() {
