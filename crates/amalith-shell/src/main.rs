@@ -47,8 +47,14 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
-/// Height of the top app bar, logical points.
+/// Height of the top app bar, logical points. It stands in for the hidden
+/// OS title bar on macOS. Windows keeps its native title bar *and* gets a
+/// native menu bar in that space, so the strip would only be dead air —
+/// collapse it there and let the chrome below start at the menu bar.
+#[cfg(not(target_os = "windows"))]
 const APP_BAR_H: f64 = 30.0;
+#[cfg(target_os = "windows")]
+const APP_BAR_H: f64 = 0.0;
 /// The document-tab strip, between the app bar and the options bar.
 const TAB_BAR_H: f64 = 29.4;
 /// The tool options strip, between the app bar and the canvas.
@@ -5452,41 +5458,44 @@ fn paint_main(
     }
 
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
-    // traffic lights floating over its left end.
-    let bar = Rect::new(0.0, 0.0, width, APP_BAR_H);
-    scene.fill(Fill::NonZero, ID, theme.app_bar, None, &bar);
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        theme.border,
-        None,
-        &Rect::new(0.0, APP_BAR_H - 1.0, width, APP_BAR_H),
-    );
-    // The name sits in this strip only where the OS title bar is hidden
-    // (macOS). Elsewhere the native title bar already shows it.
-    #[cfg(target_os = "macos")]
-    {
-        let name = "Amalith Ver. Alpha";
-        let tw = text.measure(name, 12.5);
-        text.draw(
-            scene,
-            name,
-            12.5,
-            Color::from_rgb8(0xcd, 0xcd, 0xcd),
-            (width - tw) * 0.5,
-            APP_BAR_H * 0.5 + 4.5,
+    // traffic lights floating over its left end. On Windows APP_BAR_H is 0
+    // — the native title bar and menu bar own this space — so skip it.
+    if APP_BAR_H > 0.0 {
+        let bar = Rect::new(0.0, 0.0, width, APP_BAR_H);
+        scene.fill(Fill::NonZero, ID, theme.app_bar, None, &bar);
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            theme.border,
+            None,
+            &Rect::new(0.0, APP_BAR_H - 1.0, width, APP_BAR_H),
         );
-    }
-    if let Some(status) = status {
-        let sw = text.measure(status, 11.5);
-        text.draw(
-            scene,
-            status,
-            11.5,
-            Color::from_rgb8(0x9a, 0x9a, 0x9a),
-            width - sw - 12.0,
-            APP_BAR_H * 0.5 + 4.0,
-        );
+        // The name sits in this strip only where the OS title bar is
+        // hidden (macOS). Elsewhere the native title bar already shows it.
+        #[cfg(target_os = "macos")]
+        {
+            let name = "Amalith Ver. Alpha";
+            let tw = text.measure(name, 12.5);
+            text.draw(
+                scene,
+                name,
+                12.5,
+                Color::from_rgb8(0xcd, 0xcd, 0xcd),
+                (width - tw) * 0.5,
+                APP_BAR_H * 0.5 + 4.5,
+            );
+        }
+        if let Some(status) = status {
+            let sw = text.measure(status, 11.5);
+            text.draw(
+                scene,
+                status,
+                11.5,
+                Color::from_rgb8(0x9a, 0x9a, 0x9a),
+                width - sw - 12.0,
+                APP_BAR_H * 0.5 + 4.0,
+            );
+        }
     }
 
     // The New Document modal sits over everything.
@@ -5614,12 +5623,17 @@ impl NativeMenu {
         menu.init_for_nsapp();
         #[cfg(target_os = "windows")]
         {
+            use muda::MenuTheme;
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if let Ok(handle) = window.window_handle() {
                 if let RawWindowHandle::Win32(w) = handle.as_raw() {
                     // Safe: `w.hwnd` is the live main window's handle.
+                    // Dark theme so the bar and its dropdowns read as one
+                    // piece with the rest of the app rather than a white
+                    // Win32 strip (muda draws RGB(43,43,43) / white text,
+                    // which matches `theme.panel_bg`).
                     unsafe {
-                        let _ = menu.init_for_hwnd(w.hwnd.get());
+                        let _ = menu.init_for_hwnd_with_theme(w.hwnd.get(), MenuTheme::Dark);
                     }
                 }
             }
