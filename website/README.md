@@ -1,19 +1,19 @@
 # Amalith website
 
 The marketing site for [Amalith](../README.md) — a static Next.js export served
-from GitHub Pages at <https://tonykastaneda.github.io/Amalith/>.
+from GitHub Pages at <https://www.amalith.app/>.
 
 ## Develop
 
 ```bash
 npm install
-npm run dev:pages      # serves at http://localhost:3000/Amalith/
+npm run dev:pages      # serves at http://localhost:3000/
 ```
 
 ## Build
 
 ```bash
-npm run build:pages    # static export to ./out with basePath /Amalith
+npm run build:pages    # static export to ./out for www.amalith.app
 ```
 
 ## Deploy

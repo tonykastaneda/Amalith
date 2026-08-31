@@ -8,9 +8,9 @@
   },
   "scripts": {
     "dev": "next dev",
-    "dev:pages": "NEXT_PUBLIC_BASE_PATH=/Amalith NEXT_PUBLIC_SITE_URL=http://localhost:3000/Amalith next dev",
+    "dev:pages": "NEXT_PUBLIC_SITE_URL=http://localhost:3000 next dev",
     "build": "next build",
-    "build:pages": "NEXT_PUBLIC_BASE_PATH=/Amalith NEXT_PUBLIC_SITE_URL=https://tonykastaneda.github.io/Amalith next build",
+    "build:pages": "NEXT_PUBLIC_SITE_URL=https://www.amalith.app next build",
     "start": "next start",
     "lint": "eslint ."
   },

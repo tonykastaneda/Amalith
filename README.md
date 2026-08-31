@@ -7,7 +7,7 @@
 <p align="center"><em>The Illustrator-class vector editor that launched yesterday with 20 years of tutorials.</em></p>
 
 <p align="center">
-  <a href="https://tonykastaneda.github.io/Amalith/">Website</a> ·
+  <a href="https://www.amalith.app/">Website</a> ·
   <a href="amalith-project-brief.md">Project brief</a> ·
   <a href="#build-and-run">Build</a>
 </p>
@@ -71,7 +71,7 @@ The invariant everything hangs on: **the GUI never mutates the document directly
 
 ## Website
 
-The marketing site lives in `website/` (Next.js) and deploys to GitHub Pages from `main` via `.github/workflows/pages.yml`: <https://tonykastaneda.github.io/Amalith/>
+The marketing site lives in `website/` (Next.js) and deploys to GitHub Pages from `main` via `.github/workflows/pages.yml`: <https://www.amalith.app/>
 
 ## License
 
