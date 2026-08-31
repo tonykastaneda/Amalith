@@ -120,7 +120,9 @@ export default function Home() {
           <div><p>Project</p><a href="#why">Why Amalith</a><a href="#features">Features</a><a href="#status">Status</a></div>
           <div><p>Community</p><a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a><a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues <ArrowUpRight /></a></div>
         </div>
-        <p className="footer-note">Built in public. Made for designers.</p>
+        <p className="footer-note">
+          Built in public. Made for designers. Made with <span className="footer-heart" aria-label="love">♥</span> in Bell, California.
+        </p>
       </footer>
     </>
   );

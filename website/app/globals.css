@@ -96,6 +96,7 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 .footer-links div { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .footer-links p { color: #8f8e87; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 12px; }
 .footer-note { grid-column: 1 / -1; border-top: 1px solid #343430; margin: 50px 0 0; padding-top: 26px; color: #8f8e87; font-size: 12px; }
+.footer-heart { color: var(--yellow); font-size: 1.15em; }
 
 @media (max-width: 900px) {
   .site-header { grid-template-columns: 1fr auto; height: 76px; padding: 0 18px; }
