@@ -514,7 +514,10 @@ impl Editor {
                     for index in indices {
                         amalith_core::geom::translate_anchor(&mut geometry, index, delta);
                     }
-                    edits.push(Edit::SetPathGeometry { id, geometry });
+                    // TODO(stage 3): translate the anchor model directly so
+                    // per-anchor HandleMode is carried instead of re-inferred.
+                    let data = amalith_core::PathData::from_bezpath(geometry);
+                    edits.push(Edit::SetPathData { id, data });
                 }
                 edits
             }

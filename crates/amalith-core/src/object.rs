@@ -8,7 +8,7 @@
 //! complexity in Inkscape; Amalith has no reason to take it on, since the
 //! native format is not "serialized DOM" (see `DESIGN.md`).
 use crate::appearance::Appearance;
-use crate::geom::{Affine, BezPath, Rect};
+use crate::geom::{Affine, BezPath, PathEl, Point, Rect};
 use crate::ids::{AssetId, LayerId, ObjectId};
 use serde::{Deserialize, Serialize};
 
@@ -27,14 +27,254 @@ pub enum ObjectParent {
     Group(ObjectId),
 }
 
+/// How an anchor's two bezier handles are kept related while editing.
+///
+/// This is *editing intent*, not geometry — [`subpaths_to_bezpath`]
+/// ignores it. Tools consult it to decide whether moving one handle
+/// should drag its partner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HandleMode {
+    /// Handles move independently — Illustrator's "corner point".
+    #[default]
+    Corner,
+    /// Handles stay 180° opposed; lengths independent — a "smooth point".
+    Smooth,
+    /// Handles stay 180° opposed *and* equal length — a "symmetric point".
+    Symmetric,
+}
+
+/// One anchor of a [`Subpath`], with optional cubic bezier handles, in the
+/// object's local coordinate space (before `Object::transform`).
+///
+/// Handle positions are absolute (not relative to `point`), matching how
+/// [`crate::geom::translate_anchor`] already moves an anchor and its
+/// controls together. `None` on a side means the segment on that side is a
+/// straight line.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub point: Point,
+    pub handle_in: Option<Point>,
+    pub handle_out: Option<Point>,
+    #[serde(default)]
+    pub mode: HandleMode,
+}
+
+impl Anchor {
+    /// A plain corner anchor with no handles.
+    pub fn corner(point: Point) -> Self {
+        Self {
+            point,
+            handle_in: None,
+            handle_out: None,
+            mode: HandleMode::Corner,
+        }
+    }
+}
+
+/// A single open or closed contour: an ordered run of [`Anchor`]s.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Subpath {
+    pub anchors: Vec<Anchor>,
+    pub closed: bool,
+}
+
 /// A path built from Bezier segments, in the object's local coordinate
 /// space (before `Object::transform` is applied).
+///
+/// `subpaths` is the editable truth (anchors + handles + per-anchor
+/// [`HandleMode`]); `geometry` is a flattened kurbo cache kept in sync on
+/// every mutation. Rendering, hit-testing, bounds and SVG export all read
+/// `geometry` — treat it as read-only and mutate through
+/// [`Self::edit_subpaths`] or the constructors.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "PathDataRepr")]
 pub struct PathData {
+    subpaths: Vec<Subpath>,
     pub geometry: BezPath,
 }
 
+/// On-disk shape of [`PathData`]. Files written before the anchor model
+/// carried only `geometry`; `subpaths` is derived from it on load. Newer
+/// files carry both and `subpaths` wins.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PathDataRepr {
+    /// Newer files: anchors are authoritative. Any `geometry` key present
+    /// alongside is ignored and rebuilt.
+    Structured { subpaths: Vec<Subpath> },
+    /// Pre-anchor-model files: only a flat `geometry` path.
+    Legacy { geometry: BezPath },
+}
+
+impl From<PathDataRepr> for PathData {
+    fn from(repr: PathDataRepr) -> Self {
+        match repr {
+            PathDataRepr::Structured { subpaths } => Self::from_subpaths(subpaths),
+            PathDataRepr::Legacy { geometry } => Self::from_bezpath(geometry),
+        }
+    }
+}
+
+/// Flattens `subpaths` to a kurbo [`BezPath`]. The closing edge of a
+/// closed contour is left to `close_path()` when it is straight, and
+/// emitted explicitly when it is curved — so our native rectangle /
+/// ellipse constructors round-trip byte-identically.
+pub fn subpaths_to_bezpath(subpaths: &[Subpath]) -> BezPath {
+    let mut out = BezPath::new();
+    for sp in subpaths {
+        let n = sp.anchors.len();
+        if n == 0 {
+            continue;
+        }
+        out.move_to(sp.anchors[0].point);
+        let segments = if sp.closed { n } else { n - 1 };
+        for i in 0..segments {
+            let a = &sp.anchors[i];
+            let b = &sp.anchors[(i + 1) % n];
+            match (a.handle_out, b.handle_in) {
+                (None, None) => {
+                    // Let close_path() draw the straight wrap edge.
+                    if !(sp.closed && i == n - 1) {
+                        out.line_to(b.point);
+                    }
+                }
+                _ => out.curve_to(
+                    a.handle_out.unwrap_or(a.point),
+                    b.handle_in.unwrap_or(b.point),
+                    b.point,
+                ),
+            }
+        }
+        if sp.closed {
+            out.close_path();
+        }
+    }
+    out
+}
+
+/// Derives an anchor model from an arbitrary kurbo [`BezPath`]. Quadratic
+/// segments are degree-elevated to cubics. Per-anchor [`HandleMode`] is
+/// inferred: an anchor whose two handles are ~colinear becomes `Smooth`
+/// (or `Symmetric` when their lengths also match), otherwise `Corner`.
+pub fn bezpath_to_subpaths(path: &BezPath) -> Vec<Subpath> {
+    const EPS: f64 = 1e-6;
+    let mut out: Vec<Subpath> = Vec::new();
+    let mut cur: Option<Subpath> = None;
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                if let Some(sp) = cur.take() {
+                    out.push(sp);
+                }
+                cur = Some(Subpath {
+                    anchors: vec![Anchor::corner(p)],
+                    closed: false,
+                });
+            }
+            PathEl::LineTo(p) => {
+                if let Some(sp) = cur.as_mut() {
+                    sp.anchors.push(Anchor::corner(p));
+                }
+            }
+            PathEl::QuadTo(c, p) => {
+                if let Some(sp) = cur.as_mut() {
+                    if let Some(a) = sp.anchors.last_mut() {
+                        a.handle_out = Some(a.point + (c - a.point) * (2.0 / 3.0));
+                    }
+                    sp.anchors.push(Anchor {
+                        point: p,
+                        handle_in: Some(p + (c - p) * (2.0 / 3.0)),
+                        handle_out: None,
+                        mode: HandleMode::Corner,
+                    });
+                }
+            }
+            PathEl::CurveTo(p1, p2, p) => {
+                if let Some(sp) = cur.as_mut() {
+                    if let Some(a) = sp.anchors.last_mut() {
+                        a.handle_out = Some(p1);
+                    }
+                    sp.anchors.push(Anchor {
+                        point: p,
+                        handle_in: Some(p2),
+                        handle_out: None,
+                        mode: HandleMode::Corner,
+                    });
+                }
+            }
+            PathEl::ClosePath => {
+                if let Some(sp) = cur.as_mut() {
+                    sp.closed = true;
+                    // A trailing anchor coincident with the start is the
+                    // seam of a merged closed contour — fold it back in.
+                    if sp.anchors.len() > 1 {
+                        let tail = *sp.anchors.last().unwrap();
+                        if (tail.point - sp.anchors[0].point).hypot() < EPS {
+                            sp.anchors.pop();
+                            sp.anchors[0].handle_in = tail.handle_in;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(sp) = cur.take() {
+        out.push(sp);
+    }
+    for sp in &mut out {
+        let n = sp.anchors.len();
+        for i in 0..n {
+            let a = sp.anchors[i];
+            let (Some(hin), Some(hout)) = (a.handle_in, a.handle_out) else {
+                continue;
+            };
+            let din = a.point - hin;
+            let dout = hout - a.point;
+            let (lin, lout) = (din.hypot(), dout.hypot());
+            if lin < EPS || lout < EPS {
+                continue;
+            }
+            let cross = din.x * dout.y - din.y * dout.x;
+            let dot = din.dot(dout);
+            if cross.abs() < EPS * lin * lout && dot > 0.0 {
+                sp.anchors[i].mode = if (lin - lout).abs() < EPS * lin.max(lout) {
+                    HandleMode::Symmetric
+                } else {
+                    HandleMode::Smooth
+                };
+            }
+        }
+    }
+    out
+}
+
 impl PathData {
+    /// Builds a path from an anchor model, deriving the `geometry` cache.
+    pub fn from_subpaths(subpaths: Vec<Subpath>) -> Self {
+        let geometry = subpaths_to_bezpath(&subpaths);
+        Self { subpaths, geometry }
+    }
+
+    /// Wraps an existing kurbo path, deriving the anchor model from it.
+    /// The `geometry` is kept verbatim (not re-flattened) so callers that
+    /// only render / export see no change.
+    pub fn from_bezpath(geometry: BezPath) -> Self {
+        let subpaths = bezpath_to_subpaths(&geometry);
+        Self { subpaths, geometry }
+    }
+
+    /// The editable anchor model.
+    pub fn subpaths(&self) -> &[Subpath] {
+        &self.subpaths
+    }
+
+    /// Mutates the anchor model, then rebuilds the `geometry` cache.
+    pub fn edit_subpaths(&mut self, f: impl FnOnce(&mut Vec<Subpath>)) {
+        f(&mut self.subpaths);
+        self.geometry = subpaths_to_bezpath(&self.subpaths);
+    }
+
+
     /// Builds a closed axis-aligned rectangle path in local space.
     ///
     /// This is the minimum path construction needed for Milestone 0.1
@@ -47,7 +287,7 @@ impl PathData {
         path.line_to((rect.x1, rect.y1));
         path.line_to((rect.x0, rect.y1));
         path.close_path();
-        Self { geometry: path }
+        Self::from_bezpath(path)
     }
 
     /// Builds a closed ellipse path in local space using four cubic Bézier
@@ -67,7 +307,7 @@ impl PathData {
         path.curve_to((cx - rx, cy - ky), (cx - kx, cy - ry), (cx, cy - ry));
         path.curve_to((cx + kx, cy - ry), (cx + rx, cy - ky), (cx + rx, cy));
         path.close_path();
-        Self { geometry: path }
+        Self::from_bezpath(path)
     }
 
     /// A closed straight-sided path through `points`.
@@ -80,7 +320,7 @@ impl PathData {
             }
             path.close_path();
         }
-        Self { geometry: path }
+        Self::from_bezpath(path)
     }
 
     /// An open straight-sided path through `points`.
@@ -97,7 +337,7 @@ impl PathData {
                 path.line_to((point.x, point.y));
             }
         }
-        Self { geometry: path }
+        Self::from_bezpath(path)
     }
 
     /// A rounded rectangle with cubic Bézier corners.
@@ -133,7 +373,7 @@ impl PathData {
             (rect.x0 + radius, rect.y0),
         );
         path.close_path();
-        Self { geometry: path }
+        Self::from_bezpath(path)
     }
 
     pub fn local_bounds(&self) -> Rect {
@@ -351,5 +591,101 @@ impl Object {
 
     pub fn is_group(&self) -> bool {
         matches!(self.kind, ObjectKind::Group(_))
+    }
+}
+
+#[cfg(test)]
+mod path_data_tests {
+    use super::*;
+
+    /// Every native constructor must round-trip through the anchor model
+    /// with a byte-identical `geometry`, so Stage 1 is behaviour-neutral.
+    #[test]
+    fn constructors_roundtrip_geometry_verbatim() {
+        let r = Rect::new(10.0, 20.0, 90.0, 70.0);
+        for pd in [
+            PathData::rectangle(r),
+            PathData::ellipse(r),
+            PathData::rounded_rectangle(r, 12.0),
+            PathData::polygon(&[
+                Point::new(0.0, 0.0),
+                Point::new(30.0, 5.0),
+                Point::new(15.0, 40.0),
+            ]),
+            PathData::polyline(&[
+                Point::new(0.0, 0.0),
+                Point::new(30.0, 5.0),
+                Point::new(15.0, 40.0),
+            ]),
+        ] {
+            let rebuilt = subpaths_to_bezpath(pd.subpaths());
+            assert_eq!(
+                pd.geometry.elements(),
+                rebuilt.elements(),
+                "geometry cache diverged from its own subpaths"
+            );
+        }
+    }
+
+    #[test]
+    fn rectangle_is_four_corner_anchors() {
+        let pd = PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0));
+        assert_eq!(pd.subpaths().len(), 1);
+        let sp = &pd.subpaths()[0];
+        assert!(sp.closed);
+        assert_eq!(sp.anchors.len(), 4);
+        assert!(sp
+            .anchors
+            .iter()
+            .all(|a| a.mode == HandleMode::Corner && a.handle_in.is_none()));
+    }
+
+    #[test]
+    fn ellipse_anchors_are_smooth() {
+        let pd = PathData::ellipse(Rect::new(0.0, 0.0, 100.0, 60.0));
+        let sp = &pd.subpaths()[0];
+        assert_eq!(sp.anchors.len(), 4);
+        assert!(sp
+            .anchors
+            .iter()
+            .all(|a| a.handle_in.is_some() && a.handle_out.is_some()));
+        assert!(sp
+            .anchors
+            .iter()
+            .all(|a| matches!(a.mode, HandleMode::Smooth | HandleMode::Symmetric)));
+    }
+
+    #[test]
+    fn legacy_geometry_only_json_still_loads() {
+        // A pre-anchor-model artwork blob is just `{ "geometry": <bezpath> }`.
+        let reference = PathData::rectangle(Rect::new(1.0, 2.0, 3.0, 4.0));
+        let wrapped = serde_json::json!({
+            "geometry": serde_json::to_value(&reference.geometry).unwrap(),
+        });
+        let loaded: PathData = serde_json::from_value(wrapped).unwrap();
+        assert_eq!(loaded.geometry.elements(), reference.geometry.elements());
+        assert_eq!(loaded.subpaths().len(), 1);
+        assert_eq!(loaded.subpaths()[0].anchors.len(), 4);
+    }
+
+    #[test]
+    fn structured_json_roundtrips() {
+        let pd = PathData::ellipse(Rect::new(0.0, 0.0, 40.0, 30.0));
+        let json = serde_json::to_string(&pd).unwrap();
+        let back: PathData = serde_json::from_str(&json).unwrap();
+        // Anchor structure is preserved exactly; geometry may differ by a
+        // float ULP because it is re-derived from the parsed anchors.
+        assert_eq!(back.subpaths().len(), pd.subpaths().len());
+        assert_eq!(back.subpaths()[0].anchors.len(), pd.subpaths()[0].anchors.len());
+        assert_eq!(back.subpaths()[0].closed, pd.subpaths()[0].closed);
+        for (a, b) in back.subpaths()[0]
+            .anchors
+            .iter()
+            .zip(&pd.subpaths()[0].anchors)
+        {
+            assert!((a.point - b.point).hypot() < 1e-9);
+            assert_eq!(a.mode, b.mode);
+        }
+        assert_eq!(back.geometry.elements().len(), pd.geometry.elements().len());
     }
 }

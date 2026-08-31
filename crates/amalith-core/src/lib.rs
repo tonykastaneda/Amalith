@@ -31,8 +31,8 @@ pub use ids::{ArtboardId, AssetId, LayerId, ObjectId};
 pub use layer::Layer;
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use object::{
-    CompoundPathData, GroupData, ImageData, Object, ObjectKind, ObjectParent, PathData, SymbolData,
-    TextAlign, TextData, TextKind, TextPosition, TextStyle,
+    Anchor, CompoundPathData, GroupData, HandleMode, ImageData, Object, ObjectKind, ObjectParent,
+    PathData, Subpath, SymbolData, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};

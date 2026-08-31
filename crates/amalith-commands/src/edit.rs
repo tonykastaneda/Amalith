@@ -16,8 +16,8 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    geom::BezPath, Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint, StrokeStyle, TextData,
+    Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId, ObjectKind,
+    ObjectParent, Paint, PathData, StrokeStyle, TextData,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,9 +63,9 @@ pub(crate) enum Edit {
         id: ObjectId,
         transform: Affine,
     },
-    SetPathGeometry {
+    SetPathData {
         id: ObjectId,
-        geometry: BezPath,
+        data: PathData,
     },
     SetTextData {
         id: ObjectId,
@@ -183,19 +183,13 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 None,
             ))
         }
-        Edit::SetPathGeometry { id, geometry } => {
+        Edit::SetPathData { id, data } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
             let ObjectKind::Path(path) = &mut object.kind else {
                 return Err(CommandError::NotAPath(id));
             };
-            let old_geometry = std::mem::replace(&mut path.geometry, geometry);
-            Ok((
-                Edit::SetPathGeometry {
-                    id,
-                    geometry: old_geometry,
-                },
-                None,
-            ))
+            let old = std::mem::replace(path, data);
+            Ok((Edit::SetPathData { id, data: old }, None))
         }
         Edit::SetTextData { id, data } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;

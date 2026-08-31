@@ -1865,7 +1865,7 @@ impl App {
             }
             let Ok(CommandOutcome::Object(pid)) = self.doc.editor.execute(Command::CreatePath {
                 layer,
-                path: amalith_core::PathData { geometry },
+                path: amalith_core::PathData::from_bezpath(geometry),
                 name,
             }) else {
                 continue;

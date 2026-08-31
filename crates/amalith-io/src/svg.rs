@@ -219,9 +219,9 @@ fn import_node(
         .unwrap_or(Affine::IDENTITY);
 
     let kind = match node.tag_name().name() {
-        "path" => ObjectKind::Path(PathData {
-            geometry: BezPath::from_svg(node.attribute("d")?).ok()?,
-        }),
+        "path" => ObjectKind::Path(PathData::from_bezpath(
+            BezPath::from_svg(node.attribute("d")?).ok()?,
+        )),
         "rect" => {
             let x = attr_f64(node, "x").unwrap_or(0.0);
             let y = attr_f64(node, "y").unwrap_or(0.0);
