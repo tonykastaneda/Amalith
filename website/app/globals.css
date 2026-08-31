@@ -85,7 +85,7 @@ summary { font: inherit; }
 .cta { min-height: 600px; background: #fff; color: var(--ink); border-top: 1px solid rgba(17,17,15,.16); padding: 60px 5vw; display: grid; grid-template-columns: 1fr 2fr; align-items: center; position: relative; overflow: hidden; }
 .cta__art { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .cta__mark { position: absolute; left: -3vw; bottom: -39%; width: min(54vw, 760px); opacity: .08; }
-.cta p { grid-column: 2; font-size: clamp(45px, 6vw, 90px); line-height: .94; letter-spacing: -.06em; margin: 0 0 65px; font-weight: 800; }
+.cta p { grid-column: 2; font-size: clamp(45px, 3.8vw, 72px); line-height: .94; letter-spacing: -.06em; margin: 0 0 65px; font-weight: 800; }
 .cta > a { grid-column: 2; justify-self: end; min-width: 220px; display: flex; justify-content: space-between; gap: 60px; color: var(--ink); background: var(--yellow); border: 1px solid var(--yellow); border-radius: 999px; padding: 18px 25px; font-weight: 800; transition: background 160ms ease, color 160ms ease; }
 .cta > a:hover { background: var(--paper); border-color: var(--paper); color: var(--ink); }
 
@@ -97,6 +97,10 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 .footer-links p { color: #8f8e87; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 12px; }
 .footer-note { grid-column: 1 / -1; border-top: 1px solid #343430; margin: 50px 0 0; padding-top: 26px; color: #8f8e87; font-size: 12px; }
 .footer-heart { color: var(--yellow); font-size: 1.15em; }
+
+@media (min-width: 1200px) {
+  .cta p span { white-space: nowrap; }
+}
 
 @media (max-width: 900px) {
   .site-header { grid-template-columns: 1fr auto; height: 76px; padding: 0 18px; }
