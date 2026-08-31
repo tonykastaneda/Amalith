@@ -85,7 +85,7 @@ summary { font: inherit; }
 .cta { min-height: 600px; background: #fff; color: var(--ink); border-top: 1px solid rgba(17,17,15,.16); padding: 60px 5vw; display: grid; grid-template-columns: 1fr 2fr; align-items: center; position: relative; overflow: hidden; }
 .cta__mark { position: absolute; left: -3vw; bottom: -39%; width: min(54vw, 760px); opacity: .08; }
 .cta p { grid-column: 2; font-size: clamp(45px, 6vw, 90px); line-height: .94; letter-spacing: -.06em; margin: 0 0 65px; font-weight: 800; }
-.cta > a { grid-column: 2; justify-self: start; min-width: 220px; display: flex; justify-content: space-between; gap: 60px; color: var(--ink); background: var(--yellow); border: 1px solid var(--yellow); border-radius: 999px; padding: 18px 25px; font-weight: 800; transition: background 160ms ease, color 160ms ease; }
+.cta > a { grid-column: 2; justify-self: end; min-width: 220px; display: flex; justify-content: space-between; gap: 60px; color: var(--ink); background: var(--yellow); border: 1px solid var(--yellow); border-radius: 999px; padding: 18px 25px; font-weight: 800; transition: background 160ms ease, color 160ms ease; }
 .cta > a:hover { background: var(--paper); border-color: var(--paper); color: var(--ink); }
 
 footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; display: grid; grid-template-columns: 1fr 1fr; gap: 100px; }
@@ -122,6 +122,7 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
   .status__copy { padding-top: 0; }
   .cta { grid-template-columns: 1fr; min-height: 500px; }
   .cta p, .cta > a { grid-column: 1; }
+  .cta > a { justify-self: start; }
   .cta__mark { width: 80vw; }
   footer { grid-template-columns: 1fr; gap: 60px; }
 }
