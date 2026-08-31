@@ -85,19 +85,27 @@ pub fn hit_handle(p: Point, quad_screen: [Point; 4]) -> Option<Handle> {
         .find(|&h| (p - handle_pos(quad_screen, h)).hypot() <= 7.0)
 }
 
-/// Is `p` (screen px) in the rotation halo just outside a corner?
+/// Is `p` (screen px) in the rotation halo just outside a handle?
 pub fn hit_rotate_halo(p: Point, quad_screen: [Point; 4]) -> bool {
+    rotate_halo_handle(p, quad_screen).is_some()
+}
+
+/// Which handle's rotation halo `p` (screen px) is in — index into
+/// `Handle::ALL` (0 = Nw, then N, Ne, E, Se, S, Sw, W). The halo is the
+/// band just outside each of the 8 grips. `None` if not in any halo.
+pub fn rotate_halo_handle(p: Point, quad_screen: [Point; 4]) -> Option<usize> {
     if point_in_convex_quad(p, quad_screen) {
-        return false;
+        return None;
     }
     let center = quad_center(quad_screen);
-    quad_screen.into_iter().any(|corner| {
-        let outward = corner - center;
+    Handle::ALL.iter().position(|&h| {
+        let anchor = handle_pos(quad_screen, h);
+        let outward = anchor - center;
         let len = outward.hypot();
         if len <= f64::EPSILON {
             return false;
         }
-        let offset = p - corner;
+        let offset = p - anchor;
         let dist = offset.hypot();
         offset.dot(outward / len) > 0.0 && (8.0..=32.0).contains(&dist)
     })

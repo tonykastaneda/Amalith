@@ -38,6 +38,7 @@ pub(in crate::app) fn paint_main(
     active_tab: usize,
     cursor_glyph: Option<(Tool, bool)>,
     zoom_cursor: Option<bool>,
+    cursor_mode: CanvasCursor,
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
     stroke_popover: bool,
@@ -244,6 +245,36 @@ pub(in crate::app) fn paint_main(
     }
     if let Some(plus) = zoom_cursor {
         icons::draw_magnifier(scene, pointer, plus);
+    }
+    // Transform-handle hover cursors (scale double-arrow / rotate).
+    {
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        match cursor_mode {
+            CanvasCursor::ScaleNS => icons::draw_scale_cursor(scene, pointer, FRAC_PI_2),
+            CanvasCursor::ScaleEW => icons::draw_scale_cursor(scene, pointer, 0.0),
+            CanvasCursor::ScaleNWSE => icons::draw_scale_cursor(scene, pointer, FRAC_PI_4),
+            CanvasCursor::ScaleNESW => {
+                icons::draw_scale_cursor(scene, pointer, 3.0 * FRAC_PI_4)
+            }
+            CanvasCursor::Rotate(grip) => {
+                // Handle::ALL index (0 = Nw, then N, Ne, E, Se, S, Sw, W)
+                // → the outward direction that grip sits on. The arc
+                // bulges out that way, leaving its gap + both arrowheads
+                // facing the selection.
+                let angle = [
+                    -3.0 * FRAC_PI_4,
+                    -FRAC_PI_2,
+                    -FRAC_PI_4,
+                    0.0,
+                    FRAC_PI_4,
+                    FRAC_PI_2,
+                    3.0 * FRAC_PI_4,
+                    PI,
+                ][grip as usize % 8];
+                icons::draw_rotate_cursor(scene, pointer, angle);
+            }
+            _ => {}
+        }
     }
 
     // Primitive flyout.

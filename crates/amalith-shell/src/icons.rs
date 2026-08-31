@@ -5,9 +5,14 @@
 //! option — but the glyphs only use `<polygon>` / `<rect>` / `<ellipse>`
 //! / `<circle>` / `<line>` in a 0..100 view box, which is easy to walk.
 
-use vello::kurbo::{Affine, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke};
+use vello::kurbo::{Affine, Arc, BezPath, Circle, Ellipse, Line, Point, Rect, Stroke, Vec2};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
+
+/// Transform-cursor ink: a wide white halo under a near-black body, so it
+/// reads on the pasteboard and on a white artboard alike.
+const CURSOR_HALO: Color = Color::from_rgb8(0xff, 0xff, 0xff);
+const CURSOR_BODY: Color = Color::from_rgb8(0x1a, 0x1a, 0x1a);
 
 const ID: Affine = Affine::IDENTITY;
 
@@ -245,6 +250,75 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
             }
         }
     }
+}
+
+/// Illustrator-style scale cursor: a double-headed arrow along `angle`
+/// (radians; 0 = horizontal), centred on `center`. Painted white-halo
+/// then dark body.
+pub fn draw_scale_cursor(scene: &mut Scene, center: Point, angle: f64) {
+    let (s, c) = angle.sin_cos();
+    let dir = Vec2::new(c, s);
+    let perp = Vec2::new(-s, c);
+    let hl = 11.0; // half of the total arrow length
+    let ah = 6.0; // arrowhead length
+    let aw = 4.0; // arrowhead half-width
+    let base_p = center + dir * (hl - ah);
+    let base_m = center - dir * (hl - ah);
+    let head = |tip: Point, base: Point| {
+        let mut p = BezPath::new();
+        p.move_to(tip);
+        p.line_to(base + perp * aw);
+        p.line_to(base - perp * aw);
+        p.close_path();
+        p
+    };
+    let hp = head(center + dir * hl, base_p);
+    let hm = head(center - dir * hl, base_m);
+    let shaft = Line::new(base_m, base_p);
+    let mut pass = |col: Color, sw: f64| {
+        scene.stroke(&Stroke::new(sw), ID, col, None, &shaft);
+        for h in [&hp, &hm] {
+            scene.fill(Fill::NonZero, ID, col, None, h);
+            scene.stroke(&Stroke::new(sw), ID, col, None, h);
+        }
+    };
+    pass(CURSOR_HALO, 5.0);
+    pass(CURSOR_BODY, 2.0);
+}
+
+/// Illustrator-style rotate cursor: a ~115° arc with a tangent arrowhead
+/// at each end, centred on `center`. The arc is centred on `angle`
+/// (radians) so it can be rotated to face the corner being hovered.
+pub fn draw_rotate_cursor(scene: &mut Scene, center: Point, angle: f64) {
+    let r = 8.5;
+    let sweep = 2.0;
+    let a0 = angle - sweep * 0.5;
+    let arc = Arc::new(center, (r, r), a0, sweep, 0.0);
+    let ah = 5.0;
+    let aw = 3.5;
+    let head = |ang: f64, along: f64| {
+        let (s, c) = ang.sin_cos();
+        let p = center + Vec2::new(c, s) * r;
+        let tan = Vec2::new(-s, c) * along; // travel direction, signed
+        let perp = Vec2::new(-tan.y, tan.x);
+        let mut path = BezPath::new();
+        path.move_to(p + tan * ah);
+        path.line_to(p + perp * aw);
+        path.line_to(p - perp * aw);
+        path.close_path();
+        path
+    };
+    let h0 = head(a0, -1.0);
+    let h1 = head(a0 + sweep, 1.0);
+    let mut pass = |col: Color, sw: f64| {
+        scene.stroke(&Stroke::new(sw), ID, col, None, &arc);
+        for h in [&h0, &h1] {
+            scene.fill(Fill::NonZero, ID, col, None, h);
+            scene.stroke(&Stroke::new(sw), ID, col, None, h);
+        }
+    };
+    pass(CURSOR_HALO, 5.0);
+    pass(CURSOR_BODY, 2.0);
 }
 
 #[derive(Clone, Copy, Default)]

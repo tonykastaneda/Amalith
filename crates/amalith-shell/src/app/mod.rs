@@ -365,6 +365,30 @@ enum CanvasCursor {
     Zoom,
     /// I-beam — the Type tool.
     IBeam,
+    /// Drawn double-arrow scale cursors — hovering a transform grip.
+    ScaleNS,
+    ScaleEW,
+    ScaleNESW,
+    ScaleNWSE,
+    /// Drawn curved-arrow rotate cursor — hovering just outside a corner.
+    /// Carries the corner index (0 = NW, clockwise) so it can face that way.
+    Rotate(u8),
+}
+
+impl CanvasCursor {
+    /// Modes where the OS cursor is hidden and we paint one instead.
+    fn is_drawn(self) -> bool {
+        matches!(
+            self,
+            CanvasCursor::Glyph
+                | CanvasCursor::Zoom
+                | CanvasCursor::ScaleNS
+                | CanvasCursor::ScaleEW
+                | CanvasCursor::ScaleNESW
+                | CanvasCursor::ScaleNWSE
+                | CanvasCursor::Rotate(_)
+        )
+    }
 }
 
 struct App {
@@ -2342,11 +2366,18 @@ impl App {
                 _ => CanvasCursor::Crosshair,
             }
         };
+        // Hovering a transform grip / rotation halo wins over the tool's
+        // default cursor.
+        let mode = if over && matches!(self.drag, Drag::None) && !self.space_down {
+            self.handle_hover_cursor().unwrap_or(mode)
+        } else {
+            mode
+        };
         if mode != self.cursor_mode {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
                 use winit::window::CursorIcon;
-                let drawn = matches!(mode, CanvasCursor::Glyph | CanvasCursor::Zoom);
+                let drawn = mode.is_drawn();
                 w.set_cursor_visible(!drawn);
                 w.set_cursor(match mode {
                     CanvasCursor::Crosshair => CursorIcon::Crosshair,
@@ -2357,6 +2388,41 @@ impl App {
                 });
             }
             self.request_main_redraw();
+        }
+    }
+
+    /// If the pointer is over a transform grip (Selection or Artboard
+    /// tool) or a rotation halo, the cursor that fits.
+    fn handle_hover_cursor(&self) -> Option<CanvasCursor> {
+        let to_screen = self.doc.view.to_screen();
+        let scale_for = |h: handles::Handle| match h {
+            handles::Handle::Nw | handles::Handle::Se => CanvasCursor::ScaleNWSE,
+            handles::Handle::Ne | handles::Handle::Sw => CanvasCursor::ScaleNESW,
+            handles::Handle::N | handles::Handle::S => CanvasCursor::ScaleNS,
+            handles::Handle::E | handles::Handle::W => CanvasCursor::ScaleEW,
+        };
+        match self.effective_tool() {
+            Tool::Select if !self.doc.selection.is_empty() => {
+                let quad =
+                    select::selection_quad(self.doc.editor.document(), &self.doc.selection)?;
+                let scr = quad.map(|p| to_screen * p);
+                if let Some(h) = handles::hit_handle(self.pointer, scr) {
+                    Some(scale_for(h))
+                } else {
+                    handles::rotate_halo_handle(self.pointer, scr)
+                        .map(|c| CanvasCursor::Rotate(c as u8))
+                }
+            }
+            Tool::Artboard => {
+                let ab = self
+                    .doc
+                    .editor
+                    .document()
+                    .artboard(self.doc.selected_artboard?)?;
+                let scr = handles::rect_quad(convert::rect(ab.rect)).map(|p| to_screen * p);
+                handles::hit_handle(self.pointer, scr).map(scale_for)
+            }
+            _ => None,
         }
     }
 

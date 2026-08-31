@@ -235,6 +235,7 @@ impl App {
                 active_tab,
                 cursor_glyph,
                 zoom_cursor,
+                self.cursor_mode,
                 self.last_shape_tool,
                 self.shape_flyout,
                 self.stroke_popover,
