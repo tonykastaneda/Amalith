@@ -12,8 +12,8 @@ use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Document, DocumentError, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Rect, Vec2,
+    Affine, Appearance, Artboard, ArtboardId, Color, Document, DocumentError, Layer, LayerId,
+    Object, ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -456,6 +456,13 @@ impl Editor {
                     ObjectParent::Layer(layer),
                     amalith_core::ObjectKind::Text(data),
                 );
+                // Text follows Illustrator's default — black fill, no stroke —
+                // not the shape tools' visible-stroke default.
+                object.appearance = Appearance {
+                    fill: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
+                    stroke: Paint::None,
+                    ..object.appearance
+                };
                 object.transform = transform;
                 object.name = name;
                 let index = self.document.children_of(ObjectParent::Layer(layer)).len();
