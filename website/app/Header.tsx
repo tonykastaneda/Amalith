@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { ArrowUpRight } from "./ArrowUpRight";
+import wordmark from "../public/brand/amalith-wordmark.png";
 
 export function Header({ basePath }: { basePath: string }) {
   const headerRef = useRef<HTMLElement>(null);
@@ -43,7 +44,7 @@ export function Header({ basePath }: { basePath: string }) {
         }}
       />
       <a className="brand" href="#top" aria-label="Amalith home">
-        <img src={`${basePath}/brand/amalith-wordmark.png`} alt="Amalith" />
+        <img src={wordmark.src} alt="Amalith" width={669} height={160} />
       </a>
       <nav className="desktop-nav" aria-label="Primary navigation">
         <a href="#why">Why Amalith</a>
