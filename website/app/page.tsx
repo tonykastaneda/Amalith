@@ -1,4 +1,5 @@
 import { Header } from "./Header";
+import { ArrowUpRight } from "./ArrowUpRight";
 
 const features = [
   {
@@ -105,9 +106,11 @@ export default function Home() {
         </section>
 
         <section className="cta">
-          <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
+          <div className="cta__art" aria-hidden="true">
+            <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
+          </div>
           <p>Open source vector design,<br />without the compromise.</p>
-          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Get Amalith <span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Get Amalith <ArrowUpRight /></a>
         </section>
       </main>
 
@@ -115,7 +118,7 @@ export default function Home() {
         <a className="footer-brand" href="#top" aria-label="Amalith"><img src={`${basePath}/brand/amalith-a.svg`} alt="" /></a>
         <div className="footer-links">
           <div><p>Project</p><a href="#why">Why Amalith</a><a href="#features">Features</a><a href="#status">Status</a></div>
-          <div><p>Community</p><a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub ↗</a><a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues ↗</a></div>
+          <div><p>Community</p><a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a><a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues <ArrowUpRight /></a></div>
         </div>
         <p className="footer-note">Built in public. Made for designers.</p>
       </footer>

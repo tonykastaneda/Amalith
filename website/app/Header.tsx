@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { ArrowUpRight } from "./ArrowUpRight";
 
 export function Header({ basePath }: { basePath: string }) {
   const headerRef = useRef<HTMLElement>(null);
@@ -60,8 +61,8 @@ export function Header({ basePath }: { basePath: string }) {
           <a href="#why">Why Amalith</a>
           <a href="#features">Features</a>
           <a href="#status">Status</a>
-          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Get Amalith ↗</a>
-          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub ↗</a>
+          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Get Amalith <ArrowUpRight /></a>
+          <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a>
         </div>
       </details>
     </header>
