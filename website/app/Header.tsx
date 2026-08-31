@@ -54,7 +54,6 @@ export function Header({ basePath }: { basePath: string }) {
       <a className="get-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">
         Get Amalith
       </a>
-      <span className="language-pill" aria-label="Language: English">EN</span>
       <details className="mobile-nav">
         <summary>Menu</summary>
         <div>
