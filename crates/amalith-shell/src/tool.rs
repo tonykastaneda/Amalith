@@ -7,6 +7,7 @@ pub enum Tool {
     Select,
     DirectSelect,
     Pen,
+    Text,
     Rectangle,
     RoundedRect,
     Ellipse,
@@ -16,10 +17,11 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 9] = [
+    pub const ALL: [Tool; 10] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
+        Tool::Text,
         Tool::Rectangle,
         Tool::RoundedRect,
         Tool::Ellipse,
@@ -41,6 +43,7 @@ impl Tool {
             Tool::Select => "Selection",
             Tool::DirectSelect => "Direct Selection",
             Tool::Pen => "Pen",
+            Tool::Text => "Type",
             Tool::Rectangle => "Rectangle",
             Tool::RoundedRect => "Rounded Rectangle",
             Tool::Ellipse => "Ellipse",
@@ -56,6 +59,7 @@ impl Tool {
             Tool::Select => "V",
             Tool::DirectSelect => "A",
             Tool::Pen => "P",
+            Tool::Text => "T",
             Tool::Rectangle => "M",
             Tool::Ellipse => "L",
             Tool::Artboard => "⇧O",
@@ -68,6 +72,7 @@ impl Tool {
             Tool::Select => Icon::Select,
             Tool::DirectSelect => Icon::DirectSelect,
             Tool::Pen => Icon::Pen,
+            Tool::Text => Icon::Text,
             Tool::Rectangle => Icon::Rectangle,
             Tool::RoundedRect => Icon::RoundedRect,
             Tool::Ellipse => Icon::Ellipse,

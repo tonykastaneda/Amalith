@@ -32,8 +32,8 @@ use amalith_shell::newdoc;
 use amalith_shell::text::TextContext;
 use amalith_shell::tool::Tool;
 use amalith_shell::{
-    about, appicon, chrome, convert, home, icons, layout, panels, picker, recent, sample, select,
-    stroke_panel, Theme,
+    about, appicon, chrome, convert, home, icons, layout, panels, picker, prefs, recent, sample,
+    select, stroke_panel, textedit, Theme,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 use vello::peniko::{color::palette, Color, Fill};
@@ -50,7 +50,7 @@ use winit::window::{Window, WindowId};
 /// Height of the top app bar, logical points.
 const APP_BAR_H: f64 = 30.0;
 /// The document-tab strip, between the app bar and the options bar.
-const TAB_BAR_H: f64 = 28.0;
+const TAB_BAR_H: f64 = 29.4;
 /// The tool options strip, between the app bar and the canvas.
 const OPT_BAR_H: f64 = 30.0;
 /// Total fixed chrome above the canvas / below the top of the window.
@@ -171,6 +171,10 @@ enum Drag {
     },
     /// Artboard tool: rubber-banding a new artboard.
     DrawArtboard { start_doc: Point, cur_doc: Point },
+    /// Type tool: press-drag before deciding point vs area type.
+    DrawText { start_doc: Point, cur_doc: Point },
+    /// Type tool: dragging to select text inside the open editor.
+    TextSelect,
     /// Artboard tool: dragging an existing artboard. Alt (held at any
     /// point) drops a copy; Shift locks to 8 directions — both read live.
     MoveArtboard {
@@ -194,6 +198,7 @@ enum Drag {
 #[derive(Clone, Copy, Debug)]
 enum MenuAction {
     About,
+    Preferences,
     New,
     Open,
     Save,
@@ -210,6 +215,8 @@ enum MenuAction {
     BringToFront,
     SendBackward,
     SendToBack,
+    /// Window menu: show/hide the panel with this id.
+    TogglePanel(&'static str),
 }
 
 /// Where a paste drops. `Plain` recentres on the view; the other two keep
@@ -228,6 +235,23 @@ struct Rename {
     target: panels::RenameId,
     buf: String,
     fresh: bool,
+}
+
+/// A hover tooltip: shown after a short delay, anchored where the pointer
+/// was when it appeared.
+struct Tooltip {
+    text: String,
+    anchor: Point,
+    since: Instant,
+}
+
+/// An open Character-panel dropdown (font family / style / size).
+struct FontMenuState {
+    kind: panels::FontMenu,
+    /// The field the menu drops from, in screen coords.
+    anchor: Rect,
+    items: Vec<String>,
+    scroll: f64,
 }
 
 /// One open document's worth of state. The *active* tab's copy lives
@@ -293,6 +317,8 @@ enum CanvasCursor {
     Grabbing,
     /// Magnifier glyph — Space+⌘ scrubby zoom (＋ or － by direction).
     Zoom,
+    /// I-beam — the Type tool.
+    IBeam,
 }
 
 struct App {
@@ -332,6 +358,24 @@ struct App {
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
+    /// An open text edit (Type tool). `Some` while a text object has the
+    /// caret; commits on Esc / click-away / tool switch.
+    text_edit: Option<textedit::TextEdit>,
+    /// Style the next new text object gets.
+    text_defaults: amalith_core::TextStyle,
+    /// Caret blink phase origin.
+    text_blink: Instant,
+    /// Installed font family names, sorted — built once, for the Character
+    /// panel's family dropdown.
+    font_families: Vec<String>,
+    /// An open Character-panel dropdown.
+    font_menu: Option<FontMenuState>,
+    /// Hover tooltip, if the pointer has been resting on a labelled control.
+    tooltip: Option<Tooltip>,
+    /// Application settings (Amalith ▸ Preferences).
+    settings: prefs::Settings,
+    /// The Preferences modal, when open.
+    prefs: Option<prefs::Prefs>,
     active_tool: Tool,
     /// The tool that was active when the Artboard tool was entered, so
     /// Escape can drop straight back to it.
@@ -439,6 +483,14 @@ impl App {
             // Boot into the Home screen; New Document opens from there.
             newdoc: None,
             home: home::Home::new(recent::load()),
+            text_edit: None,
+            text_defaults: amalith_core::TextStyle::default(),
+            text_blink: Instant::now(),
+            font_families: Vec::new(),
+            font_menu: None,
+            tooltip: None,
+            settings: prefs::Settings::default(),
+            prefs: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
@@ -573,7 +625,9 @@ impl App {
         if self.tabs.len() == 1 {
             self.load_active_doc(Doc::placeholder());
             self.selection.clear();
-            self.home = home::Home::new(recent::load());
+            if self.settings.home_on_last_close {
+                self.home = home::Home::new(recent::load());
+            }
             self.request_main_redraw();
             return;
         }
@@ -791,8 +845,247 @@ impl App {
             }
             // Intercepted in on_press (press-and-hold logic).
             panels::Action::ShapeSlot => {}
+            // --- Character panel ---
+            panels::Action::SetFontFamily(name) => {
+                self.edit_text_style(move |s| s.family = name.clone());
+            }
+            panels::Action::SetFontFace { weight, italic } => {
+                self.edit_text_style(move |s| {
+                    s.weight = weight;
+                    s.italic = italic;
+                });
+            }
+            panels::Action::SetFontSize(v) => {
+                self.edit_text_style(move |s| s.size = v);
+            }
+            panels::Action::SetLeading(v) => {
+                self.edit_text_style(move |s| s.leading = v);
+            }
+            panels::Action::SetTracking(v) => {
+                self.edit_text_style(move |s| s.tracking = v);
+            }
+            panels::Action::ToggleTextFlag(f) => {
+                use amalith_core::TextPosition;
+                use panels::TextFlag;
+                self.edit_text_style(move |s| match f {
+                    TextFlag::Underline => s.underline = !s.underline,
+                    TextFlag::Strikethrough => s.strikethrough = !s.strikethrough,
+                    TextFlag::SmallCaps => s.small_caps = !s.small_caps,
+                    TextFlag::Superscript => {
+                        s.position = if s.position == TextPosition::Superscript {
+                            TextPosition::Normal
+                        } else {
+                            TextPosition::Superscript
+                        }
+                    }
+                    TextFlag::Subscript => {
+                        s.position = if s.position == TextPosition::Subscript {
+                            TextPosition::Normal
+                        } else {
+                            TextPosition::Subscript
+                        }
+                    }
+                    TextFlag::AllCaps => {} // not modelled yet
+                });
+            }
+            panels::Action::OpenFontMenu(kind, anchor) => {
+                self.open_font_menu(kind, anchor);
+            }
         }
         self.request_main_redraw();
+    }
+
+    /// Apply `f` to the type style the Character panel targets: the live
+    /// text edit, else every selected text object, else the new-text
+    /// defaults.
+    fn edit_text_style(&mut self, f: impl Fn(&mut amalith_core::TextStyle)) {
+        if let Some(te) = &mut self.text_edit {
+            let mut s = te.style().clone();
+            f(&mut s);
+            te.apply_style(&s, &mut self.text);
+            self.request_main_redraw();
+            return;
+        }
+        let ids: Vec<ObjectId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(
+                    self.editor.document().object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Text(_))
+                )
+            })
+            .collect();
+        if ids.is_empty() {
+            f(&mut self.text_defaults);
+            self.request_main_redraw();
+            return;
+        }
+        for id in ids {
+            let Some(amalith_core::ObjectKind::Text(t)) =
+                self.editor.document().object(id).map(|o| &o.kind)
+            else {
+                continue;
+            };
+            let mut data = t.clone();
+            f(&mut data.style);
+            data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+            let _ = self.editor.execute(Command::SetText { object: id, data });
+        }
+        self.request_main_redraw();
+    }
+
+    /// Open a Character-panel dropdown anchored at `anchor` (screen rect).
+    fn open_font_menu(&mut self, kind: panels::FontMenu, anchor: Rect) {
+        let items: Vec<String> = match kind {
+            panels::FontMenu::Family => self.font_families.clone(),
+            panels::FontMenu::Style => {
+                let fam = self.active_text_style().family;
+                let (fc, _) = self.text.parts();
+                let mut faces: Vec<(u16, bool, String)> = fc
+                    .collection
+                    .family_by_name(&fam)
+                    .map(|info| {
+                        info.fonts()
+                            .iter()
+                            .map(|font| {
+                                let w = font.weight().value().round() as u16;
+                                let italic =
+                                    !matches!(font.style(), parley::style::FontStyle::Normal);
+                                (w, italic, panels::character::face_label(w, italic))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                faces.sort();
+                faces.dedup();
+                faces.into_iter().map(|(_, _, l)| l).collect()
+            }
+            panels::FontMenu::Size => panels::character::SIZE_PRESETS
+                .iter()
+                .map(|v| format!("{}", *v as i64))
+                .collect(),
+        };
+        self.font_menu = Some(FontMenuState {
+            kind,
+            anchor,
+            items,
+            scroll: 0.0,
+        });
+        self.request_main_redraw();
+    }
+
+    const FM_ROW: f64 = 22.0;
+    const FM_ROWS: usize = 12;
+
+    fn font_menu_rect(m: &FontMenuState) -> Rect {
+        let w = m.anchor.width().max(190.0);
+        let rows = m.items.len().min(Self::FM_ROWS).max(1) as f64;
+        let x = m.anchor.x0;
+        let y = m.anchor.y1 + 2.0;
+        Rect::new(x, y, x + w, y + rows * Self::FM_ROW + 6.0)
+    }
+
+    /// A click while a font dropdown is open. Returns true if consumed.
+    fn font_menu_click(&mut self, p: Point) -> bool {
+        let Some(m) = &self.font_menu else {
+            return false;
+        };
+        let outer = Self::font_menu_rect(m);
+        if !outer.contains(p) {
+            self.font_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let idx = ((p.y - outer.y0 - 3.0 + m.scroll) / Self::FM_ROW).floor() as isize;
+        if idx >= 0 && (idx as usize) < m.items.len() {
+            let kind = m.kind;
+            let label = m.items[idx as usize].clone();
+            self.font_menu = None;
+            match kind {
+                panels::FontMenu::Family => {
+                    self.apply_panel_action(panels::Action::SetFontFamily(label), false);
+                }
+                panels::FontMenu::Size => {
+                    if let Ok(v) = label.parse::<f64>() {
+                        self.apply_panel_action(panels::Action::SetFontSize(v), false);
+                    }
+                }
+                panels::FontMenu::Style => {
+                    // Resolve the label back to weight/italic via the family's faces.
+                    let fam = self.active_text_style().family;
+                    let (fc, _) = self.text.parts();
+                    let face = fc.collection.family_by_name(&fam).and_then(|info| {
+                        info.fonts().iter().find_map(|font| {
+                            let w = font.weight().value().round() as u16;
+                            let italic = !matches!(font.style(), parley::style::FontStyle::Normal);
+                            (panels::character::face_label(w, italic) == label)
+                                .then_some((w, italic))
+                        })
+                    });
+                    if let Some((weight, italic)) = face {
+                        self.apply_panel_action(
+                            panels::Action::SetFontFace { weight, italic },
+                            false,
+                        );
+                    }
+                }
+            }
+        }
+        self.request_main_redraw();
+        true
+    }
+
+    fn paint_font_menu(&mut self) {
+        let Some(m) = &self.font_menu else {
+            return;
+        };
+        let outer = Self::font_menu_rect(m);
+        let th = &self.theme;
+        self.content.fill(
+            Fill::NonZero,
+            ID,
+            th.bg,
+            None,
+            &outer.to_rounded_rect(4.0),
+        );
+        self.content
+            .stroke(&Stroke::new(1.0), ID, th.border, None, &outer.to_rounded_rect(4.0));
+        self.content
+            .push_clip_layer(Fill::NonZero, ID, &outer);
+        let cur = match m.kind {
+            panels::FontMenu::Family => self.active_text_style().family,
+            panels::FontMenu::Style => {
+                let s = self.active_text_style();
+                panels::character::face_label(s.weight, s.italic)
+            }
+            panels::FontMenu::Size => {
+                format!("{}", self.active_text_style().size.round() as i64)
+            }
+        };
+        for (i, label) in m.items.iter().enumerate() {
+            let y = outer.y0 + 3.0 + i as f64 * Self::FM_ROW - m.scroll;
+            if y + Self::FM_ROW < outer.y0 || y > outer.y1 {
+                continue;
+            }
+            let row = Rect::new(outer.x0, y, outer.x1, y + Self::FM_ROW);
+            let hot = row.contains(self.pointer);
+            if hot {
+                self.content
+                    .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
+            }
+            let sel = *label == cur;
+            self.text.draw(
+                &mut self.content,
+                label,
+                12.0,
+                if sel { th.accent } else { th.text },
+                row.x0 + 10.0,
+                row.center().y + 4.0,
+            );
+        }
+        self.content.pop_layer();
     }
 
     /// Start an inline rename, seeding the buffer with the current name.
@@ -979,7 +1272,8 @@ impl App {
     /// Arrow-key nudge (Shift = ×10). Moves the selected anchors when the
     /// Direct Selection tool is active, otherwise the object selection.
     fn nudge(&mut self, dx: f64, dy: f64) {
-        let step = if self.shift_down { 10.0 } else { 1.0 };
+        let base = self.settings.nudge_step;
+        let step = if self.shift_down { base * 10.0 } else { base };
         let delta = amalith_core::Vec2::new(dx * step, dy * step);
         if self.effective_tool() == Tool::DirectSelect && !self.anchor_sel.is_empty() {
             let _ = self.editor.execute(Command::MoveAnchors {
@@ -1199,6 +1493,10 @@ impl App {
                 }
                 self.request_main_redraw();
             }
+            MenuAction::Preferences => {
+                self.prefs = Some(prefs::Prefs::new(self.settings));
+                self.request_main_redraw();
+            }
             MenuAction::New => self.open_new_doc(),
             MenuAction::Open => self.open_document(),
             MenuAction::Save => self.save_document(false),
@@ -1243,6 +1541,7 @@ impl App {
                 }
             }
             MenuAction::SelectAll => self.select_all(),
+            MenuAction::TogglePanel(id) => self.toggle_panel(id),
             MenuAction::BringForward => self.restack(1),
             MenuAction::BringToFront => self.restack_extreme(true),
             MenuAction::SendBackward => self.restack(-1),
@@ -1513,6 +1812,10 @@ impl App {
 
     /// Switch tools, discarding any in-progress Pen path.
     fn set_tool(&mut self, t: Tool) {
+        // Leaving the Type tool commits whatever's being typed.
+        if t != Tool::Text && self.text_edit.is_some() {
+            self.commit_text_edit();
+        }
         if t != Tool::Pen {
             self.pen.clear();
             self.pen_redo.clear();
@@ -1532,6 +1835,144 @@ impl App {
         self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
+    }
+
+    // --- Type tool -----------------------------------------------------
+
+    /// The type style the Character panel should show / edit: the live text
+    /// edit, else a selected text object, else the new-text defaults.
+    fn active_text_style(&self) -> amalith_core::TextStyle {
+        if let Some(te) = &self.text_edit {
+            return te.style().clone();
+        }
+        for &id in &self.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.editor.document().object(id).map(|o| &o.kind)
+            {
+                return t.style.clone();
+            }
+        }
+        self.text_defaults.clone()
+    }
+
+    /// Whether the caret is in its visible blink phase.
+    fn text_blink_on(&self) -> bool {
+        self.text_blink.elapsed().as_millis() % 1060 < 530
+    }
+
+    /// Screen (logical) point → the open editor's local space.
+    fn text_editor_point(&self, screen: Point) -> Option<(f32, f32)> {
+        let obj = self.text_edit.as_ref()?.object;
+        let world = self.editor.document().world_transform(obj);
+        let xf = self.view.to_screen() * convert::affine(world);
+        let p = xf.inverse() * screen;
+        Some((p.x as f32, p.y as f32))
+    }
+
+    /// Create a text object of `kind` anchored at `origin` (document space)
+    /// and open it for editing.
+    fn create_text(&mut self, kind: amalith_core::TextKind, origin: Point) {
+        let layer = self.ensure_layer();
+        let data = amalith_core::TextData {
+            content: String::new(),
+            kind,
+            style: self.text_defaults.clone(),
+            align: amalith_core::TextAlign::Start,
+            local_bounds: amalith_core::Rect::ZERO,
+        };
+        let cmd = Command::CreateText {
+            layer,
+            data,
+            transform: amalith_core::Affine::translate((origin.x, origin.y)),
+            name: None,
+        };
+        if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
+            self.selection = vec![id];
+            self.enter_text_edit(id, origin, None);
+        }
+    }
+
+    /// Open text object `id` for editing. `click` (screen point) places the
+    /// caret; `None` selects all (fresh object).
+    fn enter_text_edit(&mut self, id: ObjectId, origin: Point, click: Option<Point>) {
+        let Some(td) = self
+            .editor
+            .document()
+            .object(id)
+            .and_then(|o| match &o.kind {
+                amalith_core::ObjectKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let mut te = textedit::TextEdit::new(
+            id,
+            amalith_core::Point::new(origin.x, origin.y),
+            td.kind,
+            td.style,
+            td.align,
+            &td.content,
+            &mut self.text,
+        );
+        match click {
+            Some(p) => {
+                let xf =
+                    self.view.to_screen() * convert::affine(self.editor.document().world_transform(id));
+                let lp = xf.inverse() * p;
+                te.pointer_down((lp.x as f32, lp.y as f32), 1, &mut self.text);
+            }
+            None => te.select_all(&mut self.text),
+        }
+        self.text_edit = Some(te);
+        self.active_tool = Tool::Text;
+        self.text_blink = Instant::now();
+        if let Some(w) = self.main_window() {
+            w.set_ime_allowed(true);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Write the open text edit back to the document (empty & untouched →
+    /// delete the object) and leave edit mode.
+    fn commit_text_edit(&mut self) {
+        let Some(mut te) = self.text_edit.take() else {
+            return;
+        };
+        if te.is_empty() && !te.touched {
+            let _ = self.editor.execute(Command::DeleteObject { id: te.object });
+            self.selection.retain(|s| *s != te.object);
+        } else {
+            let data = te.to_text_data(&mut self.text);
+            let _ = self.editor.execute(Command::SetText {
+                object: te.object,
+                data,
+            });
+        }
+        if let Some(w) = self.main_window() {
+            w.set_ime_allowed(false);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Route one key event to the open text editor.
+    fn text_edit_key(&mut self, event: &winit::event::KeyEvent) -> textedit::KeyResult {
+        if !event.state.is_pressed() {
+            return textedit::KeyResult::Handled;
+        }
+        let mods = textedit::Mods {
+            shift: self.shift_down,
+            alt: self.alt_down,
+            meta: self.cmd_down,
+        };
+        self.text_blink = Instant::now();
+        let text = event.text.as_ref().map(|s| s.as_str());
+        let Some(te) = &mut self.text_edit else {
+            return textedit::KeyResult::PassThrough;
+        };
+        let r = te.key(&event.logical_key, mods, text, &mut self.text);
+        self.request_main_redraw();
+        r
     }
 
     /// ⌘Z with the Pen tool: step back one anchor. While still drawing this
@@ -1716,6 +2157,152 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// A minimal [`panels::Ctx`] for hit-only / tip-only queries.
+    fn tip_ctx(&self) -> panels::Ctx<'_> {
+        panels::Ctx {
+            theme: &self.theme,
+            doc: self.editor.document(),
+            selection: &self.selection,
+            active_tool: self.active_tool,
+            pointer: self.pointer,
+            representative: None,
+            active_slot: self.active_slot,
+            shape_tool: self.last_shape_tool,
+            expanded: &self.expanded_groups,
+            renaming: None,
+            selected_layer: self.selected_layer,
+            selected_artboard: self.selected_artboard,
+            text_style: amalith_core::TextStyle::default(),
+            text_editing: false,
+            font_families: &self.font_families,
+        }
+    }
+
+    /// Text for a hover tooltip over the pointer's current position, if it's
+    /// resting on a labelled panel control or a tab close button.
+    fn hover_tooltip(&mut self) -> Option<String> {
+        if !self.settings.show_tooltips
+            || !matches!(self.drag, Drag::None)
+            || self.font_menu.is_some()
+            || self.prefs.is_some()
+        {
+            return None;
+        }
+        let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
+            [RailSide::Left, RailSide::Right]
+                .iter()
+                .flat_map(|&side| {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
+                        return Vec::new();
+                    }
+                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                })
+                .collect()
+        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
+            self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })
+        }) {
+            self.floating_layout(fid).areas
+        } else {
+            return None;
+        };
+
+        for area in &areas {
+            if area.tab_strip.contains(self.pointer) {
+                if let Some(t) = area.tabs.iter().find(|t| t.rect.contains(self.pointer)) {
+                    if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
+                        return Some("Close panel".into());
+                    }
+                    return Some(tab_label(t.panel));
+                }
+                return None;
+            }
+            if area.body.contains(self.pointer) {
+                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                    let ctx = self.tip_ctx();
+                    return panels::tip(pid, area.body, self.pointer, &ctx);
+                }
+            }
+        }
+        None
+    }
+
+    /// Recompute the hover tooltip after a pointer move.
+    fn refresh_tooltip(&mut self) {
+        let new = self.hover_tooltip();
+        match (&self.tooltip, &new) {
+            (Some(t), Some(n)) if &t.text == n => {}
+            (_, Some(n)) => {
+                self.tooltip = Some(Tooltip {
+                    text: n.clone(),
+                    anchor: self.pointer,
+                    since: Instant::now(),
+                });
+                self.request_main_redraw();
+            }
+            (Some(_), None) => {
+                self.tooltip = None;
+                self.request_main_redraw();
+            }
+            (None, None) => {}
+        }
+    }
+
+    /// The × on a panel tab. In a rail: remove the panel. In a floating
+    /// window: close that window (drop its panels — no redock).
+    fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
+        if let Some(fid) = floating {
+            let wid = self
+                .hosts
+                .iter()
+                .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == fid))
+                .map(|(k, _)| *k);
+            if let Some(wid) = wid {
+                self.hosts.remove(&wid);
+                self.focused.remove(&wid);
+            }
+            self.dock.remove_floating(fid);
+        } else {
+            self.dock.remove(pid);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Window menu: show the panel (docked into the right rail) if hidden,
+    /// or remove it if shown.
+    fn toggle_panel(&mut self, id: &str) {
+        let pid = PanelId(match WINDOW_PANELS.iter().find(|(p, _)| *p == id) {
+            Some((p, _)) => *p,
+            None => return,
+        });
+        if self.dock.contains(pid) {
+            self.dock.remove(pid);
+        } else {
+            let path = self.dock.right.any_tab_path().unwrap_or_default();
+            self.dock.rail_mut(RailSide::Right).dock(
+                pid,
+                DropTarget::Tab {
+                    path,
+                    index: usize::MAX,
+                },
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.request_main_redraw();
+    }
+
     /// Snap the view onto one artboard (Artboards panel, double-click its
     /// number).
     fn focus_artboard(&mut self, id: ArtboardId) {
@@ -1742,6 +2329,8 @@ impl App {
             && self.newdoc.is_none()
             && self.about.is_none()
             && self.home.is_none()
+            && self.prefs.is_none()
+            && self.font_menu.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -1758,6 +2347,7 @@ impl App {
             }
         } else {
             match self.effective_tool() {
+                Tool::Text => CanvasCursor::IBeam,
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
                 _ => CanvasCursor::Crosshair,
             }
@@ -1772,6 +2362,7 @@ impl App {
                     CanvasCursor::Crosshair => CursorIcon::Crosshair,
                     CanvasCursor::Grab => CursorIcon::Grab,
                     CanvasCursor::Grabbing => CursorIcon::Grabbing,
+                    CanvasCursor::IBeam => CursorIcon::Text,
                     _ => CursorIcon::Default,
                 });
             }
@@ -1904,6 +2495,42 @@ impl App {
         };
         // Any press ends the "⌘Z re-opens the last pen path" window.
         self.last_pen = None;
+        self.tooltip = None;
+        // An open Character-panel dropdown is topmost — it eats the press.
+        if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
+            return;
+        }
+        // The Preferences modal.
+        if self.prefs.is_some() {
+            let hit = self.prefs.as_mut().unwrap().on_press(self.pointer);
+            match hit {
+                prefs::Hit::Backdrop | prefs::Hit::Cancel => self.prefs = None,
+                prefs::Hit::Ok => self.settings = self.prefs.take().unwrap().working,
+                prefs::Hit::Category(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.category = i;
+                    }
+                }
+                prefs::Hit::IncStep(v) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.nudge_step = v;
+                    }
+                }
+                prefs::Hit::ToggleTips => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.show_tooltips = !p.working.show_tooltips;
+                    }
+                }
+                prefs::Hit::ToggleHome => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.home_on_last_close = !p.working.home_on_last_close;
+                    }
+                }
+                prefs::Hit::None => {}
+            }
+            self.request_main_redraw();
+            return;
+        }
         // A press anywhere commits an in-progress rename (unless it's the
         // double-click that's about to start one).
         if self.rename.is_some() && !double {
@@ -2150,9 +2777,15 @@ impl App {
                             if let Some(tab) =
                                 area.tabs.iter().position(|t| t.rect.contains(self.pointer))
                             {
+                                let trect = area.tabs[tab].rect;
+                                let pid = area.tabs[tab].panel;
+                                if chrome::panel_tab_close_rect(trect).contains(self.pointer) {
+                                    self.close_panel_tab(pid, None);
+                                    return;
+                                }
                                 self.drag = Drag::PendingTearoff {
                                     side,
-                                    panel: area.tabs[tab].panel,
+                                    panel: pid,
                                     path: area.path.clone(),
                                     tab,
                                     press: self.pointer,
@@ -2180,6 +2813,9 @@ impl App {
                                             .map(|r| (r.target, r.buf.as_str())),
                                         selected_layer: self.selected_layer,
                                         selected_artboard: self.selected_artboard,
+                                        text_style: self.active_text_style(),
+                                        text_editing: self.text_edit.is_some(),
+                                        font_families: &self.font_families,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -2215,6 +2851,48 @@ impl App {
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
+
+                // Type tool.
+                if self.active_tool == Tool::Text {
+                    if self.text_edit.is_some() {
+                        // A press inside the open editor places the caret /
+                        // starts a selection drag.
+                        if let Some(p) = self.text_editor_point(self.pointer) {
+                            if let Some(te) = &mut self.text_edit {
+                                let clicks = if double { 2 } else { 1 };
+                                te.pointer_down(p, clicks, &mut self.text);
+                            }
+                        }
+                        self.drag = Drag::TextSelect;
+                        self.request_main_redraw();
+                        return;
+                    }
+                    let visible = self.visible_doc_rect();
+                    if let Some(hit) = select::topmost_selectable_at(
+                        self.editor.document(),
+                        dp,
+                        visible,
+                    ) {
+                        if let Some(amalith_core::ObjectKind::Text(_)) =
+                            self.editor.document().object(hit).map(|o| &o.kind)
+                        {
+                            let c = self
+                                .editor
+                                .document()
+                                .object(hit)
+                                .map(|o| o.transform.as_coeffs())
+                                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+                            self.enter_text_edit(hit, Point::new(c[4], c[5]), Some(self.pointer));
+                            self.drag = Drag::TextSelect;
+                            return;
+                        }
+                    }
+                    self.drag = Drag::DrawText {
+                        start_doc: dp,
+                        cur_doc: dp,
+                    };
+                    return;
+                }
 
                 // Pen: click to place anchors; click the first anchor to
                 // close and commit.
@@ -2392,6 +3070,17 @@ impl App {
                 };
                 let doc = self.editor.document();
                 if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
+                    // Double-click a text object → edit it (temporary Type tool).
+                    if double
+                        && matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Text(_)))
+                    {
+                        let c = doc
+                            .object(id)
+                            .map(|o| o.transform.as_coeffs())
+                            .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+                        self.enter_text_edit(id, Point::new(c[4], c[5]), Some(self.pointer));
+                        return;
+                    }
                     if self.shift_down {
                         // Shift-click toggles that object; no drag.
                         if let Some(i) = self.selection.iter().position(|x| *x == id) {
@@ -2430,20 +3119,57 @@ impl App {
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
                 for area in &laid.areas {
-                    if !area.tab_strip.contains(self.pointer) {
-                        continue;
+                    if area.tab_strip.contains(self.pointer) {
+                        let tab = area
+                            .tabs
+                            .iter()
+                            .position(|t| t.rect.contains(self.pointer))
+                            .unwrap_or(0);
+                        if let Some(t) = area.tabs.get(tab) {
+                            if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
+                                let pid = t.panel;
+                                self.close_panel_tab(pid, Some(fid));
+                                return;
+                            }
+                        }
+                        self.drag = Drag::PendingFloatMove {
+                            id: fid,
+                            tab,
+                            press: self.pointer,
+                        };
+                        return;
                     }
-                    let tab = area
-                        .tabs
-                        .iter()
-                        .position(|t| t.rect.contains(self.pointer))
-                        .unwrap_or(0);
-                    self.drag = Drag::PendingFloatMove {
-                        id: fid,
-                        tab,
-                        press: self.pointer,
-                    };
-                    return;
+                    if area.body.contains(self.pointer) {
+                        if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                            let rep = self.representative();
+                            let body = area.body;
+                            let action = {
+                                let ctx = panels::Ctx {
+                                    theme: &self.theme,
+                                    doc: self.editor.document(),
+                                    selection: &self.selection,
+                                    active_tool: self.active_tool,
+                                    pointer: self.pointer,
+                                    representative: rep,
+                                    active_slot: self.active_slot,
+                                    shape_tool: self.last_shape_tool,
+                                    expanded: &self.expanded_groups,
+                                    renaming: self
+                                        .rename
+                                        .as_ref()
+                                        .map(|r| (r.target, r.buf.as_str())),
+                                    selected_layer: self.selected_layer,
+                                    selected_artboard: self.selected_artboard,
+                                    text_style: self.active_text_style(),
+                                    text_editing: self.text_edit.is_some(),
+                                    font_families: &self.font_families,
+                                };
+                                panels::hit(pid, body, self.pointer, &ctx)
+                            };
+                            self.apply_panel_action(action, double);
+                        }
+                        return;
+                    }
                 }
             }
         }
@@ -2459,6 +3185,7 @@ impl App {
             return;
         }
         self.update_canvas_cursor();
+        self.refresh_tooltip();
         // Redraw so a drawn cursor glyph tracks the pointer.
         if matches!(self.cursor_mode, CanvasCursor::Glyph | CanvasCursor::Zoom) {
             self.request_main_redraw();
@@ -2573,6 +3300,22 @@ impl App {
                     cur_doc: self.doc_point(self.pointer),
                 };
                 self.request_main_redraw();
+            }
+            Drag::DrawText { start_doc, .. } => {
+                let start_doc = *start_doc;
+                self.drag = Drag::DrawText {
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
+            Drag::TextSelect => {
+                if let Some(p) = self.text_editor_point(self.pointer) {
+                    if let Some(te) = &mut self.text_edit {
+                        te.pointer_drag(p, &mut self.text);
+                    }
+                    self.request_main_redraw();
+                }
             }
             Drag::MoveArtboard { id, start_doc, .. } => {
                 let (id, start_doc) = (*id, *start_doc);
@@ -2774,13 +3517,34 @@ impl App {
                                 None => return,
                             }
                         }
-                        Tool::Select | Tool::DirectSelect | Tool::Pen | Tool::Artboard => return,
+                        Tool::Select
+                        | Tool::DirectSelect
+                        | Tool::Pen
+                        | Tool::Text
+                        | Tool::Artboard => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
                         self.selection = vec![id];
                         self.apply_new_appearance(id);
                     }
                     self.request_main_redraw();
+                }
+            }
+            Drag::TextSelect => {}
+            Drag::DrawText { start_doc, cur_doc } => {
+                let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
+                if r.width() > 4.0 && r.height() > 4.0 {
+                    // A real drag → area / paragraph type.
+                    self.create_text(
+                        amalith_core::TextKind::Area {
+                            width: r.width(),
+                            height: None,
+                        },
+                        Point::new(r.x0, r.y0),
+                    );
+                } else {
+                    // A click → point type.
+                    self.create_text(amalith_core::TextKind::Point, start_doc);
                 }
             }
             Drag::DrawArtboard {
@@ -2992,7 +3756,9 @@ impl App {
         );
         let theme = self.theme.clone();
         layout::layout(&node, Rect::new(0.0, 0.0, wl, hl), &theme, &mut |p| {
-            self.text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
+            self.text.measure(&tab_label(p), 12.0)
+                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                + chrome::PANEL_TAB_CLOSE_W
         })
     }
 
@@ -3184,6 +3950,8 @@ impl App {
         });
         let stroke_flyout = self.stroke_flyout_layout(wl);
         let stroke_style_shown = self.stroke_style_repr();
+        let panel_text_style = self.active_text_style();
+        let panel_text_editing = self.text_edit.is_some();
         match role {
             Role::Main => paint_main(
                 &mut self.content,
@@ -3226,22 +3994,72 @@ impl App {
                 self.stroke_popover,
                 stroke_style_shown,
                 stroke_flyout,
+                self.text_edit.as_ref().map(|t| t.object),
+                panel_text_style,
+                panel_text_editing,
+                &self.font_families,
             ),
             Role::Floating(fid) => {
-                if let Some(f) = self.dock.floating(fid) {
-                    let node = f.node.clone();
-                    paint_floating(
-                        &mut self.content,
-                        &mut self.text,
-                        &node,
-                        &self.theme,
-                        wl,
-                        hl,
-                    );
+                let laid = self.floating_layout(fid);
+                let exists = self.dock.floating(fid).is_some();
+                if exists {
+                    // Same tab strip (with ×) and frame as a docked panel.
+                    self.content
+                        .fill(Fill::NonZero, ID, self.theme.panel_bg, None, &Rect::new(0.0, 0.0, wl, hl));
+                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, &tab_label);
+                    let area = laid.areas.first();
+                    let pid = area.and_then(|a| a.tabs.get(a.active).map(|t| t.panel));
+                    if let (Some(area), Some(pid)) = (area, pid) {
+                        let body = area.body;
+                        let ctx = panels::Ctx {
+                            theme: &self.theme,
+                            doc: self.editor.document(),
+                            selection: &self.selection,
+                            active_tool: self.active_tool,
+                            pointer: self.pointer,
+                            representative,
+                            active_slot: self.active_slot,
+                            shape_tool: self.last_shape_tool,
+                            expanded: &self.expanded_groups,
+                            renaming: self
+                                .rename
+                                .as_ref()
+                                .map(|r| (r.target, r.buf.as_str())),
+                            selected_layer: self.selected_layer,
+                            selected_artboard: self.selected_artboard,
+                            text_style: panel_text_style.clone(),
+                            text_editing: panel_text_editing,
+                            font_families: &self.font_families,
+                        };
+                        self.content.push_clip_layer(Fill::NonZero, ID, &body);
+                        panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
+                        self.content.pop_layer();
+                    }
                 }
             }
         }
         if matches!(role, Role::Main) {
+            // Live text edit — drawn over the canvas, clipped to the viewport.
+            if let Some(obj) = self.text_edit.as_ref().map(|t| t.object) {
+                let vp = self.canvas_viewport();
+                let world = self.editor.document().world_transform(obj);
+                let xf = self.view.to_screen() * convert::affine(world);
+                let color = self
+                    .editor
+                    .document()
+                    .object(obj)
+                    .and_then(|o| o.appearance.fill.color())
+                    .map(convert::color)
+                    .unwrap_or(vello::peniko::Color::from_rgb8(0, 0, 0));
+                let caret_on = self.text_blink_on();
+                let blue = self.theme.accent;
+                self.content
+                    .push_clip_layer(vello::peniko::Fill::NonZero, ID, &vp);
+                if let Some(te) = &mut self.text_edit {
+                    te.render(&mut self.content, &mut self.text, xf, color, caret_on, blue);
+                }
+                self.content.pop_layer();
+            }
             if let Some(pk) = self.picker {
                 picker::paint(
                     &mut self.content,
@@ -3251,6 +4069,7 @@ impl App {
                     &mut self.text,
                 );
             }
+            self.paint_font_menu();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that.
             if let Some(hm) = &mut self.home {
@@ -3267,6 +4086,23 @@ impl App {
             }
             if let Some(a) = &mut self.about {
                 a.paint(&mut self.content, &mut self.text, wl, hl);
+            }
+            if let Some(pr) = &mut self.prefs {
+                pr.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
+            }
+        }
+        // Hover tooltip — topmost, in whichever window the pointer is over.
+        if let Some(tt) = &self.tooltip {
+            if self.pointer_win == Some(id) && tt.since.elapsed().as_millis() >= 350 {
+                draw_tooltip(
+                    &mut self.content,
+                    &mut self.text,
+                    &self.theme,
+                    &tt.text,
+                    tt.anchor,
+                    wl,
+                    hl,
+                );
             }
         }
         self.scene.reset();
@@ -3354,6 +4190,14 @@ impl ApplicationHandler for App {
         if self.main_id.is_some() {
             return;
         }
+        if self.font_families.is_empty() {
+            let (fc, _) = self.text.parts();
+            let mut names: Vec<String> =
+                fc.collection.family_names().map(str::to_string).collect();
+            names.sort_by_key(|s| s.to_lowercase());
+            names.dedup();
+            self.font_families = names;
+        }
         let attrs = Window::default_attributes()
             .with_title("Amalith Ver. Alpha")
             .with_window_icon(appicon::window_icon())
@@ -3378,7 +4222,9 @@ impl ApplicationHandler for App {
         self.main_id = Some(wid);
         #[cfg(target_os = "macos")]
         {
-            self.native_menu = Some(NativeMenu::build());
+            let m = NativeMenu::build();
+            m.sync_window(&self.dock);
+            self.native_menu = Some(m);
         }
         self.hosts[&wid].window.request_redraw();
     }
@@ -3491,6 +4337,13 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => self.on_release(),
+            WindowEvent::Ime(ime) if Some(id) == self.main_id => {
+                if let Some(te) = &mut self.text_edit {
+                    te.ime(&ime, &mut self.text);
+                    self.text_blink = Instant::now();
+                    self.request_main_redraw();
+                }
+            }
             WindowEvent::ModifiersChanged(m) => {
                 if Some(id) == self.main_id {
                     let was_direct = self.effective_tool() == Tool::DirectSelect;
@@ -3512,6 +4365,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
+                // The Preferences modal swallows every key; Esc = cancel.
+                if self.prefs.is_some() {
+                    if event.state.is_pressed()
+                        && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+                    {
+                        self.prefs = None;
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
                 // The About panel is modal: it swallows every key, handling
                 // only Esc (dismiss) and ⌘/Ctrl+C (copy the selection).
                 if self.about.is_some() {
@@ -3546,6 +4409,20 @@ impl ApplicationHandler for App {
                 if self.rename.is_some() {
                     self.rename_key(&event);
                     return;
+                }
+                // The Type tool's live editor gets first crack at every key.
+                if self.text_edit.is_some() {
+                    match self.text_edit_key(&event) {
+                        textedit::KeyResult::Handled => return,
+                        textedit::KeyResult::Commit => {
+                            self.commit_text_edit();
+                            return;
+                        }
+                        // ⌘Z / ⌘S / … — commit, then let the shell handle it.
+                        textedit::KeyResult::PassThrough => {
+                            self.commit_text_edit();
+                        }
+                    }
                 }
                 // Escape closes the Stroke flyout before anything else acts.
                 if self.stroke_popover
@@ -3695,6 +4572,7 @@ impl ApplicationHandler for App {
                             KeyCode::KeyV => self.set_tool(Tool::Select),
                             KeyCode::KeyA => self.set_tool(Tool::DirectSelect),
                             KeyCode::KeyP => self.set_tool(Tool::Pen),
+                            KeyCode::KeyT => self.set_tool(Tool::Text),
                             KeyCode::KeyM => self.set_tool(Tool::Rectangle),
                             KeyCode::KeyL => self.set_tool(Tool::Ellipse),
                             KeyCode::KeyO if self.shift_down => self.set_tool(Tool::Artboard),
@@ -3717,6 +4595,15 @@ impl ApplicationHandler for App {
                 // The New Document modal scrolls its content.
                 if let Some(form) = &mut self.newdoc {
                     form.scroll = (form.scroll - dy).max(0.0);
+                    self.request_main_redraw();
+                    return;
+                }
+                // An open font dropdown scrolls its list.
+                if let Some(m) = &mut self.font_menu {
+                    let max = (m.items.len() as f64 * Self::FM_ROW
+                        - Self::FM_ROWS as f64 * Self::FM_ROW)
+                        .max(0.0);
+                    m.scroll = (m.scroll - dy).clamp(0.0, max);
                     self.request_main_redraw();
                     return;
                 }
@@ -3778,10 +4665,17 @@ fn demo_right_dock() -> Node {
             },
             Child {
                 node: Node::Tabs {
-                    panels: vec![PanelId("artboards"), PanelId("swatches")],
+                    panels: vec![PanelId("character"), PanelId("swatches")],
                     active: 0,
                 },
-                weight: 1.0,
+                weight: 1.4,
+            },
+            Child {
+                node: Node::Tabs {
+                    panels: vec![PanelId("artboards")],
+                    active: 0,
+                },
+                weight: 0.8,
             },
         ],
     }
@@ -3933,6 +4827,7 @@ fn tab_label(panel: PanelId) -> String {
         "layers" => "Layers",
         "artboards" => "Artboards",
         "swatches" => "Swatches",
+        "character" => "Character",
         other => other,
     }
     .to_string()
@@ -3956,10 +4851,60 @@ fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
     }
 }
 
+/// A small dark tooltip box near `anchor` (screen px), clamped inside the
+/// `wl`×`hl` window.
+fn draw_tooltip(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    label: &str,
+    anchor: Point,
+    wl: f64,
+    hl: f64,
+) {
+    let fs = 11.5;
+    let tw = text.measure(label, fs);
+    let pad = 7.0;
+    let (bw, bh) = (tw + pad * 2.0, fs as f64 + pad * 1.6);
+    let mut x = anchor.x + 12.0;
+    let mut y = anchor.y + 18.0;
+    if x + bw > wl - 4.0 {
+        x = (anchor.x - bw - 8.0).max(4.0);
+    }
+    if y + bh > hl - 4.0 {
+        y = (anchor.y - bh - 8.0).max(4.0);
+    }
+    let box_ = Rect::new(x, y, x + bw, y + bh);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        Color::from_rgb8(0x1a, 0x1a, 0x1c),
+        None,
+        &box_.to_rounded_rect(4.0),
+    );
+    scene.stroke(
+        &Stroke::new(1.0),
+        ID,
+        theme.border,
+        None,
+        &box_.to_rounded_rect(4.0),
+    );
+    text.draw(
+        scene,
+        label,
+        fs as f32,
+        Color::from_rgb8(0xe8, 0xe8, 0xea),
+        x + pad,
+        y + bh - pad,
+    );
+}
+
 fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: Rect) -> Layout {
     match &rail.tree {
         Some(tree) => layout::layout(tree, rect, theme, &mut |p| {
-            text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * 2.0
+            text.measure(&tab_label(p), 12.0)
+                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                + chrome::PANEL_TAB_CLOSE_W
         }),
         None => Layout::default(),
     }
@@ -3988,8 +4933,8 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
     let mut out = Vec::with_capacity(labels.len());
     let mut x = strip.x0 + 4.0;
     for label in labels {
-        let tw = text.measure(label, 12.0);
-        let w = tw + 18.0 /* × */ + 22.0 /* padding */;
+        let tw = text.measure(label, 12.6);
+        let w = tw + 18.9 /* × */ + 23.1 /* padding */;
         let whole = Rect::new(x, strip.y0, (x + w).min(strip.x1), strip.y1);
         let close = Rect::new(
             whole.x0 + 6.0,
@@ -4197,7 +5142,7 @@ fn paint_options_bar(
 
     // Weight — labelled "Stroke", and the label opens the Stroke flyout.
     let w = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
-    let link_color = if stroke_open { theme.select_blue } else { theme.text };
+    let link_color = if stroke_open { theme.accent } else { theme.text };
     text.draw(scene, "Stroke", 11.5, link_color, ob.label_weight, baseline);
     let uw = text.measure("Stroke", 11.5);
     scene.stroke(
@@ -4282,6 +5227,10 @@ fn paint_main(
     stroke_popover: bool,
     stroke_style: StrokeStyle,
     stroke_flyout: stroke_panel::Layout,
+    editing_text: Option<ObjectId>,
+    text_style: amalith_core::TextStyle,
+    text_editing: bool,
+    font_families: &[String],
 ) {
     scene.fill(
         Fill::NonZero,
@@ -4318,11 +5267,12 @@ fn paint_main(
         active_tool == Tool::Artboard,
         pen_preview,
         anchor_view,
+        editing_text,
     );
 
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
-        scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &m);
+        scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
 
     // Document-tab strip (canvas x-span, between options bar and canvas).
@@ -4342,7 +5292,7 @@ fn paint_main(
             scene.fill(
                 Fill::NonZero,
                 ID,
-                theme.select_blue,
+                theme.accent,
                 None,
                 &Rect::new(whole.x0, whole.y1 - 2.0, whole.x1, whole.y1),
             );
@@ -4359,7 +5309,7 @@ fn paint_main(
         text.draw(
             scene,
             &tab_labels[i],
-            12.0,
+            12.6,
             if is_active { theme.text } else { theme.text_dim },
             close.x1 + 6.0,
             tab_strip.y0 + TAB_BAR_H * 0.5 + 4.0,
@@ -4399,6 +5349,9 @@ fn paint_main(
                 renaming,
                 selected_layer,
                 selected_artboard,
+                text_style: text_style.clone(),
+                text_editing,
+                font_families,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
@@ -4468,9 +5421,9 @@ fn paint_main(
             let c = shape_flyout_cell(anchor, i);
             let on = *t == shape_tool;
             if on {
-                scene.fill(Fill::NonZero, ID, theme.select_blue, None, &c);
+                scene.fill(Fill::NonZero, ID, theme.accent, None, &c);
             } else if c.contains(pointer) {
-                scene.fill(Fill::NonZero, ID, theme.select_blue.with_alpha(0.14), None, &c);
+                scene.fill(Fill::NonZero, ID, theme.accent.with_alpha(0.14), None, &c);
             }
             let col = if on {
                 Color::from_rgb8(0xff, 0xff, 0xff)
@@ -4520,66 +5473,25 @@ fn paint_main(
     }
 }
 
-/// A torn-off window: dark body, a header strip that always names the
-/// panel (so a floating window is never an anonymous square), an accent
-/// line, and a 1px frame since the OS chrome is gone.
-fn paint_floating(
-    scene: &mut Scene,
-    text: &mut TextContext,
-    node: &Node,
-    theme: &Theme,
-    width: f64,
-    height: f64,
-) {
-    let full = Rect::new(0.0, 0.0, width, height);
-    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &full);
-
-    let h = theme.tab_strip_h;
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        theme.strip_bg,
-        None,
-        &Rect::new(0.0, 0.0, width, h),
-    );
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        theme.drop_line,
-        None,
-        &Rect::new(0.0, h - 2.0, width, h),
-    );
-
-    let baseline = h * 0.5 + 12.5 * 0.34;
-    text.draw(
-        scene,
-        &floating_title(node),
-        12.5,
-        theme.text,
-        theme.tab_pad_x,
-        baseline,
-    );
-
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &full);
-}
-
-fn floating_title(node: &Node) -> String {
-    match node {
-        Node::Tabs { panels, active } => panels
-            .get(*active)
-            .or_else(|| panels.first())
-            .map(|p| tab_label(*p))
-            .unwrap_or_else(|| "Panel".to_string()),
-        Node::Split { .. } => "Panel".to_string(),
-    }
-}
-
 /// The macOS application menu bar. Items carry the same accelerators as
 /// the in-app keyboard shortcuts; clicks arrive on `muda`'s global
 /// channel, drained each loop in `about_to_wait`.
 #[cfg(target_os = "macos")]
+/// The panels the Window menu lists, alphabetical like Illustrator.
+const WINDOW_PANELS: [(&str, &str); 5] = [
+    ("artboards", "Artboards"),
+    ("character", "Character"),
+    ("layers", "Layers"),
+    ("swatches", "Swatches"),
+    ("tools", "Tools"),
+];
+
 struct NativeMenu {
     items: Vec<(muda::MenuId, MenuAction)>,
+    /// Window-menu checkmarks, keyed by panel id, updated as panels
+    /// open/close.
+    #[cfg(target_os = "macos")]
+    window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
@@ -4589,7 +5501,7 @@ impl NativeMenu {
     fn build() -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
-            Menu, MenuItem, PredefinedMenuItem, Submenu,
+            CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
         };
         let sup = Some(Modifiers::SUPER);
         let sup_shift = Some(Modifiers::SUPER | Modifiers::SHIFT);
@@ -4614,11 +5526,18 @@ impl NativeMenu {
 
         let sep = PredefinedMenuItem::separator;
         let about_i = MenuItem::new("About Amalith", true, None);
+        let prefs_i = MenuItem::new(
+            "Preferences…",
+            true,
+            Some(Accelerator::new(sup, Code::Comma)),
+        );
         let app = Submenu::with_items(
             "Amalith",
             true,
             &[
                 &about_i,
+                &sep(),
+                &prefs_i,
                 &sep(),
                 &PredefinedMenuItem::quit(Some("Quit Amalith")),
             ],
@@ -4642,14 +5561,28 @@ impl NativeMenu {
         )
         .expect("edit menu");
 
+        let window_checks: Vec<(&'static str, CheckMenuItem)> = WINDOW_PANELS
+            .iter()
+            .map(|(id, label)| (*id, CheckMenuItem::new(*label, true, false, None)))
+            .collect();
+        let window_refs: Vec<&dyn muda::IsMenuItem> = window_checks
+            .iter()
+            .map(|(_, i)| i as &dyn muda::IsMenuItem)
+            .collect();
+        // "Window" is a name AppKit reserves for its own window menu, so
+        // call ours "Panels".
+        let window = Submenu::with_items("Panels", true, &window_refs).expect("panels menu");
+
         let menu = Menu::new();
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
+        menu.append(&window).expect("append panels menu");
         menu.init_for_nsapp();
 
         let items = vec![
             (about_i.id().clone(), MenuAction::About),
+            (prefs_i.id().clone(), MenuAction::Preferences),
             (new_i.id().clone(), MenuAction::New),
             (open_i.id().clone(), MenuAction::Open),
             (save_i.id().clone(), MenuAction::Save),
@@ -4667,7 +5600,22 @@ impl NativeMenu {
             (backward_i.id().clone(), MenuAction::SendBackward),
             (back_i.id().clone(), MenuAction::SendToBack),
         ];
-        Self { items, _menu: menu }
+        let mut items = items;
+        for (id, item) in &window_checks {
+            items.push((item.id().clone(), MenuAction::TogglePanel(id)));
+        }
+        Self {
+            items,
+            window_checks,
+            _menu: menu,
+        }
+    }
+
+    /// Tick / untick each Window-menu entry to match the live dock.
+    fn sync_window(&self, dock: &DockModel) {
+        for (id, item) in &self.window_checks {
+            item.set_checked(dock.contains(PanelId(id)));
+        }
     }
 
     /// Every menu click queued since the last call.

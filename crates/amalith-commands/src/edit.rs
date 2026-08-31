@@ -17,7 +17,7 @@
 use crate::error::CommandError;
 use amalith_core::{
     geom::BezPath, Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint, StrokeStyle,
+    ObjectKind, ObjectParent, Paint, StrokeStyle, TextData,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,6 +66,10 @@ pub(crate) enum Edit {
     SetPathGeometry {
         id: ObjectId,
         geometry: BezPath,
+    },
+    SetTextData {
+        id: ObjectId,
+        data: TextData,
     },
     SetChildOrder {
         parent: ObjectParent,
@@ -192,6 +196,14 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 },
                 None,
             ))
+        }
+        Edit::SetTextData { id, data } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let ObjectKind::Text(text) = &mut object.kind else {
+                return Err(CommandError::NotText(id));
+            };
+            let old = std::mem::replace(text, data);
+            Ok((Edit::SetTextData { id, data: old }, None))
         }
         Edit::SetChildOrder { parent, order } => {
             let old_order = doc

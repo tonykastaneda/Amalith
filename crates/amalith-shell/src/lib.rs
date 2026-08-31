@@ -33,11 +33,13 @@ pub mod newdoc;
 pub mod panel;
 pub mod panels;
 pub mod picker;
+pub mod prefs;
 pub mod recent;
 pub mod sample;
 pub mod select;
 pub mod stroke_panel;
 pub mod text;
+pub mod textedit;
 pub mod theme;
 pub mod tool;
 

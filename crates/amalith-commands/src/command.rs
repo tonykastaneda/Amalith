@@ -6,7 +6,7 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle, Vec2,
+    Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle, TextData, Vec2,
 };
 
 /// A single, undoable document mutation.
@@ -81,6 +81,21 @@ pub enum Command {
         layer: LayerId,
         path: PathData,
         name: Option<String>,
+    },
+    /// Creates a text object as the top-most child of `layer`, with
+    /// `transform` placing its anchor in document space.
+    CreateText {
+        layer: LayerId,
+        data: TextData,
+        transform: Affine,
+        name: Option<String>,
+    },
+    /// Replaces a text object's whole [`TextData`] (content, style, box,
+    /// alignment, bounds) in one undoable step. v1's text edits are coarse
+    /// by design — the shell rebuilds the full `TextData` and swaps it.
+    SetText {
+        object: ObjectId,
+        data: TextData,
     },
     /// Translates an object by `delta`, in the coordinate space of the
     /// object's parent (document space for a layer-level object).

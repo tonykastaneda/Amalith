@@ -19,7 +19,7 @@ const CELL: f64 = 36.0;
 /// Gap above the grid.
 const TOP: f64 = 4.0;
 /// Index of the Shape slot among [`slots`].
-const SHAPE_SLOT: usize = 3;
+const SHAPE_SLOT: usize = 4;
 
 /// The primitive tools the Shape slot collects, in flyout order.
 pub const SHAPE_TOOLS: [Tool; 5] = [
@@ -30,9 +30,16 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
     Tool::Star,
 ];
 
-/// The five visible slots; the Shape slot shows `shape`'s icon.
-fn slots(shape: Tool) -> [Tool; 5] {
-    [Tool::Select, Tool::DirectSelect, Tool::Pen, shape, Tool::Artboard]
+/// The six visible slots; the Shape slot shows `shape`'s icon.
+fn slots(shape: Tool) -> [Tool; 6] {
+    [
+        Tool::Select,
+        Tool::DirectSelect,
+        Tool::Pen,
+        Tool::Text,
+        shape,
+        Tool::Artboard,
+    ]
 }
 
 fn cols(body: Rect) -> usize {
@@ -68,7 +75,6 @@ fn tool_chips(body: Rect) -> (Rect, Rect) {
 }
 
 pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx) {
-    let white = Color::from_rgb8(0xff, 0xff, 0xff);
     let cols = cols(body);
     for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
         let r = cell(body, i, cols);
@@ -78,11 +84,16 @@ pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx:
             tool == ctx.active_tool
         };
         if active {
-            scene.fill(Fill::NonZero, ID, ctx.theme.select_blue, None, &r);
+            scene.fill(Fill::NonZero, ID, ctx.theme.accent, None, &r);
         } else if r.contains(ctx.pointer) {
-            scene.fill(Fill::NonZero, ID, ctx.theme.select_blue.with_alpha(0.14), None, &r);
+            scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.14), None, &r);
         }
-        let color = if active { white } else { ctx.theme.text_dim };
+        // Dark glyph over the gold accent so it stays legible.
+        let color = if active {
+            Color::from_rgb8(0x1a, 0x14, 0x00)
+        } else {
+            ctx.theme.text_dim
+        };
         icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (22.0, 22.0)), color);
         if i == SHAPE_SLOT {
             // Bottom-right triangle: this slot has a flyout.
@@ -134,4 +145,27 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         }
     }
     Action::None
+}
+
+/// Hover text: tool name plus its keyboard shortcut.
+pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
+    let (fr, sr) = tool_chips(body);
+    if fr.contains(local) {
+        return Some("Fill".into());
+    }
+    if sr.contains(local) {
+        return Some("Stroke".into());
+    }
+    let cols = cols(body);
+    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
+        if cell(body, i, cols).contains(local) {
+            let key = tool.key();
+            return Some(if key.is_empty() {
+                tool.label().to_string()
+            } else {
+                format!("{} ({key})", tool.label())
+            });
+        }
+    }
+    None
 }

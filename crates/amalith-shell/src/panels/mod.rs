@@ -7,6 +7,7 @@
 //! still a direct `match` on the panel id string, not the `Panel` trait.
 
 mod artboards;
+pub mod character;
 mod layers;
 mod swatches;
 pub mod tools;
@@ -88,6 +89,32 @@ pub struct Ctx<'a> {
     /// Panel-row selection highlights.
     pub selected_layer: Option<LayerId>,
     pub selected_artboard: Option<ArtboardId>,
+    /// The type style the Character panel edits — the live text edit, else
+    /// the selected text object, else the "new text" defaults.
+    pub text_style: amalith_core::TextStyle,
+    /// True while a text object has the caret (Character panel shows "live").
+    pub text_editing: bool,
+    /// Installed font family names, sorted (for the family dropdown).
+    pub font_families: &'a [String],
+}
+
+/// A character-attribute flag toggled from the Character panel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TextFlag {
+    Underline,
+    Strikethrough,
+    SmallCaps,
+    Superscript,
+    Subscript,
+    AllCaps,
+}
+
+/// Which Character-panel dropdown to open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FontMenu {
+    Family,
+    Style,
+    Size,
 }
 
 /// What a click in a panel body asks the app to do.
@@ -125,6 +152,16 @@ pub enum Action {
     DeleteObjects,
     /// Artboards footer: delete the selected artboard.
     DeleteArtboard,
+    // --- Character panel ---
+    SetFontFamily(String),
+    SetFontFace { weight: u16, italic: bool },
+    SetFontSize(f64),
+    /// `None` = auto leading.
+    SetLeading(Option<f64>),
+    SetTracking(f64),
+    ToggleTextFlag(TextFlag),
+    /// Open a Character-panel dropdown, anchored at the given screen rect.
+    OpenFontMenu(FontMenu, Rect),
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -134,6 +171,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "layers" => layers::paint(scene, text, body, ctx),
         "artboards" => artboards::paint(scene, text, body, ctx),
         "swatches" => swatches::paint(scene, text, body, ctx),
+        "character" => character::paint(scene, text, body, ctx),
         _ => {}
     }
 }
@@ -146,7 +184,17 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "layers" => layers::hit(body, local, ctx),
         "artboards" => artboards::hit(body, local, ctx),
         "swatches" => swatches::hit(body, local, ctx),
+        "character" => character::hit(body, local, ctx),
         _ => Action::None,
+    }
+}
+
+/// Hover text for the control at `local` in panel `id`'s body, if any.
+pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
+    match id.0 {
+        "tools" => tools::tip(body, local, ctx),
+        "character" => character::tip(body, local, ctx).map(str::to_string),
+        _ => None,
     }
 }
 
@@ -280,7 +328,7 @@ fn draw_name_field(
         Some(buf) => {
             let field = Rect::new(x - 4.0, row.y0 + 3.0, row.x1 - PAD, row.y1 - 3.0);
             scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-            scene.stroke(&Stroke::new(1.25), ID, theme.select_blue, None, &field);
+            scene.stroke(&Stroke::new(1.25), ID, theme.accent, None, &field);
             text.draw(scene, buf, 12.0, theme.text, x, baseline);
             let caret_x = x + text.measure(buf, 12.0) + 1.0;
             scene.stroke(
@@ -309,7 +357,7 @@ pub fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint
         }
     }
     let (w, col) = if active {
-        (1.5, theme.select_blue)
+        (1.5, theme.accent)
     } else {
         (1.0, theme.border)
     };

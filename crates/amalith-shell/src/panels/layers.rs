@@ -123,7 +123,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                         .any(|o| owning_layer(ctx.doc, *o) == Some(lid));
                 let show_blue = !has_obj_sel && ctx.selected_layer == Some(lid);
                 let fill = if show_blue {
-                    ctx.theme.select_blue.with_alpha(0.22)
+                    ctx.theme.accent.with_alpha(0.22)
                 } else {
                     ctx.theme.strip_bg
                 };
@@ -165,7 +165,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                     scene.fill(
                         Fill::NonZero,
                         ID,
-                        ctx.theme.select_blue.with_alpha(0.22),
+                        ctx.theme.accent.with_alpha(0.22),
                         None,
                         &r,
                     );

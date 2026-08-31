@@ -445,6 +445,26 @@ impl Editor {
                     index,
                 }]
             }
+            Command::CreateText {
+                layer,
+                data,
+                transform,
+                name,
+            } => {
+                let mut object = Object::new(
+                    amalith_core::ObjectId::new(),
+                    ObjectParent::Layer(layer),
+                    amalith_core::ObjectKind::Text(data),
+                );
+                object.transform = transform;
+                object.name = name;
+                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                vec![Edit::InsertObject {
+                    object: Box::new(object),
+                    index,
+                }]
+            }
+            Command::SetText { object, data } => vec![Edit::SetTextData { id: object, data }],
             Command::MoveObject { object, delta } => {
                 let current = self
                     .document

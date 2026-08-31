@@ -19,7 +19,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             scene.fill(
                 Fill::NonZero,
                 ID,
-                ctx.theme.select_blue.with_alpha(0.22),
+                ctx.theme.accent.with_alpha(0.22),
                 None,
                 &r,
             );

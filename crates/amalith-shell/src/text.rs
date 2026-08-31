@@ -33,6 +33,12 @@ impl TextContext {
         }
     }
 
+    /// Lend the font DB and layout scratch buffers together — for
+    /// `parley::PlainEditor` (see [`crate::textedit`]).
+    pub fn parts(&mut self) -> (&mut FontContext, &mut LayoutContext<Brush>) {
+        (&mut self.fonts, &mut self.layout)
+    }
+
     /// Lay a single line out with no wrapping. `size` is in px.
     fn build(&mut self, text: &str, size: f32, color: Color) -> Layout<Brush> {
         let mut builder = self.layout.ranged_builder(&mut self.fonts, text, 1.0, true);

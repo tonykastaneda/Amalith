@@ -11,7 +11,17 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
-const TAB_TEXT_PX: f32 = 12.0;
+const TAB_TEXT_PX: f32 = 12.6;
+
+/// Panel tabs get 10% more side padding than the theme's base, and reserve
+/// this much room on the right for the close (×) button.
+pub const PANEL_TAB_PAD_MUL: f64 = 1.1;
+pub const PANEL_TAB_CLOSE_W: f64 = 22.0;
+
+/// The close-button hit / draw rect for a panel `tab`.
+pub fn panel_tab_close_rect(tab: Rect) -> Rect {
+    Rect::new(tab.x1 - PANEL_TAB_CLOSE_W, tab.y0, tab.x1, tab.y1)
+}
 
 /// Paint every group and splitter in `layout`. `label(panel)` supplies the
 /// tab caption; `text` rasterizes it.
@@ -45,13 +55,33 @@ pub fn paint(
 
             let color = if active { theme.text } else { theme.text_dim };
             let baseline = tab.rect.y0 + tab.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+            // Label: left-aligned.
             text.draw(
                 scene,
                 &label(tab.panel),
                 TAB_TEXT_PX,
                 color,
-                tab.rect.x0 + theme.tab_pad_x,
+                tab.rect.x0 + theme.tab_pad_x * PANEL_TAB_PAD_MUL,
                 baseline,
+            );
+            // Close (×): right-aligned.
+            let cr = panel_tab_close_rect(tab.rect);
+            let c = cr.center();
+            let a = 3.5;
+            let xcol = if active { theme.text } else { theme.text_dim };
+            scene.stroke(
+                &Stroke::new(1.4),
+                ID,
+                xcol,
+                None,
+                &vello::kurbo::Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)),
+            );
+            scene.stroke(
+                &Stroke::new(1.4),
+                ID,
+                xcol,
+                None,
+                &vello::kurbo::Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)),
             );
         }
 

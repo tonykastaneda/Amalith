@@ -344,25 +344,25 @@ fn glyph_color(theme: &Theme, sel: bool) -> Color {
 
 fn toggle(scene: &mut Scene, r: Rect, theme: &Theme, sel: bool) {
     if sel {
-        scene.fill(Fill::NonZero, ID, theme.select_blue, None, &r);
+        scene.fill(Fill::NonZero, ID, theme.accent, None, &r);
     } else {
         scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
     }
     scene.stroke(
         &Stroke::new(1.0),
         ID,
-        if sel { theme.select_blue } else { theme.border },
+        if sel { theme.accent } else { theme.border },
         None,
         &r,
     );
 }
 
 fn checkbox(scene: &mut Scene, r: Rect, theme: &Theme, on: bool) {
-    scene.fill(Fill::NonZero, ID, if on { theme.select_blue } else { theme.bg }, None, &r);
+    scene.fill(Fill::NonZero, ID, if on { theme.accent } else { theme.bg }, None, &r);
     scene.stroke(
         &Stroke::new(1.0),
         ID,
-        if on { theme.select_blue } else { theme.border },
+        if on { theme.accent } else { theme.border },
         None,
         &r,
     );

@@ -175,13 +175,93 @@ impl CompoundPathData {
     }
 }
 
-/// Stub text object: enough identity, transform, and an explicit bounds box
-/// to participate in layout/selection, without a typography engine yet.
+/// Point type auto-sizes to its content and only wraps on explicit
+/// newlines. Area type wraps to `width`; `height` `None` grows downward.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum TextKind {
+    Point,
+    Area { width: f64, height: Option<f64> },
+}
+
+/// Horizontal alignment of the text block against its anchor / box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+    Justify,
+}
+
+/// OpenType vertical position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TextPosition {
+    #[default]
+    Normal,
+    Superscript,
+    Subscript,
+}
+
+/// One text object's typography. v1 applies to the whole object — there are
+/// no per-character runs yet. Fonts are referenced portably (family name +
+/// weight + italic) and resolved against the system font set on load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextStyle {
+    pub family: String,
+    /// CSS weight, 100..=900.
+    pub weight: u16,
+    pub italic: bool,
+    /// Font size in local px (= pt at 1:1).
+    pub size: f64,
+    /// Line height in px. `None` = auto (≈ 1.2 × size).
+    pub leading: Option<f64>,
+    /// Tracking, in thousandths of an em (Illustrator's unit).
+    pub tracking: f64,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub small_caps: bool,
+    pub position: TextPosition,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            family: "Helvetica".into(),
+            weight: 400,
+            italic: false,
+            size: 24.0,
+            leading: None,
+            tracking: 0.0,
+            underline: false,
+            strikethrough: false,
+            small_caps: false,
+            position: TextPosition::Normal,
+        }
+    }
+}
+
+/// A text object. `local_bounds` is recomputed from the laid-out text by
+/// the shell after every content / style / box change (the core has no
+/// typography engine).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextData {
     pub content: String,
-    /// Local-space bounds, set explicitly until real text layout exists.
+    pub kind: TextKind,
+    pub style: TextStyle,
+    pub align: TextAlign,
     pub local_bounds: Rect,
+}
+
+impl Default for TextData {
+    fn default() -> Self {
+        Self {
+            content: String::new(),
+            kind: TextKind::Point,
+            style: TextStyle::default(),
+            align: TextAlign::Start,
+            local_bounds: Rect::ZERO,
+        }
+    }
 }
 
 /// Stub image object: references a (linked or embedded) [`AssetId`] plus an

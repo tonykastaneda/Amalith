@@ -121,6 +121,9 @@ pub fn paint(
     artboard_mode: bool,
     pen: Option<PenPreview<'_>>,
     anchor_view: Option<AnchorView<'_>>,
+    // The text object open in the Type tool — drawn live by the shell
+    // overlay, so its committed content is skipped here.
+    editing_text: Option<ObjectId>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -176,7 +179,7 @@ pub fn paint(
             continue;
         }
         for &id in &layer.children {
-            paint_object(scene, doc, id, vt, drag);
+            paint_object(scene, doc, id, vt, drag, text, editing_text);
         }
     }
 
@@ -184,7 +187,15 @@ pub fn paint(
     // the originals stay put underneath and the blue outline marks it.
     if let Some(d) = drag.filter(|d| d.dup) {
         for &id in d.ids {
-            paint_object(scene, doc, id, vt * Affine::translate(d.delta), None);
+            paint_object(
+                scene,
+                doc,
+                id,
+                vt * Affine::translate(d.delta),
+                None,
+                text,
+                editing_text,
+            );
         }
     }
 
@@ -194,7 +205,7 @@ pub fn paint(
         scene.stroke(
             &Stroke::new(1.0),
             Affine::IDENTITY,
-            theme.select_blue,
+            theme.accent,
             None,
             &r,
         );
@@ -231,22 +242,22 @@ pub fn paint(
 
     if let Some((tool, r_doc)) = draw_shape {
         let r = vt.transform_rect_bbox(r_doc);
-        let fill = theme.select_blue.with_alpha(0.12);
+        let fill = theme.accent.with_alpha(0.12);
         let stroke = Stroke::new(1.0);
         match tool {
             Tool::Ellipse => {
                 let e = vello::kurbo::Ellipse::from_rect(r);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &e);
-                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &e);
+                scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &e);
             }
             Tool::Rectangle | Tool::Select | Tool::Pen => {
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
-                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &r);
+                scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &r);
             }
             _ => {
                 let p = shape_preview_path(tool, r);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &p);
-                scene.stroke(&stroke, Affine::IDENTITY, theme.select_blue, None, &p);
+                scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &p);
             }
         }
     }
@@ -263,7 +274,7 @@ pub fn paint(
             scene.stroke(
                 &Stroke::new(1.5),
                 Affine::IDENTITY,
-                theme.select_blue,
+                theme.accent,
                 None,
                 &path,
             );
@@ -275,14 +286,14 @@ pub fn paint(
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
-                    if hot { theme.select_blue } else { white },
+                    if hot { theme.accent } else { white },
                     None,
                     &sq,
                 );
                 scene.stroke(
                     &Stroke::new(1.25),
                     Affine::IDENTITY,
-                    theme.select_blue,
+                    theme.accent,
                     None,
                     &sq,
                 );
@@ -314,7 +325,7 @@ pub fn paint(
             scene.stroke(
                 &Stroke::new(1.25),
                 Affine::IDENTITY,
-                theme.select_blue,
+                theme.accent,
                 None,
                 &path,
             );
@@ -325,7 +336,7 @@ pub fn paint(
                 scene.stroke(
                     &Stroke::new(1.25),
                     Affine::IDENTITY,
-                    theme.select_blue,
+                    theme.accent,
                     None,
                     &sq,
                 );
@@ -334,7 +345,7 @@ pub fn paint(
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
-                theme.select_blue,
+                theme.accent,
                 None,
                 &center,
             );
@@ -369,7 +380,7 @@ pub fn paint(
                 scene.stroke(
                     &Stroke::new(1.5),
                     Affine::IDENTITY,
-                    theme.select_blue,
+                    theme.accent,
                     None,
                     &screen,
                 );
@@ -388,13 +399,13 @@ pub fn paint(
                 let doc_pos = if sel { pos + dv } else { pos };
                 let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
                 if sel || !any_sel {
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.select_blue, None, &sq);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &sq);
                 } else {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
                     scene.stroke(
                         &Stroke::new(1.25),
                         Affine::IDENTITY,
-                        theme.select_blue,
+                        theme.accent,
                         None,
                         &sq,
                     );
@@ -529,12 +540,15 @@ fn stroke_path(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_object(
     scene: &mut Scene,
     doc: &Document,
     id: ObjectId,
     vt: Affine,
     drag: Option<DragPreview<'_>>,
+    text: &mut TextContext,
+    editing_text: Option<ObjectId>,
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -599,7 +613,14 @@ fn paint_object(
             // scaled/rotated/moved group snap back on release.
             let child_drag = if replacement.is_some() { None } else { drag };
             for &child in &g.children {
-                paint_object(scene, doc, child, m, child_drag);
+                paint_object(scene, doc, child, m, child_drag, text, editing_text);
+            }
+        }
+        ObjectKind::Text(td) => {
+            // The object open in the Type tool is drawn live by the shell.
+            if Some(id) != editing_text {
+                let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
+                crate::textedit::paint_text_data(scene, text, td, m, color);
             }
         }
         other => {

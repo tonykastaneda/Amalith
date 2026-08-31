@@ -27,8 +27,9 @@ pub struct Theme {
     pub drop_fill: Color,
     /// The solid Illustrator-style insertion line.
     pub drop_line: Color,
-    /// Selection box, transform handle strokes, center marker.
-    pub select_blue: Color,
+    /// App accent — selection box, transform handles, active-tab underline,
+    /// drop indicator, focus rings. Amalith gold.
+    pub accent: Color,
     /// Faint fill inside a live marquee.
     pub marquee_fill: Color,
     /// Artboard hairline and its name label.
@@ -58,18 +59,18 @@ impl Default for Theme {
             border: Color::from_rgb8(0x15, 0x15, 0x15),
             // Light enough to read as a grabbable groove against panel_bg.
             splitter: Color::from_rgb8(0x3d, 0x3d, 0x3d),
-            drop_fill: Color::from_rgb8(0x1d, 0x7a, 0xf0).with_alpha(0.20),
-            drop_line: Color::from_rgb8(0x1d, 0x7a, 0xf0),
-            select_blue: Color::from_rgb8(0x3b, 0x9b, 0xff),
-            marquee_fill: Color::from_rgb8(0x5a, 0xa5, 0xff).with_alpha(0.10),
+            drop_fill: Color::from_rgb8(0xf4, 0xbe, 0x18).with_alpha(0.20),
+            drop_line: Color::from_rgb8(0xf4, 0xbe, 0x18),
+            accent: Color::from_rgb8(0xf4, 0xbe, 0x18),
+            marquee_fill: Color::from_rgb8(0xf4, 0xbe, 0x18).with_alpha(0.12),
             artboard_border: Color::from_rgb8(0x23, 0x23, 0x23),
             artboard_label: Color::from_rgb8(0xe1, 0xe1, 0xe1),
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),
             text_dim: Color::from_rgb8(0x8a, 0x8a, 0x8a),
 
-            tab_strip_h: 26.0,
+            tab_strip_h: 27.3,
             splitter_thickness: 6.0,
-            tab_pad_x: 12.0,
+            tab_pad_x: 12.6,
         }
     }
 }

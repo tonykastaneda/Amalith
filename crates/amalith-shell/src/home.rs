@@ -39,7 +39,8 @@ const INK: Color = Color::from_rgb8(238, 238, 240);
 const DIM: Color = Color::from_rgb8(138, 138, 144);
 const DIVIDER: Color = Color::from_rgb8(48, 48, 51);
 const TILE_RECENT: Color = Color::from_rgb8(46, 46, 48);
-const SEL: Color = Color::from_rgb8(59, 111, 214);
+/// App accent — Amalith gold.
+const SEL: Color = Color::from_rgb8(0xf4, 0xbe, 0x18);
 
 /// What a press on the Home screen landed on.
 pub enum Hit {
@@ -151,7 +152,7 @@ impl Home {
         // The header block (mark, wordmark, version) is centred in the panel.
         let cx = split / 2.0;
 
-        let mark_y = 52.0;
+        let mark_y = 104.0;
         image_into(
             scene,
             &self.mark,
@@ -173,9 +174,8 @@ impl Home {
         let ver_baseline = wm_top + wm_h + 30.0;
         tcx.draw(scene, ver, 15.0, DIM, cx - ver_w / 2.0, ver_baseline);
 
-        // Divider sits a gap below the header equal to the gap above the mark,
-        // so the header block reads as evenly inset.
-        let dy = (ver_baseline + 8.0 + mark_y).round();
+        // Divider sits a fixed gap below the header.
+        let dy = (ver_baseline + 8.0 + 56.0).round();
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
@@ -291,5 +291,11 @@ fn label(scene: &mut Scene, tcx: &mut TextContext, s: &str, tile: Rect, gap: f64
             &RoundedRect::from_rect(pill, 4.0),
         );
     }
-    tcx.draw(scene, s, 14.0, INK, cx - w / 2.0, baseline);
+    // Dark text over the gold pill, light text otherwise.
+    let col = if selected {
+        Color::from_rgb8(0x1a, 0x14, 0x00)
+    } else {
+        INK
+    };
+    tcx.draw(scene, s, 14.0, col, cx - w / 2.0, baseline);
 }

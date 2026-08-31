@@ -656,7 +656,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
         let y1 = items.iter().map(|r| r.y1).fold(f64::MIN, f64::max);
         let listbox = Rect::new(items[0].x0, y0, items[0].x1, y1);
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &listbox);
-        scene.stroke(&Stroke::new(1.0), ID, theme.select_blue, None, &listbox);
+        scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &listbox);
         let labels: Vec<&str> = match m {
             Menu::Unit => UNITS.iter().map(|u| unit_label(*u)).collect(),
             Menu::Color => COLORS.iter().map(|c| color_label(*c)).collect(),
@@ -719,7 +719,7 @@ fn draw_field(
 ) {
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
     let border = if focused {
-        theme.select_blue
+        theme.accent
     } else {
         theme.text_dim.with_alpha(0.5)
     };
@@ -762,7 +762,7 @@ fn draw_dropdown(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Re
 fn draw_orient(scene: &mut Scene, theme: &Theme, p: Rect, land: Rect, portrait: bool) {
     for (r, on) in [(p, portrait), (land, !portrait)] {
         let fill = if on {
-            theme.select_blue
+            theme.accent
         } else {
             theme.strip_active
         };
@@ -846,7 +846,7 @@ fn draw_check(
         tick.move_to((box_.x0 + 3.0, box_.y0 + 8.0));
         tick.line_to((box_.x0 + 7.0, box_.y0 + 12.0));
         tick.line_to((box_.x0 + 13.0, box_.y0 + 4.0));
-        scene.stroke(&Stroke::new(2.0), ID, theme.select_blue, None, &tick);
+        scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &tick);
     }
     text.draw(scene, label, 12.0, theme.text_dim, box_.x1 + 8.0, r.y0 + 14.0);
 }
@@ -860,7 +860,7 @@ fn draw_button(
     primary: bool,
 ) {
     let fill = if primary {
-        theme.select_blue
+        theme.accent
     } else {
         theme.strip_active
     };

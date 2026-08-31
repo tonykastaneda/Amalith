@@ -82,7 +82,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         scene.fill(
             Fill::NonZero,
             ID,
-            if on { ctx.theme.select_blue } else { ctx.theme.strip_bg },
+            if on { ctx.theme.accent } else { ctx.theme.strip_bg },
             None,
             r,
         );

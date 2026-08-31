@@ -37,6 +37,7 @@ pub enum Icon {
     Select,
     DirectSelect,
     Pen,
+    Text,
     Rectangle,
     RoundedRect,
     Ellipse,
@@ -56,12 +57,64 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Polygon => POLYGON_SVG,
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
+        // Hand-drawn in `draw`; never reaches the brand-SVG path.
+        Icon::Text => "",
     }
 }
 
 /// Draw `icon` filling `box_` (screen px), tinted `color` — the panel look.
 pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
+    if icon == Icon::Text {
+        draw_type_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// A serif "T" — the Type tool.
+fn draw_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x = box_.x0;
+    let y = box_.y0;
+    let bar = (h * 0.14).max(1.5);
+    let stem = (w * 0.14).max(1.5);
+    let inset = w * 0.16;
+    let serif = h * 0.12;
+    // Top bar.
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(x + inset, y + inset, x + w - inset, y + inset + bar),
+    );
+    // Stem.
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(
+            box_.center().x - stem / 2.0,
+            y + inset,
+            box_.center().x + stem / 2.0,
+            y + h - inset,
+        ),
+    );
+    // Foot serif.
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(
+            box_.center().x - stem * 1.6,
+            y + h - inset - serif,
+            box_.center().x + stem * 1.6,
+            y + h - inset,
+        ),
+    );
 }
 
 /// A magnifying-glass cursor centred at `center`, with a `+` (`plus`) or

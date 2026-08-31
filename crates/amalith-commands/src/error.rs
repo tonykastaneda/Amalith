@@ -12,6 +12,8 @@ pub enum CommandError {
     ObjectNotFound(ObjectId),
     #[error("object {0} is not a path")]
     NotAPath(ObjectId),
+    #[error("object {0} is not text")]
+    NotText(ObjectId),
     #[error(transparent)]
     Document(#[from] DocumentError),
     #[error("nothing to undo")]
