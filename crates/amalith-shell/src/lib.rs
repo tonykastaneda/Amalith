@@ -3,6 +3,9 @@
 //! No widget toolkit. The stack is winit (windows + input), wgpu + vello
 //! (GPU 2D rendering, for both chrome and artwork), and the modules here:
 //!
+//! - [`app`]    — the whole application: `App` state, the winit event loop,
+//!               input routing ([`app::input`]), and rendering
+//!               ([`app::render`]). [`app::run`] is the entry point.
 //! - [`dock`]   — the pure layout-tree model: splits, tab groups, detach,
 //!               dock. No rendering, fully unit-tested.
 //! - [`layout`] — turns a [`dock::Node`] tree + a rect into concrete
@@ -10,13 +13,16 @@
 //!               ([`layout::hit_test`]). Also pure.
 //! - [`theme`]  — colors and metrics for the chrome.
 //! - [`chrome`] — draws a [`layout::Layout`] into a vello scene, plus the
-//!               blue drop indicator.
-//! - [`panel`]  — the [`Panel`](panel::Panel) trait every dockable pane
-//!               implements, and the registry mapping [`PanelId`] to an
-//!               instance.
+//!               drop indicator.
+//! - [`panels`] — the dockable panel bodies (Tools, Layers, Artboards,
+//!               Character, Swatches). Dispatched by string [`PanelId`] in
+//!               `panels::{paint, hit, tip}`; each is a stateless renderer
+//!               of a `Ctx` that returns a `panels::Action` the shell
+//!               applies.
+//! - [`context_bar`] — the control bar, assembled the same way from a
+//!               priority-ordered list of self-contained segments.
 //!
-//! The binary (`main.rs`) owns the winit event loop and per-window render
-//! state, and drives these modules.
+//! [`main.rs`](../../main.rs) is a launcher that calls [`app::run`].
 
 pub mod about;
 pub mod anchors;
@@ -32,7 +38,6 @@ pub mod home;
 pub mod icons;
 pub mod layout;
 pub mod newdoc;
-pub mod panel;
 pub mod panels;
 pub mod picker;
 pub mod prefs;
@@ -47,5 +52,4 @@ pub mod tool;
 
 pub use dock::{Axis, Child, DockModel, DropTarget, Floating, Node, NodePath, PanelId, Side};
 pub use layout::{hit_test, Layout, PanelArea, SplitterHandle, TabRect};
-pub use panel::{Key, Mods, Panel, PanelEvent, PanelRegistry, PointerButton};
 pub use theme::Theme;
