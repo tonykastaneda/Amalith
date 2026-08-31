@@ -372,28 +372,13 @@ struct App {
     content: Scene,
     text: TextContext,
     dock: DockModel,
+    /// The live (active-tab) document state. Inactive tabs are parked in
+    /// `tabs`; switching swaps this with `tabs[active]`.
+    doc: Doc,
     /// Parked state for every open document. `tabs[active]` is a
-    /// placeholder while that document is the live one on `App`.
+    /// placeholder while that document is the live one on `doc`.
     tabs: Vec<Doc>,
     active: usize,
-    editor: Editor,
-    /// Path this document was last opened from / saved to, for ⌘S.
-    file_path: Option<std::path::PathBuf>,
-    /// Embedded assets that travel with the `.amalith` container.
-    asset_store: amalith_io::AssetStore,
-    /// Last file error, shown in the app bar until the next action.
-    io_error: Option<String>,
-    selection: Vec<ObjectId>,
-    /// Selected path anchors, for the Direct Selection tool.
-    anchor_sel: Vec<(ObjectId, usize)>,
-    /// Group ids shown expanded in the Layers panel.
-    expanded_groups: std::collections::HashSet<ObjectId>,
-    /// The artboard the Artboard tool is currently editing (shows handles).
-    selected_artboard: Option<ArtboardId>,
-    /// The layer highlighted in the Layers panel.
-    selected_layer: Option<LayerId>,
-    /// An in-progress inline rename in a panel.
-    rename: Option<Rename>,
     /// The New Document modal, when open.
     newdoc: Option<newdoc::NewDocForm>,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
@@ -443,13 +428,6 @@ struct App {
     /// Direction of the last scrubby-zoom move: `>= 0` = in (＋ cursor),
     /// `< 0` = out (－ cursor).
     zoom_sign: i8,
-    /// Current stroke weight / opacity shown in the options bar. The
-    /// steppers edit these; new shapes and any selection pick them up.
-    stroke_w: f64,
-    opacity: f32,
-    /// Cap / join / miter / align / dash for new shapes and the current
-    /// selection — the Stroke flyout edits this.
-    stroke_style: StrokeStyle,
     /// Whether the Stroke flyout (opened from the options bar) is showing.
     stroke_popover: bool,
     /// Handle to the OS clipboard, for SVG copy/paste with other apps
@@ -470,7 +448,6 @@ struct App {
     last_pen: Option<(ObjectId, Vec<Point>, bool)>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
-    view: CanvasView,
     theme: Theme,
     scale: f64,
     /// Pointer position within whichever window last reported it, logical.
@@ -517,18 +494,9 @@ impl App {
                 d.left.width = 80.0; // two tool columns
                 d
             },
+            doc: Doc::new(Editor::new(sample::document())),
             tabs: vec![Doc::placeholder()],
             active: 0,
-            editor: Editor::new(sample::document()),
-            file_path: None,
-            asset_store: amalith_io::AssetStore::new(),
-            io_error: None,
-            selection: Vec::new(),
-            anchor_sel: Vec::new(),
-            expanded_groups: std::collections::HashSet::new(),
-            selected_artboard: None,
-            selected_layer: None,
-            rename: None,
             // Boot into the Home screen; New Document opens from there.
             newdoc: None,
             home: home::Home::new(recent::load()),
@@ -551,9 +519,6 @@ impl App {
             shape_flyout: None,
             pending_fit: true,
             zoom_sign: 1,
-            stroke_w: 1.0,
-            opacity: 1.0,
-            stroke_style: StrokeStyle::default(),
             stroke_popover: false,
             clipboard: None,
             picker: None,
@@ -562,7 +527,6 @@ impl App {
             pen_redo: Vec::new(),
             last_pen: None,
             marquee: None,
-            view: CanvasView::default(),
             theme: Theme::default(),
             scale: 1.0,
             pointer: Point::ZERO,
@@ -599,45 +563,15 @@ impl App {
         }
     }
 
-    /// Move the live (active) document state off `App` into a [`Doc`].
+    /// Move the live (active) document state off `App` into a [`Doc`],
+    /// leaving a placeholder behind.
     fn take_active_doc(&mut self) -> Doc {
-        Doc {
-            editor: std::mem::replace(
-                &mut self.editor,
-                Editor::new(amalith_core::Document::new("Untitled")),
-            ),
-            file_path: self.file_path.take(),
-            asset_store: std::mem::replace(&mut self.asset_store, amalith_io::AssetStore::new()),
-            io_error: self.io_error.take(),
-            selection: std::mem::take(&mut self.selection),
-            anchor_sel: std::mem::take(&mut self.anchor_sel),
-            expanded_groups: std::mem::take(&mut self.expanded_groups),
-            selected_artboard: self.selected_artboard.take(),
-            selected_layer: self.selected_layer.take(),
-            rename: self.rename.take(),
-            stroke_w: self.stroke_w,
-            stroke_style: self.stroke_style,
-            opacity: self.opacity,
-            view: self.view,
-        }
+        std::mem::replace(&mut self.doc, Doc::placeholder())
     }
 
     /// Make `doc` the live document on `App`.
     fn load_active_doc(&mut self, doc: Doc) {
-        self.editor = doc.editor;
-        self.file_path = doc.file_path;
-        self.asset_store = doc.asset_store;
-        self.io_error = doc.io_error;
-        self.selection = doc.selection;
-        self.anchor_sel = doc.anchor_sel;
-        self.expanded_groups = doc.expanded_groups;
-        self.selected_artboard = doc.selected_artboard;
-        self.selected_layer = doc.selected_layer;
-        self.rename = doc.rename;
-        self.stroke_w = doc.stroke_w;
-        self.stroke_style = doc.stroke_style;
-        self.opacity = doc.opacity;
-        self.view = doc.view;
+        self.doc = doc;
         // Transient interaction state doesn't cross documents.
         self.drag = Drag::None;
         self.pen.clear();
@@ -676,7 +610,7 @@ impl App {
         }
         if self.tabs.len() == 1 {
             self.load_active_doc(Doc::placeholder());
-            self.selection.clear();
+            self.doc.selection.clear();
             if self.settings.home_on_last_close {
                 self.home = home::Home::new(recent::load());
             }
@@ -701,8 +635,8 @@ impl App {
     fn tab_label(&self, i: usize) -> String {
         let d = if i == self.active {
             (
-                &self.editor,
-                self.view.zoom,
+                &self.doc.editor,
+                self.doc.view.zoom,
             )
         } else {
             (&self.tabs[i].editor, self.tabs[i].view.zoom)
@@ -734,7 +668,7 @@ impl App {
 
     /// Screen (logical) point → document point.
     fn doc_point(&self, screen: Point) -> Point {
-        self.view.to_screen().inverse() * screen
+        self.doc.view.to_screen().inverse() * screen
     }
 
     /// Apply the colour picker's current colour to its slot on the
@@ -743,16 +677,16 @@ impl App {
         let Some(pk) = self.picker else {
             return;
         };
-        if self.selection.is_empty() {
+        if self.doc.selection.is_empty() {
             return;
         }
-        let objects = self.selection.clone();
+        let objects = self.doc.selection.clone();
         let paint = amalith_core::Paint::Solid(pk.color());
         let cmd = match pk.slot {
             panels::PaintSlot::Fill => Command::SetFill { objects, paint },
             panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
         };
-        let _ = self.editor.execute(cmd);
+        let _ = self.doc.editor.execute(cmd);
         self.request_main_redraw();
     }
 
@@ -761,7 +695,7 @@ impl App {
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
             panels::Action::Select(id) => {
-                self.selection = vec![id];
+                self.doc.selection = vec![id];
                 if double {
                     self.begin_rename(panels::RenameId::Object(id));
                 }
@@ -769,27 +703,27 @@ impl App {
             panels::Action::SelectLayer(id) => {
                 // Selecting a layer deselects any objects, so the row can
                 // show its plain blue highlight.
-                self.selection.clear();
-                self.anchor_sel.clear();
-                self.selected_layer = Some(id);
+                self.doc.selection.clear();
+                self.doc.anchor_sel.clear();
+                self.doc.selected_layer = Some(id);
                 if double {
                     self.begin_rename(panels::RenameId::Layer(id));
                 }
             }
             panels::Action::SelectArtboard(id) => {
-                self.selected_artboard = Some(id);
+                self.doc.selected_artboard = Some(id);
                 if double {
                     self.begin_rename(panels::RenameId::Artboard(id));
                 }
             }
             panels::Action::FocusArtboard(id) => {
-                self.selected_artboard = Some(id);
+                self.doc.selected_artboard = Some(id);
                 if double {
                     self.focus_artboard(id);
                 }
             }
             panels::Action::FocusLayerSearch => {
-                self.rename = None;
+                self.doc.rename = None;
                 self.layer_search_focused = true;
                 self.request_main_redraw();
             }
@@ -816,69 +750,69 @@ impl App {
                 self.picker = Some(picker::Picker::from_color(slot, origin, cur));
             }
             panels::Action::SetPaint(paint) => {
-                if !self.selection.is_empty() {
-                    let objects = self.selection.clone();
+                if !self.doc.selection.is_empty() {
+                    let objects = self.doc.selection.clone();
                     let cmd = match self.active_slot {
                         panels::PaintSlot::Fill => Command::SetFill { objects, paint },
                         panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
                     };
-                    let _ = self.editor.execute(cmd);
+                    let _ = self.doc.editor.execute(cmd);
                 }
             }
             panels::Action::SetStrokeWidth(width) => {
-                if !self.selection.is_empty() {
-                    let _ = self.editor.execute(Command::SetStrokeWidth {
-                        objects: self.selection.clone(),
+                if !self.doc.selection.is_empty() {
+                    let _ = self.doc.editor.execute(Command::SetStrokeWidth {
+                        objects: self.doc.selection.clone(),
                         width,
                     });
                 }
             }
             panels::Action::ToggleVisible(id) => {
-                if let Some(cur) = self.editor.document().object(id).map(|o| o.visible) {
-                    let _ = self.editor.execute(Command::SetVisible {
+                if let Some(cur) = self.doc.editor.document().object(id).map(|o| o.visible) {
+                    let _ = self.doc.editor.execute(Command::SetVisible {
                         objects: vec![id],
                         visible: !cur,
                     });
                 }
             }
             panels::Action::ToggleLocked(id) => {
-                if let Some(cur) = self.editor.document().object(id).map(|o| o.locked) {
-                    let _ = self.editor.execute(Command::SetLocked {
+                if let Some(cur) = self.doc.editor.document().object(id).map(|o| o.locked) {
+                    let _ = self.doc.editor.execute(Command::SetLocked {
                         objects: vec![id],
                         locked: !cur,
                     });
                     if !cur {
-                        self.selection.retain(|s| *s != id);
+                        self.doc.selection.retain(|s| *s != id);
                     }
                 }
             }
             panels::Action::ToggleExpand(id) => {
-                if !self.expanded_groups.remove(&id) {
-                    self.expanded_groups.insert(id);
+                if !self.doc.expanded_groups.remove(&id) {
+                    self.doc.expanded_groups.insert(id);
                 }
             }
             panels::Action::NewLayer => {
-                let n = self.editor.document().layers().len() + 1;
-                let _ = self.editor.execute(Command::CreateLayer {
+                let n = self.doc.editor.document().layers().len() + 1;
+                let _ = self.doc.editor.execute(Command::CreateLayer {
                     name: format!("Layer {n}"),
                     index: None,
                 });
             }
             panels::Action::LayerRestack(dir) => self.restack(dir),
             panels::Action::DeleteObjects => {
-                if !self.selection.is_empty() {
-                    let _ = self.editor.execute(Command::DeleteObjects {
-                        ids: std::mem::take(&mut self.selection),
+                if !self.doc.selection.is_empty() {
+                    let _ = self.doc.editor.execute(Command::DeleteObjects {
+                        ids: std::mem::take(&mut self.doc.selection),
                     });
                 }
             }
             panels::Action::DeleteArtboard => {
-                if let Some(id) = self.selected_artboard.take() {
-                    let _ = self.editor.execute(Command::DeleteArtboard { id });
+                if let Some(id) = self.doc.selected_artboard.take() {
+                    let _ = self.doc.editor.execute(Command::DeleteArtboard { id });
                 }
             }
             panels::Action::NewArtboard => {
-                let boards = self.editor.document().artboards();
+                let boards = self.doc.editor.document().artboards();
                 let n = boards.len() + 1;
                 // Sit the new board to the right of the rightmost one,
                 // same size; default 1200×800 when there are none.
@@ -891,12 +825,12 @@ impl App {
                         amalith_core::Rect::new(r.x1 + 40.0, r.y0, r.x1 + 40.0 + w, r.y0 + h)
                     })
                     .unwrap_or_else(|| amalith_core::Rect::new(0.0, 0.0, 1200.0, 800.0));
-                if let Ok(CommandOutcome::Artboard(id)) = self.editor.execute(Command::CreateArtboard {
+                if let Ok(CommandOutcome::Artboard(id)) = self.doc.editor.execute(Command::CreateArtboard {
                     name: format!("Artboard {n}"),
                     rect,
                     index: None,
                 }) {
-                    self.selected_artboard = Some(id);
+                    self.doc.selected_artboard = Some(id);
                     self.set_tool(Tool::Artboard);
                 }
             }
@@ -971,12 +905,12 @@ impl App {
             return;
         }
         let ids: Vec<ObjectId> = self
-            .selection
+            .doc.selection
             .iter()
             .copied()
             .filter(|id| {
                 matches!(
-                    self.editor.document().object(*id).map(|o| &o.kind),
+                    self.doc.editor.document().object(*id).map(|o| &o.kind),
                     Some(amalith_core::ObjectKind::Text(_))
                 )
             })
@@ -988,14 +922,14 @@ impl App {
         }
         for id in ids {
             let Some(amalith_core::ObjectKind::Text(t)) =
-                self.editor.document().object(id).map(|o| &o.kind)
+                self.doc.editor.document().object(id).map(|o| &o.kind)
             else {
                 continue;
             };
             let mut data = t.clone();
             f(&mut data.style);
             data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
-            let _ = self.editor.execute(Command::SetText { object: id, data });
+            let _ = self.doc.editor.execute(Command::SetText { object: id, data });
         }
         self.request_main_redraw();
     }
@@ -1249,7 +1183,7 @@ impl App {
 
     /// Start an inline rename, seeding the buffer with the current name.
     fn begin_rename(&mut self, target: panels::RenameId) {
-        let doc = self.editor.document();
+        let doc = self.doc.editor.document();
         let buf = match target {
             panels::RenameId::Layer(id) => doc
                 .layers()
@@ -1262,7 +1196,7 @@ impl App {
             panels::RenameId::Artboard(id) => doc.artboard(id).map(|a| a.name.clone()),
         };
         if let Some(buf) = buf {
-            self.rename = Some(Rename {
+            self.doc.rename = Some(Rename {
                 target,
                 buf,
                 fresh: true,
@@ -1273,7 +1207,7 @@ impl App {
 
     /// Commit the inline rename (empty name = cancel).
     fn commit_rename(&mut self) {
-        let Some(r) = self.rename.take() else {
+        let Some(r) = self.doc.rename.take() else {
             return;
         };
         let name = r.buf.trim().to_string();
@@ -1286,31 +1220,31 @@ impl App {
                 },
                 panels::RenameId::Artboard(id) => Command::RenameArtboard { id, name },
             };
-            let _ = self.editor.execute(cmd);
+            let _ = self.doc.editor.execute(cmd);
         }
         self.request_main_redraw();
     }
 
     /// A key while an inline rename is active. Returns `true` if consumed.
     fn rename_key(&mut self, event: &winit::event::KeyEvent) -> bool {
-        if self.rename.is_none() || !event.state.is_pressed() {
-            return self.rename.is_some();
+        if self.doc.rename.is_none() || !event.state.is_pressed() {
+            return self.doc.rename.is_some();
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => self.commit_rename(),
             PhysicalKey::Code(KeyCode::Escape) => {
-                self.rename = None;
+                self.doc.rename = None;
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::Backspace) => {
-                if let Some(r) = &mut self.rename {
+                if let Some(r) = &mut self.doc.rename {
                     r.fresh = false;
                     r.buf.pop();
                 }
                 self.request_main_redraw();
             }
             _ => {
-                if let (Some(r), Some(txt)) = (&mut self.rename, event.text.as_ref()) {
+                if let (Some(r), Some(txt)) = (&mut self.doc.rename, event.text.as_ref()) {
                     for ch in txt.chars().filter(|c| !c.is_control()) {
                         if r.fresh {
                             r.buf.clear();
@@ -1364,17 +1298,17 @@ impl App {
 
     /// Appearance of the first selected object, for the Swatches panel.
     fn representative(&self) -> Option<amalith_core::Appearance> {
-        self.selection
+        self.doc.selection
             .first()
-            .and_then(|id| self.editor.document().object(*id))
+            .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance)
     }
 
     /// Drop selection ids / anchors that no longer exist.
     fn prune_selection(&mut self) {
-        let doc = self.editor.document();
-        self.selection.retain(|id| doc.object(*id).is_some());
-        self.anchor_sel
+        let doc = self.doc.editor.document();
+        self.doc.selection.retain(|id| doc.object(*id).is_some());
+        self.doc.anchor_sel
             .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
                 Some(amalith_core::ObjectKind::Path(pd)) => {
                     amalith_core::geom::anchor_position(&pd.geometry, *i).is_some()
@@ -1382,16 +1316,16 @@ impl App {
                 _ => false,
             });
         if self
-            .selected_layer
+            .doc.selected_layer
             .is_some_and(|id| !doc.layers().iter().any(|l| l.id == id))
         {
-            self.selected_layer = None;
+            self.doc.selected_layer = None;
         }
         if self
-            .selected_artboard
+            .doc.selected_artboard
             .is_some_and(|id| doc.artboard(id).is_none())
         {
-            self.selected_artboard = None;
+            self.doc.selected_artboard = None;
         }
     }
 
@@ -1418,15 +1352,15 @@ impl App {
     /// `A` tool nor the ⌘ gesture lights up every path on its own. A ⌘
     /// marquee still reaches unselected paths (see `on_release`).
     fn node_paths(&self) -> Vec<ObjectId> {
-        let mut out = self.selection.clone();
-        for (id, _) in &self.anchor_sel {
+        let mut out = self.doc.selection.clone();
+        for (id, _) in &self.doc.anchor_sel {
             if !out.contains(id) {
                 out.push(*id);
             }
         }
         out.retain(|id| {
             matches!(
-                self.editor.document().object(*id).map(|o| &o.kind),
+                self.doc.editor.document().object(*id).map(|o| &o.kind),
                 Some(amalith_core::ObjectKind::Path(_))
             )
         });
@@ -1448,9 +1382,9 @@ impl App {
                 _ => {}
             }
         }
-        let doc = self.editor.document();
+        let doc = self.doc.editor.document();
         let mut out = Vec::new();
-        for &id in &self.selection {
+        for &id in &self.doc.selection {
             walk(doc, id, &mut out);
         }
         out
@@ -1462,7 +1396,7 @@ impl App {
         self.space_down
             && !self.cmd_down
             && self.active_tool == Tool::Select
-            && !self.selection.is_empty()
+            && !self.doc.selection.is_empty()
     }
 
     /// Arrow-key nudge (Shift = ×10). Moves the selected anchors when the
@@ -1471,15 +1405,15 @@ impl App {
         let base = self.settings.nudge_step;
         let step = if self.shift_down { base * 10.0 } else { base };
         let delta = amalith_core::Vec2::new(dx * step, dy * step);
-        if self.effective_tool() == Tool::DirectSelect && !self.anchor_sel.is_empty() {
-            let _ = self.editor.execute(Command::MoveAnchors {
-                anchors: self.anchor_sel.clone(),
+        if self.effective_tool() == Tool::DirectSelect && !self.doc.anchor_sel.is_empty() {
+            let _ = self.doc.editor.execute(Command::MoveAnchors {
+                anchors: self.doc.anchor_sel.clone(),
                 delta,
             });
             self.request_main_redraw();
-        } else if !self.selection.is_empty() {
-            let _ = self.editor.execute(Command::MoveObjects {
-                objects: self.selection.clone(),
+        } else if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::MoveObjects {
+                objects: self.doc.selection.clone(),
                 delta,
             });
             self.request_main_redraw();
@@ -1506,12 +1440,12 @@ impl App {
             amalith_core::PathData::polyline(&pts)
         };
         let layer = self.ensure_layer();
-        if let Ok(CommandOutcome::Object(id)) = self.editor.execute(Command::CreatePath {
+        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(Command::CreatePath {
             layer,
             path,
             name: None,
         }) {
-            self.selection = vec![id];
+            self.doc.selection = vec![id];
             self.last_pen = Some((id, anchors, closed));
             self.apply_new_appearance(id);
         }
@@ -1626,7 +1560,7 @@ impl App {
         form.commit_focus();
         let (wpx, hpx) = (form.width_px(), form.height_px());
         if wpx <= 0.0 || hpx <= 0.0 {
-            self.io_error = Some("Width and height must be greater than zero.".into());
+            self.doc.io_error = Some("Width and height must be greater than zero.".into());
             self.request_main_redraw();
             return;
         }
@@ -1703,39 +1637,39 @@ impl App {
             MenuAction::SaveAs => self.save_document(true),
             MenuAction::ImportSvg => self.import_svg(),
             MenuAction::Undo => {
-                let _ = self.editor.undo();
+                let _ = self.doc.editor.undo();
                 self.prune_selection();
                 self.request_main_redraw();
             }
             MenuAction::Redo => {
-                let _ = self.editor.redo();
+                let _ = self.doc.editor.redo();
                 self.prune_selection();
                 self.request_main_redraw();
             }
             MenuAction::Cut => {
-                if !self.selection.is_empty() {
-                    let ids = self.selection.clone();
+                if !self.doc.selection.is_empty() {
+                    let ids = self.doc.selection.clone();
                     self.copy_selection(&ids);
-                    let _ = self.editor.execute(Command::DeleteObjects {
-                        ids: std::mem::take(&mut self.selection),
+                    let _ = self.doc.editor.execute(Command::DeleteObjects {
+                        ids: std::mem::take(&mut self.doc.selection),
                     });
                     self.request_main_redraw();
                 }
             }
             MenuAction::Copy => {
-                if !self.selection.is_empty() {
-                    let ids = self.selection.clone();
+                if !self.doc.selection.is_empty() {
+                    let ids = self.doc.selection.clone();
                     self.copy_selection(&ids);
                 }
             }
             MenuAction::Paste => self.paste_clipboard(PastePlace::Plain),
             MenuAction::Duplicate => {
-                if !self.selection.is_empty() {
+                if !self.doc.selection.is_empty() {
                     if let Ok(ids) = self
-                        .editor
-                        .duplicate_objects(&self.selection, amalith_core::Vec2::new(16.0, 16.0))
+                        .doc.editor
+                        .duplicate_objects(&self.doc.selection, amalith_core::Vec2::new(16.0, 16.0))
                     {
-                        self.selection = ids;
+                        self.doc.selection = ids;
                     }
                     self.request_main_redraw();
                 }
@@ -1754,17 +1688,17 @@ impl App {
     /// as the value new shapes will use.
     fn step_weight(&mut self, dir: i32) {
         let base = self
-            .selection
+            .doc.selection
             .first()
-            .and_then(|id| self.editor.document().object(*id))
+            .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.stroke_width)
-            .unwrap_or(self.stroke_w);
+            .unwrap_or(self.doc.stroke_w);
         let step = if base < 1.0 { 0.25 } else { 1.0 };
         let next = (base + dir as f64 * step).clamp(0.0, 1000.0);
-        self.stroke_w = next;
-        if !self.selection.is_empty() {
-            let _ = self.editor.execute(Command::SetStrokeWidth {
-                objects: self.selection.clone(),
+        self.doc.stroke_w = next;
+        if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetStrokeWidth {
+                objects: self.doc.selection.clone(),
                 width: next,
             });
         }
@@ -1774,16 +1708,16 @@ impl App {
     /// Options-bar Opacity stepper (5% steps).
     fn step_opacity(&mut self, dir: i32) {
         let base = self
-            .selection
+            .doc.selection
             .first()
-            .and_then(|id| self.editor.document().object(*id))
+            .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.opacity)
-            .unwrap_or(self.opacity);
+            .unwrap_or(self.doc.opacity);
         let next = (base + dir as f32 * 0.05).clamp(0.0, 1.0);
-        self.opacity = next;
-        if !self.selection.is_empty() {
-            let _ = self.editor.execute(Command::SetOpacity {
-                objects: self.selection.clone(),
+        self.doc.opacity = next;
+        if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetOpacity {
+                objects: self.doc.selection.clone(),
                 opacity: next,
             });
         }
@@ -1793,11 +1727,11 @@ impl App {
     /// The stroke style the Stroke flyout should show: the first selected
     /// object's, or the stored default when nothing is selected.
     fn stroke_style_repr(&self) -> StrokeStyle {
-        self.selection
+        self.doc.selection
             .first()
-            .and_then(|id| self.editor.document().object(*id))
+            .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.stroke_style)
-            .unwrap_or(self.stroke_style)
+            .unwrap_or(self.doc.stroke_style)
     }
 
     /// Where the Stroke flyout sits: hanging off the "Stroke" link in the
@@ -1820,16 +1754,16 @@ impl App {
     /// flyout.
     fn edit_stroke_style(&mut self, f: impl FnOnce(&mut StrokeStyle)) {
         let mut style = self
-            .selection
+            .doc.selection
             .first()
-            .and_then(|id| self.editor.document().object(*id))
+            .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.stroke_style)
-            .unwrap_or(self.stroke_style);
+            .unwrap_or(self.doc.stroke_style);
         f(&mut style);
-        self.stroke_style = style;
-        if !self.selection.is_empty() {
-            let _ = self.editor.execute(Command::SetStrokeStyle {
-                objects: self.selection.clone(),
+        self.doc.stroke_style = style;
+        if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetStrokeStyle {
+                objects: self.doc.selection.clone(),
                 style,
             });
         }
@@ -1877,22 +1811,22 @@ impl App {
     /// Push the options-bar Weight / Opacity / Stroke style onto a freshly
     /// created object, so those fields mean something with nothing selected.
     fn apply_new_appearance(&mut self, id: ObjectId) {
-        if (self.stroke_w - 1.0).abs() > f64::EPSILON {
-            let _ = self.editor.execute(Command::SetStrokeWidth {
+        if (self.doc.stroke_w - 1.0).abs() > f64::EPSILON {
+            let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                 objects: vec![id],
-                width: self.stroke_w,
+                width: self.doc.stroke_w,
             });
         }
-        if self.stroke_style != StrokeStyle::default() {
-            let _ = self.editor.execute(Command::SetStrokeStyle {
+        if self.doc.stroke_style != StrokeStyle::default() {
+            let _ = self.doc.editor.execute(Command::SetStrokeStyle {
                 objects: vec![id],
-                style: self.stroke_style,
+                style: self.doc.stroke_style,
             });
         }
-        if (self.opacity - 1.0).abs() > f32::EPSILON {
-            let _ = self.editor.execute(Command::SetOpacity {
+        if (self.doc.opacity - 1.0).abs() > f32::EPSILON {
+            let _ = self.doc.editor.execute(Command::SetOpacity {
                 objects: vec![id],
-                opacity: self.opacity,
+                opacity: self.doc.opacity,
             });
         }
     }
@@ -1900,11 +1834,11 @@ impl App {
     /// ⌘] / ⌘[ — move the selection `steps` places forward (+) or back
     /// (−) in its parent's paint order.
     fn restack(&mut self, steps: i32) {
-        if self.selection.is_empty() || steps == 0 {
+        if self.doc.selection.is_empty() || steps == 0 {
             return;
         }
-        let _ = self.editor.execute(Command::NudgeStack {
-            ids: self.selection.clone(),
+        let _ = self.doc.editor.execute(Command::NudgeStack {
+            ids: self.doc.selection.clone(),
             steps,
         });
         self.request_main_redraw();
@@ -1914,9 +1848,9 @@ impl App {
     /// by the largest sibling count among the selection's parents, which
     /// is the most swaps `NudgeStack` could ever need.
     fn restack_extreme(&mut self, to_front: bool) {
-        let doc = self.editor.document();
+        let doc = self.doc.editor.document();
         let bound = self
-            .selection
+            .doc.selection
             .iter()
             .filter_map(|id| doc.object(*id))
             .map(|o| doc.children_of(o.parent).len() as i32)
@@ -1955,7 +1889,7 @@ impl App {
                 recent::push(path);
             }
             Err(err) => {
-                self.io_error = Some(format!("Open failed: {err}"));
+                self.doc.io_error = Some(format!("Open failed: {err}"));
                 self.request_main_redraw();
             }
         }
@@ -1964,7 +1898,7 @@ impl App {
     /// ⌘S / ⌘⇧S — write the document to its `.amalith` file, prompting for
     /// a path when there isn't one yet or `save_as` forces it.
     fn save_document(&mut self, save_as: bool) {
-        let path = if save_as { None } else { self.file_path.clone() }.or_else(|| {
+        let path = if save_as { None } else { self.doc.file_path.clone() }.or_else(|| {
             rfd::FileDialog::new()
                 .add_filter("Amalith document", &["amalith"])
                 .set_file_name("Untitled.amalith")
@@ -1973,13 +1907,13 @@ impl App {
         let Some(path) = path else {
             return;
         };
-        match amalith_io::save(self.editor.document(), &self.asset_store, &path) {
+        match amalith_io::save(self.doc.editor.document(), &self.doc.asset_store, &path) {
             Ok(()) => {
                 recent::push(&path);
-                self.file_path = Some(path);
-                self.io_error = None;
+                self.doc.file_path = Some(path);
+                self.doc.io_error = None;
             }
-            Err(err) => self.io_error = Some(format!("Save failed: {err}")),
+            Err(err) => self.doc.io_error = Some(format!("Save failed: {err}")),
         }
         self.request_main_redraw();
     }
@@ -1995,21 +1929,21 @@ impl App {
         let svg = match std::fs::read_to_string(&path) {
             Ok(s) => s,
             Err(err) => {
-                self.io_error = Some(format!("Import failed: {err}"));
+                self.doc.io_error = Some(format!("Import failed: {err}"));
                 self.request_main_redraw();
                 return;
             }
         };
-        match self.editor.copy_from_svg(&svg) {
-            Ok(()) => match self.editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
+        match self.doc.editor.copy_from_svg(&svg) {
+            Ok(()) => match self.doc.editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
                 Ok(ids) => {
-                    self.selection = ids;
-                    self.anchor_sel.clear();
-                    self.io_error = None;
+                    self.doc.selection = ids;
+                    self.doc.anchor_sel.clear();
+                    self.doc.io_error = None;
                 }
-                Err(err) => self.io_error = Some(format!("Import failed: {err}")),
+                Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
             },
-            Err(err) => self.io_error = Some(format!("Import failed: {err}")),
+            Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
         }
         self.request_main_redraw();
     }
@@ -2033,13 +1967,13 @@ impl App {
             self.pen_redo.clear();
         }
         if t != Tool::DirectSelect {
-            self.anchor_sel.clear();
+            self.doc.anchor_sel.clear();
         }
         if t == Tool::Artboard && self.active_tool != Tool::Artboard {
             self.pre_artboard_tool = self.active_tool;
         }
         if t != Tool::Artboard {
-            self.selected_artboard = None;
+            self.doc.selected_artboard = None;
         }
         if t.is_shape() {
             self.last_shape_tool = t;
@@ -2057,9 +1991,9 @@ impl App {
         if let Some(te) = &self.text_edit {
             return te.style().clone();
         }
-        for &id in &self.selection {
+        for &id in &self.doc.selection {
             if let Some(amalith_core::ObjectKind::Text(t)) =
-                self.editor.document().object(id).map(|o| &o.kind)
+                self.doc.editor.document().object(id).map(|o| &o.kind)
             {
                 return t.style.clone();
             }
@@ -2072,10 +2006,10 @@ impl App {
     /// options-bar Character cluster.
     fn text_context(&self) -> bool {
         self.text_edit.is_some()
-            || (!self.selection.is_empty()
-                && self.selection.iter().all(|id| {
+            || (!self.doc.selection.is_empty()
+                && self.doc.selection.iter().all(|id| {
                     matches!(
-                        self.editor.document().object(*id).map(|o| &o.kind),
+                        self.doc.editor.document().object(*id).map(|o| &o.kind),
                         Some(amalith_core::ObjectKind::Text(_))
                     )
                 }))
@@ -2091,12 +2025,12 @@ impl App {
     fn context_bar_ctx(&self) -> context_bar::Ctx<'_> {
         context_bar::Ctx {
             theme: &self.theme,
-            selection_len: self.selection.len(),
+            selection_len: self.doc.selection.len(),
             text_context: self.text_context(),
             representative: self.representative(),
             active_slot: self.active_slot,
-            cur_weight: self.stroke_w,
-            cur_opacity: self.opacity,
+            cur_weight: self.doc.stroke_w,
+            cur_opacity: self.doc.opacity,
             stroke_open: self.stroke_popover,
             text_style: self.active_text_style(),
         }
@@ -2110,8 +2044,8 @@ impl App {
     /// Screen (logical) point → the open editor's local space.
     fn text_editor_point(&self, screen: Point) -> Option<(f32, f32)> {
         let obj = self.text_edit.as_ref()?.object;
-        let world = self.editor.document().world_transform(obj);
-        let xf = self.view.to_screen() * convert::affine(world);
+        let world = self.doc.editor.document().world_transform(obj);
+        let xf = self.doc.view.to_screen() * convert::affine(world);
         let p = xf.inverse() * screen;
         Some((p.x as f32, p.y as f32))
     }
@@ -2136,8 +2070,8 @@ impl App {
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
         };
-        if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
-            self.selection = vec![id];
+        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+            self.doc.selection = vec![id];
             self.enter_text_edit(id, origin, None);
         }
     }
@@ -2150,12 +2084,12 @@ impl App {
             self.commit_text_edit();
         }
         let targets: Vec<ObjectId> = self
-            .selection
+            .doc.selection
             .iter()
             .copied()
             .filter(|id| {
                 matches!(
-                    self.editor.document().object(*id).map(|o| &o.kind),
+                    self.doc.editor.document().object(*id).map(|o| &o.kind),
                     Some(amalith_core::ObjectKind::Text(_))
                 )
             })
@@ -2166,7 +2100,7 @@ impl App {
         let mut new_ids = Vec::new();
         for tid in targets {
             let Some((td, transform, appearance, name, layer)) =
-                self.editor.document().object(tid).and_then(|o| {
+                self.doc.editor.document().object(tid).and_then(|o| {
                     let amalith_core::ObjectKind::Text(td) = &o.kind else {
                         return None;
                     };
@@ -2180,43 +2114,43 @@ impl App {
             if geometry.elements().is_empty() {
                 continue;
             }
-            let Ok(CommandOutcome::Object(pid)) = self.editor.execute(Command::CreatePath {
+            let Ok(CommandOutcome::Object(pid)) = self.doc.editor.execute(Command::CreatePath {
                 layer,
                 path: amalith_core::PathData { geometry },
                 name,
             }) else {
                 continue;
             };
-            let _ = self.editor.execute(Command::SetTransform {
+            let _ = self.doc.editor.execute(Command::SetTransform {
                 object: pid,
                 transform,
             });
             // Carry the text's own paint — don't inherit CreatePath's
             // visible-stroke default.
-            let _ = self.editor.execute(Command::SetFill {
+            let _ = self.doc.editor.execute(Command::SetFill {
                 objects: vec![pid],
                 paint: appearance.fill,
             });
-            let _ = self.editor.execute(Command::SetStroke {
+            let _ = self.doc.editor.execute(Command::SetStroke {
                 objects: vec![pid],
                 paint: appearance.stroke,
             });
             if appearance.stroke != amalith_core::Paint::None {
-                let _ = self.editor.execute(Command::SetStrokeWidth {
+                let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                     objects: vec![pid],
                     width: appearance.stroke_width,
                 });
-                let _ = self.editor.execute(Command::SetStrokeStyle {
+                let _ = self.doc.editor.execute(Command::SetStrokeStyle {
                     objects: vec![pid],
                     style: appearance.stroke_style,
                 });
             }
-            let _ = self.editor.execute(Command::DeleteObject { id: tid });
+            let _ = self.doc.editor.execute(Command::DeleteObject { id: tid });
             new_ids.push(pid);
         }
         if !new_ids.is_empty() {
-            self.selection = new_ids;
-            self.anchor_sel.clear();
+            self.doc.selection = new_ids;
+            self.doc.anchor_sel.clear();
             self.request_main_redraw();
         }
     }
@@ -2224,7 +2158,7 @@ impl App {
     /// The layer that ultimately owns `id`, walking out through any groups.
     fn owning_layer(&self, mut id: ObjectId) -> Option<LayerId> {
         loop {
-            match self.editor.document().object(id)?.parent {
+            match self.doc.editor.document().object(id)?.parent {
                 amalith_core::ObjectParent::Layer(l) => return Some(l),
                 amalith_core::ObjectParent::Group(g) => id = g,
             }
@@ -2235,7 +2169,7 @@ impl App {
     /// caret; `None` selects all (fresh object).
     fn enter_text_edit(&mut self, id: ObjectId, origin: Point, click: Option<Point>) {
         let Some(td) = self
-            .editor
+            .doc.editor
             .document()
             .object(id)
             .and_then(|o| match &o.kind {
@@ -2257,7 +2191,7 @@ impl App {
         match click {
             Some(p) => {
                 let xf =
-                    self.view.to_screen() * convert::affine(self.editor.document().world_transform(id));
+                    self.doc.view.to_screen() * convert::affine(self.doc.editor.document().world_transform(id));
                 let lp = xf.inverse() * p;
                 te.pointer_down((lp.x as f32, lp.y as f32), 1, &mut self.text);
             }
@@ -2280,11 +2214,11 @@ impl App {
             return;
         };
         if te.is_empty() {
-            let _ = self.editor.execute(Command::DeleteObject { id: te.object });
-            self.selection.retain(|s| *s != te.object);
+            let _ = self.doc.editor.execute(Command::DeleteObject { id: te.object });
+            self.doc.selection.retain(|s| *s != te.object);
         } else {
             let data = te.to_text_data(&mut self.text);
-            let _ = self.editor.execute(Command::SetText {
+            let _ = self.doc.editor.execute(Command::SetText {
                 object: te.object,
                 data,
             });
@@ -2329,13 +2263,13 @@ impl App {
             return true;
         }
         if let Some((id, mut anchors, closed)) = self.last_pen.take() {
-            let _ = self.editor.execute(Command::DeleteObject { id });
+            let _ = self.doc.editor.execute(Command::DeleteObject { id });
             anchors.pop();
             if anchors.len() >= 2 {
                 self.pen = anchors;
                 self.commit_pen(closed && self.pen.len() >= 3);
             } else {
-                self.selection.clear();
+                self.doc.selection.clear();
             }
             self.request_main_redraw();
             return true;
@@ -2344,8 +2278,8 @@ impl App {
     }
 
     fn select_all(&mut self) {
-        self.selection = self
-            .editor
+        self.doc.selection = self
+            .doc.editor
             .document()
             .layers()
             .iter()
@@ -2367,8 +2301,8 @@ impl App {
     /// the OS clipboard as a portable `<svg>` document, so the same copy
     /// can be pasted into Illustrator, a browser, Figma, etc.
     fn copy_selection(&mut self, ids: &[ObjectId]) {
-        let _ = self.editor.copy(ids);
-        let svg = amalith_io::export_svg(self.editor.document(), ids);
+        let _ = self.doc.editor.copy(ids);
+        let svg = amalith_io::export_svg(self.doc.editor.document(), ids);
         if let (Some(svg), Some(cb)) = (svg, self.clipboard()) {
             let _ = cb.set_text(svg);
         }
@@ -2385,7 +2319,7 @@ impl App {
         };
         let head = text.trim_start();
         if head.starts_with("<svg") || head.starts_with("<?xml") {
-            let _ = self.editor.copy_from_svg(&text);
+            let _ = self.doc.editor.copy_from_svg(&text);
         }
     }
 
@@ -2395,14 +2329,14 @@ impl App {
     /// coordinates and only restack.
     fn paste_clipboard(&mut self, place: PastePlace) {
         self.pull_svg_from_clipboard();
-        if !self.editor.has_clipboard() {
+        if !self.doc.editor.has_clipboard() {
             return;
         }
         let (delta, stack) = match place {
             PastePlace::Plain => {
                 let vc = self.visible_doc_rect().center();
                 let delta = self
-                    .editor
+                    .doc.editor
                     .clipboard_bounds()
                     .map(|b| {
                         let bc = b.center();
@@ -2414,8 +2348,8 @@ impl App {
             PastePlace::InFront => (amalith_core::Vec2::ZERO, PasteStack::InFront),
             PastePlace::Behind => (amalith_core::Vec2::ZERO, PasteStack::Behind),
         };
-        if let Ok(ids) = self.editor.paste(delta, stack) {
-            self.selection = ids;
+        if let Ok(ids) = self.doc.editor.paste(delta, stack) {
+            self.doc.selection = ids;
         }
         self.request_main_redraw();
     }
@@ -2423,10 +2357,10 @@ impl App {
     /// The layer new shapes should land in — the topmost, creating one if
     /// the document has none.
     fn ensure_layer(&mut self) -> LayerId {
-        if let Some(l) = self.editor.document().layers().last() {
+        if let Some(l) = self.doc.editor.document().layers().last() {
             return l.id;
         }
-        match self.editor.execute(Command::CreateLayer {
+        match self.doc.editor.execute(Command::CreateLayer {
             name: "Layer 1".into(),
             index: None,
         }) {
@@ -2457,7 +2391,7 @@ impl App {
     fn visible_doc_rect(&self) -> Rect {
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, right) = self.canvas_x_span();
-        self.view
+        self.doc.view
             .to_screen()
             .inverse()
             .transform_rect_bbox(Rect::new(left, CHROME_TOP, right, h))
@@ -2472,7 +2406,7 @@ impl App {
 
     /// Fit the view so the document's artboards are centred in the canvas.
     fn fit_view(&mut self) {
-        let boards = self.editor.document().artboards();
+        let boards = self.doc.editor.document().artboards();
         let Some(first) = boards.first() else { return };
         let mut b = first.rect;
         for a in &boards[1..] {
@@ -2492,8 +2426,8 @@ impl App {
         }
         let zoom = ((vp.width() / b.width()).min(vp.height() / b.height()) * 0.88).clamp(0.02, 8.0);
         let (bc, vc) = (b.center(), vp.center());
-        self.view.zoom = zoom;
-        self.view.pan = Vec2::new(vc.x - zoom * bc.x, vc.y - zoom * bc.y);
+        self.doc.view.zoom = zoom;
+        self.doc.view.pan = Vec2::new(vc.x - zoom * bc.x, vc.y - zoom * bc.y);
         self.request_main_redraw();
     }
 
@@ -2501,17 +2435,17 @@ impl App {
     fn tip_ctx(&self) -> panels::Ctx<'_> {
         panels::Ctx {
             theme: &self.theme,
-            doc: self.editor.document(),
-            selection: &self.selection,
+            doc: self.doc.editor.document(),
+            selection: &self.doc.selection,
             active_tool: self.active_tool,
             pointer: self.pointer,
             representative: None,
             active_slot: self.active_slot,
             shape_tool: self.last_shape_tool,
-            expanded: &self.expanded_groups,
+            expanded: &self.doc.expanded_groups,
             renaming: None,
-            selected_layer: self.selected_layer,
-            selected_artboard: self.selected_artboard,
+            selected_layer: self.doc.selected_layer,
+            selected_artboard: self.doc.selected_artboard,
             text_style: amalith_core::TextStyle::default(),
             text_editing: false,
             font_families: &self.font_families,
@@ -2649,7 +2583,7 @@ impl App {
     /// number).
     fn focus_artboard(&mut self, id: ArtboardId) {
         if let Some(ab) = self
-            .editor
+            .doc.editor
             .document()
             .artboards()
             .iter()
@@ -2910,7 +2844,7 @@ impl App {
         }
         // A press anywhere commits an in-progress rename (unless it's the
         // double-click that's about to start one).
-        if self.rename.is_some() && !double {
+        if self.doc.rename.is_some() && !double {
             self.commit_rename();
         }
         match role {
@@ -3079,10 +3013,10 @@ impl App {
                             self.drag = Drag::PickColor { in_hue: true };
                         }
                         picker::Hit::NoneButton => {
-                            if !self.selection.is_empty() {
-                                let objects = self.selection.clone();
+                            if !self.doc.selection.is_empty() {
+                                let objects = self.doc.selection.clone();
                                 let paint = amalith_core::Paint::None;
-                                let _ = self.editor.execute(match pk.slot {
+                                let _ = self.doc.editor.execute(match pk.slot {
                                     panels::PaintSlot::Fill => Command::SetFill { objects, paint },
                                     panels::PaintSlot::Stroke => {
                                         Command::SetStroke { objects, paint }
@@ -3159,20 +3093,20 @@ impl App {
                                 let action = {
                                     let ctx = panels::Ctx {
                                         theme: &self.theme,
-                                        doc: self.editor.document(),
-                                        selection: &self.selection,
+                                        doc: self.doc.editor.document(),
+                                        selection: &self.doc.selection,
                                         active_tool: self.active_tool,
                                         pointer: self.pointer,
                                         representative: rep,
                                         active_slot: self.active_slot,
                                         shape_tool: self.last_shape_tool,
-                                        expanded: &self.expanded_groups,
+                                        expanded: &self.doc.expanded_groups,
                                         renaming: self
-                                            .rename
+                                            .doc.rename
                                             .as_ref()
                                             .map(|r| (r.target, r.buf.as_str())),
-                                        selected_layer: self.selected_layer,
-                                        selected_artboard: self.selected_artboard,
+                                        selected_layer: self.doc.selected_layer,
+                                        selected_artboard: self.doc.selected_artboard,
                                         text_style: self.active_text_style(),
                                         text_editing: self.text_edit.is_some(),
                                         font_families: &self.font_families,
@@ -3231,15 +3165,15 @@ impl App {
                     }
                     let visible = self.visible_doc_rect();
                     if let Some(hit) = select::topmost_selectable_at(
-                        self.editor.document(),
+                        self.doc.editor.document(),
                         dp,
                         visible,
                     ) {
                         if let Some(amalith_core::ObjectKind::Text(_)) =
-                            self.editor.document().object(hit).map(|o| &o.kind)
+                            self.doc.editor.document().object(hit).map(|o| &o.kind)
                         {
                             let c = self
-                                .editor
+                                .doc.editor
                                 .document()
                                 .object(hit)
                                 .map(|o| o.transform.as_coeffs())
@@ -3259,7 +3193,7 @@ impl App {
                 // Pen: click to place anchors; click the first anchor to
                 // close and commit.
                 if self.active_tool == Tool::Pen {
-                    let close_r = 8.0 / self.view.zoom;
+                    let close_r = 8.0 / self.doc.view.zoom;
                     if self.pen.len() >= 3
                         && self
                             .pen
@@ -3289,16 +3223,16 @@ impl App {
                 // Artboard tool: a resize handle of the selected artboard,
                 // else drag an existing artboard, else rubber-band a new one.
                 if self.active_tool == Tool::Artboard {
-                    if let Some(id) = self.selected_artboard {
+                    if let Some(id) = self.doc.selected_artboard {
                         if let Some(ab) = self
-                            .editor
+                            .doc.editor
                             .document()
                             .artboards()
                             .iter()
                             .find(|a| a.id == id)
                         {
                             let quad = handles::rect_quad(convert::rect(ab.rect))
-                                .map(|p| self.view.to_screen() * p);
+                                .map(|p| self.doc.view.to_screen() * p);
                             if let Some(handle) = handles::hit_handle(self.pointer, quad) {
                                 self.drag = Drag::ResizeArtboard {
                                     id,
@@ -3311,9 +3245,9 @@ impl App {
                             }
                         }
                     }
-                    match artboard_at(self.editor.document(), dp) {
+                    match artboard_at(self.doc.editor.document(), dp) {
                         Some(id) => {
-                            self.selected_artboard = Some(id);
+                            self.doc.selected_artboard = Some(id);
                             self.drag = Drag::MoveArtboard {
                                 id,
                                 start_doc: dp,
@@ -3321,7 +3255,7 @@ impl App {
                             };
                         }
                         None => {
-                            self.selected_artboard = None;
+                            self.doc.selected_artboard = None;
                             self.drag = Drag::DrawArtboard {
                                 start_doc: dp,
                                 cur_doc: dp,
@@ -3338,20 +3272,20 @@ impl App {
                 // that either selects the object under the press (if the
                 // pointer never moves) or rubber-bands its nodes.
                 if self.effective_tool() == Tool::DirectSelect {
-                    let hit_r = 6.0 / self.view.zoom;
+                    let hit_r = 6.0 / self.doc.view.zoom;
                     let shown = self.node_paths();
                     if let Some(a) =
-                        anchors::topmost_anchor_among(self.editor.document(), &shown, dp, hit_r)
+                        anchors::topmost_anchor_among(self.doc.editor.document(), &shown, dp, hit_r)
                     {
                         if self.shift_down {
-                            if let Some(i) = self.anchor_sel.iter().position(|x| *x == a) {
-                                self.anchor_sel.remove(i);
+                            if let Some(i) = self.doc.anchor_sel.iter().position(|x| *x == a) {
+                                self.doc.anchor_sel.remove(i);
                             } else {
-                                self.anchor_sel.push(a);
+                                self.doc.anchor_sel.push(a);
                             }
                         } else {
-                            if !self.anchor_sel.contains(&a) {
-                                self.anchor_sel = vec![a];
+                            if !self.doc.anchor_sel.contains(&a) {
+                                self.doc.anchor_sel = vec![a];
                             }
                             self.drag = Drag::MoveAnchors {
                                 start_doc: dp,
@@ -3365,7 +3299,7 @@ impl App {
 
                     let visible = self.visible_doc_rect();
                     let candidate =
-                        select::topmost_selectable_at(self.editor.document(), dp, visible);
+                        select::topmost_selectable_at(self.doc.editor.document(), dp, visible);
                     self.drag = Drag::AnchorMarquee {
                         start: self.pointer,
                         candidate,
@@ -3378,17 +3312,17 @@ impl App {
                 let visible = self.visible_doc_rect();
 
                 // Transform handles / rotation halo win over object hits.
-                if !self.selection.is_empty() {
+                if !self.doc.selection.is_empty() {
                     if let Some(quad) =
-                        select::selection_quad(self.editor.document(), &self.selection)
+                        select::selection_quad(self.doc.editor.document(), &self.doc.selection)
                     {
-                        let to_screen = self.view.to_screen();
+                        let to_screen = self.doc.view.to_screen();
                         let scr = quad.map(|p| to_screen * p);
                         let start_xf: HashMap<ObjectId, Affine> = self
-                            .selection
+                            .doc.selection
                             .iter()
                             .filter_map(|id| {
-                                self.editor
+                                self.doc.editor
                                     .document()
                                     .object(*id)
                                     .map(|o| (*id, convert::affine(o.transform)))
@@ -3397,7 +3331,7 @@ impl App {
                         if !start_xf.is_empty() {
                             if let Some(handle) = handles::hit_handle(self.pointer, scr) {
                                 let start_bounds =
-                                    select::union_bounds(self.editor.document(), &self.selection)
+                                    select::union_bounds(self.doc.editor.document(), &self.doc.selection)
                                         .unwrap();
                                 self.drag = Drag::Scale {
                                     handle,
@@ -3410,7 +3344,7 @@ impl App {
                             }
                             if handles::hit_rotate_halo(self.pointer, scr) {
                                 let center =
-                                    select::union_bounds(self.editor.document(), &self.selection)
+                                    select::union_bounds(self.doc.editor.document(), &self.doc.selection)
                                         .unwrap()
                                         .center();
                                 self.drag = Drag::Rotate {
@@ -3430,7 +3364,7 @@ impl App {
                     last_doc: dp,
                     moved: false,
                 };
-                let doc = self.editor.document();
+                let doc = self.doc.editor.document();
                 if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
                     // Double-click a text object → edit it (temporary Type tool).
                     if double
@@ -3445,17 +3379,17 @@ impl App {
                     }
                     if self.shift_down {
                         // Shift-click toggles that object; no drag.
-                        if let Some(i) = self.selection.iter().position(|x| *x == id) {
-                            self.selection.remove(i);
+                        if let Some(i) = self.doc.selection.iter().position(|x| *x == id) {
+                            self.doc.selection.remove(i);
                         } else {
-                            self.selection.push(id);
+                            self.doc.selection.push(id);
                         }
                     } else {
                         // Click on an unselected object replaces the
                         // selection before the move; click on one already
                         // selected drags the whole selection.
-                        if !self.selection.contains(&id) {
-                            self.selection = vec![id];
+                        if !self.doc.selection.contains(&id) {
+                            self.doc.selection = vec![id];
                         }
                         self.drag = start_move(dp);
                     }
@@ -3463,13 +3397,13 @@ impl App {
                     // Empty space: a press inside the selection box drags
                     // the selection; otherwise it's a marquee.
                     let inside_box = !self.shift_down
-                        && select::union_bounds(doc, &self.selection)
+                        && select::union_bounds(doc, &self.doc.selection)
                             .is_some_and(|b| b.contains(dp));
                     if inside_box {
                         self.drag = start_move(dp);
                     } else {
                         if !self.shift_down {
-                            self.selection.clear();
+                            self.doc.selection.clear();
                         }
                         self.drag = Drag::Marquee {
                             start: self.pointer,
@@ -3508,20 +3442,20 @@ impl App {
                             let action = {
                                 let ctx = panels::Ctx {
                                     theme: &self.theme,
-                                    doc: self.editor.document(),
-                                    selection: &self.selection,
+                                    doc: self.doc.editor.document(),
+                                    selection: &self.doc.selection,
                                     active_tool: self.active_tool,
                                     pointer: self.pointer,
                                     representative: rep,
                                     active_slot: self.active_slot,
                                     shape_tool: self.last_shape_tool,
-                                    expanded: &self.expanded_groups,
+                                    expanded: &self.doc.expanded_groups,
                                     renaming: self
-                                        .rename
+                                        .doc.rename
                                         .as_ref()
                                         .map(|r| (r.target, r.buf.as_str())),
-                                    selected_layer: self.selected_layer,
-                                    selected_artboard: self.selected_artboard,
+                                    selected_layer: self.doc.selected_layer,
+                                    selected_artboard: self.doc.selected_artboard,
                                     text_style: self.active_text_style(),
                                     text_editing: self.text_edit.is_some(),
                                     font_families: &self.font_families,
@@ -3622,7 +3556,7 @@ impl App {
             }
             Drag::Pan { last } => {
                 let last = *last;
-                self.view.pan += self.pointer - last;
+                self.doc.view.pan += self.pointer - last;
                 self.drag = Drag::Pan { last: self.pointer };
                 self.request_main_redraw();
             }
@@ -3631,7 +3565,7 @@ impl App {
                 let dx = self.pointer.x - last.x;
                 if dx.abs() > 0.01 {
                     self.zoom_sign = if dx < 0.0 { -1 } else { 1 };
-                    self.view.zoom_at(2f64.powf(dx / 180.0), anchor);
+                    self.doc.view.zoom_at(2f64.powf(dx / 180.0), anchor);
                 }
                 self.drag = Drag::ScrubZoom {
                     anchor,
@@ -3859,7 +3793,7 @@ impl App {
                 last_doc,
                 moved,
             } => {
-                if moved && !self.selection.is_empty() {
+                if moved && !self.doc.selection.is_empty() {
                     let mut d = last_doc - start_doc;
                     if self.shift_down {
                         d = snap8(d);
@@ -3867,14 +3801,14 @@ impl App {
                     let delta = convert::vec2_to_core(d);
                     if self.alt_down {
                         if let Ok(new_ids) = self
-                            .editor
-                            .duplicate_objects(&self.selection.clone(), delta)
+                            .doc.editor
+                            .duplicate_objects(&self.doc.selection.clone(), delta)
                         {
-                            self.selection = new_ids;
+                            self.doc.selection = new_ids;
                         }
                     } else {
-                        let _ = self.editor.execute(Command::MoveObjects {
-                            objects: self.selection.clone(),
+                        let _ = self.doc.editor.execute(Command::MoveObjects {
+                            objects: self.doc.selection.clone(),
                             delta,
                         });
                     }
@@ -3916,8 +3850,8 @@ impl App {
                         | Tool::Text
                         | Tool::Artboard => return,
                     };
-                    if let Ok(CommandOutcome::Object(id)) = self.editor.execute(cmd) {
-                        self.selection = vec![id];
+                    if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+                        self.doc.selection = vec![id];
                         self.apply_new_appearance(id);
                     }
                     self.request_main_redraw();
@@ -3946,15 +3880,15 @@ impl App {
             } => {
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 1.0 && r.height() > 1.0 {
-                    let n = self.editor.document().artboards().len() + 1;
+                    let n = self.doc.editor.document().artboards().len() + 1;
                     if let Ok(CommandOutcome::Artboard(id)) =
-                        self.editor.execute(Command::CreateArtboard {
+                        self.doc.editor.execute(Command::CreateArtboard {
                             name: format!("Artboard {n}"),
                             rect: r,
                             index: None,
                         })
                     {
-                        self.selected_artboard = Some(id);
+                        self.doc.selected_artboard = Some(id);
                     }
                     self.request_main_redraw();
                 }
@@ -3975,8 +3909,8 @@ impl App {
                     } else {
                         Command::MoveArtboard { id, delta }
                     };
-                    if let Ok(CommandOutcome::Artboard(new_id)) = self.editor.execute(cmd) {
-                        self.selected_artboard = Some(new_id);
+                    if let Ok(CommandOutcome::Artboard(new_id)) = self.doc.editor.execute(cmd) {
+                        self.doc.selected_artboard = Some(new_id);
                     }
                     self.request_main_redraw();
                 }
@@ -3995,7 +3929,7 @@ impl App {
                     || (rect.x0 - start_rect.x0).abs() > f64::EPSILON
                     || (rect.y0 - start_rect.y0).abs() > f64::EPSILON
                 {
-                    let _ = self.editor.execute(Command::ResizeArtboard { id, rect });
+                    let _ = self.doc.editor.execute(Command::ResizeArtboard { id, rect });
                     self.request_main_redraw();
                 }
             }
@@ -4010,26 +3944,26 @@ impl App {
                         .into_iter()
                         .map(|(id, a)| (id, convert::affine_to_core(a)))
                         .collect();
-                    let _ = self.editor.execute(Command::SetTransforms { items });
+                    let _ = self.doc.editor.execute(Command::SetTransforms { items });
                     self.request_main_redraw();
                 }
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);
                 let r_doc = self
-                    .view
+                    .doc.view
                     .to_screen()
                     .inverse()
                     .transform_rect_bbox(r_screen);
-                let hits = select::within(self.editor.document(), r_doc);
+                let hits = select::within(self.doc.editor.document(), r_doc);
                 if self.shift_down {
                     for id in hits {
-                        if !self.selection.contains(&id) {
-                            self.selection.push(id);
+                        if !self.doc.selection.contains(&id) {
+                            self.doc.selection.push(id);
                         }
                     }
                 } else {
-                    self.selection = hits;
+                    self.doc.selection = hits;
                 }
                 self.marquee = None;
                 self.request_main_redraw();
@@ -4039,10 +3973,10 @@ impl App {
                 last_doc,
                 moved,
             } => {
-                if moved && !self.anchor_sel.is_empty() {
+                if moved && !self.doc.anchor_sel.is_empty() {
                     let delta = convert::vec2_to_core(last_doc - start_doc);
-                    let _ = self.editor.execute(Command::MoveAnchors {
-                        anchors: self.anchor_sel.clone(),
+                    let _ = self.doc.editor.execute(Command::MoveAnchors {
+                        anchors: self.doc.anchor_sel.clone(),
                         delta,
                     });
                     self.request_main_redraw();
@@ -4056,34 +3990,34 @@ impl App {
                     // reaches objects that weren't selected first. The
                     // objects it catches then show their contour + nodes.
                     let r_doc = self
-                        .view
+                        .doc.view
                         .to_screen()
                         .inverse()
                         .transform_rect_bbox(Rect::from_points(start, self.pointer));
-                    let hits = anchors::within(self.editor.document(), r_doc);
+                    let hits = anchors::within(self.doc.editor.document(), r_doc);
                     if self.shift_down {
                         for a in hits {
-                            if !self.anchor_sel.contains(&a) {
-                                self.anchor_sel.push(a);
+                            if !self.doc.anchor_sel.contains(&a) {
+                                self.doc.anchor_sel.push(a);
                             }
                         }
                     } else {
-                        self.anchor_sel = hits;
+                        self.doc.anchor_sel = hits;
                     }
                 } else if let Some(id) = candidate {
                     // A click on an object: select it, revealing its nodes.
                     if self.shift_down {
-                        if !self.selection.contains(&id) {
-                            self.selection.push(id);
+                        if !self.doc.selection.contains(&id) {
+                            self.doc.selection.push(id);
                         }
                     } else {
-                        self.selection = vec![id];
+                        self.doc.selection = vec![id];
                     }
-                    self.anchor_sel.clear();
+                    self.doc.anchor_sel.clear();
                 } else if !self.shift_down {
                     // A click on empty canvas: clear everything.
-                    self.selection.clear();
-                    self.anchor_sel.clear();
+                    self.doc.selection.clear();
+                    self.doc.anchor_sel.clear();
                 }
                 self.marquee = None;
                 self.request_main_redraw();
@@ -4171,7 +4105,7 @@ impl App {
                 last_doc,
                 moved: true,
             } => Some(DragPreview {
-                ids: &self.selection,
+                ids: &self.doc.selection,
                 delta: if self.shift_down {
                     snap8(*last_doc - *start_doc)
                 } else {
@@ -4182,7 +4116,7 @@ impl App {
                 anchors: None,
             }),
             Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
-                ids: &self.selection,
+                ids: &self.doc.selection,
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: Some(preview),
@@ -4198,7 +4132,7 @@ impl App {
                 dup: false,
                 xf: None,
                 anchors: Some((
-                    self.anchor_sel.as_slice(),
+                    self.doc.anchor_sel.as_slice(),
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
             }),
@@ -4239,7 +4173,7 @@ impl App {
                 if self.shift_down {
                     d = snap8(d);
                 }
-                self.editor
+                self.doc.editor
                     .document()
                     .artboards()
                     .iter()
@@ -4262,11 +4196,11 @@ impl App {
         // Resize handles around the selected artboard (or its live rect
         // mid-drag), screen-space. Only while the Artboard tool is active.
         let artboard_handles: Option<[Point; 4]> = self
-            .selected_artboard
+            .doc.selected_artboard
             .filter(|_| self.active_tool == Tool::Artboard)
             .and_then(|id| {
                 let committed = self
-                    .editor
+                    .doc.editor
                     .document()
                     .artboards()
                     .iter()
@@ -4279,7 +4213,7 @@ impl App {
                     }
                     _ => committed,
                 };
-                let vt = self.view.to_screen();
+                let vt = self.doc.view.to_screen();
                 Some(handles::rect_quad(rect).map(|p| vt * p))
             });
         let pen_preview = if self.active_tool == Tool::Pen && !self.pen.is_empty() {
@@ -4288,7 +4222,7 @@ impl App {
                 && self
                     .pen
                     .first()
-                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.view.zoom);
+                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.doc.view.zoom);
             Some(PenPreview {
                 anchors: &self.pen,
                 hover,
@@ -4302,7 +4236,7 @@ impl App {
         // anchor selection keeps this view (and suppresses the Selection
         // tool's bounding box) even after a ⌘-marquee releases ⌘.
         let direct =
-            self.effective_tool() == Tool::DirectSelect || !self.anchor_sel.is_empty();
+            self.effective_tool() == Tool::DirectSelect || !self.doc.anchor_sel.is_empty();
         // Hold Space with the Selection tool to peek at every node (read-only;
         // the bounding box stays). Direct Selection proper takes precedence.
         let peek = !direct && self.space_peek();
@@ -4314,7 +4248,7 @@ impl App {
             Vec::new()
         };
         let anchor_view = (direct || peek).then_some(AnchorView {
-            selected: &self.anchor_sel,
+            selected: &self.doc.anchor_sel,
             paths: &anchor_paths,
             peek,
         });
@@ -4322,8 +4256,8 @@ impl App {
         self.content.reset();
         let representative = self.representative();
         // App-bar status: a file error wins, else the current file name.
-        let status_text: Option<String> = self.io_error.clone().or_else(|| {
-            self.file_path
+        let status_text: Option<String> = self.doc.io_error.clone().or_else(|| {
+            self.doc.file_path
                 .as_ref()
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
@@ -4337,7 +4271,7 @@ impl App {
                 let hover = self.doc_point(self.pointer);
                 self.pen
                     .first()
-                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.view.zoom)
+                    .is_some_and(|f| (*f - hover).hypot() <= 8.0 / self.doc.view.zoom)
             };
             (self.effective_tool(), pen_closing)
         });
@@ -4350,10 +4284,10 @@ impl App {
                 &mut self.content,
                 &mut self.text,
                 &self.dock,
-                self.editor.document(),
-                &self.view,
+                self.doc.editor.document(),
+                &self.doc.view,
                 &self.theme,
-                &self.selection,
+                &self.doc.selection,
                 self.active_tool,
                 self.active_slot,
                 representative,
@@ -4369,12 +4303,12 @@ impl App {
                 hl,
                 self.redock_preview.as_ref(),
                 status_text.as_deref(),
-                &self.expanded_groups,
-                self.stroke_w,
-                self.opacity,
-                self.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
-                self.selected_layer,
-                self.selected_artboard,
+                &self.doc.expanded_groups,
+                self.doc.stroke_w,
+                self.doc.opacity,
+                self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
+                self.doc.selected_layer,
+                self.doc.selected_artboard,
                 // On Home, the modal is drawn in the overlay pass below so it
                 // lands on top of the Home screen.
                 self.newdoc.as_ref().filter(|_| self.home.is_none()),
@@ -4408,20 +4342,20 @@ impl App {
                         let body = area.body;
                         let ctx = panels::Ctx {
                             theme: &self.theme,
-                            doc: self.editor.document(),
-                            selection: &self.selection,
+                            doc: self.doc.editor.document(),
+                            selection: &self.doc.selection,
                             active_tool: self.active_tool,
                             pointer: self.pointer,
                             representative,
                             active_slot: self.active_slot,
                             shape_tool: self.last_shape_tool,
-                            expanded: &self.expanded_groups,
+                            expanded: &self.doc.expanded_groups,
                             renaming: self
-                                .rename
+                                .doc.rename
                                 .as_ref()
                                 .map(|r| (r.target, r.buf.as_str())),
-                            selected_layer: self.selected_layer,
-                            selected_artboard: self.selected_artboard,
+                            selected_layer: self.doc.selected_layer,
+                            selected_artboard: self.doc.selected_artboard,
                             text_style: panel_text_style.clone(),
                             text_editing: panel_text_editing,
                             font_families: &self.font_families,
@@ -4439,10 +4373,10 @@ impl App {
             // Live text edit — drawn over the canvas, clipped to the viewport.
             if let Some(obj) = self.text_edit.as_ref().map(|t| t.object) {
                 let vp = self.canvas_viewport();
-                let world = self.editor.document().world_transform(obj);
-                let xf = self.view.to_screen() * convert::affine(world);
+                let world = self.doc.editor.document().world_transform(obj);
+                let xf = self.doc.view.to_screen() * convert::affine(world);
                 let color = self
-                    .editor
+                    .doc.editor
                     .document()
                     .object(obj)
                     .and_then(|o| o.appearance.fill.color())
@@ -4772,7 +4706,7 @@ impl ApplicationHandler for App {
                     if !now_direct && was_direct && matches!(self.drag, Drag::None) {
                         // The ⌘ gesture ended: drop the node selection so
                         // the plain arrow's bounding box comes back.
-                        self.anchor_sel.clear();
+                        self.doc.anchor_sel.clear();
                     }
                     if now_direct != was_direct || !matches!(self.drag, Drag::None) {
                         self.request_main_redraw();
@@ -4826,7 +4760,7 @@ impl ApplicationHandler for App {
                     self.font_menu_key(&event);
                     return;
                 }
-                if self.rename.is_some() {
+                if self.doc.rename.is_some() {
                     self.rename_key(&event);
                     return;
                 }
@@ -4846,9 +4780,9 @@ impl ApplicationHandler for App {
                             // just made selected.
                             self.set_tool(Tool::Select);
                             if let Some(id) = obj
-                                .filter(|id| self.editor.document().object(*id).is_some())
+                                .filter(|id| self.doc.editor.document().object(*id).is_some())
                             {
-                                self.selection = vec![id];
+                                self.doc.selection = vec![id];
                             }
                             self.request_main_redraw();
                             return;
@@ -4891,33 +4825,33 @@ impl ApplicationHandler for App {
                             // handled
                         } else {
                             let _ = if redo {
-                                self.editor.redo()
+                                self.doc.editor.redo()
                             } else {
-                                self.editor.undo()
+                                self.doc.editor.undo()
                             };
                             self.prune_selection();
                             self.request_main_redraw();
                         }
                     }
                     PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
-                        if pressed && !self.selection.is_empty() =>
+                        if pressed && !self.doc.selection.is_empty() =>
                     {
-                        let _ = self.editor.execute(Command::DeleteObjects {
-                            ids: std::mem::take(&mut self.selection),
+                        let _ = self.doc.editor.execute(Command::DeleteObjects {
+                            ids: std::mem::take(&mut self.doc.selection),
                         });
                         self.request_main_redraw();
                     }
                     // ⌘ shortcuts (copy / paste / duplicate / group / all).
                     PhysicalKey::Code(code) if pressed && self.cmd_down => match code {
-                        KeyCode::KeyC if !self.selection.is_empty() => {
-                            let ids = self.selection.clone();
+                        KeyCode::KeyC if !self.doc.selection.is_empty() => {
+                            let ids = self.doc.selection.clone();
                             self.copy_selection(&ids);
                         }
-                        KeyCode::KeyX if !self.selection.is_empty() => {
-                            let ids = self.selection.clone();
+                        KeyCode::KeyX if !self.doc.selection.is_empty() => {
+                            let ids = self.doc.selection.clone();
                             self.copy_selection(&ids);
-                            let _ = self.editor.execute(Command::DeleteObjects {
-                                ids: std::mem::take(&mut self.selection),
+                            let _ = self.doc.editor.execute(Command::DeleteObjects {
+                                ids: std::mem::take(&mut self.doc.selection),
                             });
                             self.request_main_redraw();
                         }
@@ -4927,31 +4861,31 @@ impl ApplicationHandler for App {
                         KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
                         KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
                         KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
-                        KeyCode::KeyD if !self.selection.is_empty() => {
-                            if let Ok(ids) = self.editor.duplicate_objects(
-                                &self.selection,
+                        KeyCode::KeyD if !self.doc.selection.is_empty() => {
+                            if let Ok(ids) = self.doc.editor.duplicate_objects(
+                                &self.doc.selection,
                                 amalith_core::Vec2::new(16.0, 16.0),
                             ) {
-                                self.selection = ids;
+                                self.doc.selection = ids;
                             }
                             self.request_main_redraw();
                         }
                         KeyCode::KeyG if self.shift_down => {
-                            if let Ok(freed) = self.editor.ungroup(&self.selection) {
+                            if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
                                 if !freed.is_empty() {
-                                    self.selection = freed;
+                                    self.doc.selection = freed;
                                 }
                             }
                             self.request_main_redraw();
                         }
-                        KeyCode::KeyG if self.selection.len() > 1 => {
+                        KeyCode::KeyG if self.doc.selection.len() > 1 => {
                             if let Ok(CommandOutcome::Object(g)) =
-                                self.editor.execute(Command::Group {
-                                    ids: self.selection.clone(),
+                                self.doc.editor.execute(Command::Group {
+                                    ids: self.doc.selection.clone(),
                                     name: None,
                                 })
                             {
-                                self.selection = vec![g];
+                                self.doc.selection = vec![g];
                             }
                             self.request_main_redraw();
                         }
@@ -5001,8 +4935,8 @@ impl ApplicationHandler for App {
                                 } else {
                                     self.pen.clear();
                                     self.pen_redo.clear();
-                                    self.anchor_sel.clear();
-                                    self.selection.clear();
+                                    self.doc.anchor_sel.clear();
+                                    self.doc.selection.clear();
                                 }
                                 self.request_main_redraw();
                             }
@@ -5020,7 +4954,7 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::PinchGesture { delta, .. } if Some(id) == self.main_id => {
-                self.view.zoom_at(1.0 + delta, self.pointer);
+                self.doc.view.zoom_at(1.0 + delta, self.pointer);
             }
             WindowEvent::MouseWheel { delta, .. } if Some(id) == self.main_id => {
                 let (dx, dy) = match delta {
@@ -5092,10 +5026,10 @@ impl ApplicationHandler for App {
                 if self.cmd_down {
                     // ⌘ + scroll → zoom at the cursor.
                     let factor = 2f64.powf(dy / 180.0);
-                    self.view.zoom_at(factor, self.pointer);
+                    self.doc.view.zoom_at(factor, self.pointer);
                 } else {
                     // Plain scroll → pan.
-                    self.view.pan += Vec2::new(dx, dy);
+                    self.doc.view.pan += Vec2::new(dx, dy);
                 }
             }
             WindowEvent::RedrawRequested => self.redraw(id),
