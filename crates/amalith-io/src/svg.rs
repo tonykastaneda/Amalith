@@ -946,7 +946,6 @@ mod tests {
     /// producing non-finite coordinates.
     #[test]
     fn import_heavy_illustrator_path_keeps_geometry_intact() {
-        use amalith_core::geom::{anchor_indices, anchor_position, translate_anchor};
         use amalith_core::Vec2;
         use kurbo::PathEl;
 
@@ -1014,33 +1013,33 @@ mod tests {
             "four flattened subpaths"
         );
 
-        // The per-subpath anchor walk added for direct selection must cope
-        // with a 1400+ element, 4-subpath path: every reported anchor index
-        // resolves to a finite position, and translating each in turn never
-        // panics and never introduces a non-finite coordinate.
-        let anchors = anchor_indices(&path.geometry);
+        // The anchor model must cope with a 1400+ element, 4-subpath
+        // path: every anchor resolves to a finite position, and
+        // translating each in turn never panics or introduces a
+        // non-finite coordinate.
+        let n = amalith_core::anchor_count(path.subpaths());
         assert!(
-            (1000..elements.len()).contains(&anchors.len()),
-            "expected most elements to be editable anchors, got {}",
-            anchors.len()
+            (1000..elements.len()).contains(&n),
+            "expected most elements to be editable anchors, got {n}"
         );
-        for &index in &anchors {
-            let position = anchor_position(&path.geometry, index)
-                .unwrap_or_else(|| panic!("anchor {index} has no position"));
-            assert!(position.x.is_finite() && position.y.is_finite());
+        for i in 0..n {
+            let a = amalith_core::anchor_at(path.subpaths(), i)
+                .unwrap_or_else(|| panic!("anchor {i} missing"));
+            assert!(a.point.x.is_finite() && a.point.y.is_finite());
         }
-        let mut moved = path.geometry.clone();
-        for &index in &anchors {
-            translate_anchor(&mut moved, index, Vec2::new(1.5, -2.0));
+        let mut sp = path.subpaths().to_vec();
+        for i in 0..n {
+            amalith_core::translate_anchor_n(&mut sp, i, Vec2::new(1.5, -2.0));
         }
+        let moved = amalith_core::subpaths_to_bezpath(&sp);
         assert!(
             moved.elements().iter().flat_map(coords).all(f64::is_finite),
             "translating every anchor must keep coordinates finite"
         );
         assert_eq!(
-            moved.elements().len(),
-            elements.len(),
-            "translating anchors must not add or drop elements"
+            moved.elements().iter().filter(|e| matches!(e, PathEl::MoveTo(_))).count(),
+            4,
+            "the four subpaths survive the anchor round-trip"
         );
     }
 

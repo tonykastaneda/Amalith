@@ -20,7 +20,11 @@ use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
 /// or `ArtworkFile` change shape in a way older readers can't tolerate.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// v2: path objects store an anchor/handle model (`PathData::subpaths`)
+/// instead of a flat `geometry` BezPath. Readers still accept v1's
+/// `{ "geometry": ... }` shape (see `PathData`'s deserialize shim).
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DocumentManifest {

@@ -97,6 +97,9 @@ pub struct Subpath {
 #[serde(from = "PathDataRepr")]
 pub struct PathData {
     subpaths: Vec<Subpath>,
+    /// Derived cache, rebuilt from `subpaths` on every mutation and on
+    /// load — never serialised.
+    #[serde(skip)]
     pub geometry: BezPath,
 }
 
@@ -435,14 +438,69 @@ pub fn insert_anchor(subpaths: &mut [Subpath], seg: usize, t: f64) -> Option<usi
     None
 }
 
-/// Remove anchor `n`. Neighbouring handles are left as-is (a curvature
-/// re-fit is future polish). Subpaths that fall below two anchors are
+/// Remove anchor `n`. When it sits between two other anchors, the
+/// neighbours' facing handles are re-fitted so the single replacement
+/// segment approximates the two it replaces (cubic through the points at
+/// 1/3 and 2/3 of the old pair). Subpaths that fall below two anchors are
 /// dropped.
 pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
+    use kurbo::{CubicBez, ParamCurve};
+
     let Some((si, ai)) = locate(subpaths, n) else {
         return;
     };
-    subpaths[si].anchors.remove(ai);
+    let sp = &mut subpaths[si];
+    let m = sp.anchors.len();
+    let prev_i = if ai > 0 {
+        Some(ai - 1)
+    } else if sp.closed && m > 2 {
+        Some(m - 1)
+    } else {
+        None
+    };
+    let next_i = if ai + 1 < m {
+        Some(ai + 1)
+    } else if sp.closed && m > 2 {
+        Some(0)
+    } else {
+        None
+    };
+    if let (Some(pi), Some(ni)) = (prev_i, next_i) {
+        let a = sp.anchors[pi];
+        let b = sp.anchors[ai];
+        let c = sp.anchors[ni];
+        let straight = a.handle_out.is_none()
+            && b.handle_in.is_none()
+            && b.handle_out.is_none()
+            && c.handle_in.is_none();
+        if straight {
+            sp.anchors[pi].handle_out = None;
+            sp.anchors[ni].handle_in = None;
+        } else {
+            let s1 = CubicBez::new(
+                a.point,
+                a.handle_out.unwrap_or(a.point),
+                b.handle_in.unwrap_or(b.point),
+                b.point,
+            );
+            let s2 = CubicBez::new(
+                b.point,
+                b.handle_out.unwrap_or(b.point),
+                c.handle_in.unwrap_or(c.point),
+                c.point,
+            );
+            // Points at 1/3 and 2/3 of the combined a..c walk.
+            let q1 = s1.eval(2.0 / 3.0).to_vec2();
+            let q2 = s2.eval(1.0 / 3.0).to_vec2();
+            let p0 = a.point.to_vec2();
+            let p3 = c.point.to_vec2();
+            let p1 = (p0 * -5.0 + q1 * 18.0 - q2 * 9.0 + p3 * 2.0) * (1.0 / 6.0);
+            let p2 = (p0 * 2.0 - q1 * 9.0 + q2 * 18.0 - p3 * 5.0) * (1.0 / 6.0);
+            sp.anchors[pi].handle_out = Some(p1.to_point());
+            sp.anchors[ni].handle_in = Some(p2.to_point());
+        }
+    }
+    sp.anchors.remove(ai);
     subpaths.retain(|s| s.anchors.len() >= 2);
 }
 
@@ -949,6 +1007,53 @@ mod path_data_tests {
         let mut sp = open_curve();
         delete_anchor(&mut sp, 0);
         assert!(sp.is_empty(), "a 1-anchor subpath is dropped");
+    }
+
+    #[test]
+    fn delete_middle_anchor_keeps_curve_close() {
+        use kurbo::{ParamCurve, ParamCurveNearest};
+        // A gentle S made of two cubics through three anchors.
+        let mut sp = vec![Subpath {
+            anchors: vec![
+                Anchor {
+                    point: Point::new(0.0, 0.0),
+                    handle_in: None,
+                    handle_out: Some(Point::new(20.0, 40.0)),
+                    mode: HandleMode::Smooth,
+                },
+                Anchor {
+                    point: Point::new(60.0, 40.0),
+                    handle_in: Some(Point::new(40.0, 40.0)),
+                    handle_out: Some(Point::new(80.0, 40.0)),
+                    mode: HandleMode::Smooth,
+                },
+                Anchor {
+                    point: Point::new(120.0, 0.0),
+                    handle_in: Some(Point::new(100.0, 40.0)),
+                    handle_out: None,
+                    mode: HandleMode::Smooth,
+                },
+            ],
+            closed: false,
+        }];
+        let before = subpaths_to_bezpath(&sp);
+        delete_anchor(&mut sp, 1);
+        assert_eq!(anchor_count(&sp), 2);
+        let after = subpaths_to_bezpath(&sp);
+        // Sample the original curve; the refitted single segment should
+        // stay within a few units of it.
+        let segs: Vec<_> = before.segments().collect();
+        for i in 0..=12 {
+            let u = (i as f64 / 12.0) * 2.0;
+            let seg = (u.floor() as usize).min(segs.len() - 1);
+            let p = segs[seg].eval((u - seg as f64).min(1.0));
+            let d = after
+                .segments()
+                .map(|s| s.nearest(p, 1e-3).distance_sq)
+                .fold(f64::INFINITY, f64::min)
+                .sqrt();
+            assert!(d < 6.0, "sample {u} drifted {d}");
+        }
     }
 
     #[test]
