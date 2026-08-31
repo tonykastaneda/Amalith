@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: "Amalith — Open-source vector design",
   description: "A free, open-source, cross-platform professional vector editor with familiar workflows and one shared command engine.",
-  icons: { icon: `${basePath}/brand/amalith-mark.svg`, shortcut: `${basePath}/brand/amalith-mark.svg` },
+  icons: { icon: `${basePath}/brand/favicon.svg`, shortcut: `${basePath}/brand/favicon.svg` },
   openGraph: {
     title: "Amalith — Open-source vector design",
     description: "A free, open-source professional vector editor built for familiar workflows.",
