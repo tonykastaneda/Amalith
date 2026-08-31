@@ -192,13 +192,17 @@ enum Drag {
     },
 }
 
-/// A command reachable from the menu bar (native on macOS, and — later —
-/// an in-window bar elsewhere). Keyboard shortcuts still handle these
-/// directly; this is the same set routed through one dispatcher.
+/// A command reachable from the menu bar (native NSMenu on macOS, native
+/// HMENU on Windows). Keyboard shortcuts still handle these directly; this
+/// is the same set routed through one dispatcher.
 #[derive(Clone, Copy, Debug)]
 enum MenuAction {
     About,
     Preferences,
+    /// Windows "Exit". macOS uses the predefined Quit item and never emits
+    /// this. Handled in `about_to_wait`, where the event loop is reachable.
+    #[cfg(target_os = "windows")]
+    Quit,
     New,
     Open,
     Save,
@@ -448,8 +452,9 @@ struct App {
     /// Which of our windows currently hold OS focus. Non-empty ⇒ Amalith
     /// is the active app, and floating panels stay above the main window.
     focused: std::collections::HashSet<WindowId>,
-    /// The macOS application menu bar, once the app has resumed.
-    #[cfg(target_os = "macos")]
+    /// The native menu bar (macOS NSMenu / Windows HMENU), once the app has
+    /// resumed.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_menu: Option<NativeMenu>,
 }
 
@@ -525,7 +530,7 @@ impl App {
             about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_menu: None,
         }
     }
@@ -1487,6 +1492,10 @@ impl App {
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
         match action {
+            // Quit is dispatched in `about_to_wait`, which holds the event
+            // loop; it never reaches here.
+            #[cfg(target_os = "windows")]
+            MenuAction::Quit => {}
             MenuAction::About => {
                 if self.about.is_none() {
                     self.about = about::About::load();
@@ -2270,7 +2279,7 @@ impl App {
         } else {
             self.dock.remove(pid);
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);
         }
@@ -2296,7 +2305,7 @@ impl App {
                 },
             );
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);
         }
@@ -4156,8 +4165,11 @@ impl ApplicationHandler for App {
     /// Fires every loop iteration. Requesting redraws here guarantees the
     /// first frame paints even if the post-`resumed` `request_redraw` was
     /// dropped; once running it just tops up the vsync-throttled loop.
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        #[cfg(target_os = "macos")]
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Only the Windows path calls `event_loop.exit()` from here.
+        #[cfg(not(target_os = "windows"))]
+        let _ = event_loop;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let actions = self
                 .native_menu
@@ -4165,6 +4177,11 @@ impl ApplicationHandler for App {
                 .map(NativeMenu::drain)
                 .unwrap_or_default();
             for action in actions {
+                #[cfg(target_os = "windows")]
+                if matches!(action, MenuAction::Quit) {
+                    event_loop.exit();
+                    continue;
+                }
                 self.run_menu_action(action);
             }
         }
@@ -4220,9 +4237,9 @@ impl ApplicationHandler for App {
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
         self.main_id = Some(wid);
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let m = NativeMenu::build();
+            let m = NativeMenu::build(&self.hosts[&wid].window);
             m.sync_window(&self.dock);
             self.native_menu = Some(m);
         }
@@ -5445,16 +5462,21 @@ fn paint_main(
         None,
         &Rect::new(0.0, APP_BAR_H - 1.0, width, APP_BAR_H),
     );
-    let name = "Amalith Ver. Alpha";
-    let tw = text.measure(name, 12.5);
-    text.draw(
-        scene,
-        name,
-        12.5,
-        Color::from_rgb8(0xcd, 0xcd, 0xcd),
-        (width - tw) * 0.5,
-        APP_BAR_H * 0.5 + 4.5,
-    );
+    // The name sits in this strip only where the OS title bar is hidden
+    // (macOS). Elsewhere the native title bar already shows it.
+    #[cfg(target_os = "macos")]
+    {
+        let name = "Amalith Ver. Alpha";
+        let tw = text.measure(name, 12.5);
+        text.draw(
+            scene,
+            name,
+            12.5,
+            Color::from_rgb8(0xcd, 0xcd, 0xcd),
+            (width - tw) * 0.5,
+            APP_BAR_H * 0.5 + 4.5,
+        );
+    }
     if let Some(status) = status {
         let sw = text.measure(status, 11.5);
         text.draw(
@@ -5473,11 +5495,7 @@ fn paint_main(
     }
 }
 
-/// The macOS application menu bar. Items carry the same accelerators as
-/// the in-app keyboard shortcuts; clicks arrive on `muda`'s global
-/// channel, drained each loop in `about_to_wait`.
-#[cfg(target_os = "macos")]
-/// The panels the Window menu lists, alphabetical like Illustrator.
+/// The panels the Panels menu lists, alphabetical like Illustrator.
 const WINDOW_PANELS: [(&str, &str); 5] = [
     ("artboards", "Artboards"),
     ("character", "Character"),
@@ -5486,25 +5504,38 @@ const WINDOW_PANELS: [(&str, &str); 5] = [
     ("tools", "Tools"),
 ];
 
+/// The native menu bar: an `NSMenu` on macOS, an `HMENU` attached to the
+/// main window on Windows. Items carry the same accelerators as the in-app
+/// keyboard shortcuts; clicks arrive on `muda`'s global channel, drained
+/// each loop in `about_to_wait`. (On Windows `muda` subclasses the window
+/// to catch clicks; accelerator keystrokes still go through the app's own
+/// keyboard handler, so the menu text is a label only there.)
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct NativeMenu {
     items: Vec<(muda::MenuId, MenuAction)>,
-    /// Window-menu checkmarks, keyed by panel id, updated as panels
+    /// Panels-menu checkmarks, keyed by panel id, updated as panels
     /// open/close.
-    #[cfg(target_os = "macos")]
     window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl NativeMenu {
-    fn build() -> Self {
+    fn build(window: &Window) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
             CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
         };
-        let sup = Some(Modifiers::SUPER);
-        let sup_shift = Some(Modifiers::SUPER | Modifiers::SHIFT);
+        // macOS puts modifier symbols on the Cmd key; Windows on Ctrl.
+        #[cfg(target_os = "macos")]
+        let prim = Modifiers::SUPER;
+        #[cfg(not(target_os = "macos"))]
+        let prim = Modifiers::CONTROL;
+        #[cfg(target_os = "macos")]
+        let _ = window;
+        let sup = Some(prim);
+        let sup_shift = Some(prim | Modifiers::SHIFT);
         let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
 
         let new_i = mk("New", sup, Code::KeyN);
@@ -5531,16 +5562,17 @@ impl NativeMenu {
             true,
             Some(Accelerator::new(sup, Code::Comma)),
         );
+        // macOS has a real "Quit" that ends the process cleanly. Windows
+        // has no app menu convention and `PostQuitMessage` doesn't stop
+        // winit's loop, so use a plain item routed to `event_loop.exit()`.
+        #[cfg(target_os = "macos")]
+        let quit_i = PredefinedMenuItem::quit(Some("Quit Amalith"));
+        #[cfg(not(target_os = "macos"))]
+        let quit_i = MenuItem::new("Exit", true, None);
         let app = Submenu::with_items(
             "Amalith",
             true,
-            &[
-                &about_i,
-                &sep(),
-                &prefs_i,
-                &sep(),
-                &PredefinedMenuItem::quit(Some("Quit Amalith")),
-            ],
+            &[&about_i, &sep(), &prefs_i, &sep(), &quit_i],
         )
         .expect("app menu");
         let file = Submenu::with_items(
@@ -5571,14 +5603,27 @@ impl NativeMenu {
             .collect();
         // "Window" is a name AppKit reserves for its own window menu, so
         // call ours "Panels".
-        let window = Submenu::with_items("Panels", true, &window_refs).expect("panels menu");
+        let panels_menu = Submenu::with_items("Panels", true, &window_refs).expect("panels menu");
 
         let menu = Menu::new();
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
-        menu.append(&window).expect("append panels menu");
+        menu.append(&panels_menu).expect("append panels menu");
+        #[cfg(target_os = "macos")]
         menu.init_for_nsapp();
+        #[cfg(target_os = "windows")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(w) = handle.as_raw() {
+                    // Safe: `w.hwnd` is the live main window's handle.
+                    unsafe {
+                        let _ = menu.init_for_hwnd(w.hwnd.get());
+                    }
+                }
+            }
+        }
 
         let items = vec![
             (about_i.id().clone(), MenuAction::About),
@@ -5604,6 +5649,10 @@ impl NativeMenu {
         for (id, item) in &window_checks {
             items.push((item.id().clone(), MenuAction::TogglePanel(id)));
         }
+        // The macOS Quit is predefined and self-handles; the Windows Exit
+        // item routes through our dispatcher.
+        #[cfg(target_os = "windows")]
+        items.push((quit_i.id().clone(), MenuAction::Quit));
         Self {
             items,
             window_checks,
