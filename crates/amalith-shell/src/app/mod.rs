@@ -38,7 +38,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
-    recent, sample, select, stroke_panel, textedit, Theme,
+    recent, sample, select, settings, stroke_panel, textedit, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -538,7 +538,7 @@ impl App {
             layer_query: String::new(),
             layer_search_focused: false,
             main_resizable: true,
-            settings: prefs::Settings::default(),
+            settings: settings::load(),
             prefs: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,

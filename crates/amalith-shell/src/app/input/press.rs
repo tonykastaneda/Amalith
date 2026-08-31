@@ -27,10 +27,22 @@ impl App {
                 prefs::Hit::Ok => {
                     self.settings = self.prefs.take().unwrap().working;
                     self.apply_theme_accent();
+                    settings::save(&self.settings);
                 }
                 prefs::Hit::SetAccent(rgb) => {
                     if let Some(p) = &mut self.prefs {
                         p.working.accent = rgb;
+                    }
+                }
+                prefs::Hit::StartRecording(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.recording = Some(i);
+                    }
+                }
+                prefs::Hit::ResetKeys => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.tool_keys = prefs::Settings::default().tool_keys;
+                        p.recording = None;
                     }
                 }
                 prefs::Hit::Category(i) => {

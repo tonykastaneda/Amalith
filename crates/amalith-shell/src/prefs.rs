@@ -5,12 +5,108 @@
 //! v1 has one category (General) with a few genuinely-wired settings; more
 //! categories slot into [`CATEGORIES`] as they gain real controls.
 
+use std::fmt;
+
 use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
+use winit::keyboard::KeyCode;
 
 use crate::text::TextContext;
 use crate::theme::Theme;
+use crate::tool::Tool;
+
+/// A tool shortcut: a letter/digit key, optionally with Shift.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct KeyChord {
+    pub code: KeyCode,
+    pub shift: bool,
+}
+
+impl KeyChord {
+    fn plain(code: KeyCode) -> Self {
+        Self { code, shift: false }
+    }
+    fn with_shift(code: KeyCode) -> Self {
+        Self { code, shift: true }
+    }
+}
+
+impl fmt::Display for KeyChord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let c = key_char(self.code).unwrap_or('?');
+        if self.shift {
+            write!(f, "Shift+{c}")
+        } else {
+            write!(f, "{c}")
+        }
+    }
+}
+
+impl std::str::FromStr for KeyChord {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, ()> {
+        let s = s.trim();
+        let (shift, rest) = s
+            .strip_prefix("Shift+")
+            .map_or((false, s), |r| (true, r));
+        let mut ch = rest.chars();
+        let (Some(c), None) = (ch.next(), ch.next()) else {
+            return Err(());
+        };
+        key_code(c).map(|code| KeyChord { code, shift }).ok_or(())
+    }
+}
+
+/// `KeyCode` → its single display character (A–Z, 0–9). `None` for keys we
+/// don't allow as tool shortcuts.
+pub fn key_char(code: KeyCode) -> Option<char> {
+    use KeyCode::*;
+    Some(match code {
+        KeyA => 'A', KeyB => 'B', KeyC => 'C', KeyD => 'D', KeyE => 'E',
+        KeyF => 'F', KeyG => 'G', KeyH => 'H', KeyI => 'I', KeyJ => 'J',
+        KeyK => 'K', KeyL => 'L', KeyM => 'M', KeyN => 'N', KeyO => 'O',
+        KeyP => 'P', KeyQ => 'Q', KeyR => 'R', KeyS => 'S', KeyT => 'T',
+        KeyU => 'U', KeyV => 'V', KeyW => 'W', KeyX => 'X', KeyY => 'Y',
+        KeyZ => 'Z',
+        Digit0 => '0', Digit1 => '1', Digit2 => '2', Digit3 => '3',
+        Digit4 => '4', Digit5 => '5', Digit6 => '6', Digit7 => '7',
+        Digit8 => '8', Digit9 => '9',
+        _ => return None,
+    })
+}
+
+/// Inverse of [`key_char`], case-insensitive.
+pub fn key_code(c: char) -> Option<KeyCode> {
+    use KeyCode::*;
+    Some(match c.to_ascii_uppercase() {
+        'A' => KeyA, 'B' => KeyB, 'C' => KeyC, 'D' => KeyD, 'E' => KeyE,
+        'F' => KeyF, 'G' => KeyG, 'H' => KeyH, 'I' => KeyI, 'J' => KeyJ,
+        'K' => KeyK, 'L' => KeyL, 'M' => KeyM, 'N' => KeyN, 'O' => KeyO,
+        'P' => KeyP, 'Q' => KeyQ, 'R' => KeyR, 'S' => KeyS, 'T' => KeyT,
+        'U' => KeyU, 'V' => KeyV, 'W' => KeyW, 'X' => KeyX, 'Y' => KeyY,
+        'Z' => KeyZ,
+        '0' => Digit0, '1' => Digit1, '2' => Digit2, '3' => Digit3,
+        '4' => Digit4, '5' => Digit5, '6' => Digit6, '7' => Digit7,
+        '8' => Digit8, '9' => Digit9,
+        _ => return None,
+    })
+}
+
+/// The factory-default shortcut for each tool (`None` = unbound).
+pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
+    use KeyCode::*;
+    Some(match tool {
+        Tool::Select => KeyChord::plain(KeyV),
+        Tool::DirectSelect => KeyChord::plain(KeyA),
+        Tool::Pen => KeyChord::plain(KeyP),
+        Tool::Text => KeyChord::plain(KeyT),
+        Tool::Rectangle => KeyChord::plain(KeyM),
+        Tool::Ellipse => KeyChord::plain(KeyL),
+        Tool::Artboard => KeyChord::with_shift(KeyO),
+        Tool::RoundedRect | Tool::Polygon | Tool::Star => return None,
+    })
+}
 
 /// The settings the app actually reads. Cheap to copy; the modal edits a
 /// working copy and only writes back on OK.
@@ -24,6 +120,14 @@ pub struct Settings {
     pub home_on_last_close: bool,
     /// App accent colour, sRGB. Feeds [`crate::theme::Theme::set_accent`].
     pub accent: [u8; 3],
+    /// Tool shortcut per [`Tool::ALL`] position.
+    pub tool_keys: [Option<KeyChord>; Tool::ALL.len()],
+}
+
+impl Settings {
+    fn default_tool_keys() -> [Option<KeyChord>; Tool::ALL.len()] {
+        std::array::from_fn(|i| default_tool_key(Tool::ALL[i]))
+    }
 }
 
 impl Default for Settings {
@@ -33,6 +137,7 @@ impl Default for Settings {
             show_tooltips: true,
             home_on_last_close: true,
             accent: ACCENTS[0].1,
+            tool_keys: Settings::default_tool_keys(),
         }
     }
 }
@@ -47,7 +152,7 @@ pub const ACCENTS: [(&str, [u8; 3]); 6] = [
     ("Graphite", [0x9a, 0x9a, 0x9a]),
 ];
 
-pub const CATEGORIES: [&str; 1] = ["General"];
+pub const CATEGORIES: [&str; 2] = ["General", "Keyboard"];
 
 const W: f64 = 660.0;
 const H: f64 = 440.0;
@@ -65,6 +170,11 @@ pub struct Prefs {
     check_tips: Rect,
     check_home: Rect,
     accent_swatches: Vec<(Rect, [u8; 3])>,
+    /// Keyboard page: (row rect, `Tool::ALL` index).
+    bind_rows: Vec<(Rect, usize)>,
+    /// `Tool::ALL` index currently capturing a keypress, if any.
+    pub recording: Option<usize>,
+    reset_keys: Rect,
     cancel: Rect,
     ok: Rect,
 }
@@ -77,6 +187,10 @@ pub enum Hit {
     ToggleTips,
     ToggleHome,
     SetAccent([u8; 3]),
+    /// Keyboard page: start capturing a key for `Tool::ALL[i]`.
+    StartRecording(usize),
+    /// Keyboard page: restore the factory tool shortcuts.
+    ResetKeys,
     Cancel,
     Ok,
 }
@@ -93,6 +207,9 @@ impl Prefs {
             check_tips: Rect::ZERO,
             check_home: Rect::ZERO,
             accent_swatches: Vec::new(),
+            bind_rows: Vec::new(),
+            recording: None,
+            reset_keys: Rect::ZERO,
             cancel: Rect::ZERO,
             ok: Rect::ZERO,
         }
@@ -127,6 +244,14 @@ impl Prefs {
             if r.contains(p) {
                 return Hit::SetAccent(*rgb);
             }
+        }
+        for (r, i) in &self.bind_rows {
+            if r.contains(p) {
+                return Hit::StartRecording(*i);
+            }
+        }
+        if self.reset_keys.contains(p) {
+            return Hit::ResetKeys;
         }
         if self.cancel.contains(p) {
             return Hit::Cancel;
@@ -191,8 +316,26 @@ impl Prefs {
             &Rect::new(ox + SIDEBAR_W, oy + 37.0, ox + SIDEBAR_W + 1.0, oy + H - 52.0),
         );
 
-        // General page.
         let px = ox + SIDEBAR_W + PAD;
+
+        // Rects from the page that isn't shown must not stay hittable.
+        self.accent_swatches.clear();
+        self.bind_rows.clear();
+        self.inc_up = Rect::ZERO;
+        self.inc_down = Rect::ZERO;
+        self.check_tips = Rect::ZERO;
+        self.check_home = Rect::ZERO;
+        self.reset_keys = Rect::ZERO;
+
+        if self.category == 1 {
+            self.paint_keyboard(scene, tcx, theme, px, oy);
+            let by = oy + H - 40.0;
+            self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
+            self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+            return;
+        }
+
+        // General page.
         let mut cy = oy + 60.0;
         tcx.draw(scene, "General", 13.0, theme.text, px, cy);
         cy += 30.0;
@@ -231,7 +374,6 @@ impl Prefs {
 
         // Accent colour swatches.
         tcx.draw(scene, "Accent Color", 12.0, theme.text_dim, px, cy + 12.0);
-        self.accent_swatches.clear();
         let mut sx = px + 170.0;
         for (_, rgb) in ACCENTS {
             let sw = Rect::new(sx, cy, sx + 20.0, cy + 20.0);
@@ -258,7 +400,77 @@ impl Prefs {
         // Footer buttons.
         let by = oy + H - 40.0;
         self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
-        self.cancel = button(scene, tcx, theme, ox + W - PAD - 76.0 - 12.0 - 86.0, by, "Cancel", false);
+        self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+    }
+
+    /// The Keyboard page — one row per tool with its current shortcut.
+    fn paint_keyboard(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        theme: &Theme,
+        px: f64,
+        oy: f64,
+    ) {
+        let mut cy = oy + 60.0;
+        tcx.draw(scene, "Tool Shortcuts", 13.0, theme.text, px, cy);
+        cy += 12.0;
+        tcx.draw(
+            scene,
+            "Click a shortcut, then press a key. Shift is allowed.",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 12.0,
+        );
+        cy += 26.0;
+
+        let row_w = W - SIDEBAR_W - PAD * 2.0;
+        for (i, tool) in Tool::ALL.iter().enumerate() {
+            let row = Rect::new(px, cy, px + row_w, cy + 24.0);
+            let hot = self.recording == Some(i);
+            if hot {
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    theme.accent.with_alpha(0.18),
+                    None,
+                    &row.to_rounded_rect(4.0),
+                );
+            }
+            tcx.draw(scene, tool.label(), 12.0, theme.text, px + 4.0, cy + 16.0);
+
+            let chip = Rect::new(row.x1 - 92.0, cy + 1.0, row.x1, cy + 23.0);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(4.0));
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                if hot { theme.accent } else { theme.border },
+                None,
+                &chip.to_rounded_rect(4.0),
+            );
+            let label = if hot {
+                "Press a key…".to_string()
+            } else {
+                self.working.tool_keys[i]
+                    .map_or_else(|| "—".to_string(), |c| c.to_string())
+            };
+            let lw = tcx.measure(&label, 11.5);
+            tcx.draw(
+                scene,
+                &label,
+                11.5,
+                if hot { theme.accent } else { theme.text },
+                chip.center().x - lw / 2.0,
+                cy + 16.0,
+            );
+
+            self.bind_rows.push((row, i));
+            cy += 27.0;
+        }
+
+        cy += 8.0;
+        self.reset_keys = button(scene, tcx, theme, px, cy, "Reset", false);
     }
 }
 

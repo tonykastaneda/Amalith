@@ -7,6 +7,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 
 use amalith_commands::{Command, CommandOutcome};
 
+use crate::prefs::{self, KeyChord};
 use crate::textedit;
 use crate::tool::Tool;
 
@@ -14,11 +15,44 @@ use super::super::{App, PastePlace};
 
 impl App {
     pub(in crate::app) fn on_key(&mut self, event: KeyEvent) {
-        // The Preferences modal swallows every key; Esc = cancel.
+        // The Preferences modal swallows every key. While a shortcut row
+        // is "recording", the next key becomes that tool's binding;
+        // otherwise Esc closes the modal.
         if self.prefs.is_some() {
-            if event.state.is_pressed()
-                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
-            {
+            if !event.state.is_pressed() {
+                return;
+            }
+            let recording = self.prefs.as_ref().and_then(|p| p.recording);
+            if let Some(i) = recording {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        if let Some(p) = self.prefs.as_mut() {
+                            p.recording = None;
+                        }
+                    }
+                    PhysicalKey::Code(code) if prefs::key_char(code).is_some() => {
+                        let chord = KeyChord {
+                            code,
+                            shift: self.shift_down,
+                        };
+                        if let Some(p) = self.prefs.as_mut() {
+                            // Steal the chord from whichever tool holds it.
+                            for k in p.working.tool_keys.iter_mut() {
+                                if *k == Some(chord) {
+                                    *k = None;
+                                }
+                            }
+                            p.working.tool_keys[i] = Some(chord);
+                            p.recording = None;
+                        }
+                    }
+                    // A non-letter/digit key: ignore, stay recording.
+                    _ => {}
+                }
+                self.request_main_redraw();
+                return;
+            }
+            if matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) {
                 self.prefs = None;
                 self.request_main_redraw();
             }
@@ -240,14 +274,23 @@ impl App {
                         }
                         self.request_main_redraw();
                     }
-                    KeyCode::KeyV => self.set_tool(Tool::Select),
-                    KeyCode::KeyA => self.set_tool(Tool::DirectSelect),
-                    KeyCode::KeyP => self.set_tool(Tool::Pen),
-                    KeyCode::KeyT => self.set_tool(Tool::Text),
-                    KeyCode::KeyM => self.set_tool(Tool::Rectangle),
-                    KeyCode::KeyL => self.set_tool(Tool::Ellipse),
-                    KeyCode::KeyO if self.shift_down => self.set_tool(Tool::Artboard),
-                    _ => {}
+                    // Tool shortcuts — user-remappable (Preferences ▸
+                    // Keyboard). `settings.tool_keys` is indexed by
+                    // `Tool::ALL` position.
+                    _ => {
+                        let chord = KeyChord {
+                            code,
+                            shift: self.shift_down,
+                        };
+                        if let Some(i) = self
+                            .settings
+                            .tool_keys
+                            .iter()
+                            .position(|k| *k == Some(chord))
+                        {
+                            self.set_tool(Tool::ALL[i]);
+                        }
+                    }
                 }
             }
             _ => {}

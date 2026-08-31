@@ -44,6 +44,7 @@ pub mod prefs;
 pub mod recent;
 pub mod sample;
 pub mod select;
+pub mod settings;
 pub mod stroke_panel;
 pub mod text;
 pub mod textedit;
