@@ -13,13 +13,13 @@ export const metadata: Metadata = {
     title: "Amalith — The Open Source Design Suite",
     description: "A free, open-source professional vector editor built for familiar workflows.",
     type: "website",
-    images: [{ url: `${siteUrl}/og-suite-v2.png`, width: 1730, height: 909, alt: "Amalith — The Open Source Design Suite" }],
+    images: [{ url: `${siteUrl}/og-suite-v3.png`, width: 1730, height: 909, alt: "Amalith — The Open Source Design Suite" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Amalith — The Open Source Design Suite",
     description: "A free, open-source professional vector editor built for familiar workflows.",
-    images: [`${siteUrl}/og-suite-v2.png`],
+    images: [`${siteUrl}/og-suite-v3.png`],
   },
 };
 
