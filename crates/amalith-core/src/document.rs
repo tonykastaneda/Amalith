@@ -39,7 +39,7 @@ use crate::artboard::Artboard;
 use crate::asset::Asset;
 use crate::error::DocumentError;
 use crate::geom::{Affine, Rect};
-use crate::ids::{ArtboardId, LayerId, ObjectId};
+use crate::ids::{ArtboardId, AssetId, LayerId, ObjectId};
 use crate::layer::Layer;
 use crate::metadata::{Metadata, Settings};
 use crate::object::{Object, ObjectKind, ObjectParent};
@@ -253,6 +253,20 @@ impl Document {
 
     pub fn add_asset(&mut self, asset: Asset) {
         self.assets.push(asset);
+    }
+
+    pub fn asset(&self, id: AssetId) -> Option<&Asset> {
+        self.assets.iter().find(|a| a.id == id)
+    }
+
+    pub fn insert_asset(&mut self, asset: Asset, index: usize) {
+        let i = index.min(self.assets.len());
+        self.assets.insert(i, asset);
+    }
+
+    pub fn remove_asset(&mut self, id: AssetId) -> Option<(Asset, usize)> {
+        let i = self.assets.iter().position(|a| a.id == id)?;
+        Some((self.assets.remove(i), i))
     }
 
     pub fn swatches(&self) -> &[Swatch] {

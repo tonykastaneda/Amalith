@@ -3,9 +3,11 @@
 
 use std::collections::HashMap;
 
-use amalith_core::{Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign, StrokeStyle};
+use amalith_core::{
+    AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign, StrokeStyle,
+};
 use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
-use vello::peniko::{Color, Fill};
+use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use crate::handles::{self, Handle};
@@ -116,6 +118,22 @@ impl DragPreview<'_> {
     }
 }
 
+/// Inset from the canvas viewport where objects start to cull. Drawn as a
+/// dashed line so the threshold is visible while we tune it.
+pub const CULL_INSET: f64 = 48.0;
+
+/// Screen-space rect used for object / image culling, inset from `viewport`
+/// so the boundary sits on the canvas instead of under the rails.
+pub fn cull_rect(viewport: Rect) -> Rect {
+    let i = CULL_INSET;
+    Rect::new(
+        viewport.x0 + i,
+        viewport.y0 + i,
+        (viewport.x1 - i).max(viewport.x0 + i + 1.0),
+        (viewport.y1 - i).max(viewport.y0 + i + 1.0),
+    )
+}
+
 /// Paint the document into `viewport` (the screen rect between the rails).
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
@@ -137,6 +155,7 @@ pub fn paint(
     // The text object open in the Type tool — drawn live by the shell
     // overlay, so its committed content is skipped here.
     editing_text: Option<ObjectId>,
+    images: &HashMap<AssetId, ImageData>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -153,6 +172,7 @@ pub fn paint(
     );
 
     let vt = view.to_screen();
+    let cull = cull_rect(viewport);
 
     for (i, ab) in doc.artboards().iter().enumerate() {
         let r = vt.transform_rect_bbox(convert::rect(ab.rect));
@@ -192,7 +212,18 @@ pub fn paint(
             continue;
         }
         for &id in &layer.children {
-            paint_object(scene, doc, id, vt, view.zoom, drag, text, editing_text);
+            paint_object(
+                scene,
+                doc,
+                id,
+                vt,
+                view.zoom,
+                cull,
+                drag,
+                text,
+                editing_text,
+                images,
+            );
         }
     }
 
@@ -206,9 +237,11 @@ pub fn paint(
                 id,
                 vt * Affine::translate(d.delta),
                 view.zoom,
+                cull,
                 None,
                 text,
                 editing_text,
+                images,
             );
         }
     }
@@ -484,6 +517,24 @@ pub fn paint(
         }
     }
 
+    // Debug: the dashed line is the cull threshold. Objects whose bounds
+    // fully leave this rect are not drawn (and rasters are not decoded).
+    scene.stroke(
+        &Stroke::new(1.5).with_dashes(0.0, [8.0, 6.0]),
+        Affine::IDENTITY,
+        Color::from_rgb8(0xff, 0x3b, 0x8a),
+        None,
+        &cull,
+    );
+    text.draw(
+        scene,
+        "cull",
+        11.0,
+        Color::from_rgb8(0xff, 0x3b, 0x8a),
+        cull.x0 + 6.0,
+        cull.y0 + 14.0,
+    );
+
     scene.pop_layer();
 }
 
@@ -632,9 +683,11 @@ fn paint_object(
     id: ObjectId,
     vt: Affine,
     zoom: f64,
+    viewport: Rect,
     drag: Option<DragPreview<'_>>,
     text: &mut TextContext,
     editing_text: Option<ObjectId>,
+    images: &HashMap<AssetId, ImageData>,
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -644,6 +697,17 @@ fn paint_object(
     }
     let off = drag.map_or(Affine::IDENTITY, |d| d.object_offset(id));
     let replacement = drag.and_then(|d| d.replacement(id));
+    // Same cull as the egui-ui branch: skip anything whose bounds miss
+    // the canvas. Off-screen copies of a huge raster must not enter
+    // Vello's image atlas.
+    if replacement.is_none() {
+        if let Some(b) = doc.bounds_of(id) {
+            let screen = (vt * off).transform_rect_bbox(convert::rect(b));
+            if !overlaps(screen, viewport) {
+                return;
+            }
+        }
+    }
     let m = match replacement {
         Some(a) => vt * a,
         None => vt * off * convert::affine(obj.transform),
@@ -705,7 +769,18 @@ fn paint_object(
             // scaled/rotated/moved group snap back on release.
             let child_drag = if replacement.is_some() { None } else { drag };
             for &child in &g.children {
-                paint_object(scene, doc, child, m, zoom, child_drag, text, editing_text);
+                paint_object(
+                    scene,
+                    doc,
+                    child,
+                    m,
+                    zoom,
+                    viewport,
+                    child_drag,
+                    text,
+                    editing_text,
+                    images,
+                );
             }
         }
         ObjectKind::Text(td) => {
@@ -713,6 +788,19 @@ fn paint_object(
             if Some(id) != editing_text {
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
                 crate::textedit::paint_text_data(scene, text, td, m, color);
+            }
+        }
+        ObjectKind::Image(img) => {
+            if let Some(gpu) = images.get(&img.asset) {
+                paint_raster(scene, m, gpu, img.local_bounds);
+            } else if let Some(b) = obj.kind.own_local_bounds() {
+                scene.stroke(
+                    &Stroke::new(1.0),
+                    m,
+                    Color::from_rgb8(0x88, 0x88, 0x88),
+                    None,
+                    &convert::rect(b),
+                );
             }
         }
         other => {
@@ -726,5 +814,135 @@ fn paint_object(
                 );
             }
         }
+    }
+}
+
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
+}
+
+/// Draw a raster so `img`'s pixel box fills `local_bounds` under `m`.
+/// Native document size comes from `local_bounds`; `img` may be a
+/// downsampled GPU copy (Vello's atlas is 8192²).
+fn paint_raster(
+    scene: &mut Scene,
+    m: Affine,
+    img: &ImageData,
+    local_bounds: amalith_core::Rect,
+) {
+    if img.width == 0 || img.height == 0 {
+        return;
+    }
+    let b = convert::rect(local_bounds);
+    if b.width() <= 0.0 || b.height() <= 0.0 {
+        return;
+    }
+    let xf = m
+        * Affine::translate((b.x0, b.y0))
+        * Affine::scale_non_uniform(
+            b.width() / img.width as f64,
+            b.height() / img.height as f64,
+        );
+    scene.draw_image(img, xf);
+}
+
+/// A decoded raster: native document size plus a GPU image that fits
+/// Vello's 8192² atlas.
+pub struct Raster {
+    pub native_w: u32,
+    pub native_h: u32,
+    pub gpu: ImageData,
+}
+
+/// Vello's image atlas is a square of at most 8192. Larger rasters are
+/// downsampled for the GPU; object bounds stay at native pixels.
+const GPU_ATLAS_MAX: u32 = 8192;
+
+fn atlas_fit(w: u32, h: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (1, 1);
+    }
+    if w <= GPU_ATLAS_MAX && h <= GPU_ATLAS_MAX {
+        return (w, h);
+    }
+    let s = GPU_ATLAS_MAX as f64 / w.max(h) as f64;
+    (
+        ((w as f64 * s).floor() as u32).max(1),
+        ((h as f64 * s).floor() as u32).max(1),
+    )
+}
+
+fn rgba_to_gpu(mut rgba: image::RgbaImage) -> ImageData {
+    let (nw, nh) = atlas_fit(rgba.width(), rgba.height());
+    if nw != rgba.width() || nh != rgba.height() {
+        rgba = image::imageops::resize(&rgba, nw, nh, image::imageops::FilterType::Triangle);
+    }
+    ImageData {
+        data: Blob::from(rgba.into_raw()),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: nw,
+        height: nh,
+    }
+}
+
+/// Decode PNG/JPEG bytes into a vello image (GPU-capped) plus native size.
+pub fn decode_raster_bytes(bytes: &[u8]) -> Option<Raster> {
+    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (native_w, native_h) = rgba.dimensions();
+    if native_w == 0 || native_h == 0 {
+        return None;
+    }
+    Some(Raster {
+        native_w,
+        native_h,
+        gpu: rgba_to_gpu(rgba),
+    })
+}
+
+/// Decode a raster file. PNG/JPEG via the `image` crate; on macOS, ImageIO
+/// covers HEIC and anything else Preview can open (iMessage attachments).
+pub fn decode_raster_path(path: &std::path::Path) -> Option<Raster> {
+    if let Ok(bytes) = std::fs::read(path) {
+        if let Some(img) = decode_raster_bytes(&bytes) {
+            return Some(img);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return crate::macdrop::decode_path_via_imageio(path);
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// True for the raster types File ▸ Place and drop currently accept.
+pub fn is_raster_path(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "heic" | "heif" | "tif" | "tiff" | "gif" | "webp" | "bmp")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atlas_fit_caps_the_long_side_and_keeps_aspect() {
+        let (w, h) = atlas_fit(10913, 4071);
+        assert!(w <= GPU_ATLAS_MAX && h <= GPU_ATLAS_MAX);
+        assert_eq!(w, GPU_ATLAS_MAX);
+        let native = 10913.0 / 4071.0;
+        let gpu = w as f64 / h as f64;
+        assert!((native - gpu).abs() < 0.01);
+    }
+
+    #[test]
+    fn atlas_fit_leaves_small_images_alone() {
+        assert_eq!(atlas_fit(800, 600), (800, 600));
     }
 }

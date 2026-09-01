@@ -35,6 +35,7 @@ impl App {
                         let chord = KeyChord {
                             code,
                             shift: self.shift_down,
+                            cmd: self.cmd_down,
                         };
                         if let Some(p) = self.prefs.as_mut() {
                             // Steal the chord from whichever binding holds it.
@@ -234,79 +235,95 @@ impl App {
                 self.request_main_redraw();
             }
             // ⌘ shortcuts (copy / paste / duplicate / group / all).
-            PhysicalKey::Code(code) if pressed && self.cmd_down => match code {
-                KeyCode::KeyC if !self.doc.selection.is_empty() => {
-                    let ids = self.doc.selection.clone();
-                    self.copy_selection(&ids);
+            PhysicalKey::Code(code) if pressed && self.cmd_down => {
+                let chord = KeyChord {
+                    code,
+                    shift: self.shift_down,
+                    cmd: true,
+                };
+                if let Some(i) = self
+                    .settings
+                    .action_keys
+                    .iter()
+                    .position(|k| *k == Some(chord))
+                {
+                    self.run_pref_action(prefs::PrefAction::ALL[i]);
+                    return;
                 }
-                KeyCode::KeyX if !self.doc.selection.is_empty() => {
-                    let ids = self.doc.selection.clone();
-                    self.copy_selection(&ids);
-                    let _ = self.doc.editor.execute(Command::DeleteObjects {
-                        ids: std::mem::take(&mut self.doc.selection),
-                    });
-                    self.request_main_redraw();
-                }
-                // Plain paste recentres on the view; ⌘F / ⌘B keep
-                // the source coordinates. Each first checks the OS
-                // clipboard for SVG (paste from Illustrator etc.).
-                KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
-                KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
-                KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
-                KeyCode::KeyD if !self.doc.selection.is_empty() => {
-                    if let Ok(ids) = self.doc.editor.duplicate_objects(
-                        &self.doc.selection,
-                        amalith_core::Vec2::new(16.0, 16.0),
-                    ) {
-                        self.doc.selection = ids;
+                match code {
+                    KeyCode::KeyC if !self.doc.selection.is_empty() => {
+                        let ids = self.doc.selection.clone();
+                        self.copy_selection(&ids);
                     }
-                    self.request_main_redraw();
-                }
-                KeyCode::KeyG if self.shift_down => {
-                    if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
-                        if !freed.is_empty() {
-                            self.doc.selection = freed;
+                    KeyCode::KeyX if !self.doc.selection.is_empty() => {
+                        let ids = self.doc.selection.clone();
+                        self.copy_selection(&ids);
+                        let _ = self.doc.editor.execute(Command::DeleteObjects {
+                            ids: std::mem::take(&mut self.doc.selection),
+                        });
+                        self.request_main_redraw();
+                    }
+                    // Plain paste recentres on the view; ⌘F / ⌘B keep
+                    // the source coordinates. Each first checks the OS
+                    // clipboard for SVG (paste from Illustrator etc.).
+                    KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
+                    KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
+                    KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
+                    KeyCode::KeyD if !self.doc.selection.is_empty() => {
+                        if let Ok(ids) = self.doc.editor.duplicate_objects(
+                            &self.doc.selection,
+                            amalith_core::Vec2::new(16.0, 16.0),
+                        ) {
+                            self.doc.selection = ids;
+                        }
+                        self.request_main_redraw();
+                    }
+                    KeyCode::KeyG if self.shift_down => {
+                        if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
+                            if !freed.is_empty() {
+                                self.doc.selection = freed;
+                            }
+                        }
+                        self.request_main_redraw();
+                    }
+                    KeyCode::KeyG if self.doc.selection.len() > 1 => {
+                        if let Ok(CommandOutcome::Object(g)) =
+                            self.doc.editor.execute(Command::Group {
+                                ids: self.doc.selection.clone(),
+                                name: None,
+                            })
+                        {
+                            self.doc.selection = vec![g];
+                        }
+                        self.request_main_redraw();
+                    }
+                    KeyCode::KeyA => self.select_all(),
+                    // File I/O: open, save, save-as, import SVG.
+                    KeyCode::KeyN => self.open_new_doc(),
+                    // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
+                    KeyCode::KeyO if self.shift_down => self.create_outlines(),
+                    KeyCode::KeyO => self.open_document(),
+                    KeyCode::KeyS => self.save_document(self.shift_down),
+                    KeyCode::KeyI if self.shift_down => self.import_svg(),
+                    KeyCode::KeyW => self.close_tab(self.active),
+                    // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
+                    KeyCode::BracketRight => {
+                        if self.alt_down {
+                            self.restack_extreme(true);
+                        } else {
+                            self.restack(1);
                         }
                     }
-                    self.request_main_redraw();
-                }
-                KeyCode::KeyG if self.doc.selection.len() > 1 => {
-                    if let Ok(CommandOutcome::Object(g)) =
-                        self.doc.editor.execute(Command::Group {
-                            ids: self.doc.selection.clone(),
-                            name: None,
-                        })
-                    {
-                        self.doc.selection = vec![g];
+                    KeyCode::BracketLeft => {
+                        if self.alt_down {
+                            self.restack_extreme(false);
+                        } else {
+                            self.restack(-1);
+                        }
                     }
-                    self.request_main_redraw();
+                    _ => {}
                 }
-                KeyCode::KeyA => self.select_all(),
-                // File I/O: open, save, save-as, import SVG.
-                KeyCode::KeyN => self.open_new_doc(),
-                // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
-                KeyCode::KeyO if self.shift_down => self.create_outlines(),
-                KeyCode::KeyO => self.open_document(),
-                KeyCode::KeyS => self.save_document(self.shift_down),
-                KeyCode::KeyI if self.shift_down => self.import_svg(),
-                KeyCode::KeyW => self.close_tab(self.active),
-                // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
-                KeyCode::BracketRight => {
-                    if self.alt_down {
-                        self.restack_extreme(true);
-                    } else {
-                        self.restack(1);
-                    }
-                }
-                KeyCode::BracketLeft => {
-                    if self.alt_down {
-                        self.restack_extreme(false);
-                    } else {
-                        self.restack(-1);
-                    }
-                }
-                _ => {}
-            },
+            }
             // Bare-key: arrow nudge, Escape, tool shortcuts.
             PhysicalKey::Code(code) if pressed && !self.cmd_down && !self.alt_down => {
                 match code {
@@ -351,6 +368,7 @@ impl App {
                         let chord = KeyChord {
                             code,
                             shift: self.shift_down,
+                            cmd: false,
                         };
                         if let Some(i) = self
                             .settings
@@ -365,20 +383,24 @@ impl App {
                             .iter()
                             .position(|k| *k == Some(chord))
                         {
-                            let act = match prefs::PrefAction::ALL[i] {
-                                prefs::PrefAction::SwapPaints => {
-                                    crate::panels::Action::SwapPaints
-                                }
-                                prefs::PrefAction::DefaultPaints => {
-                                    crate::panels::Action::DefaultPaints
-                                }
-                            };
-                            self.apply_panel_action(act, false);
+                            self.run_pref_action(prefs::PrefAction::ALL[i]);
                         }
                     }
                 }
             }
             _ => {}
+        }
+    }
+
+    pub(in crate::app) fn run_pref_action(&mut self, act: prefs::PrefAction) {
+        match act {
+            prefs::PrefAction::SwapPaints => {
+                self.apply_panel_action(crate::panels::Action::SwapPaints, false);
+            }
+            prefs::PrefAction::DefaultPaints => {
+                self.apply_panel_action(crate::panels::Action::DefaultPaints, false);
+            }
+            prefs::PrefAction::Place => self.place_image_dialog(),
         }
     }
 }

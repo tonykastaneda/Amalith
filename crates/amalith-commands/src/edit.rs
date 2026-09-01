@@ -16,8 +16,8 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Document, Layer, LayerId, Object, ObjectId, ObjectKind,
-    ObjectParent, Paint, PathData, StrokeStyle, TextData,
+    Affine, Artboard, ArtboardId, Asset, AssetId, Document, DocumentError, Layer, LayerId, Object,
+    ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +102,13 @@ pub(crate) enum Edit {
     SetLocked {
         id: ObjectId,
         locked: bool,
+    },
+    InsertAsset {
+        asset: Asset,
+        index: usize,
+    },
+    RemoveAsset {
+        id: AssetId,
     },
 }
 
@@ -272,6 +279,17 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
             let old = std::mem::replace(&mut object.locked, locked);
             Ok((Edit::SetLocked { id, locked: old }, None))
+        }
+        Edit::InsertAsset { asset, index } => {
+            let id = asset.id;
+            doc.insert_asset(asset, index);
+            Ok((Edit::RemoveAsset { id }, None))
+        }
+        Edit::RemoveAsset { id } => {
+            let (asset, index) = doc
+                .remove_asset(id)
+                .ok_or(DocumentError::AssetNotFound(id))?;
+            Ok((Edit::InsertAsset { asset, index }, None))
         }
     }
 }

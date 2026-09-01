@@ -12,8 +12,8 @@ use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
-    Affine, Appearance, Artboard, ArtboardId, Color, Document, DocumentError, Layer, LayerId,
-    Object, ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
+    Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, Color, Document,
+    DocumentError, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -445,6 +445,49 @@ impl Editor {
                     object: Box::new(object),
                     index,
                 }]
+            }
+            Command::CreateImage {
+                layer,
+                path,
+                bounds,
+                transform,
+                name,
+                embedded,
+            } => {
+                let asset_id = AssetId::new();
+                let file_name = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Image".into());
+                let asset = if embedded {
+                    Asset::embedded(asset_id, file_name, AssetKind::Image, path)
+                } else {
+                    Asset::linked(asset_id, file_name, AssetKind::Image, path)
+                };
+                let mut object = Object::new(
+                    ObjectId::new(),
+                    ObjectParent::Layer(layer),
+                    ObjectKind::Image(amalith_core::ImageData {
+                        asset: asset_id,
+                        local_bounds: bounds,
+                    }),
+                );
+                object.appearance.fill = Paint::None;
+                object.appearance.stroke = Paint::None;
+                object.transform = transform;
+                object.name = name;
+                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                let asset_index = self.document.assets().len();
+                vec![
+                    Edit::InsertAsset {
+                        asset,
+                        index: asset_index,
+                    },
+                    Edit::InsertObject {
+                        object: Box::new(object),
+                        index,
+                    },
+                ]
             }
             Command::CreatePath { layer, path, name } => {
                 let mut object = Object::new(

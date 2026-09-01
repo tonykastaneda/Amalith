@@ -39,8 +39,8 @@ pub use error::CommandError;
 mod tests {
     use super::*;
     use amalith_core::{
-        Affine, Color, Document, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint,
-        Rect, Vec2,
+        Affine, AssetKind, AssetSource, Color, Document, Layer, LayerId, Object, ObjectId,
+        ObjectKind, ObjectParent, Paint, Rect, Vec2,
     };
 
     fn new_editor() -> Editor {
@@ -229,6 +229,54 @@ mod tests {
         editor.redo().unwrap();
         assert_eq!(editor.document().layers()[0].id, layer_id);
         assert_eq!(editor.document().bounds_of(object_id), Some(moved));
+    }
+
+    #[test]
+    fn create_image_links_an_asset_and_undo_removes_both() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreateImage {
+                layer,
+                path: "/tmp/photo.png".into(),
+                bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
+                transform: Affine::translate((10.0, 20.0)),
+                name: Some("photo".into()),
+                embedded: false,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let obj = editor.document().object(id).unwrap();
+        let ObjectKind::Image(img) = &obj.kind else {
+            panic!("expected an image object");
+        };
+        assert_eq!(obj.name.as_deref(), Some("photo"));
+        assert_eq!(img.local_bounds, Rect::new(0.0, 0.0, 200.0, 100.0));
+        assert_eq!(editor.document().assets().len(), 1);
+        assert_eq!(editor.document().assets()[0].kind, AssetKind::Image);
+        assert!(matches!(
+            &editor.document().assets()[0].source,
+            AssetSource::Linked { path } if path == "/tmp/photo.png"
+        ));
+        assert_eq!(editor.document().bounds_of(id), Some(Rect::new(10.0, 20.0, 210.0, 120.0)));
+
+        editor.undo().unwrap();
+        assert!(editor.document().object(id).is_none());
+        assert!(editor.document().assets().is_empty());
+
+        editor.redo().unwrap();
+        assert!(editor.document().object(id).is_some());
+        assert_eq!(editor.document().assets().len(), 1);
     }
 
     #[test]

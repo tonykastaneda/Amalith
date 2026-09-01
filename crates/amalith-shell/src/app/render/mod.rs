@@ -9,6 +9,7 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn redraw(&mut self, id: WindowId) {
+        self.warm_images();
         let Some(host) = self.hosts.get_mut(&id) else {
             return;
         };
@@ -289,6 +290,7 @@ impl App {
                 self.layer_search_focused,
                 self.color_mode,
                 &self.recent_colors,
+                &self.image_cache,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

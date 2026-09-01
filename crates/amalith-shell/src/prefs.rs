@@ -16,29 +16,47 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
 
-/// A tool shortcut: a letter/digit key, optionally with Shift.
+/// A tool / command shortcut: a letter/digit key, optionally with Shift
+/// and/or Cmd (Ctrl on Windows/Linux).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct KeyChord {
     pub code: KeyCode,
     pub shift: bool,
+    pub cmd: bool,
 }
 
 impl KeyChord {
     fn plain(code: KeyCode) -> Self {
-        Self { code, shift: false }
+        Self {
+            code,
+            shift: false,
+            cmd: false,
+        }
     }
     fn with_shift(code: KeyCode) -> Self {
-        Self { code, shift: true }
+        Self {
+            code,
+            shift: true,
+            cmd: false,
+        }
+    }
+    fn with_cmd_shift(code: KeyCode) -> Self {
+        Self {
+            code,
+            shift: true,
+            cmd: true,
+        }
     }
 }
 
 impl fmt::Display for KeyChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let c = key_char(self.code).unwrap_or('?');
-        if self.shift {
-            write!(f, "Shift+{c}")
-        } else {
-            write!(f, "{c}")
+        match (self.cmd, self.shift) {
+            (true, true) => write!(f, "Cmd+Shift+{c}"),
+            (true, false) => write!(f, "Cmd+{c}"),
+            (false, true) => write!(f, "Shift+{c}"),
+            (false, false) => write!(f, "{c}"),
         }
     }
 }
@@ -47,14 +65,15 @@ impl std::str::FromStr for KeyChord {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, ()> {
         let s = s.trim();
-        let (shift, rest) = s
-            .strip_prefix("Shift+")
-            .map_or((false, s), |r| (true, r));
+        let (cmd, s) = s.strip_prefix("Cmd+").map_or((false, s), |r| (true, r));
+        let (shift, rest) = s.strip_prefix("Shift+").map_or((false, s), |r| (true, r));
         let mut ch = rest.chars();
         let (Some(c), None) = (ch.next(), ch.next()) else {
             return Err(());
         };
-        key_code(c).map(|code| KeyChord { code, shift }).ok_or(())
+        key_code(c)
+            .map(|code| KeyChord { code, shift, cmd })
+            .ok_or(())
     }
 }
 
@@ -113,15 +132,21 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
 pub enum PrefAction {
     SwapPaints,
     DefaultPaints,
+    Place,
 }
 
 impl PrefAction {
-    pub const ALL: [PrefAction; 2] = [PrefAction::SwapPaints, PrefAction::DefaultPaints];
+    pub const ALL: [PrefAction; 3] = [
+        PrefAction::SwapPaints,
+        PrefAction::DefaultPaints,
+        PrefAction::Place,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             PrefAction::SwapPaints => "Swap Fill / Stroke",
             PrefAction::DefaultPaints => "Default Fill / Stroke",
+            PrefAction::Place => "Place…",
         }
     }
 
@@ -129,6 +154,7 @@ impl PrefAction {
         Some(match self {
             PrefAction::SwapPaints => KeyChord::plain(KeyCode::KeyX),
             PrefAction::DefaultPaints => KeyChord::plain(KeyCode::KeyD),
+            PrefAction::Place => KeyChord::with_cmd_shift(KeyCode::KeyP),
         })
     }
 }
@@ -535,7 +561,7 @@ fn kb_row(
         );
     }
     tcx.draw(scene, name, 12.0, theme.text, px + 4.0, cy + 16.0);
-    let chip = Rect::new(row.x1 - 92.0, cy + 1.0, row.x1, cy + 23.0);
+    let chip = Rect::new(row.x1 - 120.0, cy + 1.0, row.x1, cy + 23.0);
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,

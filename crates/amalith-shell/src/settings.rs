@@ -136,6 +136,7 @@ fn action_name(a: PrefAction) -> &'static str {
     match a {
         PrefAction::SwapPaints => "SwapPaints",
         PrefAction::DefaultPaints => "DefaultPaints",
+        PrefAction::Place => "Place",
     }
 }
 

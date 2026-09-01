@@ -37,6 +37,8 @@ pub mod handles;
 pub mod home;
 pub mod icons;
 pub mod layout;
+#[cfg(target_os = "macos")]
+pub mod macdrop;
 pub mod newdoc;
 pub mod panels;
 pub mod picker;

@@ -25,7 +25,7 @@ pub(crate) use std::sync::Arc;
 pub(crate) use std::time::Instant;
 
 pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
-pub(crate) use amalith_core::{ArtboardId, Document, LayerId, ObjectId, StrokeStyle};
+pub(crate) use amalith_core::{ArtboardId, AssetId, Document, LayerId, ObjectId, StrokeStyle};
 pub(crate) use crate::anchors;
 pub(crate) use crate::canvas::{self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview};
 pub(crate) use crate::dock::{
@@ -241,6 +241,7 @@ enum MenuAction {
     Save,
     SaveAs,
     ImportSvg,
+    Place,
     Undo,
     Redo,
     Cut,
@@ -358,6 +359,9 @@ struct Doc {
     stroke_style: StrokeStyle,
     opacity: f32,
     view: CanvasView,
+    /// Plain (⌘V) pastes since the last copy. Each one nudges further so
+    /// repeats don't land on top of the original.
+    paste_nudge: u32,
 }
 
 impl Doc {
@@ -382,6 +386,7 @@ impl Doc {
             stroke_style: StrokeStyle::default(),
             opacity: 1.0,
             view: CanvasView::default(),
+            paste_nudge: 0,
         }
     }
 
@@ -525,6 +530,10 @@ struct App {
     color_mode: panels::ColorSpace,
     /// Recently used solid colours for the Color panel, newest first.
     recent_colors: Vec<amalith_core::Color>,
+    /// GPU-ready rasters for placed images, keyed by document asset.
+    image_cache: HashMap<AssetId, vello::peniko::ImageData>,
+    /// Same GPU blob interned by source path so duplicates share one atlas slot.
+    decoded_by_path: HashMap<String, vello::peniko::ImageData>,
     /// Time + position of the last left press, for double-click detection.
     last_click: Option<(Instant, Point)>,
     /// In-progress Pen path — placed anchors (with bezier handles) in
@@ -615,6 +624,8 @@ impl App {
             picker: None,
             color_mode: panels::ColorSpace::Rgb,
             recent_colors: Vec::new(),
+            image_cache: HashMap::new(),
+            decoded_by_path: HashMap::new(),
             last_click: None,
             pen: Vec::new(),
             pen_redo: Vec::new(),
@@ -1696,6 +1707,7 @@ impl App {
             MenuAction::Save => self.save_document(false),
             MenuAction::SaveAs => self.save_document(true),
             MenuAction::ImportSvg => self.import_svg(),
+            MenuAction::Place => self.place_image_dialog(),
             MenuAction::Undo => {
                 let _ = self.doc.editor.undo();
                 self.prune_selection();
@@ -2016,7 +2028,248 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Switch tools, discarding any in-progress Pen path.
+    /// File ▸ Place… / ⌘⇧P — pick a PNG or JPEG and drop it at the view centre.
+    pub(in crate::app) fn place_image_dialog(&mut self) {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "Images",
+                &["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "webp", "bmp"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        let center = self.doc_point(self.canvas_viewport().center());
+        self.place_image_at(&path, center);
+    }
+
+    /// Insert a linked raster at `center` (document space), 1 image px = 1 doc px.
+    fn place_image_at(&mut self, path: &std::path::Path, center: Point) {
+        let Some(raster) = canvas::decode_raster_path(path) else {
+            self.doc.io_error = Some(format!("Could not read image: {}", path.display()));
+            self.request_main_redraw();
+            return;
+        };
+        let (w, h) = (raster.native_w as f64, raster.native_h as f64);
+        let layer = self.ensure_layer();
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned());
+        let src = path.to_string_lossy().into_owned();
+        let cmd = Command::CreateImage {
+            layer,
+            path: src.clone(),
+            bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
+            transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
+            name,
+            embedded: false,
+        };
+        match self.doc.editor.execute(cmd) {
+            Ok(CommandOutcome::Object(id)) => {
+                let asset = self.doc.editor.document().object(id).and_then(|o| {
+                    match &o.kind {
+                        amalith_core::ObjectKind::Image(d) => Some(d.asset),
+                        _ => None,
+                    }
+                });
+                if let Some(asset) = asset {
+                    self.remember_raster(asset, src, raster.gpu);
+                }
+                self.doc.selection = vec![id];
+                self.doc.anchor_sel.clear();
+                self.doc.io_error = None;
+            }
+            Err(err) => self.doc.io_error = Some(format!("Place failed: {err}")),
+            _ => {}
+        }
+        self.request_main_redraw();
+    }
+
+    /// Drop a raster onto the document at the pointer.
+    fn on_drop_file(&mut self, path: std::path::PathBuf) {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return;
+        }
+        // Try to decode anything we can read (PNG/JPEG, and on macOS HEIC
+        // via ImageIO). Skip silently if it isn't an image — a .amalith
+        // or random file dropped on the window shouldn't error.
+        if canvas::decode_raster_path(&path).is_none() && !canvas::is_raster_path(&path) {
+            return;
+        }
+        let center = if self.pointer_win == self.main_id {
+            self.doc_point(self.pointer)
+        } else {
+            self.doc_point(self.canvas_viewport().center())
+        };
+        self.place_image_at(&path, center);
+    }
+
+    /// Place pixels that never had a file (iMessage pasteboard, etc.).
+    /// Bytes go in the document's asset store — nothing is written to disk.
+    fn place_image_png_bytes(&mut self, name: &str, bytes: &[u8], center: Point) {
+        let Some(raster) = canvas::decode_raster_bytes(bytes) else {
+            self.doc.io_error = Some("Could not read dropped image.".into());
+            self.request_main_redraw();
+            return;
+        };
+        let (w, h) = (raster.native_w as f64, raster.native_h as f64);
+        let stem = if name.is_empty() { "Image" } else { name };
+        let container = format!("images/{stem}-{}.png", amalith_core::AssetId::new());
+        self.doc.asset_store.insert(&container, bytes.to_vec());
+        let layer = self.ensure_layer();
+        let cmd = Command::CreateImage {
+            layer,
+            path: container.clone(),
+            bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
+            transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
+            name: Some(stem.to_string()),
+            embedded: true,
+        };
+        match self.doc.editor.execute(cmd) {
+            Ok(CommandOutcome::Object(id)) => {
+                let asset = self.doc.editor.document().object(id).and_then(|o| {
+                    match &o.kind {
+                        amalith_core::ObjectKind::Image(d) => Some(d.asset),
+                        _ => None,
+                    }
+                });
+                if let Some(asset) = asset {
+                    self.remember_raster(asset, container, raster.gpu);
+                }
+                self.doc.selection = vec![id];
+                self.doc.anchor_sel.clear();
+                self.doc.io_error = None;
+            }
+            Err(err) => self.doc.io_error = Some(format!("Place failed: {err}")),
+            _ => {}
+        }
+        self.request_main_redraw();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn drain_mac_drops(&mut self) {
+        let drops = crate::macdrop::drain();
+        if drops.is_empty() {
+            return;
+        }
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return;
+        }
+        let fallback = self.doc_point(self.canvas_viewport().center());
+        for drop in drops {
+            let center = drop.at.map_or(fallback, |(x, y)| self.doc_point(Point::new(x, y)));
+            match drop.item {
+                crate::macdrop::Incoming::Path(path) => self.place_image_at(&path, center),
+                crate::macdrop::Incoming::Png { name, bytes } => {
+                    self.place_image_png_bytes(&name, &bytes, center)
+                }
+            }
+        }
+    }
+
+    fn remember_raster(
+        &mut self,
+        id: AssetId,
+        key: String,
+        gpu: vello::peniko::ImageData,
+    ) {
+        self.decoded_by_path.insert(key, gpu.clone());
+        self.image_cache.insert(id, gpu);
+    }
+
+    fn visible_image_assets(&self) -> std::collections::HashSet<AssetId> {
+        let vis = self
+            .doc
+            .view
+            .to_screen()
+            .inverse()
+            .transform_rect_bbox(canvas::cull_rect(self.canvas_viewport()));
+        let doc = self.doc.editor.document();
+        let mut out = std::collections::HashSet::new();
+        fn walk(
+            doc: &Document,
+            ids: &[ObjectId],
+            vis: Rect,
+            out: &mut std::collections::HashSet<AssetId>,
+        ) {
+            for &id in ids {
+                let Some(obj) = doc.object(id) else { continue };
+                if !obj.visible {
+                    continue;
+                }
+                if let Some(b) = doc.bounds_of(id) {
+                    let b = convert::rect(b);
+                    if b.x1 <= vis.x0 || b.x0 >= vis.x1 || b.y1 <= vis.y0 || b.y0 >= vis.y1 {
+                        continue;
+                    }
+                }
+                match &obj.kind {
+                    amalith_core::ObjectKind::Image(i) => {
+                        out.insert(i.asset);
+                    }
+                    amalith_core::ObjectKind::Group(g) => walk(doc, &g.children, vis, out),
+                    _ => {}
+                }
+            }
+        }
+        for layer in doc.layers() {
+            if layer.visible {
+                walk(doc, &layer.children, vis, &mut out);
+            }
+        }
+        out
+    }
+
+    /// Decode visible image assets so the next paint can draw them.
+    /// Off-screen rasters stay cold — same idea as the egui-ui viewport cull.
+    fn warm_images(&mut self) {
+        let needed = self.visible_image_assets();
+        let mut linked = Vec::new();
+        let mut embedded = Vec::new();
+        for a in self.doc.editor.document().assets() {
+            if a.kind != amalith_core::AssetKind::Image
+                || !needed.contains(&a.id)
+                || self.image_cache.contains_key(&a.id)
+            {
+                continue;
+            }
+            match &a.source {
+                amalith_core::AssetSource::Linked { path } => {
+                    linked.push((a.id, path.clone()));
+                }
+                amalith_core::AssetSource::Embedded { container_path } => {
+                    embedded.push((a.id, container_path.clone()));
+                }
+            }
+        }
+        for (id, path) in linked {
+            if let Some(gpu) = self.decoded_by_path.get(&path) {
+                self.image_cache.insert(id, gpu.clone());
+                continue;
+            }
+            if let Some(raster) = canvas::decode_raster_path(std::path::Path::new(&path)) {
+                self.remember_raster(id, path, raster.gpu);
+            }
+        }
+        for (id, key) in embedded {
+            if let Some(gpu) = self.decoded_by_path.get(&key) {
+                self.image_cache.insert(id, gpu.clone());
+                continue;
+            }
+            let raster = self
+                .doc
+                .asset_store
+                .get(&key)
+                .and_then(canvas::decode_raster_bytes);
+            if let Some(raster) = raster {
+                self.remember_raster(id, key, raster.gpu);
+            }
+        }
+    }
+
     /// Push `settings.accent` into the live theme (and its derived tokens).
     fn apply_theme_accent(&mut self) {
         let [r, g, b] = self.settings.accent;
@@ -2371,6 +2624,7 @@ impl App {
     /// can be pasted into Illustrator, a browser, Figma, etc.
     fn copy_selection(&mut self, ids: &[ObjectId]) {
         let _ = self.doc.editor.copy(ids);
+        self.doc.paste_nudge = 0;
         // Remember which artboard the copy sits in, for artboard-relative
         // Paste in Front / Back.
         self.doc.clip_artboard = self.doc.editor.clipboard_bounds().and_then(|b| {
@@ -2443,14 +2697,21 @@ impl App {
         let (delta, stack) = match place {
             PastePlace::Plain => {
                 let vc = self.visible_doc_rect().center();
-                let delta = self
-                    .doc.editor
+                let mut delta = self
+                    .doc
+                    .editor
                     .clipboard_bounds()
                     .map(|b| {
                         let bc = b.center();
                         amalith_core::Vec2::new(vc.x - bc.x, vc.y - bc.y)
                     })
                     .unwrap_or(amalith_core::Vec2::ZERO);
+                // Images are placed on the view centre, so a centred paste
+                // lands on the original. Nudge each ⌘V further.
+                self.doc.paste_nudge = self.doc.paste_nudge.saturating_add(1);
+                let step = 16.0 * self.doc.paste_nudge as f64;
+                delta.x += step;
+                delta.y += step;
                 (delta, PasteStack::Top)
             }
             PastePlace::InFront => (artboard_delta, PasteStack::InFront),
@@ -3065,6 +3326,8 @@ impl ApplicationHandler for App {
                 self.run_menu_action(action);
             }
         }
+        #[cfg(target_os = "macos")]
+        self.drain_mac_drops();
         if self.pending_fit {
             self.fit_view();
         }
@@ -3127,6 +3390,8 @@ impl ApplicationHandler for App {
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
         self.main_id = Some(wid);
+        #[cfg(target_os = "macos")]
+        crate::macdrop::install(&self.hosts[&wid].window);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let m = NativeMenu::build(&self.hosts[&wid].window);
@@ -3289,6 +3554,9 @@ impl ApplicationHandler for App {
                 self.on_wheel(delta);
             }
             WindowEvent::RedrawRequested => self.redraw(id),
+            WindowEvent::DroppedFile(path) if Some(id) == self.main_id => {
+                self.on_drop_file(path);
+            }
             _ => {}
         }
     }
@@ -3605,6 +3873,7 @@ impl NativeMenu {
         let save_i = mk("Save", sup, Code::KeyS);
         let save_as_i = mk("Save As…", sup_shift, Code::KeyS);
         let import_i = mk("Import SVG…", sup_shift, Code::KeyI);
+        let place_i = mk("Place…", sup_shift, Code::KeyP);
         let undo_i = mk("Undo", sup, Code::KeyZ);
         let redo_i = mk("Redo", sup_shift, Code::KeyZ);
         let cut_i = mk("Cut", sup, Code::KeyX);
@@ -3641,7 +3910,7 @@ impl NativeMenu {
             "File",
             true,
             &[
-                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i,
+                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i,
             ],
         )
         .expect("file menu");
@@ -3700,6 +3969,7 @@ impl NativeMenu {
             (save_i.id().clone(), MenuAction::Save),
             (save_as_i.id().clone(), MenuAction::SaveAs),
             (import_i.id().clone(), MenuAction::ImportSvg),
+            (place_i.id().clone(), MenuAction::Place),
             (undo_i.id().clone(), MenuAction::Undo),
             (redo_i.id().clone(), MenuAction::Redo),
             (cut_i.id().clone(), MenuAction::Cut),

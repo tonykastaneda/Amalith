@@ -31,6 +31,8 @@ rfd.workspace = true
 arboard = { version = "3.6", default-features = false }
 # Decode the embedded app-icon PNG (branding/app-icon.png).
 png = "0.18"
+# Raster decode for File ▸ Place / drag-and-drop (PNG + JPEG).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # Native menu bar: NSMenu on macOS, an HMENU attached to the window on Windows.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
@@ -39,5 +41,22 @@ muda = "0.19"
 [target.'cfg(target_os = "macos")'.dependencies]
 # Set the Dock / Cmd-Tab icon at runtime, since we don't ship an .app bundle yet.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSResponder"] }
-objc2-foundation = { version = "0.3", features = ["NSData"] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSBitmapImageRep",
+    "NSDragging",
+    "NSEvent",
+    "NSFilePromiseReceiver",
+    "NSImage",
+    "NSImageRep",
+    "NSPasteboard",
+    "NSResponder",
+    "NSView",
+] }
+objc2-foundation = { version = "0.3", features = [
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSString",
+    "NSURL",
+] }

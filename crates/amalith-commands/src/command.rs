@@ -82,6 +82,19 @@ pub enum Command {
         path: PathData,
         name: Option<String>,
     },
+    /// Places a raster image as the top-most child of `layer`.
+    /// `path` is the source file for a linked asset, or the container path
+    /// for an embedded one (`embedded: true`). `bounds` is the image's
+    /// local box (typically `0,0,px_w,px_h`); `transform` puts that box
+    /// in the parent's space. The original file is never moved.
+    CreateImage {
+        layer: LayerId,
+        path: String,
+        bounds: Rect,
+        transform: Affine,
+        name: Option<String>,
+        embedded: bool,
+    },
     /// Creates a text object as the top-most child of `layer`, with
     /// `transform` placing its anchor in document space.
     CreateText {
