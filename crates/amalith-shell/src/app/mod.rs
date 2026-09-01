@@ -531,10 +531,11 @@ struct App {
     /// Recently used solid colours for the Color panel, newest first.
     recent_colors: Vec<amalith_core::Color>,
     /// GPU-ready rasters for placed images, keyed by document asset.
-    image_cache: HashMap<AssetId, vello::peniko::ImageData>,
-    /// Same GPU blob interned by source path so duplicates share one atlas slot.
-    decoded_by_path: HashMap<String, vello::peniko::ImageData>,
-    /// Highest LOD received per asset (so a late coarse result can't clobber).
+    /// Each entry holds every decoded LOD; paint picks by on-screen size.
+    image_cache: HashMap<AssetId, crate::lod::ImageLods>,
+    /// Same LOD set interned by source path so duplicates share GPU blobs.
+    decoded_by_path: HashMap<String, crate::lod::ImageLods>,
+    /// Highest LOD received per asset. Intern in `decoded_by_path` means done.
     image_lod: HashMap<AssetId, u8>,
     lod: crate::lod::LodHub,
     lod_inflight: std::collections::HashSet<AssetId>,
@@ -2187,16 +2188,10 @@ impl App {
         native_w: u32,
         native_h: u32,
     ) {
-        let max_level = (crate::lod::LOD_SIDES.len() - 1) as u8;
-        if self.image_lod.get(&asset).copied().unwrap_or(0) >= max_level {
-            if let Some(gpu) = self.decoded_by_path.get(&key) {
-                self.image_cache.insert(asset, gpu.clone());
-            }
-            return;
-        }
-        if let Some(gpu) = self.decoded_by_path.get(&key) {
-            self.image_cache.insert(asset, gpu.clone());
-            self.image_lod.insert(asset, max_level);
+        if let Some(lods) = self.decoded_by_path.get(&key) {
+            self.image_cache.insert(asset, lods.clone());
+            self.image_lod
+                .insert(asset, (crate::lod::LOD_SIDES.len() - 1) as u8);
             return;
         }
         if !self.lod_inflight.insert(asset) {
@@ -2212,17 +2207,25 @@ impl App {
     }
 
     fn drain_lod(&mut self) {
-        let max_level = (crate::lod::LOD_SIDES.len() - 1) as u8;
         let mut dirty = false;
         for ready in self.lod.drain() {
-            if self.image_lod.get(&ready.asset).is_some_and(|&p| ready.level < p) {
-                continue;
+            let done = ready.done;
+            let key = ready.key.clone();
+            let asset = ready.asset;
+            let level = ready.level;
+            if let Some(gpu) = ready.gpu {
+                let lods = self.image_cache.entry(asset).or_default();
+                lods.set(level, gpu);
+                let prev = self.image_lod.get(&asset).copied().unwrap_or(0);
+                if level >= prev {
+                    self.image_lod.insert(asset, level);
+                }
             }
-            self.image_cache.insert(ready.asset, ready.gpu.clone());
-            self.image_lod.insert(ready.asset, ready.level);
-            if ready.level >= max_level {
-                self.decoded_by_path.insert(ready.key, ready.gpu);
-                self.lod_inflight.remove(&ready.asset);
+            if done {
+                if let Some(lods) = self.image_cache.get(&asset) {
+                    self.decoded_by_path.insert(key, lods.clone());
+                }
+                self.lod_inflight.remove(&asset);
             }
             dirty = true;
         }
@@ -2297,8 +2300,8 @@ impl App {
             }
         }
         for (id, path) in linked {
-            if let Some(gpu) = self.decoded_by_path.get(&path) {
-                self.image_cache.insert(id, gpu.clone());
+            if let Some(lods) = self.decoded_by_path.get(&path) {
+                self.image_cache.insert(id, lods.clone());
                 continue;
             }
             let (nw, nh) = canvas::raster_dimensions(std::path::Path::new(&path)).unwrap_or((1, 1));
@@ -2312,8 +2315,8 @@ impl App {
             );
         }
         for (id, key) in embedded {
-            if let Some(gpu) = self.decoded_by_path.get(&key) {
-                self.image_cache.insert(id, gpu.clone());
+            if let Some(lods) = self.decoded_by_path.get(&key) {
+                self.image_cache.insert(id, lods.clone());
                 continue;
             }
             let bytes = self.doc.asset_store.get(&key).map(|b| b.to_vec());

@@ -11,6 +11,7 @@ use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use crate::handles::{self, Handle};
+use crate::lod::ImageLods;
 use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
@@ -155,7 +156,7 @@ pub fn paint(
     // The text object open in the Type tool — drawn live by the shell
     // overlay, so its committed content is skipped here.
     editing_text: Option<ObjectId>,
-    images: &HashMap<AssetId, ImageData>,
+    images: &HashMap<AssetId, ImageLods>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -687,7 +688,7 @@ fn paint_object(
     drag: Option<DragPreview<'_>>,
     text: &mut TextContext,
     editing_text: Option<ObjectId>,
-    images: &HashMap<AssetId, ImageData>,
+    images: &HashMap<AssetId, ImageLods>,
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -791,7 +792,13 @@ fn paint_object(
             }
         }
         ObjectKind::Image(img) => {
-            if let Some(gpu) = images.get(&img.asset) {
+            // Screen-space long side of the object (zoom × native size).
+            // Native bounds stay full-res; only the GPU copy is swapped.
+            let cover = {
+                let sb = m.transform_rect_bbox(convert::rect(img.local_bounds));
+                sb.width().max(sb.height())
+            };
+            if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
                 paint_raster(scene, m, gpu, img.local_bounds);
             } else if let Some(b) = obj.kind.own_local_bounds() {
                 let r = convert::rect(b);

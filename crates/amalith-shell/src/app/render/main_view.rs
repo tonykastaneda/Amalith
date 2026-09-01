@@ -56,7 +56,7 @@ pub(in crate::app) fn paint_main(
     layer_search_focused: bool,
     color_mode: panels::ColorSpace,
     recent: &[amalith_core::Color],
-    images: &std::collections::HashMap<AssetId, vello::peniko::ImageData>,
+    images: &std::collections::HashMap<AssetId, crate::lod::ImageLods>,
 ) {
     scene.fill(
         Fill::NonZero,
