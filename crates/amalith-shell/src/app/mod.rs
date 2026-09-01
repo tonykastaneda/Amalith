@@ -767,7 +767,10 @@ impl App {
             amalith_core::PreviewMode::Pixel => "Pixel",
             amalith_core::PreviewMode::Overprint => "Overprint",
         };
-        format!("{name}{dirty} @ {:.0}% ({color}/{preview})", zoom * 100.0)
+        format!(
+            "{name}{dirty} @ {} ({color}/{preview})",
+            canvas::zoom_percent_label(zoom)
+        )
     }
 
     /// Global (virtual-desktop) logical position of the main window's
@@ -2849,7 +2852,8 @@ impl App {
         if vp.width() < 10.0 || vp.height() < 10.0 || b.width() < 1.0 || b.height() < 1.0 {
             return;
         }
-        let zoom = ((vp.width() / b.width()).min(vp.height() / b.height()) * 0.88).clamp(0.02, 8.0);
+        let zoom = ((vp.width() / b.width()).min(vp.height() / b.height()) * 0.88)
+            .clamp(canvas::ZOOM_MIN, 8.0);
         let (bc, vc) = (b.center(), vp.center());
         self.doc.view.zoom = zoom;
         self.doc.view.pan = Vec2::new(vc.x - zoom * bc.x, vc.y - zoom * bc.y);

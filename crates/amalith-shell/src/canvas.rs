@@ -24,6 +24,10 @@ pub struct CanvasView {
     pub zoom: f64,
 }
 
+/// Floor / ceiling for view zoom (0.1% … 25600%). LOD pick is separate.
+pub const ZOOM_MIN: f64 = 0.001;
+pub const ZOOM_MAX: f64 = 256.0;
+
 impl Default for CanvasView {
     fn default() -> Self {
         Self {
@@ -42,10 +46,22 @@ impl CanvasView {
     /// Multiply zoom by `factor`, keeping the document point under `pivot`
     /// (screen px) fixed.
     pub fn zoom_at(&mut self, factor: f64, pivot: Point) {
-        let new_zoom = (self.zoom * factor).clamp(0.02, 64.0);
+        let new_zoom = (self.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
         let k = new_zoom / self.zoom;
         self.pan = pivot.to_vec2() + (self.pan - pivot.to_vec2()) * k;
         self.zoom = new_zoom;
+    }
+}
+
+/// Tab / status zoom, with extra decimals when you're far out.
+pub fn zoom_percent_label(zoom: f64) -> String {
+    let p = zoom * 100.0;
+    if p >= 10.0 {
+        format!("{p:.0}%")
+    } else if p >= 1.0 {
+        format!("{p:.1}%")
+    } else {
+        format!("{p:.2}%")
     }
 }
 
@@ -1011,5 +1027,24 @@ mod tests {
     #[test]
     fn atlas_fit_leaves_small_images_alone() {
         assert_eq!(atlas_fit(800, 600), (800, 600));
+    }
+
+    #[test]
+    fn zoom_at_clamps_to_range() {
+        let mut v = CanvasView {
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+        };
+        v.zoom_at(1e9, Point::ZERO);
+        assert_eq!(v.zoom, ZOOM_MAX);
+        v.zoom_at(1e-12, Point::ZERO);
+        assert_eq!(v.zoom, ZOOM_MIN);
+    }
+
+    #[test]
+    fn zoom_percent_label_keeps_decimals_when_far_out() {
+        assert_eq!(zoom_percent_label(1.0), "100%");
+        assert_eq!(zoom_percent_label(0.05), "5.0%");
+        assert_eq!(zoom_percent_label(0.001), "0.10%");
     }
 }
