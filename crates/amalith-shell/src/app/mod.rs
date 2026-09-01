@@ -534,6 +534,10 @@ struct App {
     image_cache: HashMap<AssetId, vello::peniko::ImageData>,
     /// Same GPU blob interned by source path so duplicates share one atlas slot.
     decoded_by_path: HashMap<String, vello::peniko::ImageData>,
+    /// Highest LOD received per asset (so a late coarse result can't clobber).
+    image_lod: HashMap<AssetId, u8>,
+    lod: crate::lod::LodHub,
+    lod_inflight: std::collections::HashSet<AssetId>,
     /// Time + position of the last left press, for double-click detection.
     last_click: Option<(Instant, Point)>,
     /// In-progress Pen path — placed anchors (with bezier handles) in
@@ -626,6 +630,9 @@ impl App {
             recent_colors: Vec::new(),
             image_cache: HashMap::new(),
             decoded_by_path: HashMap::new(),
+            image_lod: HashMap::new(),
+            lod: crate::lod::LodHub::new(),
+            lod_inflight: std::collections::HashSet::new(),
             last_click: None,
             pen: Vec::new(),
             pen_redo: Vec::new(),
@@ -2047,13 +2054,14 @@ impl App {
     }
 
     /// Insert a linked raster at `center` (document space), 1 image px = 1 doc px.
+    /// The object is created from header size immediately; pixels arrive via LOD.
     fn place_image_at(&mut self, path: &std::path::Path, center: Point) {
-        let Some(raster) = canvas::decode_raster_path(path) else {
+        let Some((nw, nh)) = canvas::raster_dimensions(path) else {
             self.doc.io_error = Some(format!("Could not read image: {}", path.display()));
             self.request_main_redraw();
             return;
         };
-        let (w, h) = (raster.native_w as f64, raster.native_h as f64);
+        let (w, h) = (nw as f64, nh as f64);
         let layer = self.ensure_layer();
         let name = path
             .file_stem()
@@ -2076,7 +2084,7 @@ impl App {
                     }
                 });
                 if let Some(asset) = asset {
-                    self.remember_raster(asset, src, raster.gpu);
+                    self.request_lod(asset, src, Some(path.to_path_buf()), None, nw, nh);
                 }
                 self.doc.selection = vec![id];
                 self.doc.anchor_sel.clear();
@@ -2096,7 +2104,7 @@ impl App {
         // Try to decode anything we can read (PNG/JPEG, and on macOS HEIC
         // via ImageIO). Skip silently if it isn't an image — a .amalith
         // or random file dropped on the window shouldn't error.
-        if canvas::decode_raster_path(&path).is_none() && !canvas::is_raster_path(&path) {
+        if !canvas::is_raster_path(&path) && canvas::raster_dimensions(&path).is_none() {
             return;
         }
         let center = if self.pointer_win == self.main_id {
@@ -2110,12 +2118,12 @@ impl App {
     /// Place pixels that never had a file (iMessage pasteboard, etc.).
     /// Bytes go in the document's asset store — nothing is written to disk.
     fn place_image_png_bytes(&mut self, name: &str, bytes: &[u8], center: Point) {
-        let Some(raster) = canvas::decode_raster_bytes(bytes) else {
+        let Some((nw, nh)) = canvas::raster_dimensions_bytes(bytes) else {
             self.doc.io_error = Some("Could not read dropped image.".into());
             self.request_main_redraw();
             return;
         };
-        let (w, h) = (raster.native_w as f64, raster.native_h as f64);
+        let (w, h) = (nw as f64, nh as f64);
         let stem = if name.is_empty() { "Image" } else { name };
         let container = format!("images/{stem}-{}.png", amalith_core::AssetId::new());
         self.doc.asset_store.insert(&container, bytes.to_vec());
@@ -2137,7 +2145,7 @@ impl App {
                     }
                 });
                 if let Some(asset) = asset {
-                    self.remember_raster(asset, container, raster.gpu);
+                    self.request_lod(asset, container, None, Some(bytes.to_vec()), nw, nh);
                 }
                 self.doc.selection = vec![id];
                 self.doc.anchor_sel.clear();
@@ -2170,14 +2178,57 @@ impl App {
         }
     }
 
-    fn remember_raster(
+    fn request_lod(
         &mut self,
-        id: AssetId,
+        asset: AssetId,
         key: String,
-        gpu: vello::peniko::ImageData,
+        path: Option<std::path::PathBuf>,
+        bytes: Option<Vec<u8>>,
+        native_w: u32,
+        native_h: u32,
     ) {
-        self.decoded_by_path.insert(key, gpu.clone());
-        self.image_cache.insert(id, gpu);
+        let max_level = (crate::lod::LOD_SIDES.len() - 1) as u8;
+        if self.image_lod.get(&asset).copied().unwrap_or(0) >= max_level {
+            if let Some(gpu) = self.decoded_by_path.get(&key) {
+                self.image_cache.insert(asset, gpu.clone());
+            }
+            return;
+        }
+        if let Some(gpu) = self.decoded_by_path.get(&key) {
+            self.image_cache.insert(asset, gpu.clone());
+            self.image_lod.insert(asset, max_level);
+            return;
+        }
+        if !self.lod_inflight.insert(asset) {
+            return;
+        }
+        if let Some(p) = path {
+            self.lod.enqueue_path(asset, p, native_w, native_h);
+        } else if let Some(b) = bytes {
+            self.lod.enqueue_bytes(asset, key, b, native_w, native_h);
+        } else {
+            self.lod_inflight.remove(&asset);
+        }
+    }
+
+    fn drain_lod(&mut self) {
+        let max_level = (crate::lod::LOD_SIDES.len() - 1) as u8;
+        let mut dirty = false;
+        for ready in self.lod.drain() {
+            if self.image_lod.get(&ready.asset).is_some_and(|&p| ready.level < p) {
+                continue;
+            }
+            self.image_cache.insert(ready.asset, ready.gpu.clone());
+            self.image_lod.insert(ready.asset, ready.level);
+            if ready.level >= max_level {
+                self.decoded_by_path.insert(ready.key, ready.gpu);
+                self.lod_inflight.remove(&ready.asset);
+            }
+            dirty = true;
+        }
+        if dirty {
+            self.request_main_redraw();
+        }
     }
 
     fn visible_image_assets(&self) -> std::collections::HashSet<AssetId> {
@@ -2223,8 +2274,7 @@ impl App {
         out
     }
 
-    /// Decode visible image assets so the next paint can draw them.
-    /// Off-screen rasters stay cold — same idea as the egui-ui viewport cull.
+    /// Kick off LOD decode for visible image assets that have no GPU copy yet.
     fn warm_images(&mut self) {
         let needed = self.visible_image_assets();
         let mut linked = Vec::new();
@@ -2233,6 +2283,7 @@ impl App {
             if a.kind != amalith_core::AssetKind::Image
                 || !needed.contains(&a.id)
                 || self.image_cache.contains_key(&a.id)
+                || self.lod_inflight.contains(&a.id)
             {
                 continue;
             }
@@ -2250,23 +2301,25 @@ impl App {
                 self.image_cache.insert(id, gpu.clone());
                 continue;
             }
-            if let Some(raster) = canvas::decode_raster_path(std::path::Path::new(&path)) {
-                self.remember_raster(id, path, raster.gpu);
-            }
+            let (nw, nh) = canvas::raster_dimensions(std::path::Path::new(&path)).unwrap_or((1, 1));
+            self.request_lod(
+                id,
+                path.clone(),
+                Some(std::path::PathBuf::from(&path)),
+                None,
+                nw,
+                nh,
+            );
         }
         for (id, key) in embedded {
             if let Some(gpu) = self.decoded_by_path.get(&key) {
                 self.image_cache.insert(id, gpu.clone());
                 continue;
             }
-            let raster = self
-                .doc
-                .asset_store
-                .get(&key)
-                .and_then(canvas::decode_raster_bytes);
-            if let Some(raster) = raster {
-                self.remember_raster(id, key, raster.gpu);
-            }
+            let bytes = self.doc.asset_store.get(&key).map(|b| b.to_vec());
+            let Some(bytes) = bytes else { continue };
+            let (nw, nh) = canvas::raster_dimensions_bytes(&bytes).unwrap_or((1, 1));
+            self.request_lod(id, key, None, Some(bytes), nw, nh);
         }
     }
 
@@ -3328,6 +3381,7 @@ impl ApplicationHandler for App {
         }
         #[cfg(target_os = "macos")]
         self.drain_mac_drops();
+        self.drain_lod();
         if self.pending_fit {
             self.fit_view();
         }

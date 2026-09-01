@@ -60,3 +60,17 @@ objc2-foundation = { version = "0.3", features = [
     "NSString",
     "NSURL",
 ] }
+# ImageIO thumbnails for progressive Place (LOD) — thread-safe, no full decode.
+objc2-core-foundation = { version = "0.3", features = [
+    "CFCGTypes",
+    "CFData",
+    "CFDictionary",
+    "CFNumber",
+    "CFURL",
+] }
+objc2-core-graphics = { version = "0.3", features = [
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGImage",
+] }

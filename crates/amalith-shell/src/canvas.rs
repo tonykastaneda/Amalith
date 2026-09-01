@@ -794,12 +794,13 @@ fn paint_object(
             if let Some(gpu) = images.get(&img.asset) {
                 paint_raster(scene, m, gpu, img.local_bounds);
             } else if let Some(b) = obj.kind.own_local_bounds() {
-                scene.stroke(
-                    &Stroke::new(1.0),
+                let r = convert::rect(b);
+                scene.fill(
+                    Fill::NonZero,
                     m,
-                    Color::from_rgb8(0x88, 0x88, 0x88),
+                    Color::from_rgb8(0x3a, 0x3a, 0x3c),
                     None,
-                    &convert::rect(b),
+                    &r,
                 );
             }
         }
@@ -856,64 +857,123 @@ pub struct Raster {
 
 /// Vello's image atlas is a square of at most 8192. Larger rasters are
 /// downsampled for the GPU; object bounds stay at native pixels.
-const GPU_ATLAS_MAX: u32 = 8192;
+pub const GPU_ATLAS_MAX: u32 = 8192;
 
+#[cfg(test)]
 fn atlas_fit(w: u32, h: u32) -> (u32, u32) {
+    fit_side(w, h, GPU_ATLAS_MAX)
+}
+
+fn fit_side(w: u32, h: u32, max_side: u32) -> (u32, u32) {
     if w == 0 || h == 0 {
         return (1, 1);
     }
-    if w <= GPU_ATLAS_MAX && h <= GPU_ATLAS_MAX {
+    if w <= max_side && h <= max_side {
         return (w, h);
     }
-    let s = GPU_ATLAS_MAX as f64 / w.max(h) as f64;
+    let s = max_side as f64 / w.max(h) as f64;
     (
         ((w as f64 * s).floor() as u32).max(1),
         ((h as f64 * s).floor() as u32).max(1),
     )
 }
 
-fn rgba_to_gpu(mut rgba: image::RgbaImage) -> ImageData {
-    let (nw, nh) = atlas_fit(rgba.width(), rgba.height());
+fn cap_rgba(mut rgba: image::RgbaImage, max_side: u32) -> image::RgbaImage {
+    let (nw, nh) = fit_side(rgba.width(), rgba.height(), max_side);
     if nw != rgba.width() || nh != rgba.height() {
         rgba = image::imageops::resize(&rgba, nw, nh, image::imageops::FilterType::Triangle);
     }
+    rgba
+}
+
+fn rgba_to_gpu(rgba: image::RgbaImage) -> ImageData {
+    let (width, height) = rgba.dimensions();
     ImageData {
         data: Blob::from(rgba.into_raw()),
         format: ImageFormat::Rgba8,
         alpha_type: ImageAlphaType::Alpha,
-        width: nw,
-        height: nh,
+        width,
+        height,
     }
+}
+
+/// Header-only dimensions. Does not decode pixels.
+pub fn raster_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(d) = crate::imageio::pixel_size(path) {
+            return Some(d);
+        }
+    }
+    image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+/// Header-only dimensions of encoded bytes.
+pub fn raster_dimensions_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(d) = crate::imageio::pixel_size_bytes(bytes) {
+            return Some(d);
+        }
+    }
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
+/// Decode `path` to a GPU image whose longest side is at most `max_side`.
+/// On macOS this is an ImageIO thumbnail (no full-res decode).
+pub fn decode_path_max_side(path: &std::path::Path, max_side: u32) -> Option<ImageData> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(img) = crate::imageio::thumbnail_path(path, max_side) {
+            return Some(img);
+        }
+    }
+    let rgba = image::open(path).ok()?.to_rgba8();
+    Some(rgba_to_gpu(cap_rgba(rgba, max_side)))
+}
+
+/// Decode encoded bytes to a GPU image whose longest side is at most `max_side`.
+pub fn decode_bytes_max_side(bytes: &[u8], max_side: u32) -> Option<ImageData> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(img) = crate::imageio::thumbnail_bytes(bytes, max_side) {
+            return Some(img);
+        }
+    }
+    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
+    Some(rgba_to_gpu(cap_rgba(rgba, max_side)))
 }
 
 /// Decode PNG/JPEG bytes into a vello image (GPU-capped) plus native size.
 pub fn decode_raster_bytes(bytes: &[u8]) -> Option<Raster> {
-    let rgba = image::load_from_memory(bytes).ok()?.to_rgba8();
-    let (native_w, native_h) = rgba.dimensions();
-    if native_w == 0 || native_h == 0 {
-        return None;
-    }
+    let (native_w, native_h) = raster_dimensions_bytes(bytes)?;
+    let gpu = decode_bytes_max_side(bytes, GPU_ATLAS_MAX)?;
     Some(Raster {
         native_w,
         native_h,
-        gpu: rgba_to_gpu(rgba),
+        gpu,
     })
 }
 
 /// Decode a raster file. PNG/JPEG via the `image` crate; on macOS, ImageIO
 /// covers HEIC and anything else Preview can open (iMessage attachments).
 pub fn decode_raster_path(path: &std::path::Path) -> Option<Raster> {
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Some(img) = decode_raster_bytes(&bytes) {
-            return Some(img);
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return crate::macdrop::decode_path_via_imageio(path);
-    }
-    #[cfg(not(target_os = "macos"))]
-    None
+    let (native_w, native_h) = raster_dimensions(path)?;
+    let gpu = decode_path_max_side(path, GPU_ATLAS_MAX)?;
+    Some(Raster {
+        native_w,
+        native_h,
+        gpu,
+    })
 }
 
 /// True for the raster types File ▸ Place and drop currently accept.

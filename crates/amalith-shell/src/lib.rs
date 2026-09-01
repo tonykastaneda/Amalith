@@ -36,7 +36,10 @@ pub mod dock;
 pub mod handles;
 pub mod home;
 pub mod icons;
+#[cfg(target_os = "macos")]
+pub mod imageio;
 pub mod layout;
+pub mod lod;
 #[cfg(target_os = "macos")]
 pub mod macdrop;
 pub mod newdoc;

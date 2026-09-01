@@ -10,7 +10,7 @@
 //! events are forwarded to winit's view underneath. ImageIO via `NSImage`
 //! also covers HEIC, which Messages attachments often are.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use objc2::rc::Retained;
@@ -49,26 +49,7 @@ fn push(item: Incoming, at: Option<(f64, f64)>) {
     }
 }
 
-/// Decode any format ImageIO understands (HEIC, TIFF, GIF, JPEG, PNG, …).
-pub fn decode_path_via_imageio(path: &Path) -> Option<crate::canvas::Raster> {
-    let png = nsimage_png_from_path(path)?;
-    crate::canvas::decode_raster_bytes(&png)
-}
 
-fn nsimage_png_from_path(path: &Path) -> Option<Vec<u8>> {
-    let s = NSString::from_str(path.to_str()?);
-    let image = NSImage::initWithContentsOfFile(NSImage::alloc(), &s)?;
-    nsimage_png_bytes(&image)
-}
-
-fn nsimage_png_bytes(image: &NSImage) -> Option<Vec<u8>> {
-    let tiff = image.TIFFRepresentation()?;
-    let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
-    let png = unsafe {
-        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
-    }?;
-    Some(png.to_vec())
-}
 
 struct DropIvars;
 
@@ -291,6 +272,15 @@ fn take_file_url(pb: &NSPasteboard, at: Option<(f64, f64)>) -> bool {
     } else {
         false
     }
+}
+
+fn nsimage_png_bytes(image: &NSImage) -> Option<Vec<u8>> {
+    let tiff = image.TIFFRepresentation()?;
+    let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
+    let png = unsafe {
+        rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
+    }?;
+    Some(png.to_vec())
 }
 
 fn take_pasteboard_image(pb: &NSPasteboard, at: Option<(f64, f64)>) -> bool {
