@@ -864,8 +864,10 @@ impl Editor {
         // Illustrator: Align To Key Object with no click uses the frontmost
         // selected object as the key (it stays put).
         let key = if to == AlignTo::KeyObject {
-            key.filter(|k| objects.contains(k))
-                .or_else(|| self.frontmost_of(&objects))
+            match key {
+                Some(k) if objects.iter().any(|&id| id == k) => Some(k),
+                _ => self.frontmost_of(&objects),
+            }
         } else {
             None
         };
@@ -876,13 +878,15 @@ impl Editor {
                 .document
                 .object(id)
                 .ok_or(CommandError::ObjectNotFound(id))?;
-            let parent_world = match obj.parent {
-                ObjectParent::Group(g) => self.document.world_transform(g),
-                ObjectParent::Layer(_) => Affine::IDENTITY,
+            // One parent-chain walk: world = parent * local. Layer children
+            // skip the inverse entirely.
+            let new_local = match obj.parent {
+                ObjectParent::Layer(_) => Affine::translate(world_delta) * obj.transform,
+                ObjectParent::Group(g) => {
+                    let p = self.document.world_transform(g);
+                    p.inverse() * Affine::translate(world_delta) * p * obj.transform
+                }
             };
-            let new_world =
-                Affine::translate(world_delta) * self.document.world_transform(id);
-            let new_local = parent_world.inverse() * new_world;
             if new_local
                 .as_coeffs()
                 .iter()

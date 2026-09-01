@@ -2526,6 +2526,28 @@ impl App {
         self.apply_panel_action(panels::Action::SetFontSize(next), false);
     }
 
+    /// Cheap context-bar Ctx for hover tips — no bounds / xform readout.
+    fn context_bar_tip_ctx(&self) -> context_bar::Ctx<'_> {
+        context_bar::Ctx {
+            theme: &self.theme,
+            selection_len: self.doc.selection.len(),
+            text_context: self.text_context(),
+            representative: None,
+            active_slot: self.active_slot,
+            cur_weight: self.doc.stroke_w,
+            cur_opacity: self.doc.opacity,
+            stroke_open: self.stroke_popover,
+            text_style: amalith_core::TextStyle::default(),
+            anchor_sel_len: self.doc.anchor_sel.len(),
+            xform: None,
+            xform_constrain: self.xform_constrain,
+            xform_edit: None,
+            pointer: self.pointer,
+            align_to: self.align_to,
+            align_to_menu: self.align_to_menu.is_some(),
+        }
+    }
+
     /// The read-only slice of state the context bar's segments draw from.
     fn context_bar_ctx(&self) -> context_bar::Ctx<'_> {
         context_bar::Ctx {
@@ -3049,7 +3071,9 @@ impl App {
             && self.pointer.y < APP_BAR_H + OPT_BAR_H
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
-            let cx = self.context_bar_ctx();
+            // Tip layout only needs selection_len / text_context / pointer —
+            // skip selection_xform (recursive group bounds on every move).
+            let cx = self.context_bar_tip_ctx();
             return context_bar::tip(opt_bar_rect(w), self.pointer, &cx);
         }
         let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
