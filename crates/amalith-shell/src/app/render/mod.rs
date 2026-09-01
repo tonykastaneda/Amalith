@@ -291,6 +291,9 @@ impl App {
                 self.color_mode,
                 &self.recent_colors,
                 &self.image_cache,
+                self.xform_ref,
+                self.xform_constrain,
+                self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -330,6 +333,12 @@ impl App {
                             layer_search_focused: self.layer_search_focused,
                             color_mode: self.color_mode,
                             recent: &self.recent_colors,
+                            xform_ref: self.xform_ref,
+                            xform_constrain: self.xform_constrain,
+                            xform_edit: self
+                                .xform_edit
+                                .as_ref()
+                                .map(|(f, s, _)| (*f, s.as_str())),
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);

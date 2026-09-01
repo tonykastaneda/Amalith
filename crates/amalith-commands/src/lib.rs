@@ -30,8 +30,10 @@ mod edit;
 mod editor;
 mod error;
 mod history;
+mod pathfinder;
 
-pub use command::{Command, CommandOutcome, PasteStack};
+pub use command::{Command, CommandOutcome, PasteStack, PathfinderOp};
+pub use pathfinder::has_visible_stroke;
 pub use editor::Editor;
 pub use error::CommandError;
 

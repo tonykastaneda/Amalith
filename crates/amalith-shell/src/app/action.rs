@@ -292,6 +292,50 @@ impl App {
                         }
                         _ => {}
                     }
+                } else if panel.0 == "transform" {
+                    match id {
+                        "flip-h" => self.flip_xform(true),
+                        "flip-v" => self.flip_xform(false),
+                        _ => {}
+                    }
+                }
+            }
+            panels::Action::SetXformRef(rp) => {
+                self.xform_ref = rp;
+            }
+            panels::Action::ToggleXformConstrain => {
+                self.xform_constrain = !self.xform_constrain;
+            }
+            panels::Action::BeginXformEdit(field) => {
+                if let Some((old, buf, _)) = self.xform_edit.take() {
+                    if old != field {
+                        self.commit_xform_buf(old, buf);
+                    }
+                }
+                self.begin_xform_edit(field);
+            }
+            panels::Action::NudgeXform { field, delta } => {
+                self.nudge_xform(field, delta);
+            }
+            panels::Action::Pathfinder(op) => {
+                let objects = self.doc.selection.clone();
+                match self.doc.editor.execute(Command::Pathfinder { op, objects }) {
+                    Ok(CommandOutcome::Object(id)) => {
+                        self.doc.selection = vec![id];
+                        self.doc.anchor_sel.clear();
+                    }
+                    Ok(_) => {
+                        self.doc.selection.clear();
+                        self.doc.anchor_sel.clear();
+                    }
+                    Err(err) => self.doc.io_error = Some(err.to_string()),
+                }
+            }
+            panels::Action::ExpandStroke => {
+                let objects = self.doc.selection.clone();
+                match self.doc.editor.execute(Command::ExpandStroke { objects }) {
+                    Ok(_) => self.doc.anchor_sel.clear(),
+                    Err(err) => self.doc.io_error = Some(err.to_string()),
                 }
             }
             panels::Action::ColorScrub { channel, t, track } => {
@@ -304,5 +348,278 @@ impl App {
             }
         }
         self.request_main_redraw();
+    }
+}
+
+impl App {
+    fn begin_xform_edit(&mut self, field: panels::transform::XformField) {
+        let seed = self
+            .xform_current(field)
+            .map(|v| trim_num(v))
+            .unwrap_or_default();
+        self.xform_edit = Some((field, seed, true));
+    }
+
+    fn xform_current(&self, field: panels::transform::XformField) -> Option<f64> {
+        use amalith_core::xform;
+        use panels::transform::XformField as F;
+        let id = *self.doc.selection.first()?;
+        let doc = self.doc.editor.document();
+        let b = doc.local_bounds_of(id)?;
+        let v = xform::values(doc.world_transform(id), b, self.xform_ref);
+        Some(match field {
+            F::X => v.x,
+            F::Y => v.y,
+            F::W => v.w,
+            F::H => v.h,
+            F::Rotation => v.rotation_deg,
+            F::Shear => v.shear_deg,
+        })
+    }
+
+    pub(in crate::app) fn nudge_xform(&mut self, field: panels::transform::XformField, dir: f64) {
+        use panels::transform::XformField as F;
+        let step = match field {
+            F::Rotation | F::Shear => {
+                if self.shift_down {
+                    15.0
+                } else {
+                    1.0
+                }
+            }
+            _ => {
+                if self.shift_down {
+                    10.0
+                } else {
+                    1.0
+                }
+            }
+        };
+        let Some(cur) = self.xform_current(field) else {
+            return;
+        };
+        self.apply_xform_value(field, cur + step * dir);
+        // Keep a live field-edit buffer in sync so a later canvas click
+        // doesn't re-apply the pre-nudge seed and snap the object back.
+        let new = self.xform_current(field);
+        if let (Some((f, buf, _)), Some(v)) = (self.xform_edit.as_mut(), new) {
+            if *f == field {
+                *buf = trim_num(v);
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    fn apply_xform_value(&mut self, field: panels::transform::XformField, value: f64) {
+        use amalith_core::xform;
+        use amalith_core::ObjectParent;
+        use panels::transform::XformField as F;
+        if !value.is_finite() {
+            return;
+        }
+        let ids = self.doc.selection.clone();
+        let rp = self.xform_ref;
+        let constrain = self.xform_constrain;
+        let mut items = Vec::new();
+        {
+            let doc = self.doc.editor.document();
+            for &id in &ids {
+                let Some(obj) = doc.object(id) else { continue };
+                let Some(bounds) = doc.local_bounds_of(id) else {
+                    continue;
+                };
+                let parent = match obj.parent {
+                    ObjectParent::Group(g) => doc.world_transform(g),
+                    ObjectParent::Layer(_) => amalith_core::Affine::IDENTITY,
+                };
+                let local = obj.transform;
+                let next = match field {
+                    F::X => xform::set_x(local, parent, bounds, rp, value),
+                    F::Y => xform::set_y(local, parent, bounds, rp, value),
+                    F::W => xform::set_w(local, parent, bounds, rp, value.max(0.01), constrain),
+                    F::H => xform::set_h(local, parent, bounds, rp, value.max(0.01), constrain),
+                    F::Rotation => xform::set_rotation(local, parent, bounds, rp, value),
+                    F::Shear => {
+                        xform::set_shear(local, parent, bounds, rp, value.clamp(-89.0, 89.0))
+                    }
+                };
+                if next.as_coeffs().iter().all(|c| c.is_finite()) {
+                    items.push((id, next));
+                }
+            }
+        }
+        if !items.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetTransforms { items });
+            self.request_main_redraw();
+        }
+    }
+
+    fn flip_xform(&mut self, horizontal: bool) {
+        use amalith_core::xform;
+        let ids = self.doc.selection.clone();
+        let rp = self.xform_ref;
+        let mut items = Vec::new();
+        {
+            let doc = self.doc.editor.document();
+            for &id in &ids {
+                let Some(obj) = doc.object(id) else { continue };
+                let Some(bounds) = doc.local_bounds_of(id) else {
+                    continue;
+                };
+                let next = if horizontal {
+                    xform::flip_h(obj.transform, bounds, rp)
+                } else {
+                    xform::flip_v(obj.transform, bounds, rp)
+                };
+                items.push((id, next));
+            }
+        }
+        if !items.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetTransforms { items });
+        }
+    }
+
+    fn commit_xform_buf(&mut self, field: panels::transform::XformField, buf: String) {
+        if let Some(v) = parse_num(&buf) {
+            self.apply_xform_value(field, v);
+        }
+    }
+
+    pub(in crate::app) fn commit_xform_edit(&mut self) {
+        if let Some((field, buf, fresh)) = self.xform_edit.take() {
+            // `fresh` means the user never typed — scroll/handle edits are
+            // already in the document. Re-applying the seed would reset them.
+            if !fresh {
+                self.commit_xform_buf(field, buf);
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn xform_field_at_pointer(&mut self) -> Option<panels::transform::XformField> {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return None;
+        }
+        if self.pointer_win == self.main_id
+            && self.pointer.y >= APP_BAR_H
+            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+        {
+            let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+            let bar = opt_bar_rect(w);
+            let cx = self.context_bar_ctx();
+            if let Some(f) = context_bar::xform_field_at(bar, &cx, self.pointer) {
+                return Some(f);
+            }
+        }
+        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
+            [RailSide::Left, RailSide::Right]
+                .iter()
+                .flat_map(|&side| {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
+                        return Vec::new();
+                    }
+                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                })
+                .collect()
+        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
+            self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })
+        }) {
+            self.floating_layout(fid).areas
+        } else {
+            return None;
+        };
+        for area in &areas {
+            if !area.body.contains(self.pointer) {
+                continue;
+            }
+            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
+                continue;
+            };
+            if pid.0 != "transform" {
+                continue;
+            }
+            return panels::transform::field_at(area.body, self.pointer);
+        }
+        None
+    }
+
+    /// Digit / Enter / Esc stay in the field. Anything else (Space, V, ⌘Z)
+    /// commits and returns false so the rest of `on_key` can run.
+    pub(in crate::app) fn xform_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.xform_edit.is_none() {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.commit_xform_edit();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.xform_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some((_, buf, fresh)) = &mut self.xform_edit {
+                    *fresh = false;
+                    buf.pop();
+                }
+                self.request_main_redraw();
+                true
+            }
+            _ => {
+                let Some(txt) = event.text.as_ref() else {
+                    self.commit_xform_edit();
+                    return false;
+                };
+                let numeric = txt.chars().all(|c| {
+                    c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ','
+                });
+                if !numeric {
+                    self.commit_xform_edit();
+                    return false;
+                }
+                if let Some((_, buf, fresh)) = &mut self.xform_edit {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if *fresh {
+                            buf.clear();
+                            *fresh = false;
+                        }
+                        buf.push(ch);
+                    }
+                }
+                self.request_main_redraw();
+                true
+            }
+        }
+    }
+}
+
+fn parse_num(s: &str) -> Option<f64> {
+    let t = s
+        .trim()
+        .trim_end_matches("px")
+        .trim_end_matches('°')
+        .trim();
+    t.parse().ok()
+}
+
+fn trim_num(v: f64) -> String {
+    let r = (v * 10_000.0).round() / 10_000.0;
+    if (r - r.round()).abs() < 5e-5 {
+        format!("{}", r.round() as i64)
+    } else {
+        let s = format!("{r:.4}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
     }
 }

@@ -32,6 +32,7 @@ mod fill_stroke;
 mod opacity;
 mod status;
 mod stroke;
+mod xform;
 
 const ID: vello::kurbo::Affine = vello::kurbo::Affine::IDENTITY;
 /// Gap between adjacent segments; a hairline separator sits in the middle.
@@ -62,6 +63,10 @@ pub struct Ctx<'a> {
     /// Number of individually-selected path anchors — flips the
     /// `anchor` (Convert) segment on.
     pub anchor_sel_len: usize,
+    /// Transform readout for the first selected object.
+    pub xform: Option<amalith_core::TransformValues>,
+    pub xform_constrain: bool,
+    pub xform_edit: Option<(crate::panels::transform::XformField, &'a str)>,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -74,6 +79,7 @@ pub enum SegKind {
     Opacity,
     Character,
     Anchor,
+    Xform,
 }
 
 struct Segment {
@@ -89,6 +95,7 @@ struct Segment {
 /// list serves every selection kind.
 const SEGMENTS: &[Segment] = &[
     status::SEGMENT,
+    xform::SEGMENT,
     anchor::SEGMENT,
     character::SEGMENT,
     fill_stroke::SEGMENT,
@@ -151,6 +158,12 @@ pub fn hit(bar: Rect, local: Point, ctx: &Ctx) -> Action {
 
 /// Where segment `kind` landed this frame, if it is visible — for anchoring
 /// popovers (the Stroke flyout) to it.
+/// Which Shape/Transform numeric field the pointer is over, if any.
+pub fn xform_field_at(bar: Rect, ctx: &Ctx, p: Point) -> Option<crate::panels::transform::XformField> {
+    let r = segment_rect(bar, ctx, SegKind::Xform)?;
+    xform::field_at(r, p)
+}
+
 pub fn segment_rect(bar: Rect, ctx: &Ctx, kind: SegKind) -> Option<Rect> {
     placed(bar, ctx)
         .into_iter()

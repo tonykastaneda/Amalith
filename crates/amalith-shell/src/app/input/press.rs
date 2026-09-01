@@ -20,6 +20,11 @@ impl App {
         // A press anywhere blurs the Layers search field; a hit on the
         // field itself re-focuses it later in this handler.
         self.layer_search_focused = false;
+        // Same for a Transform-panel numeric edit: click outside the field
+        // commits it so the canvas / zoom / Space-pan work on this press.
+        if self.xform_edit.is_some() && self.xform_field_at_pointer().is_none() {
+            self.commit_xform_edit();
+        }
         // An open Character-panel dropdown is topmost — it eats the press.
         if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
             return;
@@ -368,6 +373,12 @@ impl App {
                                         layer_search_focused: self.layer_search_focused,
                                         color_mode: self.color_mode,
                                         recent: &self.recent_colors,
+                                        xform_ref: self.xform_ref,
+                                        xform_constrain: self.xform_constrain,
+                                        xform_edit: self
+                                            .xform_edit
+                                            .as_ref()
+                                            .map(|(f, s, _)| (*f, s.as_str())),
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -842,6 +853,12 @@ impl App {
                                     layer_search_focused: self.layer_search_focused,
                                     color_mode: self.color_mode,
                                     recent: &self.recent_colors,
+                                    xform_ref: self.xform_ref,
+                                    xform_constrain: self.xform_constrain,
+                                    xform_edit: self
+                                        .xform_edit
+                                        .as_ref()
+                                        .map(|(f, s, _)| (*f, s.as_str())),
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };

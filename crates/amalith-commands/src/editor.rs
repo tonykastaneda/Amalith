@@ -7,14 +7,17 @@
 //! `amalith-core` stays free of any undo/redo concept and stays usable
 //! headless (e.g. a one-shot CLI conversion has no need for a history
 //! stack at all).
-use crate::command::{Command, CommandOutcome, PasteStack};
+use crate::command::{Command, CommandOutcome, PasteStack, PathfinderOp};
+use crate::pathfinder::{self, PathInput};
 use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
     Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, Color, Document,
-    DocumentError, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
+    DocumentError, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData,
+    Rect, Vec2,
 };
+use kurbo::BezPath;
 use std::collections::{HashMap, HashSet};
 
 /// A document plus its undo/redo history. See module docs.
@@ -807,6 +810,8 @@ impl Editor {
                 .into_iter()
                 .map(|id| Edit::SetLocked { id, locked })
                 .collect(),
+            Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
+            Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
             Command::Paste { .. } => {
                 unreachable!("Editor::execute intercepts Command::Paste before calling compile")
             }
@@ -814,6 +819,178 @@ impl Editor {
                 "Editor::execute intercepts Command::DuplicateObjects before calling compile"
             ),
         };
+        Ok(edits)
+    }
+
+    fn path_objects_in_paint_order(&self, selected: &[ObjectId]) -> Vec<ObjectId> {
+        let want: HashSet<ObjectId> = selected.iter().copied().collect();
+        let mut out = Vec::new();
+        fn walk(
+            doc: &Document,
+            ids: &[ObjectId],
+            want: &HashSet<ObjectId>,
+            out: &mut Vec<ObjectId>,
+        ) {
+            for &id in ids {
+                let Some(obj) = doc.object(id) else { continue };
+                match &obj.kind {
+                    ObjectKind::Group(g) => walk(doc, &g.children, want, out),
+                    ObjectKind::Path(_) | ObjectKind::CompoundPath(_) if want.contains(&id) => {
+                        out.push(id);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for layer in self.document.layers() {
+            walk(&self.document, &layer.children, &want, &mut out);
+        }
+        out
+    }
+
+    fn world_path(&self, id: ObjectId) -> Option<BezPath> {
+        let obj = self.document.object(id)?;
+        let local = match &obj.kind {
+            ObjectKind::Path(p) => p.geometry.clone(),
+            ObjectKind::CompoundPath(c) => {
+                let mut p = BezPath::new();
+                for s in &c.subpaths {
+                    p.extend(s.iter());
+                }
+                p
+            }
+            _ => return None,
+        };
+        Some(self.document.world_transform(id) * local)
+    }
+
+    fn compile_pathfinder(
+        &self,
+        op: PathfinderOp,
+        objects: Vec<ObjectId>,
+    ) -> Result<Vec<Edit>, CommandError> {
+        let ordered = self.path_objects_in_paint_order(&objects);
+        if ordered.len() < 2 {
+            return Err(CommandError::PathfinderNeedTwo);
+        }
+        let mut parent = None;
+        let mut inputs = Vec::new();
+        for &id in &ordered {
+            let obj = self
+                .document
+                .object(id)
+                .ok_or(CommandError::ObjectNotFound(id))?;
+            match parent {
+                None => parent = Some(obj.parent),
+                Some(p) if p == obj.parent => {}
+                Some(_) => return Err(CommandError::ObjectsSpanMultipleParents),
+            }
+            let path = self.world_path(id).ok_or(CommandError::NotAPath(id))?;
+            inputs.push(PathInput {
+                contours: pathfinder::flatten_path(&path),
+                appearance: obj.appearance,
+            });
+        }
+        let parent = parent.unwrap();
+        let parent_world = match parent {
+            ObjectParent::Group(g) => self.document.world_transform(g),
+            ObjectParent::Layer(_) => Affine::IDENTITY,
+        };
+        let results = pathfinder::apply(op, &inputs);
+        if results.is_empty() {
+            return Err(CommandError::PathfinderEmpty);
+        }
+
+        let selected: HashSet<ObjectId> = ordered.iter().copied().collect();
+        let siblings = self.document.children_of(parent);
+        let topmost = siblings
+            .iter()
+            .rposition(|id| selected.contains(id))
+            .unwrap();
+        let insert_at = siblings[..=topmost]
+            .iter()
+            .filter(|id| !selected.contains(id))
+            .count();
+
+        let mut edits: Vec<Edit> = ordered
+            .iter()
+            .rev()
+            .map(|&id| Edit::RemoveObject { id })
+            .collect();
+
+        for (i, result) in results.into_iter().enumerate() {
+            let geom = parent_world.inverse() * result.path.geometry.clone();
+            let path = PathData::from_bezpath(geom);
+            let mut object = Object::new(ObjectId::new(), parent, ObjectKind::Path(path));
+            object.appearance = result.appearance;
+            object.transform = Affine::IDENTITY;
+            edits.push(Edit::InsertObject {
+                object: Box::new(object),
+                index: insert_at + i,
+            });
+        }
+        Ok(edits)
+    }
+
+    fn compile_expand_stroke(&self, objects: Vec<ObjectId>) -> Result<Vec<Edit>, CommandError> {
+        let mut edits = Vec::new();
+        let mut any = false;
+        for id in objects {
+            let obj = self
+                .document
+                .object(id)
+                .ok_or(CommandError::ObjectNotFound(id))?
+                .clone();
+            if !pathfinder::has_visible_stroke(&obj.appearance) {
+                continue;
+            }
+            let world = self.world_path(id).ok_or(CommandError::NotAPath(id))?;
+            let Some(outlined) = pathfinder::expand_stroke(&world, &obj.appearance) else {
+                continue;
+            };
+            any = true;
+            let parent_world = match obj.parent {
+                ObjectParent::Group(g) => self.document.world_transform(g),
+                ObjectParent::Layer(_) => Affine::IDENTITY,
+            };
+            let local = PathData::from_bezpath(parent_world.inverse() * outlined.geometry.clone());
+            let mut stroke_app = obj.appearance;
+            stroke_app.fill = obj.appearance.stroke;
+            stroke_app.stroke = Paint::None;
+
+            if obj.appearance.fill == Paint::None {
+                edits.push(Edit::SetPathData {
+                    id,
+                    data: local,
+                });
+                edits.push(Edit::SetFill {
+                    id,
+                    paint: stroke_app.fill,
+                });
+                edits.push(Edit::SetStroke {
+                    id,
+                    paint: Paint::None,
+                });
+            } else {
+                let siblings = self.document.children_of(obj.parent);
+                let index = siblings.iter().position(|&x| x == id).unwrap_or(siblings.len()) + 1;
+                let new_id = ObjectId::new();
+                let mut stroke_obj = Object::new(new_id, obj.parent, ObjectKind::Path(local));
+                stroke_obj.appearance = stroke_app;
+                stroke_obj.name = obj.name.clone();
+                edits.push(Edit::SetStroke {
+                    id,
+                    paint: Paint::None,
+                });
+                edits.push(Edit::InsertObject {
+                    object: Box::new(stroke_obj),
+                    index,
+                });
+            }
+        }
+        if !any {
+            return Err(CommandError::NoStrokeToExpand);
+        }
         Ok(edits)
     }
 

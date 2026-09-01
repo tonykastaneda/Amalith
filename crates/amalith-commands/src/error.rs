@@ -34,4 +34,10 @@ pub enum CommandError {
     ObjectsSpanMultipleParents,
     #[error("no groups to ungroup")]
     NothingToUngroup,
+    #[error("select at least two paths")]
+    PathfinderNeedTwo,
+    #[error("pathfinder produced no geometry")]
+    PathfinderEmpty,
+    #[error("no stroke to expand")]
+    NoStrokeToExpand,
 }

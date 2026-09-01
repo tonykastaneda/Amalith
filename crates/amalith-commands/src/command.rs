@@ -264,6 +264,30 @@ pub enum Command {
         objects: Vec<ObjectId>,
         locked: bool,
     },
+    /// Pathfinder boolean on `objects` (paint order back → front).
+    Pathfinder {
+        op: PathfinderOp,
+        objects: Vec<ObjectId>,
+    },
+    /// Outline each listed object's stroke into a filled path.
+    ExpandStroke {
+        objects: Vec<ObjectId>,
+    },
+}
+
+/// Illustrator Pathfinder panel operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathfinderOp {
+    Unite,
+    MinusFront,
+    Intersect,
+    Exclude,
+    Divide,
+    Trim,
+    Merge,
+    Crop,
+    Outline,
+    MinusBack,
 }
 
 /// Where a pasted clone lands in its target parent's paint order. See

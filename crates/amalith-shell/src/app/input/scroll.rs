@@ -70,6 +70,7 @@ impl App {
                 over(context_bar::SegKind::Opacity),
                 over(context_bar::SegKind::Character),
             );
+            let xf = context_bar::xform_field_at(bar, &cx, p);
             drop(cx);
             let dir = if dy > 0.0 { 1 } else { -1 };
             if sw {
@@ -84,13 +85,23 @@ impl App {
                 self.step_font_size(dir as f64);
                 return;
             }
+            if let Some(field) = xf {
+                self.nudge_xform(field, dir as f64);
+                return;
+            }
         }
         if self.cmd_down {
-            // ⌘ + scroll → zoom at the cursor.
+            // ⌘ + scroll → zoom at the cursor. Wins over Transform-field
+            // nudge so zoom still works with the pointer over the panel.
             let factor = 2f64.powf(dy / 180.0);
             self.doc.view.zoom_at(factor, self.pointer);
+        } else if dy.abs() > 0.5 {
+            if let Some(field) = self.xform_field_at_pointer() {
+                self.nudge_xform(field, if dy > 0.0 { 1.0 } else { -1.0 });
+            } else {
+                self.doc.view.pan += Vec2::new(dx, dy);
+            }
         } else {
-            // Plain scroll → pan.
             self.doc.view.pan += Vec2::new(dx, dy);
         }
     }

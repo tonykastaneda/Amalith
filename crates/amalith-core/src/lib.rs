@@ -20,6 +20,7 @@ pub mod metadata;
 pub mod object;
 pub mod swatch;
 pub mod units;
+pub mod xform;
 
 pub use appearance::{Appearance, LineCap, LineJoin, Paint, StrokeAlign, StrokeStyle};
 pub use artboard::Artboard;
@@ -39,3 +40,4 @@ pub use object::{
 };
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};
+pub use xform::{RefPoint, TransformValues};

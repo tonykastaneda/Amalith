@@ -528,6 +528,10 @@ struct App {
     picker: Option<picker::Picker>,
     /// Color panel slider space (RGB / HSB / CMYK).
     color_mode: panels::ColorSpace,
+    /// Transform panel: 9-point origin, W/H lock, live numeric edit.
+    xform_ref: amalith_core::RefPoint,
+    xform_constrain: bool,
+    xform_edit: Option<(panels::transform::XformField, String, bool)>,
     /// Recently used solid colours for the Color panel, newest first.
     recent_colors: Vec<amalith_core::Color>,
     /// GPU-ready rasters for placed images, keyed by document asset.
@@ -628,6 +632,9 @@ impl App {
             clipboard: None,
             picker: None,
             color_mode: panels::ColorSpace::Rgb,
+            xform_ref: amalith_core::RefPoint::CENTER,
+            xform_constrain: true,
+            xform_edit: None,
             recent_colors: Vec::new(),
             image_cache: HashMap::new(),
             decoded_by_path: HashMap::new(),
@@ -2414,6 +2421,12 @@ impl App {
             stroke_open: self.stroke_popover,
             text_style: self.active_text_style(),
             anchor_sel_len: self.doc.anchor_sel.len(),
+            xform: selection_xform(self.doc.editor.document(), &self.doc.selection, self.xform_ref),
+            xform_constrain: self.xform_constrain,
+            xform_edit: self
+                .xform_edit
+                .as_ref()
+                .map(|(f, s, _)| (*f, s.as_str())),
         }
     }
 
@@ -2885,6 +2898,12 @@ impl App {
             layer_search_focused: self.layer_search_focused,
             color_mode: self.color_mode,
             recent: &self.recent_colors,
+            xform_ref: self.xform_ref,
+            xform_constrain: self.xform_constrain,
+            xform_edit: self
+                .xform_edit
+                .as_ref()
+                .map(|(f, s, _)| (*f, s.as_str())),
         }
     }
 
@@ -3623,15 +3642,19 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Right rail: Color|Swatches on top, Character in the middle,
-/// Layers|Artboards at the bottom.
+/// Right rail: Color|Transform|Pathfinder on top (Swatches starts closed),
+/// Character in the middle, Layers|Artboards at the bottom.
 fn demo_right_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
         children: vec![
             Child {
                 node: Node::Tabs {
-                    panels: vec![PanelId("color"), PanelId("swatches")],
+                    panels: vec![
+                        PanelId("color"),
+                        PanelId("transform"),
+                        PanelId("pathfinder"),
+                    ],
                     active: 0,
                 },
                 weight: 1.5,
@@ -3765,6 +3788,16 @@ fn cursor_hotspot(t: Tool) -> (f64, f64) {
     }
 }
 
+fn selection_xform(
+    doc: &Document,
+    selection: &[ObjectId],
+    rp: amalith_core::RefPoint,
+) -> Option<amalith_core::TransformValues> {
+    let id = *selection.first()?;
+    let b = doc.local_bounds_of(id)?;
+    Some(amalith_core::xform::values(doc.world_transform(id), b, rp))
+}
+
 /// Snap a delta to the nearest of the 8 cardinal / diagonal directions,
 /// keeping only the component along that axis (Shift-lock for drags).
 fn snap8(d: Vec2) -> Vec2 {
@@ -3802,6 +3835,8 @@ fn tab_label(panel: PanelId) -> String {
         "swatches" => "Swatches",
         "character" => "Character",
         "color" => "Color",
+        "transform" => "Transform",
+        "pathfinder" => "Pathfinder",
         "picker" => "Color Picker",
         other => other,
     }
@@ -3885,14 +3920,15 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 7] = [
+const WINDOW_PANELS: [(&str, &str); 8] = [
     ("artboards", "Artboards"),
     ("character", "Character"),
     ("color", "Color"),
-    ("picker", "Color Picker"),
     ("layers", "Layers"),
+    ("pathfinder", "Pathfinder"),
     ("swatches", "Swatches"),
     ("tools", "Tools"),
+    ("transform", "Transform"),
 ];
 
 /// The native menu bar: an `NSMenu` on macOS, an `HMENU` attached to the

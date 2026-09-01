@@ -57,6 +57,9 @@ pub(in crate::app) fn paint_main(
     color_mode: panels::ColorSpace,
     recent: &[amalith_core::Color],
     images: &std::collections::HashMap<AssetId, crate::lod::ImageLods>,
+    xform_ref: amalith_core::RefPoint,
+    xform_constrain: bool,
+    xform_edit: Option<(panels::transform::XformField, &str)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -186,6 +189,9 @@ pub(in crate::app) fn paint_main(
                 layer_search_focused,
                 color_mode,
                 recent,
+                xform_ref,
+                xform_constrain,
+                xform_edit,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
@@ -233,6 +239,9 @@ pub(in crate::app) fn paint_main(
         stroke_open: stroke_popover,
         text_style: text_style.clone(),
         anchor_sel_len,
+        xform: super::super::selection_xform(doc, selection, xform_ref),
+        xform_constrain,
+        xform_edit,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
 

@@ -136,6 +136,9 @@ impl App {
             }
             return;
         }
+        if self.xform_edit.is_some() && self.xform_key(&event) {
+            return;
+        }
         if self.doc.rename.is_some() {
             self.rename_key(&event);
             return;

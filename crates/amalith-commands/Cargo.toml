@@ -8,5 +8,6 @@ description = "Command engine and undo/redo history for Amalith documents."
 [dependencies]
 amalith-core = { path = "../amalith-core" }
 amalith-io = { path = "../amalith-io" }
+i_overlay = "8.1.0"
 kurbo.workspace = true
 thiserror.workspace = true

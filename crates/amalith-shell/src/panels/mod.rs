@@ -12,11 +12,13 @@ pub mod color;
 mod layers;
 mod swatches;
 pub mod tools;
+pub mod transform;
+pub mod pathfinder;
 
 use std::collections::HashSet;
 
 use amalith_core::{
-    Appearance, ArtboardId, Color as CoreColor, Document, LayerId, ObjectId, Paint,
+    Appearance, ArtboardId, Color as CoreColor, Document, LayerId, ObjectId, Paint, RefPoint,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -111,6 +113,11 @@ pub struct Ctx<'a> {
     pub color_mode: ColorSpace,
     /// Color panel: recently used solid colours, newest first.
     pub recent: &'a [CoreColor],
+    /// Transform panel 9-point origin and W/H lock.
+    pub xform_ref: RefPoint,
+    pub xform_constrain: bool,
+    /// Live numeric edit buffer, if a Transform field is being typed.
+    pub xform_edit: Option<(transform::XformField, &'a str)>,
 }
 
 /// A character-attribute flag toggled from the Character panel.
@@ -209,6 +216,16 @@ pub enum Action {
     ColorScrub { channel: u8, t: f32, track: Rect },
     /// Color panel: pick a hue from the spectrum bar.
     ColorSpectrum { t: f32, track: Rect },
+    // --- Transform panel ---
+    SetXformRef(RefPoint),
+    ToggleXformConstrain,
+    BeginXformEdit(transform::XformField),
+    NudgeXform {
+        field: transform::XformField,
+        delta: f64,
+    },
+    Pathfinder(amalith_commands::PathfinderOp),
+    ExpandStroke,
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
@@ -228,6 +245,7 @@ pub enum MenuEntry {
 pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
     match id.0 {
         "color" => color::menu(ctx),
+        "transform" => transform::menu(ctx),
         _ => Vec::new(),
     }
 }
@@ -235,7 +253,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
 /// Whether the hamburger should show on `id`'s tab strip. Hidden when
 /// [`menu`] is empty so unused chrome stays out of the way.
 pub fn has_menu(id: PanelId) -> bool {
-    matches!(id.0, "color")
+    matches!(id.0, "color" | "transform")
 }
 
 pub use color::ColorSpace;
@@ -249,6 +267,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "swatches" => swatches::paint(scene, text, body, ctx),
         "character" => character::paint(scene, text, body, ctx),
         "color" => color::paint(scene, text, body, ctx),
+        "transform" => transform::paint(scene, text, body, ctx),
+        "pathfinder" => pathfinder::paint(scene, text, body, ctx),
         "picker" => {
             if let Some(pk) = ctx.picker {
                 let mut local = pk;
@@ -270,6 +290,8 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
         "color" => color::hit(body, local, ctx),
+        "transform" => transform::hit(body, local, ctx),
+        "pathfinder" => pathfinder::hit(body, local, ctx),
         "picker" => {
             ctx.picker.map_or(Action::None, |mut pk| {
                 pk.origin = Point::new(body.x0, body.y0);
@@ -298,6 +320,8 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
         "artboards" | "swatches" => 132.0,
         "color" => color::NATURAL_H,
+        "transform" => transform::natural_height(),
+        "pathfinder" => pathfinder::natural_height(),
         "picker" => crate::picker::H,
         _ => 60.0,
     }
@@ -310,6 +334,8 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         "color" => color::tip(body, local, ctx).map(str::to_string),
         "picker" => Some("Color Picker".into()),
         "character" => character::tip(body, local, ctx).map(str::to_string),
+        "transform" => transform::tip(body, local, ctx).map(str::to_string),
+        "pathfinder" => pathfinder::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }
