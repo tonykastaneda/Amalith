@@ -146,6 +146,9 @@ enum Drag {
         start_doc: Point,
         last_doc: Point,
         moved: bool,
+        /// Object under the press, if any — a click (no drag) on an
+        /// already-selected object designates it as the Align key object.
+        hit: Option<ObjectId>,
     },
     /// Rubber-band selection; `start` is the press point (screen px).
     Marquee { start: Point },
@@ -487,6 +490,8 @@ struct App {
     font_menu: Option<FontMenuState>,
     /// An open panel hamburger flyout.
     panel_menu: Option<PanelMenu>,
+    /// Options-bar Align To dropdown, anchored at the button (screen px).
+    align_to_menu: Option<Rect>,
     /// Hover tooltip, if the pointer has been resting on a labelled control.
     tooltip: Option<Tooltip>,
     /// Layers panel search: the current filter text, and whether the field
@@ -532,6 +537,13 @@ struct App {
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
     xform_edit: Option<(panels::transform::XformField, String, bool)>,
+    /// Align panel: what to align to, and the key object (thicker outline).
+    align_to: amalith_commands::AlignTo,
+    key_object: Option<ObjectId>,
+    /// Distribute Spacing value. `None` = Auto.
+    align_spacing: Option<f64>,
+    /// Live buffer while the Align spacing field is being typed.
+    align_spacing_edit: Option<(String, bool)>,
     /// Recently used solid colours for the Color panel, newest first.
     recent_colors: Vec<amalith_core::Color>,
     /// GPU-ready rasters for placed images, keyed by document asset.
@@ -614,6 +626,7 @@ impl App {
             font_families: Vec::new(),
             font_menu: None,
             panel_menu: None,
+            align_to_menu: None,
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
@@ -635,6 +648,10 @@ impl App {
             xform_ref: amalith_core::RefPoint::CENTER,
             xform_constrain: true,
             xform_edit: None,
+            align_to: amalith_commands::AlignTo::Selection,
+            key_object: None,
+            align_spacing: Some(0.0),
+            align_spacing_edit: None,
             recent_colors: Vec::new(),
             image_cache: HashMap::new(),
             decoded_by_path: HashMap::new(),
@@ -965,6 +982,7 @@ impl App {
                 .map(|v| format!("{}", *v as i64))
                 .collect(),
         };
+        self.align_to_menu = None;
         self.font_menu = Some(FontMenuState {
             kind,
             anchor,
@@ -1093,6 +1111,59 @@ impl App {
         true
     }
 
+    const AT_W: f64 = 188.0;
+    const AT_ROW: f64 = 24.0;
+    const AT_PAD: f64 = 6.0;
+
+    fn align_to_items() -> [(amalith_commands::AlignTo, &'static str); 3] {
+        [
+            (amalith_commands::AlignTo::Selection, "Align to Selection"),
+            (amalith_commands::AlignTo::KeyObject, "Align to Key Object"),
+            (amalith_commands::AlignTo::Artboard, "Align to Artboard"),
+        ]
+    }
+
+    fn align_to_menu_rect(anchor: Rect) -> Rect {
+        let h = Self::AT_PAD * 2.0 + Self::AT_ROW * 3.0;
+        Rect::new(
+            anchor.x0,
+            anchor.y1 + 2.0,
+            anchor.x0 + Self::AT_W,
+            anchor.y1 + 2.0 + h,
+        )
+    }
+
+    /// Click while the Align To dropdown is open. Consumes the press.
+    fn align_to_menu_click(&mut self, p: Point) -> bool {
+        let Some(anchor) = self.align_to_menu else {
+            return false;
+        };
+        if anchor.contains(p) {
+            self.align_to_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let fly = Self::align_to_menu_rect(anchor);
+        if !fly.contains(p) {
+            self.align_to_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let mut y = fly.y0 + Self::AT_PAD;
+        for (to, _) in Self::align_to_items() {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::AT_ROW);
+            if row.contains(p) {
+                self.align_to_menu = None;
+                self.apply_panel_action(panels::Action::SetAlignTo(to), false);
+                return true;
+            }
+            y += Self::AT_ROW;
+        }
+        self.align_to_menu = None;
+        self.request_main_redraw();
+        true
+    }
+
     const PM_W: f64 = 168.0;
     const PM_ROW: f64 = 28.0;
     const PM_SEP: f64 = 9.0;
@@ -1128,6 +1199,7 @@ impl App {
 
     fn toggle_panel_menu(&mut self, panel: PanelId, anchor: Rect, win: WindowId) {
         self.font_menu = None;
+        self.align_to_menu = None;
         if self
             .panel_menu
             .as_ref()
@@ -1329,29 +1401,75 @@ impl App {
             .map(|o| o.appearance)
     }
 
+    /// Frontmost selected object (last in layer stacking). Illustrator uses
+    /// this as the default key object when Align To Key Object is chosen
+    /// without a click.
+    fn frontmost_selected(&self) -> Option<ObjectId> {
+        let want: std::collections::HashSet<ObjectId> =
+            self.doc.selection.iter().copied().collect();
+        let doc = self.doc.editor.document();
+        let mut last = None;
+        for layer in doc.layers() {
+            for &id in doc.children_of(amalith_core::ObjectParent::Layer(layer.id)) {
+                if want.contains(&id) {
+                    last = Some(id);
+                }
+            }
+        }
+        last.or_else(|| self.doc.selection.last().copied())
+    }
+
+    /// Keep Align To / key object in sync with the current selection.
+    /// One object → Artboard (can't align to itself). Key object dropped
+    /// when it leaves the selection.
+    fn sync_align_mode(&mut self) {
+        if self.doc.selection.len() < 2
+            || self
+                .key_object
+                .is_some_and(|k| !self.doc.selection.contains(&k))
+        {
+            self.key_object = None;
+        }
+        if self.key_object.is_some() {
+            self.align_to = amalith_commands::AlignTo::KeyObject;
+            return;
+        }
+        if self.align_to == amalith_commands::AlignTo::KeyObject {
+            self.align_to = amalith_commands::AlignTo::Selection;
+        }
+        if self.doc.selection.len() <= 1
+            && self.align_to == amalith_commands::AlignTo::Selection
+        {
+            self.align_to = amalith_commands::AlignTo::Artboard;
+        }
+    }
+
     /// Drop selection ids / anchors that no longer exist.
     fn prune_selection(&mut self) {
-        let doc = self.doc.editor.document();
-        self.doc.selection.retain(|id| doc.object(*id).is_some());
-        self.doc.anchor_sel
-            .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
-                Some(amalith_core::ObjectKind::Path(pd)) => {
-                    *i < amalith_core::anchor_count(pd.subpaths())
-                }
-                _ => false,
-            });
-        if self
-            .doc.selected_layer
-            .is_some_and(|id| !doc.layers().iter().any(|l| l.id == id))
         {
-            self.doc.selected_layer = None;
+            let doc = self.doc.editor.document();
+            self.doc.selection.retain(|id| doc.object(*id).is_some());
+            self.doc.anchor_sel
+                .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
+                    Some(amalith_core::ObjectKind::Path(pd)) => {
+                        *i < amalith_core::anchor_count(pd.subpaths())
+                    }
+                    _ => false,
+                });
+            if self
+                .doc.selected_layer
+                .is_some_and(|id| !doc.layers().iter().any(|l| l.id == id))
+            {
+                self.doc.selected_layer = None;
+            }
+            if self
+                .doc.selected_artboard
+                .is_some_and(|id| doc.artboard(id).is_none())
+            {
+                self.doc.selected_artboard = None;
+            }
         }
-        if self
-            .doc.selected_artboard
-            .is_some_and(|id| doc.artboard(id).is_none())
-        {
-            self.doc.selected_artboard = None;
-        }
+        self.sync_align_mode();
     }
 
     /// The tool pointer input actually routes to. Holding ⌘ while the
@@ -2427,6 +2545,9 @@ impl App {
                 .xform_edit
                 .as_ref()
                 .map(|(f, s, _)| (*f, s.as_str())),
+            pointer: self.pointer,
+            align_to: self.align_to,
+            align_to_menu: self.align_to_menu.is_some(),
         }
     }
 
@@ -2679,6 +2800,7 @@ impl App {
             .iter()
             .flat_map(|l| l.children.iter().copied())
             .collect();
+        self.sync_align_mode();
         self.request_main_redraw();
     }
 
@@ -2904,6 +3026,10 @@ impl App {
                 .xform_edit
                 .as_ref()
                 .map(|(f, s, _)| (*f, s.as_str())),
+            align_to: self.align_to,
+            align_spacing: self.align_spacing,
+            align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+            key_object: self.key_object,
         }
     }
 
@@ -2913,9 +3039,18 @@ impl App {
         if !self.settings.show_tooltips
             || !matches!(self.drag, Drag::None)
             || self.font_menu.is_some()
+            || self.align_to_menu.is_some()
             || self.prefs.is_some()
         {
             return None;
+        }
+        if self.pointer_win == self.main_id
+            && self.pointer.y >= APP_BAR_H
+            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+        {
+            let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+            let cx = self.context_bar_ctx();
+            return context_bar::tip(opt_bar_rect(w), self.pointer, &cx);
         }
         let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
             [RailSide::Left, RailSide::Right]
@@ -3642,8 +3777,8 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Right rail: Color|Transform|Pathfinder on top (Swatches starts closed),
-/// Character in the middle, Layers|Artboards at the bottom.
+/// Right rail: Color|Transform|Pathfinder|Align on top (Swatches starts
+/// closed), Character in the middle, Layers|Artboards at the bottom.
 fn demo_right_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
@@ -3654,6 +3789,7 @@ fn demo_right_dock() -> Node {
                         PanelId("color"),
                         PanelId("transform"),
                         PanelId("pathfinder"),
+                        PanelId("align"),
                     ],
                     active: 0,
                 },
@@ -3837,6 +3973,7 @@ fn tab_label(panel: PanelId) -> String {
         "color" => "Color",
         "transform" => "Transform",
         "pathfinder" => "Pathfinder",
+        "align" => "Align",
         "picker" => "Color Picker",
         other => other,
     }
@@ -3920,7 +4057,8 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 8] = [
+const WINDOW_PANELS: [(&str, &str); 9] = [
+    ("align", "Align"),
     ("artboards", "Artboards"),
     ("character", "Character"),
     ("color", "Color"),

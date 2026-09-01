@@ -173,6 +173,7 @@ pub fn paint(
     // overlay, so its committed content is skipped here.
     editing_text: Option<ObjectId>,
     images: &HashMap<AssetId, ImageLods>,
+    key_object: Option<ObjectId>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -441,6 +442,29 @@ pub fn paint(
                 None,
                 &center,
             );
+        }
+        if let Some(kid) = key_object {
+            if let Some(q) = select::selection_quad(doc, &[kid]) {
+                let extra = match drag {
+                    Some(d) if d.xf.is_some() => xf_for_quad(doc, &[kid], d),
+                    Some(d) if d.is_dragged(kid) => Affine::translate(d.delta),
+                    _ => Affine::IDENTITY,
+                };
+                let q = q.map(|p| vt * extra * p);
+                let mut path = BezPath::new();
+                path.move_to(q[0]);
+                for p in &q[1..] {
+                    path.line_to(*p);
+                }
+                path.close_path();
+                scene.stroke(
+                    &Stroke::new(2.5),
+                    Affine::IDENTITY,
+                    theme.accent,
+                    None,
+                    &path,
+                );
+            }
         }
     }
 

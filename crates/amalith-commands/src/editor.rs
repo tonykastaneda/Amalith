@@ -7,6 +7,7 @@
 //! `amalith-core` stays free of any undo/redo concept and stays usable
 //! headless (e.g. a one-shot CLI conversion has no need for a history
 //! stack at all).
+use crate::align::{self, AlignKind, AlignTo};
 use crate::command::{Command, CommandOutcome, PasteStack, PathfinderOp};
 use crate::pathfinder::{self, PathInput};
 use crate::edit::{self, Edit, NewId};
@@ -812,6 +813,14 @@ impl Editor {
                 .collect(),
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
+            Command::Align {
+                objects,
+                kind,
+                to,
+                key,
+                artboard,
+                spacing,
+            } => self.compile_align(objects, kind, to, key, artboard, spacing)?,
             Command::Paste { .. } => {
                 unreachable!("Editor::execute intercepts Command::Paste before calling compile")
             }
@@ -820,6 +829,88 @@ impl Editor {
             ),
         };
         Ok(edits)
+    }
+
+    fn compile_align(
+        &self,
+        objects: Vec<ObjectId>,
+        kind: AlignKind,
+        to: AlignTo,
+        key: Option<ObjectId>,
+        artboard: Option<ArtboardId>,
+        spacing: Option<f64>,
+    ) -> Result<Vec<Edit>, CommandError> {
+        if objects.is_empty() {
+            return Err(CommandError::NothingToAlign);
+        }
+        let mut bounds = Vec::new();
+        for &id in &objects {
+            let b = self
+                .document
+                .bounds_of(id)
+                .ok_or(CommandError::ObjectNotFound(id))?;
+            bounds.push((id, b));
+        }
+        let frame = match to {
+            AlignTo::Artboard => {
+                let id = artboard.ok_or(CommandError::NothingToAlign)?;
+                self.document
+                    .artboard(id)
+                    .ok_or(CommandError::ArtboardNotFound(id))?
+                    .rect
+            }
+            _ => Rect::new(0.0, 0.0, 0.0, 0.0),
+        };
+        // Illustrator: Align To Key Object with no click uses the frontmost
+        // selected object as the key (it stays put).
+        let key = if to == AlignTo::KeyObject {
+            key.filter(|k| objects.contains(k))
+                .or_else(|| self.frontmost_of(&objects))
+        } else {
+            None
+        };
+        let moves = align::deltas(&bounds, kind, to, key, frame, spacing);
+        let mut edits = Vec::new();
+        for (id, world_delta) in moves {
+            let obj = self
+                .document
+                .object(id)
+                .ok_or(CommandError::ObjectNotFound(id))?;
+            let parent_world = match obj.parent {
+                ObjectParent::Group(g) => self.document.world_transform(g),
+                ObjectParent::Layer(_) => Affine::IDENTITY,
+            };
+            let new_world =
+                Affine::translate(world_delta) * self.document.world_transform(id);
+            let new_local = parent_world.inverse() * new_world;
+            if new_local
+                .as_coeffs()
+                .iter()
+                .zip(obj.transform.as_coeffs())
+                .all(|(a, b)| (*a - b).abs() < 1e-9)
+            {
+                continue;
+            }
+            edits.push(Edit::SetTransform {
+                id,
+                transform: new_local,
+            });
+        }
+        Ok(edits)
+    }
+
+    /// Last in layer-child order among `ids` — the frontmost selected object.
+    fn frontmost_of(&self, ids: &[ObjectId]) -> Option<ObjectId> {
+        let want: HashSet<ObjectId> = ids.iter().copied().collect();
+        let mut last = None;
+        for layer in self.document.layers() {
+            for &id in &layer.children {
+                if want.contains(&id) {
+                    last = Some(id);
+                }
+            }
+        }
+        last.or_else(|| ids.last().copied())
     }
 
     fn path_objects_in_paint_order(&self, selected: &[ObjectId]) -> Vec<ObjectId> {

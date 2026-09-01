@@ -14,6 +14,7 @@ mod swatches;
 pub mod tools;
 pub mod transform;
 pub mod pathfinder;
+pub mod align;
 
 use std::collections::HashSet;
 
@@ -118,6 +119,12 @@ pub struct Ctx<'a> {
     pub xform_constrain: bool,
     /// Live numeric edit buffer, if a Transform field is being typed.
     pub xform_edit: Option<(transform::XformField, &'a str)>,
+    pub align_to: amalith_commands::AlignTo,
+    pub align_spacing: Option<f64>,
+    /// Live buffer while the Align spacing field is being typed.
+    pub align_spacing_edit: Option<&'a str>,
+    /// Object that stays put for Align To Key Object (thicker outline).
+    pub key_object: Option<ObjectId>,
 }
 
 /// A character-attribute flag toggled from the Character panel.
@@ -226,6 +233,11 @@ pub enum Action {
     },
     Pathfinder(amalith_commands::PathfinderOp),
     ExpandStroke,
+    Align(amalith_commands::AlignKind),
+    SetAlignTo(amalith_commands::AlignTo),
+    BeginAlignSpacingEdit,
+    /// Options-bar Align To dropdown, anchored at the button rect.
+    OpenAlignToMenu(Rect),
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
@@ -246,6 +258,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
     match id.0 {
         "color" => color::menu(ctx),
         "transform" => transform::menu(ctx),
+        "align" => align::menu(ctx),
         _ => Vec::new(),
     }
 }
@@ -253,7 +266,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
 /// Whether the hamburger should show on `id`'s tab strip. Hidden when
 /// [`menu`] is empty so unused chrome stays out of the way.
 pub fn has_menu(id: PanelId) -> bool {
-    matches!(id.0, "color" | "transform")
+    matches!(id.0, "color" | "transform" | "align")
 }
 
 pub use color::ColorSpace;
@@ -269,6 +282,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "color" => color::paint(scene, text, body, ctx),
         "transform" => transform::paint(scene, text, body, ctx),
         "pathfinder" => pathfinder::paint(scene, text, body, ctx),
+        "align" => align::paint(scene, text, body, ctx),
         "picker" => {
             if let Some(pk) = ctx.picker {
                 let mut local = pk;
@@ -292,6 +306,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "color" => color::hit(body, local, ctx),
         "transform" => transform::hit(body, local, ctx),
         "pathfinder" => pathfinder::hit(body, local, ctx),
+        "align" => align::hit(body, local, ctx),
         "picker" => {
             ctx.picker.map_or(Action::None, |mut pk| {
                 pk.origin = Point::new(body.x0, body.y0);
@@ -322,6 +337,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "color" => color::NATURAL_H,
         "transform" => transform::natural_height(),
         "pathfinder" => pathfinder::natural_height(),
+        "align" => align::natural_height(),
         "picker" => crate::picker::H,
         _ => 60.0,
     }
@@ -336,6 +352,7 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         "character" => character::tip(body, local, ctx).map(str::to_string),
         "transform" => transform::tip(body, local, ctx).map(str::to_string),
         "pathfinder" => pathfinder::tip(body, local, ctx).map(str::to_string),
+        "align" => align::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }

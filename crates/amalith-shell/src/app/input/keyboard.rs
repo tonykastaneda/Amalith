@@ -127,6 +127,15 @@ impl App {
             self.font_menu_key(&event);
             return;
         }
+        if self.align_to_menu.is_some() {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.align_to_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
         if self.panel_menu.is_some() {
             if event.state.is_pressed()
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
@@ -137,6 +146,9 @@ impl App {
             return;
         }
         if self.xform_edit.is_some() && self.xform_key(&event) {
+            return;
+        }
+        if self.align_spacing_edit.is_some() && self.align_spacing_key(&event) {
             return;
         }
         if self.doc.rename.is_some() {

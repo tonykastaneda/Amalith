@@ -60,6 +60,11 @@ pub(in crate::app) fn paint_main(
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
     xform_edit: Option<(panels::transform::XformField, &str)>,
+    align_to: amalith_commands::AlignTo,
+    align_to_menu: bool,
+    align_spacing: Option<f64>,
+    align_spacing_edit: Option<&str>,
+    key_object: Option<ObjectId>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -98,6 +103,7 @@ pub(in crate::app) fn paint_main(
         anchor_view,
         editing_text,
         images,
+        key_object,
     );
 
     if let Some(m) = marquee {
@@ -192,6 +198,10 @@ pub(in crate::app) fn paint_main(
                 xform_ref,
                 xform_constrain,
                 xform_edit,
+                align_to,
+                align_spacing,
+                align_spacing_edit,
+                key_object,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
@@ -242,6 +252,9 @@ pub(in crate::app) fn paint_main(
         xform: super::super::selection_xform(doc, selection, xform_ref),
         xform_constrain,
         xform_edit,
+        pointer,
+        align_to,
+        align_to_menu,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
 

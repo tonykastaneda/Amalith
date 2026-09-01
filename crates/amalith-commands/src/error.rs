@@ -40,4 +40,6 @@ pub enum CommandError {
     PathfinderEmpty,
     #[error("no stroke to expand")]
     NoStrokeToExpand,
+    #[error("nothing to align")]
+    NothingToAlign,
 }

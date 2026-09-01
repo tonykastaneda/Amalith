@@ -25,8 +25,14 @@ impl App {
         if self.xform_edit.is_some() && self.xform_field_at_pointer().is_none() {
             self.commit_xform_edit();
         }
+        if self.align_spacing_edit.is_some() && !self.align_spacing_field_at_pointer() {
+            self.commit_align_spacing_edit();
+        }
         // An open Character-panel dropdown is topmost — it eats the press.
         if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
+            return;
+        }
+        if self.align_to_menu.is_some() && self.align_to_menu_click(self.pointer) {
             return;
         }
         // An open panel hamburger flyout: clicks inside it are consumed;
@@ -379,6 +385,13 @@ impl App {
                                             .xform_edit
                                             .as_ref()
                                             .map(|(f, s, _)| (*f, s.as_str())),
+                                        align_to: self.align_to,
+                                        align_spacing: self.align_spacing,
+                                        align_spacing_edit: self
+                                            .align_spacing_edit
+                                            .as_ref()
+                                            .map(|(s, _)| s.as_str()),
+                                        key_object: self.key_object,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -739,10 +752,11 @@ impl App {
                         }
                     }
                 }
-                let start_move = |dp: Point| Drag::MoveObjects {
+                let start_move = |dp: Point, hit: Option<ObjectId>| Drag::MoveObjects {
                     start_doc: dp,
                     last_doc: dp,
                     moved: false,
+                    hit,
                 };
                 let doc = self.doc.editor.document();
                 if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
@@ -764,14 +778,17 @@ impl App {
                         } else {
                             self.doc.selection.push(id);
                         }
+                        self.sync_align_mode();
                     } else {
                         // Click on an unselected object replaces the
                         // selection before the move; click on one already
-                        // selected drags the whole selection.
+                        // selected drags the whole selection (a click
+                        // without a drag designates the Align key object).
                         if !self.doc.selection.contains(&id) {
                             self.doc.selection = vec![id];
+                            self.sync_align_mode();
                         }
-                        self.drag = start_move(dp);
+                        self.drag = start_move(dp, Some(id));
                     }
                 } else {
                     // Empty space: a press inside the selection box drags
@@ -780,10 +797,11 @@ impl App {
                         && select::union_bounds(doc, &self.doc.selection)
                             .is_some_and(|b| b.contains(dp));
                     if inside_box {
-                        self.drag = start_move(dp);
+                        self.drag = start_move(dp, None);
                     } else {
                         if !self.shift_down {
                             self.doc.selection.clear();
+                            self.sync_align_mode();
                         }
                         self.drag = Drag::Marquee {
                             start: self.pointer,
@@ -859,6 +877,13 @@ impl App {
                                         .xform_edit
                                         .as_ref()
                                         .map(|(f, s, _)| (*f, s.as_str())),
+                                    align_to: self.align_to,
+                                    align_spacing: self.align_spacing,
+                                    align_spacing_edit: self
+                                        .align_spacing_edit
+                                        .as_ref()
+                                        .map(|(s, _)| s.as_str()),
+                                    key_object: self.key_object,
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };

@@ -25,6 +25,7 @@
 //! See `editor.rs` for why history lives on `Editor` rather than on
 //! `Document` itself, and `edit.rs` for why undo/redo replays captured
 //! inverse edits rather than re-running commands.
+mod align;
 mod command;
 mod edit;
 mod editor;
@@ -32,6 +33,7 @@ mod error;
 mod history;
 mod pathfinder;
 
+pub use align::{AlignKind, AlignTo};
 pub use command::{Command, CommandOutcome, PasteStack, PathfinderOp};
 pub use pathfinder::has_visible_stroke;
 pub use editor::Editor;

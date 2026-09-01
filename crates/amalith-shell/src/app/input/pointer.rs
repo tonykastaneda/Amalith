@@ -118,15 +118,29 @@ impl App {
                 self.update_canvas_cursor();
                 self.request_main_redraw();
             }
-            Drag::MoveObjects { start_doc, .. } => {
+            Drag::MoveObjects {
+                start_doc,
+                last_doc: _,
+                moved,
+                hit,
+            } => {
                 let start_doc = *start_doc;
+                let hit = *hit;
+                let already = *moved;
                 let dp = self.doc_point(self.pointer);
+                // Click-to-set-key-object needs a slop so a 1px jitter
+                // isn't treated as a move. Threshold is screen px.
+                let screen = (dp - start_doc).hypot() * self.doc.view.zoom;
+                let moved = already || screen > 4.0;
                 self.drag = Drag::MoveObjects {
                     start_doc,
                     last_doc: dp,
-                    moved: true,
+                    moved,
+                    hit,
                 };
-                self.request_main_redraw();
+                if moved {
+                    self.request_main_redraw();
+                }
             }
             Drag::Marquee { start } | Drag::AnchorMarquee { start, .. } => {
                 self.marquee = Some(Rect::from_points(*start, self.pointer));
@@ -381,8 +395,22 @@ impl App {
                 start_doc,
                 last_doc,
                 moved,
+                hit,
             } => {
-                if moved && !self.doc.selection.is_empty() {
+                if !moved {
+                    if let Some(id) = hit.filter(|id| self.doc.selection.contains(id)) {
+                        if self.doc.selection.len() >= 2 {
+                            if self.key_object == Some(id) {
+                                self.key_object = None;
+                                self.align_to = amalith_commands::AlignTo::Selection;
+                            } else {
+                                self.key_object = Some(id);
+                                self.align_to = amalith_commands::AlignTo::KeyObject;
+                            }
+                            self.request_main_redraw();
+                        }
+                    }
+                } else if !self.doc.selection.is_empty() {
                     let mut d = last_doc - start_doc;
                     if self.shift_down {
                         d = snap8(d);
@@ -557,6 +585,7 @@ impl App {
                 } else {
                     self.doc.selection = hits;
                 }
+                self.sync_align_mode();
                 self.marquee = None;
                 self.request_main_redraw();
             }

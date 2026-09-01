@@ -24,6 +24,7 @@ impl App {
                 start_doc,
                 last_doc,
                 moved: true,
+                ..
             } => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: if self.shift_down {
@@ -294,6 +295,11 @@ impl App {
                 self.xform_ref,
                 self.xform_constrain,
                 self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                self.align_to,
+                self.align_to_menu.is_some(),
+                self.align_spacing,
+                self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+                self.key_object,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -339,6 +345,13 @@ impl App {
                                 .xform_edit
                                 .as_ref()
                                 .map(|(f, s, _)| (*f, s.as_str())),
+                            align_to: self.align_to,
+                            align_spacing: self.align_spacing,
+                            align_spacing_edit: self
+                                .align_spacing_edit
+                                .as_ref()
+                                .map(|(s, _)| s.as_str()),
+                            key_object: self.key_object,
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -379,6 +392,7 @@ impl App {
                 );
             }
             self.paint_font_menu();
+            self.paint_align_to_menu();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that.
             if let Some(hm) = &mut self.home {

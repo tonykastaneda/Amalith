@@ -92,6 +92,56 @@ impl App {
         self.content.pop_layer();
     }
 
+    pub(in crate::app) fn paint_align_to_menu(&mut self) {
+        let Some(anchor) = self.align_to_menu else {
+            return;
+        };
+        let fly = Self::align_to_menu_rect(anchor);
+        let th = &self.theme;
+        self.content.fill(
+            Fill::NonZero,
+            ID,
+            th.bg,
+            None,
+            &fly.to_rounded_rect(4.0),
+        );
+        self.content.stroke(
+            &Stroke::new(1.0),
+            ID,
+            th.border,
+            None,
+            &fly.to_rounded_rect(4.0),
+        );
+        let mut y = fly.y0 + Self::AT_PAD;
+        for (to, label) in Self::align_to_items() {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::AT_ROW);
+            if row.contains(self.pointer) {
+                self.content
+                    .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
+            }
+            let on = self.align_to == to;
+            if on {
+                self.text.draw(
+                    &mut self.content,
+                    "✓",
+                    12.0,
+                    th.accent,
+                    row.x0 + 10.0,
+                    row.center().y + 4.0,
+                );
+            }
+            self.text.draw(
+                &mut self.content,
+                label,
+                12.5,
+                if on { th.accent } else { th.text },
+                row.x0 + 28.0,
+                row.center().y + 4.5,
+            );
+            y += Self::AT_ROW;
+        }
+    }
+
     pub(in crate::app) fn paint_panel_menu(&mut self, wl: f64, hl: f64) {
         let Some(m) = self.panel_menu else {
             return;

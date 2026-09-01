@@ -8,6 +8,7 @@
 use amalith_core::{
     Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle, TextData, Vec2,
 };
+use crate::align::{AlignKind, AlignTo};
 
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
@@ -272,6 +273,18 @@ pub enum Command {
     /// Outline each listed object's stroke into a filled path.
     ExpandStroke {
         objects: Vec<ObjectId>,
+    },
+    /// Align / distribute `objects` in document space. `key` is the object
+    /// that stays put when `to` is [`AlignTo::KeyObject`]. `artboard` is
+    /// the frame when `to` is [`AlignTo::Artboard`]. `spacing` is the
+    /// exact gap for Distribute Spacing (`None` = Auto).
+    Align {
+        objects: Vec<ObjectId>,
+        kind: AlignKind,
+        to: AlignTo,
+        key: Option<ObjectId>,
+        artboard: Option<ArtboardId>,
+        spacing: Option<f64>,
     },
 }
 

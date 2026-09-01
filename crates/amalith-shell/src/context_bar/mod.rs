@@ -26,6 +26,7 @@ use crate::panels::{Action, PaintSlot};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
+mod align;
 mod anchor;
 mod character;
 mod fill_stroke;
@@ -67,6 +68,11 @@ pub struct Ctx<'a> {
     pub xform: Option<amalith_core::TransformValues>,
     pub xform_constrain: bool,
     pub xform_edit: Option<(crate::panels::transform::XformField, &'a str)>,
+    /// Cursor in the same space as the bar, for hover on Align buttons.
+    pub pointer: Point,
+    pub align_to: amalith_commands::AlignTo,
+    /// True while the options-bar Align To dropdown is open.
+    pub align_to_menu: bool,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -80,6 +86,7 @@ pub enum SegKind {
     Character,
     Anchor,
     Xform,
+    Align,
 }
 
 struct Segment {
@@ -96,6 +103,7 @@ struct Segment {
 const SEGMENTS: &[Segment] = &[
     status::SEGMENT,
     xform::SEGMENT,
+    align::SEGMENT,
     anchor::SEGMENT,
     character::SEGMENT,
     fill_stroke::SEGMENT,
@@ -169,6 +177,16 @@ pub fn segment_rect(bar: Rect, ctx: &Ctx, kind: SegKind) -> Option<Rect> {
         .into_iter()
         .find(|(s, _)| s.kind == kind)
         .map(|(_, r)| r)
+}
+
+/// Hover text for a control in the bar, if any.
+pub fn tip(bar: Rect, local: Point, ctx: &Ctx) -> Option<String> {
+    for (seg, r) in placed(bar, ctx) {
+        if r.contains(local) && seg.kind == SegKind::Align {
+            return align::tip(r, local).map(str::to_string);
+        }
+    }
+    None
 }
 
 // ---- shared segment widgets ---------------------------------------------

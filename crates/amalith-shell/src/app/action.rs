@@ -13,6 +13,7 @@ impl App {
             panels::Action::SetTool(t) => self.set_tool(t),
             panels::Action::Select(id) => {
                 self.doc.selection = vec![id];
+                self.sync_align_mode();
                 if double {
                     self.begin_rename(panels::RenameId::Object(id));
                 }
@@ -248,6 +249,15 @@ impl App {
             panels::Action::OpenFontMenu(kind, anchor) => {
                 self.open_font_menu(kind, anchor);
             }
+            panels::Action::OpenAlignToMenu(anchor) => {
+                self.font_menu = None;
+                self.panel_menu = None;
+                if self.align_to_menu.is_some() {
+                    self.align_to_menu = None;
+                } else {
+                    self.align_to_menu = Some(anchor);
+                }
+            }
             // --- context bar ---
             panels::Action::StepWeight(d) => self.step_weight(d),
             panels::Action::StepOpacity(d) => self.step_opacity(d),
@@ -298,6 +308,17 @@ impl App {
                         "flip-v" => self.flip_xform(false),
                         _ => {}
                     }
+                } else if panel.0 == "align" {
+                    if id == "cancel-key" {
+                        self.key_object = None;
+                        if self.align_to == amalith_commands::AlignTo::KeyObject {
+                            self.align_to = if self.doc.selection.len() <= 1 {
+                                amalith_commands::AlignTo::Artboard
+                            } else {
+                                amalith_commands::AlignTo::Selection
+                            };
+                        }
+                    }
                 }
             }
             panels::Action::SetXformRef(rp) => {
@@ -330,12 +351,65 @@ impl App {
                     }
                     Err(err) => self.doc.io_error = Some(err.to_string()),
                 }
+                self.sync_align_mode();
             }
             panels::Action::ExpandStroke => {
                 let objects = self.doc.selection.clone();
                 match self.doc.editor.execute(Command::ExpandStroke { objects }) {
                     Ok(_) => self.doc.anchor_sel.clear(),
                     Err(err) => self.doc.io_error = Some(err.to_string()),
+                }
+            }
+            panels::Action::Align(kind) => {
+                let objects = self.doc.selection.clone();
+                let artboard = self.doc.current_artboard.or_else(|| {
+                    self.doc.editor.document().artboards().first().map(|a| a.id)
+                });
+                // One object can't align to itself — fall through to the artboard,
+                // matching Illustrator's Control bar.
+                let to = if self.align_to == amalith_commands::AlignTo::Selection
+                    && objects.len() <= 1
+                {
+                    amalith_commands::AlignTo::Artboard
+                } else {
+                    self.align_to
+                };
+                match self.doc.editor.execute(Command::Align {
+                    objects,
+                    kind,
+                    to,
+                    key: self.key_object,
+                    artboard,
+                    spacing: self.align_spacing,
+                }) {
+                    Ok(_) => {}
+                    Err(err) => self.doc.io_error = Some(err.to_string()),
+                }
+            }
+            panels::Action::SetAlignTo(to) => {
+                if to == amalith_commands::AlignTo::KeyObject {
+                    if self.doc.selection.len() >= 2 {
+                        self.align_to = to;
+                        if self.key_object.is_none()
+                            || self
+                                .key_object
+                                .is_some_and(|k| !self.doc.selection.contains(&k))
+                        {
+                            self.key_object = self.frontmost_selected();
+                        }
+                    }
+                } else {
+                    self.align_to = to;
+                    self.key_object = None;
+                }
+            }
+            panels::Action::BeginAlignSpacingEdit => {
+                if self.align_spacing_edit.is_none() {
+                    let seed = self
+                        .align_spacing
+                        .map(trim_num)
+                        .unwrap_or_else(|| "Auto".into());
+                    self.align_spacing_edit = Some((seed, true));
                 }
             }
             panels::Action::ColorScrub { channel, t, track } => {
@@ -590,6 +664,122 @@ impl App {
                     return false;
                 }
                 if let Some((_, buf, fresh)) = &mut self.xform_edit {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if *fresh {
+                            buf.clear();
+                            *fresh = false;
+                        }
+                        buf.push(ch);
+                    }
+                }
+                self.request_main_redraw();
+                true
+            }
+        }
+    }
+
+    pub(in crate::app) fn commit_align_spacing_edit(&mut self) {
+        if let Some((buf, fresh)) = self.align_spacing_edit.take() {
+            if !fresh {
+                let t = buf.trim();
+                if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+                    self.align_spacing = None;
+                } else if let Some(v) = parse_num(&buf) {
+                    self.align_spacing = Some(v.max(0.0));
+                }
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn align_spacing_field_at_pointer(&mut self) -> bool {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return false;
+        }
+        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
+            [RailSide::Left, RailSide::Right]
+                .iter()
+                .flat_map(|&side| {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
+                        return Vec::new();
+                    }
+                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                })
+                .collect()
+        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
+            self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })
+        }) {
+            self.floating_layout(fid).areas
+        } else {
+            return false;
+        };
+        for area in &areas {
+            if !area.body.contains(self.pointer) {
+                continue;
+            }
+            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
+                continue;
+            };
+            if pid.0 != "align" {
+                continue;
+            }
+            return panels::align::spacing_field_at(area.body, self.pointer);
+        }
+        false
+    }
+
+    /// Digit / Enter / Esc stay in the Align spacing field.
+    pub(in crate::app) fn align_spacing_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.align_spacing_edit.is_none() {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.commit_align_spacing_edit();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.align_spacing_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some((buf, fresh)) = &mut self.align_spacing_edit {
+                    *fresh = false;
+                    buf.pop();
+                }
+                self.request_main_redraw();
+                true
+            }
+            _ => {
+                let Some(txt) = event.text.as_ref() else {
+                    self.commit_align_spacing_edit();
+                    return false;
+                };
+                let numeric = txt.chars().all(|c| {
+                    c.is_ascii_digit()
+                        || c == '.'
+                        || c == '-'
+                        || c == '+'
+                        || c == ','
+                        || c.is_ascii_alphabetic()
+                        || c.is_whitespace()
+                });
+                if !numeric {
+                    self.commit_align_spacing_edit();
+                    return false;
+                }
+                if let Some((buf, fresh)) = &mut self.align_spacing_edit {
                     for ch in txt.chars().filter(|c| !c.is_control()) {
                         if *fresh {
                             buf.clear();
