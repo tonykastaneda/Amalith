@@ -31,8 +31,9 @@ pub use ids::{ArtboardId, AssetId, LayerId, ObjectId};
 pub use layer::Layer;
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use object::{
-    anchor_at, anchor_count, delete_anchor, insert_anchor, set_handle, subpaths_to_bezpath,
-    toggle_anchor_smooth, translate_anchor_n, Anchor, CompoundPathData, GroupData, HandleMode,
+    anchor_at, anchor_count, delete_anchor, insert_anchor, set_anchor_smooth, set_handle,
+    subpaths_to_bezpath, toggle_anchor_smooth, translate_anchor_n, Anchor, CompoundPathData,
+    GroupData, HandleMode,
     HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
     TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };

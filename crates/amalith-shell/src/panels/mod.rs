@@ -80,6 +80,12 @@ pub struct Ctx<'a> {
     /// Appearance of the first selected object, if any (for the swatches).
     pub representative: Option<Appearance>,
     pub active_slot: PaintSlot,
+    /// Current state for the Color Picker panel, when it is open.
+    pub picker: Option<crate::picker::Picker>,
+    /// The Fill/Stroke proxy's current colours — shown when nothing is
+    /// selected (there's no `representative` to read).
+    pub cur_fill: amalith_core::Paint,
+    pub cur_stroke: amalith_core::Paint,
     /// Which primitive tool the Tools-panel Shape slot stands in for.
     pub shape_tool: Tool,
     /// Group ids the Layers panel currently shows expanded.
@@ -137,6 +143,10 @@ pub enum Action {
     SetActiveSlot(PaintSlot),
     /// Open the colour picker for this slot.
     OpenPicker(PaintSlot),
+    PickerSv(f32, f32),
+    PickerHue(f32),
+    PickerCancel,
+    PickerOk,
     SetPaint(Paint),
     SetStrokeWidth(f64),
     /// Layers panel: flip an object's `visible` / `locked` flag.
@@ -177,6 +187,13 @@ pub enum Action {
     StepFontSize(f64),
     /// Open / close the Stroke flyout from its "Stroke" link.
     ToggleStrokeFlyout,
+    /// Context bar "Anchor Point ▸ Convert": set every selected anchor to
+    /// a smooth point (`true`) or a sharp corner (`false`).
+    ConvertAnchor { smooth: bool },
+    /// Fill/Stroke proxy: exchange the two paints.
+    SwapPaints,
+    /// Fill/Stroke proxy: reset to white fill / black stroke.
+    DefaultPaints,
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -187,6 +204,13 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "artboards" => artboards::paint(scene, text, body, ctx),
         "swatches" => swatches::paint(scene, text, body, ctx),
         "character" => character::paint(scene, text, body, ctx),
+        "picker" => {
+            if let Some(pk) = ctx.picker {
+                let mut local = pk;
+                local.origin = Point::new(body.x0, body.y0);
+                crate::picker::paint(scene, &local, ctx.theme.text, ctx.theme, text);
+            }
+        }
         _ => {}
     }
 }
@@ -200,6 +224,18 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "artboards" => artboards::hit(body, local, ctx),
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
+        "picker" => {
+            ctx.picker.map_or(Action::None, |mut pk| {
+                pk.origin = Point::new(body.x0, body.y0);
+                match crate::picker::hit(&pk, local) {
+                crate::picker::Hit::Sv(s, v) => Action::PickerSv(s, v),
+                crate::picker::Hit::Hue(h) => Action::PickerHue(h),
+                crate::picker::Hit::Cancel => Action::PickerCancel,
+                crate::picker::Hit::Ok => Action::PickerOk,
+                _ => Action::None,
+                }
+            })
+        }
         _ => Action::None,
     }
 }
@@ -215,6 +251,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "tools" => tools::natural_height(width),
         "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
         "artboards" | "swatches" => 132.0,
+        "picker" => crate::picker::H,
         _ => 60.0,
     }
 }
@@ -223,6 +260,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
 pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {
         "tools" => tools::tip(body, local, ctx),
+        "picker" => Some("Color Picker".into()),
         "character" => character::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }

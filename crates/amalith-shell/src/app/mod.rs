@@ -175,6 +175,8 @@ enum Drag {
     PenHandle { anchor: usize, from: Point },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
+    /// Moving the colour-picker dialog by its title bar.
+    MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.
     MoveAnchors {
         start_doc: Point,
@@ -335,6 +337,10 @@ struct Doc {
     /// doesn't round-trip our own copy back through the SVG importer.
     last_svg: Option<String>,
     rename: Option<Rename>,
+    /// The Fill/Stroke proxy's current colours — what a new object gets,
+    /// and what the proxy shows / edits when nothing is selected.
+    fill: amalith_core::Paint,
+    stroke: amalith_core::Paint,
     stroke_w: f64,
     stroke_style: StrokeStyle,
     opacity: f32,
@@ -357,6 +363,8 @@ impl Doc {
             clip_artboard: None,
             last_svg: None,
             rename: None,
+            fill: amalith_core::Paint::Solid(amalith_core::Color::rgb(1.0, 1.0, 1.0)),
+            stroke: amalith_core::Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
             stroke_w: 1.0,
             stroke_style: StrokeStyle::default(),
             opacity: 1.0,
@@ -412,6 +420,17 @@ impl CanvasCursor {
                 | CanvasCursor::Rotate(_)
         )
     }
+}
+
+/// What the drawn Pen glyph should say about the next click.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PenHint {
+    /// Ordinary "place the next anchor".
+    Draw,
+    /// Over the first anchor — a click closes the path.
+    Closing,
+    /// Over a segment of a shown path — a click inserts an anchor there.
+    AddPoint,
 }
 
 struct App {
@@ -723,22 +742,57 @@ impl App {
         self.doc.view.to_screen().inverse() * screen
     }
 
-    /// Apply the colour picker's current colour to its slot on the
-    /// selection (one undoable command).
+    /// Set one of the Fill/Stroke proxy paints and, when there is a
+    /// selection, apply it to the selected objects as one undoable command.
+    fn set_paint(&mut self, slot: panels::PaintSlot, paint: amalith_core::Paint) {
+        match slot {
+            panels::PaintSlot::Fill => self.doc.fill = paint,
+            panels::PaintSlot::Stroke => self.doc.stroke = paint,
+        }
+        if !self.doc.selection.is_empty() {
+            let objects = self.doc.selection.clone();
+            let cmd = match slot {
+                panels::PaintSlot::Fill => Command::SetFill { objects, paint },
+                panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
+            };
+            let _ = self.doc.editor.execute(cmd);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Apply the colour picker's current colour to its slot.
     fn apply_picker_color(&mut self) {
         let Some(pk) = self.picker else {
             return;
         };
-        if self.doc.selection.is_empty() {
-            return;
+        self.set_paint(pk.slot, amalith_core::Paint::Solid(pk.color()));
+    }
+
+    /// Close the colour picker overlay. `apply` commits the pending colour
+    /// first. Also drops a leftover docked / floating picker panel so OK
+    /// and Cancel always take the window with them.
+    fn dismiss_picker(&mut self, apply: bool) {
+        if apply {
+            self.apply_picker_color();
         }
-        let objects = self.doc.selection.clone();
-        let paint = amalith_core::Paint::Solid(pk.color());
-        let cmd = match pk.slot {
-            panels::PaintSlot::Fill => Command::SetFill { objects, paint },
-            panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
-        };
-        let _ = self.doc.editor.execute(cmd);
+        self.picker = None;
+        self.dock.remove(PanelId("picker"));
+        let dead: Vec<WindowId> = self
+            .hosts
+            .iter()
+            .filter_map(|(wid, h)| match h.role {
+                Role::Floating(fid) if self.dock.floating(fid).is_none() => Some(*wid),
+                _ => None,
+            })
+            .collect();
+        for wid in dead {
+            self.hosts.remove(&wid);
+            self.focused.remove(&wid);
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
         self.request_main_redraw();
     }
 
@@ -1181,6 +1235,65 @@ impl App {
         }
     }
 
+    /// Recompute the handle being pulled out under `Drag::PenHandle` from
+    /// the live pointer plus Shift (lock to 45° / 8 directions from the
+    /// anchor) and Alt (break the mirror). Safe to call on a pointer move
+    /// or on a modifier change, so Shift snaps even with a still cursor.
+    fn drag_pen_handle(&mut self) {
+        let Drag::PenHandle { anchor, from } = &self.drag else {
+            return;
+        };
+        let (anchor, from) = (*anchor, *from);
+        let dp = self.doc_point(self.pointer);
+        let slop = 3.0 / self.doc.view.zoom;
+        let alt = self.alt_down;
+        let shift = self.shift_down;
+        let Some(a) = self.pen.get_mut(anchor) else {
+            return;
+        };
+        if (dp - from).hypot() > slop {
+            let h = if shift {
+                constrained(Some(a.point), dp, true)
+            } else {
+                dp
+            };
+            a.handle_out = Some(h);
+            if alt {
+                a.mode = amalith_core::HandleMode::Corner;
+                a.handle_in = None;
+            } else {
+                a.mode = amalith_core::HandleMode::Symmetric;
+                a.handle_in = Some(Point::new(a.point.x * 2.0 - h.x, a.point.y * 2.0 - h.y));
+            }
+        } else {
+            a.handle_out = None;
+            a.handle_in = None;
+            a.mode = amalith_core::HandleMode::Corner;
+        }
+        self.request_main_redraw();
+    }
+
+    /// With the Pen tool active and a path already selected (but no draw
+    /// in progress), the segment under the pointer that a click would
+    /// insert an anchor into — `(object, flat segment ordinal, t)`.
+    fn pen_insert_target(&self) -> Option<(ObjectId, usize, f64)> {
+        if self.active_tool != Tool::Pen || !self.pen.is_empty() {
+            return None;
+        }
+        let paths = self.node_paths();
+        if paths.is_empty() {
+            return None;
+        }
+        let dp = self.doc_point(self.pointer);
+        let r = 6.0 / self.doc.view.zoom;
+        // An anchor under the pointer takes priority (a click there would
+        // start a new path, not insert) — don't offer "+".
+        if anchors::topmost_anchor_among(self.doc.editor.document(), &paths, dp, r).is_some() {
+            return None;
+        }
+        anchors::segment_at(self.doc.editor.document(), &paths, dp, r)
+    }
+
     /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` joins
     /// the last anchor back to the first.
     fn commit_pen(&mut self, closed: bool) {
@@ -1577,6 +1690,14 @@ impl App {
     /// Push the options-bar Weight / Opacity / Stroke style onto a freshly
     /// created object, so those fields mean something with nothing selected.
     fn apply_new_appearance(&mut self, id: ObjectId) {
+        let def = amalith_core::Appearance::default();
+        if self.doc.fill != def.fill || self.doc.stroke != def.stroke {
+            let _ = self.doc.editor.execute(Command::SetPaints {
+                objects: vec![id],
+                fill: Some(self.doc.fill),
+                stroke: Some(self.doc.stroke),
+            });
+        }
         if (self.doc.stroke_w - 1.0).abs() > f64::EPSILON {
             let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                 objects: vec![id],
@@ -1799,6 +1920,7 @@ impl App {
             cur_opacity: self.doc.opacity,
             stroke_open: self.stroke_popover,
             text_style: self.active_text_style(),
+            anchor_sel_len: self.doc.anchor_sel.len(),
         }
     }
 
@@ -2246,6 +2368,9 @@ impl App {
             pointer: self.pointer,
             representative: None,
             active_slot: self.active_slot,
+            picker: self.picker,
+            cur_fill: self.doc.fill,
+            cur_stroke: self.doc.stroke,
             shape_tool: self.last_shape_tool,
             expanded: &self.doc.expanded_groups,
             renaming: None,
@@ -2337,6 +2462,9 @@ impl App {
     /// The × on a panel tab. In a rail: remove the panel. In a floating
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
+        if pid.0 == "picker" {
+            self.picker = None;
+        }
         if let Some(fid) = floating {
             let wid = self
                 .hosts
@@ -2406,7 +2534,7 @@ impl App {
             self.stroke_flyout_layout(w).panel.contains(self.pointer)
         };
         let over = self.pointer_win == self.main_id
-            && self.picker.is_none()
+            && (self.picker.is_none() || self.dock.contains(PanelId("picker")))
             && self.newdoc.is_none()
             && self.about.is_none()
             && self.home.is_none()
@@ -2593,10 +2721,13 @@ impl App {
     /// size the panel had while docked.
     fn tear_off(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, main_local_press: Point) {
         let global = self.main_inner_origin() + main_local_press.to_vec2();
-        let (fw, fh) = self
-            .panel_dock_size(panel)
-            .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
-            .unwrap_or((FLOAT_W, FLOAT_H));
+        let (fw, fh) = if panel.0 == "picker" {
+            (picker::W, picker::H + self.theme.tab_strip_h)
+        } else {
+            self.panel_dock_size(panel)
+                .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
+                .unwrap_or((FLOAT_W, FLOAT_H))
+        };
         // Keep the cursor grip inside the (possibly narrow) torn-off window.
         let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
         let pos = global - grab;
@@ -2611,7 +2742,7 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title(tab_label(panel))
             .with_decorations(false)
-            .with_resizable(true)
+            .with_resizable(panel.0 != "picker")
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_inner_size(LogicalSize::new(fw, fh))
             .with_position(LogicalPosition::new(pos.x, pos.y));
@@ -2627,6 +2758,64 @@ impl App {
         self.drag = Drag::MovingFloating { id, grab, pos };
         window.request_redraw();
         self.request_main_redraw();
+    }
+
+    /// Open the colour picker as its own non-resizable floating window,
+    /// centred over the main window. Dragging the tab strip moves it
+    /// anywhere on the desktop — same path as a torn-off panel.
+    fn spawn_picker_window(&mut self, event_loop: &ActiveEventLoop) {
+        let pid = PanelId("picker");
+        let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let fw = picker::W;
+        let fh = picker::H + self.theme.tab_strip_h;
+        let origin = self.main_inner_origin();
+        let pos = Point::new(
+            origin.x + ((mw - fw) * 0.5).max(4.0),
+            origin.y + ((mh - fh) * 0.5).max(4.0),
+        );
+        let rect = [pos.x as f32, pos.y as f32, fw as f32, fh as f32];
+
+        if let Some(fid) = self.dock.floating_id_of(pid) {
+            if let Some(f) = self.dock.floating_mut(fid) {
+                f.rect = rect;
+            }
+            if let Some(w) = self.floating_window(fid) {
+                w.set_outer_position(LogicalPosition::new(pos.x, pos.y));
+                w.request_redraw();
+            }
+            return;
+        }
+
+        let id = self.dock.float_alone(pid, rect);
+        if self.floating_window(id).is_some() {
+            if let Some(w) = self.floating_window(id) {
+                w.set_outer_position(LogicalPosition::new(pos.x, pos.y));
+                w.request_redraw();
+            }
+            return;
+        }
+
+        let attrs = Window::default_attributes()
+            .with_title(tab_label(pid))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_inner_size(LogicalSize::new(fw, fh))
+            .with_position(LogicalPosition::new(pos.x, pos.y));
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs)
+                .expect("create picker window"),
+        );
+        let wid = window.id();
+        let host = self.make_host(window.clone(), Role::Floating(id));
+        self.hosts.insert(wid, host);
+        window.request_redraw();
+        self.request_main_redraw();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
     }
 
     /// Dismiss the "About Amalith" panel.
@@ -2855,7 +3044,7 @@ impl ApplicationHandler for App {
                     now.duration_since(t).as_millis() < 400 && (self.pointer - p).hypot() < 5.0
                 });
                 self.last_click = Some((now, self.pointer));
-                self.on_press(id, double);
+                self.on_press(event_loop, id, double);
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
@@ -2884,12 +3073,20 @@ impl ApplicationHandler for App {
                         // the plain arrow's bounding box comes back.
                         self.doc.anchor_sel.clear();
                     }
+                    // A pen handle mid-pull re-snaps to / releases the
+                    // 45° lock the instant Shift changes, without needing
+                    // a cursor nudge.
+                    if matches!(self.drag, Drag::PenHandle { .. }) {
+                        self.drag_pen_handle();
+                    }
                     if now_direct != was_direct || !matches!(self.drag, Drag::None) {
                         self.request_main_redraw();
                     }
                 }
             }
-            WindowEvent::KeyboardInput { event, .. } if Some(id) == self.main_id => {
+            WindowEvent::KeyboardInput { event, .. }
+                if Some(id) == self.main_id || self.picker.is_some() =>
+            {
                 self.on_key(event);
             }
             WindowEvent::PinchGesture { delta, .. } if Some(id) == self.main_id => {
@@ -3074,6 +3271,7 @@ fn tab_label(panel: PanelId) -> String {
         "artboards" => "Artboards",
         "swatches" => "Swatches",
         "character" => "Character",
+        "picker" => "Color Picker",
         other => other,
     }
     .to_string()
@@ -3150,9 +3348,10 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 5] = [
+const WINDOW_PANELS: [(&str, &str); 6] = [
     ("artboards", "Artboards"),
     ("character", "Character"),
+    ("picker", "Color Picker"),
     ("layers", "Layers"),
     ("swatches", "Swatches"),
     ("tools", "Tools"),

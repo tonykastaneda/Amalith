@@ -21,6 +21,18 @@ impl App {
             self.request_main_redraw();
         }
         match &self.drag {
+            Drag::MovePicker { offset } => {
+                let Some((w, h)) = self.main_logical_size() else {
+                    return;
+                };
+                if let Some(pk) = &mut self.picker {
+                    pk.origin = Point::new(
+                        (self.pointer.x - offset.x).clamp(4.0, (w - picker::W - 4.0).max(4.0)),
+                        (self.pointer.y - offset.y).clamp(4.0, (h - picker::H - 4.0).max(4.0)),
+                    );
+                    self.request_main_redraw();
+                }
+            }
             Drag::RailWidth { side } => {
                 let side = *side;
                 let Some((w, _)) = self.main_logical_size() else {
@@ -177,37 +189,7 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::PenHandle { anchor, from } => {
-                let (anchor, from) = (*anchor, *from);
-                let dp = self.doc_point(self.pointer);
-                let slop = 3.0 / self.doc.view.zoom;
-                if let Some(a) = self.pen.get_mut(anchor) {
-                    if (dp - from).hypot() > slop {
-                        let h = if self.shift_down {
-                            constrained(Some(a.point), dp, true)
-                        } else {
-                            dp
-                        };
-                        a.handle_out = Some(h);
-                        if self.alt_down {
-                            // Break the mirror — the outgoing curve is
-                            // independent of whatever comes next.
-                            a.mode = amalith_core::HandleMode::Corner;
-                            a.handle_in = None;
-                        } else {
-                            a.mode = amalith_core::HandleMode::Symmetric;
-                            a.handle_in =
-                                Some(Point::new(a.point.x * 2.0 - h.x, a.point.y * 2.0 - h.y));
-                        }
-                    } else {
-                        // Not dragged far enough — keep it a corner.
-                        a.handle_out = None;
-                        a.handle_in = None;
-                        a.mode = amalith_core::HandleMode::Corner;
-                    }
-                }
-                self.request_main_redraw();
-            }
+            Drag::PenHandle { .. } => self.drag_pen_handle(),
             Drag::DrawText { start_doc, .. } => {
                 let start_doc = *start_doc;
                 self.drag = Drag::DrawText {
@@ -345,7 +327,14 @@ impl App {
                 w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
                 w.request_redraw();
             }
-            self.redock_preview = Some(self.resolve_redock(global));
+            // The colour picker is a free-floating dialog: never offer a
+            // re-dock target, so dragging it off the document window just
+            // moves it.
+            if self.dock.floating_id_of(PanelId("picker")) != Some(id) {
+                self.redock_preview = Some(self.resolve_redock(global));
+            } else {
+                self.redock_preview = None;
+            }
             self.request_main_redraw();
         }
     }
@@ -367,7 +356,9 @@ impl App {
             | Drag::RailWidth { .. }
             | Drag::Pan { .. }
             | Drag::ScrubZoom { .. } => {}
-            Drag::PickColor { .. } => self.apply_picker_color(),
+            Drag::MovePicker { .. } => {}
+            // The dialog keeps edits pending until its OK button (or Enter).
+            Drag::PickColor { .. } => {}
             Drag::MoveObjects {
                 start_doc,
                 last_doc,
@@ -641,7 +632,12 @@ impl App {
             }
             Drag::MovingFloating { id, grab, pos } => {
                 let global_cursor = pos + grab;
-                let (side, target) = self.resolve_redock(global_cursor);
+                let picker_float = self.dock.floating_id_of(PanelId("picker")) == Some(id);
+                let (side, target) = if picker_float {
+                    (RailSide::Right, DropTarget::Float)
+                } else {
+                    self.resolve_redock(global_cursor)
+                };
                 if matches!(target, DropTarget::Float) {
                     if let Some(f) = self.dock.floating_mut(id) {
                         // Keep the size the window currently has.

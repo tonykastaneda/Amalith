@@ -8,6 +8,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use amalith_commands::{Command, CommandOutcome};
 
 use crate::prefs::{self, KeyChord};
+use crate::dock::PanelId;
 use crate::textedit;
 use crate::tool::Tool;
 
@@ -23,7 +24,7 @@ impl App {
                 return;
             }
             let recording = self.prefs.as_ref().and_then(|p| p.recording);
-            if let Some(i) = recording {
+            if let Some(target) = recording {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::Escape) => {
                         if let Some(p) = self.prefs.as_mut() {
@@ -36,13 +37,23 @@ impl App {
                             shift: self.shift_down,
                         };
                         if let Some(p) = self.prefs.as_mut() {
-                            // Steal the chord from whichever tool holds it.
+                            // Steal the chord from whichever binding holds it.
                             for k in p.working.tool_keys.iter_mut() {
                                 if *k == Some(chord) {
                                     *k = None;
                                 }
                             }
-                            p.working.tool_keys[i] = Some(chord);
+                            for k in p.working.action_keys.iter_mut() {
+                                if *k == Some(chord) {
+                                    *k = None;
+                                }
+                            }
+                            match target {
+                                prefs::BindTarget::Tool(i) => p.working.tool_keys[i] = Some(chord),
+                                prefs::BindTarget::Action(i) => {
+                                    p.working.action_keys[i] = Some(chord)
+                                }
+                            }
                             p.recording = None;
                         }
                     }
@@ -77,6 +88,27 @@ impl App {
                 }
             }
             return;
+        }
+        // Escape cancels; Enter accepts. An overlay swallows every other
+        // key; a floating picker panel does not — the rest of the app
+        // keeps working while it is open.
+        if self.picker.is_some() {
+            if event.state.is_pressed() {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        self.dismiss_picker(false);
+                        return;
+                    }
+                    PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                        self.dismiss_picker(true);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            if !self.dock.contains(PanelId("picker")) {
+                return;
+            }
         }
         // The New Document modal, then an inline rename, each
         // swallow all keyboard input while active.
@@ -276,9 +308,20 @@ impl App {
                     KeyCode::Enter | KeyCode::NumpadEnter if !self.pen.is_empty() => {
                         self.commit_pen(false);
                     }
+                    // Illustrator's Convert Anchor Point (Shift+C): toggle
+                    // every selected anchor between smooth and corner.
+                    KeyCode::KeyC if self.shift_down && !self.doc.anchor_sel.is_empty() => {
+                        for (object, anchor) in self.doc.anchor_sel.clone() {
+                            let _ = self
+                                .doc
+                                .editor
+                                .execute(Command::ToggleAnchorSmooth { object, anchor });
+                        }
+                        self.request_main_redraw();
+                    }
                     KeyCode::Escape => {
-                        if self.picker.take().is_some() {
-                            // just dismissed the picker
+                        if self.picker.is_some() {
+                            self.dismiss_picker(false);
                         } else if self.active_tool == Tool::Artboard {
                             // Exit the Artboard tool back to the
                             // tool that was active before it.
@@ -291,9 +334,10 @@ impl App {
                         }
                         self.request_main_redraw();
                     }
-                    // Tool shortcuts — user-remappable (Preferences ▸
-                    // Keyboard). `settings.tool_keys` is indexed by
-                    // `Tool::ALL` position.
+                    // Tool + command shortcuts — user-remappable
+                    // (Preferences ▸ Keyboard). `settings.tool_keys` is
+                    // indexed by `Tool::ALL`, `action_keys` by
+                    // `prefs::PrefAction::ALL`.
                     _ => {
                         let chord = KeyChord {
                             code,
@@ -306,6 +350,21 @@ impl App {
                             .position(|k| *k == Some(chord))
                         {
                             self.set_tool(Tool::ALL[i]);
+                        } else if let Some(i) = self
+                            .settings
+                            .action_keys
+                            .iter()
+                            .position(|k| *k == Some(chord))
+                        {
+                            let act = match prefs::PrefAction::ALL[i] {
+                                prefs::PrefAction::SwapPaints => {
+                                    crate::panels::Action::SwapPaints
+                                }
+                                prefs::PrefAction::DefaultPaints => {
+                                    crate::panels::Action::DefaultPaints
+                                }
+                            };
+                            self.apply_panel_action(act, false);
                         }
                     }
                 }

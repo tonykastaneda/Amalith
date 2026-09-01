@@ -5,7 +5,12 @@
 use super::super::*;
 
 impl App {
-    pub(in crate::app) fn on_press(&mut self, id: WindowId, double: bool) {
+    pub(in crate::app) fn on_press(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        id: WindowId,
+        double: bool,
+    ) {
         let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
         };
@@ -34,14 +39,16 @@ impl App {
                         p.working.accent = rgb;
                     }
                 }
-                prefs::Hit::StartRecording(i) => {
+                prefs::Hit::StartRecording(t) => {
                     if let Some(p) = &mut self.prefs {
-                        p.recording = Some(i);
+                        p.recording = Some(t);
                     }
                 }
                 prefs::Hit::ResetKeys => {
                     if let Some(p) = &mut self.prefs {
-                        p.working.tool_keys = prefs::Settings::default().tool_keys;
+                        let def = prefs::Settings::default();
+                        p.working.tool_keys = def.tool_keys;
+                        p.working.action_keys = def.action_keys;
                         p.recording = None;
                     }
                 }
@@ -194,7 +201,11 @@ impl App {
                         context_bar::hit(opt_bar_rect(w), self.pointer, &cx)
                     };
                     if !matches!(action, panels::Action::None) {
+                        let spawn = double && matches!(action, panels::Action::OpenPicker(_));
                         self.apply_panel_action(action, double);
+                        if spawn {
+                            self.spawn_picker_window(event_loop);
+                        }
                     }
                     return;
                 }
@@ -225,7 +236,7 @@ impl App {
                 }
 
                 // The colour picker is modal while open.
-                if let Some(pk) = self.picker {
+                if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId("picker"))) {
                     match picker::hit(&pk, self.pointer) {
                         picker::Hit::Sv(s, v) => {
                             if let Some(p) = &mut self.picker {
@@ -240,24 +251,21 @@ impl App {
                             }
                             self.drag = Drag::PickColor { in_hue: true };
                         }
-                        picker::Hit::NoneButton => {
-                            if !self.doc.selection.is_empty() {
-                                let objects = self.doc.selection.clone();
-                                let paint = amalith_core::Paint::None;
-                                let _ = self.doc.editor.execute(match pk.slot {
-                                    panels::PaintSlot::Fill => Command::SetFill { objects, paint },
-                                    panels::PaintSlot::Stroke => {
-                                        Command::SetStroke { objects, paint }
-                                    }
-                                });
-                            }
-                            self.picker = None;
+                        picker::Hit::Cancel => {
+                            self.dismiss_picker(false);
                         }
-                        picker::Hit::Inside => {}
-                        picker::Hit::Outside => {
-                            self.apply_picker_color();
-                            self.picker = None;
+                        picker::Hit::Ok => {
+                            self.dismiss_picker(true);
                         }
+                        picker::Hit::Title => {
+                            self.drag = Drag::MovePicker {
+                                offset: Point::new(
+                                    self.pointer.x - pk.origin.x,
+                                    self.pointer.y - pk.origin.y,
+                                ),
+                            };
+                        }
+                        picker::Hit::Inside | picker::Hit::Outside => {}
                     }
                     self.request_main_redraw();
                     return;
@@ -327,6 +335,9 @@ impl App {
                                         pointer: self.pointer,
                                         representative: rep,
                                         active_slot: self.active_slot,
+                                        picker: self.picker,
+                                        cur_fill: self.doc.fill,
+                                        cur_stroke: self.doc.stroke,
                                         shape_tool: self.last_shape_tool,
                                         expanded: &self.doc.expanded_groups,
                                         renaming: self
@@ -351,7 +362,12 @@ impl App {
                                         panels::tools::shape_slot_rect(area.body);
                                     self.shape_press = Some((Instant::now(), anchor));
                                 } else {
+                                    let spawn =
+                                        double && matches!(action, panels::Action::OpenPicker(_));
                                     self.apply_panel_action(action, double);
+                                    if spawn {
+                                        self.spawn_picker_window(event_loop);
+                                    }
                                 }
                             }
                             return;
@@ -428,6 +444,43 @@ impl App {
                 // Pen: press to place an anchor, then drag to pull bezier
                 // handles out of it. Click the first anchor to close.
                 if self.active_tool == Tool::Pen {
+                    // Not drawing yet and over an existing anchor of the
+                    // selected path — select it (so the Convert bar shows)
+                    // rather than starting a fresh path on top of it.
+                    if self.pen.is_empty() {
+                        let paths = self.node_paths();
+                        if !paths.is_empty() {
+                            if let Some(a) = anchors::topmost_anchor_among(
+                                self.doc.editor.document(),
+                                &paths,
+                                dp,
+                                6.0 / self.doc.view.zoom,
+                            ) {
+                                self.doc.anchor_sel = vec![a];
+                                self.request_main_redraw();
+                                return;
+                            }
+                        }
+                    }
+                    // Over a segment of the selected path (and not drawing
+                    // yet) — a click inserts an anchor there.
+                    if let Some((id, seg, t)) = self.pen_insert_target() {
+                        let _ = self.doc.editor.execute(Command::InsertAnchor {
+                            object: id,
+                            segment: seg,
+                            t,
+                        });
+                        if let Some(a) = anchors::topmost_anchor_among(
+                            self.doc.editor.document(),
+                            &[id],
+                            dp,
+                            12.0 / self.doc.view.zoom,
+                        ) {
+                            self.doc.anchor_sel = vec![a];
+                        }
+                        self.request_main_redraw();
+                        return;
+                    }
                     let close_r = 8.0 / self.doc.view.zoom;
                     if self.pen.len() >= 3
                         && self
@@ -747,6 +800,9 @@ impl App {
                                     pointer: self.pointer,
                                     representative: rep,
                                     active_slot: self.active_slot,
+                                    picker: self.picker,
+                                    cur_fill: self.doc.fill,
+                                    cur_stroke: self.doc.stroke,
                                     shape_tool: self.last_shape_tool,
                                     expanded: &self.doc.expanded_groups,
                                     renaming: self
@@ -763,7 +819,12 @@ impl App {
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };
+                            let spawn =
+                                double && matches!(action, panels::Action::OpenPicker(_));
                             self.apply_panel_action(action, double);
+                            if spawn {
+                                self.spawn_picker_window(event_loop);
+                            }
                         }
                         return;
                     }

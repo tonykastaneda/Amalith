@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::prefs::{KeyChord, Settings};
+use crate::prefs::{KeyChord, PrefAction, Settings};
 use crate::tool::Tool;
 
 /// `~/Library/Application Support/Amalith/settings.txt` (macOS),
@@ -74,6 +74,16 @@ pub fn load() -> Settings {
                             KeyChord::from_str(v).ok()
                         };
                     }
+                } else if let Some(name) = k.strip_prefix("action.") {
+                    if let Some(i) =
+                        PrefAction::ALL.iter().position(|a| action_name(*a) == name)
+                    {
+                        s.action_keys[i] = if v.is_empty() {
+                            None
+                        } else {
+                            KeyChord::from_str(v).ok()
+                        };
+                    }
                 }
             }
         }
@@ -93,6 +103,10 @@ pub fn save(s: &Settings) {
     for (i, tool) in Tool::ALL.iter().enumerate() {
         let v = s.tool_keys[i].map_or_else(String::new, |c| c.to_string());
         body.push_str(&format!("tool.{} = {}\n", tool_name(*tool), v));
+    }
+    for (i, act) in PrefAction::ALL.iter().enumerate() {
+        let v = s.action_keys[i].map_or_else(String::new, |c| c.to_string());
+        body.push_str(&format!("action.{} = {}\n", action_name(*act), v));
     }
 
     if let Some(parent) = path.parent() {
@@ -114,6 +128,14 @@ fn tool_name(tool: Tool) -> &'static str {
         Tool::Polygon => "Polygon",
         Tool::Star => "Star",
         Tool::Artboard => "Artboard",
+    }
+}
+
+/// A stable file key for a bindable command.
+fn action_name(a: PrefAction) -> &'static str {
+    match a {
+        PrefAction::SwapPaints => "SwapPaints",
+        PrefAction::DefaultPaints => "DefaultPaints",
     }
 }
 

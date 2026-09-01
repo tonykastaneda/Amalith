@@ -51,29 +51,73 @@ impl App {
             panels::Action::OpenPicker(slot) => {
                 self.active_slot = slot;
                 let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                let cur = self.representative().and_then(|a| {
-                    match slot {
+                let paint = self
+                    .representative()
+                    .map(|a| match slot {
                         panels::PaintSlot::Fill => a.fill,
                         panels::PaintSlot::Stroke => a.stroke,
-                    }
-                    .color()
-                });
+                    })
+                    .unwrap_or(match slot {
+                        panels::PaintSlot::Fill => self.doc.fill,
+                        panels::PaintSlot::Stroke => self.doc.stroke,
+                    });
                 let origin = Point::new(
-                    (self.pointer.x + 10.0).min(w - picker::W - 4.0).max(4.0),
-                    (self.pointer.y - picker::H * 0.5)
-                        .min(h - picker::H - 4.0)
-                        .max(4.0),
+                    ((w - picker::W) * 0.5).max(4.0),
+                    ((h - picker::H) * 0.5).max(4.0),
                 );
-                self.picker = Some(picker::Picker::from_color(slot, origin, cur));
+                self.picker = Some(picker::Picker::from_color(slot, origin, paint.color()));
             }
-            panels::Action::SetPaint(paint) => {
+            panels::Action::PickerSv(s, v) => {
+                if let Some(pk) = &mut self.picker {
+                    pk.s = s;
+                    pk.v = v;
+                    if self.dock.contains(PanelId("picker")) {
+                        // Pointer is in the host window; reconstruct the
+                        // panel-body origin from the SV inset so a drag
+                        // keeps using the same hit math.
+                        pk.origin = Point::new(
+                            self.pointer.x - 19.0 - s as f64 * 308.0,
+                            self.pointer.y - 26.0 - (1.0 - v as f64) * 308.0,
+                        );
+                    }
+                }
+                self.drag = Drag::PickColor { in_hue: false };
+            }
+            panels::Action::PickerHue(h) => {
+                if let Some(pk) = &mut self.picker {
+                    pk.h = h;
+                    if self.dock.contains(PanelId("picker")) {
+                        pk.origin = Point::new(
+                            self.pointer.x - 350.0,
+                            self.pointer.y - 23.0 - (1.0 - h as f64) * 308.0,
+                        );
+                    }
+                }
+                self.drag = Drag::PickColor { in_hue: true };
+            }
+            panels::Action::PickerCancel => self.dismiss_picker(false),
+            panels::Action::PickerOk => self.dismiss_picker(true),
+            panels::Action::SetPaint(paint) => self.set_paint(self.active_slot, paint),
+            panels::Action::SwapPaints => {
+                std::mem::swap(&mut self.doc.fill, &mut self.doc.stroke);
                 if !self.doc.selection.is_empty() {
-                    let objects = self.doc.selection.clone();
-                    let cmd = match self.active_slot {
-                        panels::PaintSlot::Fill => Command::SetFill { objects, paint },
-                        panels::PaintSlot::Stroke => Command::SetStroke { objects, paint },
-                    };
-                    let _ = self.doc.editor.execute(cmd);
+                    let _ = self.doc.editor.execute(Command::SetPaints {
+                        objects: self.doc.selection.clone(),
+                        fill: Some(self.doc.fill),
+                        stroke: Some(self.doc.stroke),
+                    });
+                }
+            }
+            panels::Action::DefaultPaints => {
+                self.doc.fill = amalith_core::Paint::Solid(amalith_core::Color::rgb(1.0, 1.0, 1.0));
+                self.doc.stroke =
+                    amalith_core::Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0));
+                if !self.doc.selection.is_empty() {
+                    let _ = self.doc.editor.execute(Command::SetPaints {
+                        objects: self.doc.selection.clone(),
+                        fill: Some(self.doc.fill),
+                        stroke: Some(self.doc.stroke),
+                    });
                 }
             }
             panels::Action::SetStrokeWidth(width) => {
@@ -205,6 +249,15 @@ impl App {
             panels::Action::StepFontSize(d) => self.step_font_size(d),
             panels::Action::ToggleStrokeFlyout => {
                 self.stroke_popover = !self.stroke_popover;
+            }
+            panels::Action::ConvertAnchor { smooth } => {
+                for (object, anchor) in self.doc.anchor_sel.clone() {
+                    let _ = self.doc.editor.execute(Command::SetAnchorSmooth {
+                        object,
+                        anchor,
+                        smooth,
+                    });
+                }
             }
         }
         self.request_main_redraw();

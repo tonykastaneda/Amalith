@@ -178,17 +178,20 @@ impl App {
         // tool's bounding box) even after a ⌘-marquee releases ⌘.
         let direct =
             self.effective_tool() == Tool::DirectSelect || !self.doc.anchor_sel.is_empty();
+        // The Pen tool also shows a selected path's nodes (Illustrator:
+        // switch V -> P with an object selected and its anchors appear).
+        let pen_nodes = self.active_tool == Tool::Pen && !self.doc.selection.is_empty();
         // Hold Space with the Selection tool to peek at every node (read-only;
         // the bounding box stays). Direct Selection proper takes precedence.
-        let peek = !direct && self.space_peek();
+        let peek = !direct && !pen_nodes && self.space_peek();
         let anchor_paths: Vec<ObjectId> = if peek {
             self.peek_paths()
-        } else if direct {
+        } else if direct || pen_nodes {
             self.node_paths()
         } else {
             Vec::new()
         };
-        let anchor_view = (direct || peek).then_some(AnchorView {
+        let anchor_view = (direct || peek || pen_nodes).then_some(AnchorView {
             selected: &self.doc.anchor_sel,
             paths: &anchor_paths,
             peek,
@@ -208,13 +211,24 @@ impl App {
         let zoom_cursor =
             (self.cursor_mode == CanvasCursor::Zoom).then_some(self.zoom_sign >= 0);
         let cursor_glyph = (self.cursor_mode == CanvasCursor::Glyph).then(|| {
-            let pen_closing = self.active_tool == Tool::Pen && self.pen.len() >= 3 && {
+            let hint = if self.active_tool == Tool::Pen {
                 let hover = self.doc_point(self.pointer);
-                self.pen
-                    .first()
-                    .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom)
+                let closing = self.pen.len() >= 3
+                    && self
+                        .pen
+                        .first()
+                        .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom);
+                if closing {
+                    PenHint::Closing
+                } else if self.pen_insert_target().is_some() {
+                    PenHint::AddPoint
+                } else {
+                    PenHint::Draw
+                }
+            } else {
+                PenHint::Draw
             };
-            (self.effective_tool(), pen_closing)
+            (self.effective_tool(), hint)
         });
         let stroke_flyout = self.stroke_flyout_layout(wl);
         let stroke_style_shown = self.stroke_style_repr();
@@ -231,7 +245,10 @@ impl App {
                 &self.doc.selection,
                 self.active_tool,
                 self.active_slot,
+                self.picker,
                 representative,
+                self.doc.fill,
+                self.doc.stroke,
                 self.pointer,
                 preview,
                 draw_shape,
@@ -256,6 +273,7 @@ impl App {
                 &tab_labels,
                 active_tab,
                 cursor_glyph,
+                self.doc.anchor_sel.len(),
                 zoom_cursor,
                 self.cursor_mode,
                 self.last_shape_tool,
@@ -290,6 +308,9 @@ impl App {
                             pointer: self.pointer,
                             representative,
                             active_slot: self.active_slot,
+                            picker: self.picker,
+                            cur_fill: self.doc.fill,
+                            cur_stroke: self.doc.stroke,
                             shape_tool: self.last_shape_tool,
                             expanded: &self.doc.expanded_groups,
                             renaming: self
@@ -333,7 +354,7 @@ impl App {
                 }
                 self.content.pop_layer();
             }
-            if let Some(pk) = self.picker {
+            if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId("picker"))) {
                 picker::paint(
                     &mut self.content,
                     &pk,

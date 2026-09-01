@@ -339,24 +339,16 @@ pub fn set_handle(subpaths: &mut [Subpath], n: usize, side: HandleSide, pos: Opt
     }
 }
 
-/// Toggle anchor `n` between a sharp corner (no handles) and a smooth
-/// point whose mirrored handles are synthesised from the directions to
-/// its neighbouring anchors.
-pub fn toggle_anchor_smooth(subpaths: &mut [Subpath], n: usize) {
-    let Some((si, ai)) = locate(subpaths, n) else {
-        return;
-    };
-    let sp = &mut subpaths[si];
-    let a = sp.anchors[ai];
-    if a.handle_in.is_some() || a.handle_out.is_some() {
-        let a = &mut sp.anchors[ai];
-        a.handle_in = None;
-        a.handle_out = None;
-        a.mode = HandleMode::Corner;
-        return;
-    }
+fn make_corner(sp: &mut Subpath, ai: usize) {
+    let a = &mut sp.anchors[ai];
+    a.handle_in = None;
+    a.handle_out = None;
+    a.mode = HandleMode::Corner;
+}
+
+fn make_smooth(sp: &mut Subpath, ai: usize) {
     let m = sp.anchors.len();
-    let p = a.point;
+    let p = sp.anchors[ai].point;
     let prev = if ai > 0 {
         Some(sp.anchors[ai - 1].point)
     } else if sp.closed && m > 1 {
@@ -382,12 +374,49 @@ pub fn toggle_anchor_smooth(subpaths: &mut [Subpath], n: usize) {
         return;
     }
     let t = tangent / tl;
-    let din = prev.map(|pv| (p - pv).hypot() / 3.0).unwrap_or(tl / 3.0);
-    let dout = next.map(|nx| (nx - p).hypot() / 3.0).unwrap_or(tl / 3.0);
+    // Keep whatever handle lengths the anchor already had, else derive a
+    // third of the distance to each neighbour.
+    let a = sp.anchors[ai];
+    let lin = a
+        .handle_in
+        .map(|h| (h - p).hypot())
+        .unwrap_or_else(|| prev.map(|pv| (p - pv).hypot() / 3.0).unwrap_or(tl / 3.0));
+    let lout = a
+        .handle_out
+        .map(|h| (h - p).hypot())
+        .unwrap_or_else(|| next.map(|nx| (nx - p).hypot() / 3.0).unwrap_or(tl / 3.0));
     let a = &mut sp.anchors[ai];
-    a.handle_in = Some(p - t * din);
-    a.handle_out = Some(p + t * dout);
+    a.handle_in = Some(p - t * lin);
+    a.handle_out = Some(p + t * lout);
     a.mode = HandleMode::Smooth;
+}
+
+/// Toggle anchor `n` between a sharp corner (no handles) and a smooth
+/// point (mirrored handles synthesised from the neighbour directions).
+pub fn toggle_anchor_smooth(subpaths: &mut [Subpath], n: usize) {
+    let Some((si, ai)) = locate(subpaths, n) else {
+        return;
+    };
+    let sp = &mut subpaths[si];
+    if sp.anchors[ai].handle_in.is_some() || sp.anchors[ai].handle_out.is_some() {
+        make_corner(sp, ai);
+    } else {
+        make_smooth(sp, ai);
+    }
+}
+
+/// Convert anchor `n` explicitly to a smooth point (`smooth = true`) or a
+/// sharp corner (`smooth = false`).
+pub fn set_anchor_smooth(subpaths: &mut [Subpath], n: usize, smooth: bool) {
+    let Some((si, ai)) = locate(subpaths, n) else {
+        return;
+    };
+    let sp = &mut subpaths[si];
+    if smooth {
+        make_smooth(sp, ai);
+    } else {
+        make_corner(sp, ai);
+    }
 }
 
 /// Split segment `seg` (flat ordinal; open subpaths contribute

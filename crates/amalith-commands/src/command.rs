@@ -127,6 +127,13 @@ pub enum Command {
     /// corner (no handles) and a smooth point (mirrored handles from the
     /// neighbour directions).
     ToggleAnchorSmooth { object: ObjectId, anchor: usize },
+    /// Converts anchor `anchor` (flat ordinal) on `object` explicitly to a
+    /// smooth point or a sharp corner.
+    SetAnchorSmooth {
+        object: ObjectId,
+        anchor: usize,
+        smooth: bool,
+    },
     /// Splits segment `segment` (flat ordinal) of `object` at parameter
     /// `t`, keeping the curve shape.
     InsertAnchor {
@@ -208,6 +215,13 @@ pub enum Command {
     SetStroke {
         objects: Vec<ObjectId>,
         paint: Paint,
+    },
+    /// Sets fill and/or stroke paint on every listed object in one undo
+    /// group — for the Fill/Stroke proxy's swap and reset.
+    SetPaints {
+        objects: Vec<ObjectId>,
+        fill: Option<Paint>,
+        stroke: Option<Paint>,
     },
     /// Sets every listed object's stroke width, one undo group.
     SetStrokeWidth {

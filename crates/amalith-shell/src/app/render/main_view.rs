@@ -14,7 +14,10 @@ pub(in crate::app) fn paint_main(
     selection: &[ObjectId],
     active_tool: Tool,
     active_slot: panels::PaintSlot,
+    picker: Option<crate::picker::Picker>,
     representative: Option<amalith_core::Appearance>,
+    cur_fill: amalith_core::Paint,
+    cur_stroke: amalith_core::Paint,
     pointer: Point,
     drag_preview: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
@@ -36,7 +39,8 @@ pub(in crate::app) fn paint_main(
     newdoc_form: Option<&newdoc::NewDocForm>,
     tab_labels: &[String],
     active_tab: usize,
-    cursor_glyph: Option<(Tool, bool)>,
+    cursor_glyph: Option<(Tool, PenHint)>,
+    anchor_sel_len: usize,
     zoom_cursor: Option<bool>,
     cursor_mode: CanvasCursor,
     shape_tool: Tool,
@@ -163,6 +167,9 @@ pub(in crate::app) fn paint_main(
                 pointer,
                 representative,
                 active_slot,
+                picker,
+                cur_fill,
+                cur_stroke,
                 shape_tool,
                 expanded,
                 renaming,
@@ -219,6 +226,7 @@ pub(in crate::app) fn paint_main(
         cur_opacity,
         stroke_open: stroke_popover,
         text_style: text_style.clone(),
+        anchor_sel_len,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
 
@@ -229,7 +237,7 @@ pub(in crate::app) fn paint_main(
     }
 
     // The active tool's on-document glyph, standing in for the OS cursor.
-    if let Some((tool, pen_closing)) = cursor_glyph {
+    if let Some((tool, hint)) = cursor_glyph {
         let sz = 30.0;
         let (hx, hy) = cursor_hotspot(tool);
         let x0 = pointer.x - sz * hx;
@@ -237,11 +245,25 @@ pub(in crate::app) fn paint_main(
         let box_ = Rect::new(x0, y0, x0 + sz, y0 + sz);
         let src = match tool {
             Tool::DirectSelect => icons::CURSOR_DIRECT_SELECT_SVG,
-            Tool::Pen if pen_closing => icons::CURSOR_PEN_CLOSING_SVG,
+            Tool::Pen if hint == PenHint::Closing => icons::CURSOR_PEN_CLOSING_SVG,
             Tool::Pen => icons::CURSOR_PEN_DRAWING_SVG,
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
+        // A small "+" badge when a click would insert an anchor.
+        if tool == Tool::Pen && hint == PenHint::AddPoint {
+            use vello::kurbo::{Line, Stroke};
+            let c = vello::kurbo::Point::new(x0 + sz * 0.78, y0 + sz * 0.30);
+            let a = 4.0;
+            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            let halo = vello::peniko::Color::WHITE;
+            for (col, w) in [(halo, 4.0), (ink, 2.0)] {
+                scene.stroke(&Stroke::new(w), Affine::IDENTITY, col, None,
+                    &Line::new((c.x - a, c.y), (c.x + a, c.y)));
+                scene.stroke(&Stroke::new(w), Affine::IDENTITY, col, None,
+                    &Line::new((c.x, c.y - a), (c.x, c.y + a)));
+            }
+        }
     }
     if let Some(plus) = zoom_cursor {
         icons::draw_magnifier(scene, pointer, plus);

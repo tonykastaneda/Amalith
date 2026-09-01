@@ -108,6 +108,38 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
     })
 }
 
+/// A non-tool command that carries a user-remappable shortcut.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PrefAction {
+    SwapPaints,
+    DefaultPaints,
+}
+
+impl PrefAction {
+    pub const ALL: [PrefAction; 2] = [PrefAction::SwapPaints, PrefAction::DefaultPaints];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PrefAction::SwapPaints => "Swap Fill / Stroke",
+            PrefAction::DefaultPaints => "Default Fill / Stroke",
+        }
+    }
+
+    pub fn default_key(self) -> Option<KeyChord> {
+        Some(match self {
+            PrefAction::SwapPaints => KeyChord::plain(KeyCode::KeyX),
+            PrefAction::DefaultPaints => KeyChord::plain(KeyCode::KeyD),
+        })
+    }
+}
+
+/// Which binding table a Keyboard-page row edits.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BindTarget {
+    Tool(usize),
+    Action(usize),
+}
+
 /// The settings the app actually reads. Cheap to copy; the modal edits a
 /// working copy and only writes back on OK.
 #[derive(Clone, Copy, PartialEq)]
@@ -122,11 +154,16 @@ pub struct Settings {
     pub accent: [u8; 3],
     /// Tool shortcut per [`Tool::ALL`] position.
     pub tool_keys: [Option<KeyChord>; Tool::ALL.len()],
+    /// Command shortcut per [`PrefAction::ALL`] position.
+    pub action_keys: [Option<KeyChord>; PrefAction::ALL.len()],
 }
 
 impl Settings {
     fn default_tool_keys() -> [Option<KeyChord>; Tool::ALL.len()] {
         std::array::from_fn(|i| default_tool_key(Tool::ALL[i]))
+    }
+    fn default_action_keys() -> [Option<KeyChord>; PrefAction::ALL.len()] {
+        std::array::from_fn(|i| PrefAction::ALL[i].default_key())
     }
 }
 
@@ -138,6 +175,7 @@ impl Default for Settings {
             home_on_last_close: true,
             accent: ACCENTS[0].1,
             tool_keys: Settings::default_tool_keys(),
+            action_keys: Settings::default_action_keys(),
         }
     }
 }
@@ -170,10 +208,10 @@ pub struct Prefs {
     check_tips: Rect,
     check_home: Rect,
     accent_swatches: Vec<(Rect, [u8; 3])>,
-    /// Keyboard page: (row rect, `Tool::ALL` index).
-    bind_rows: Vec<(Rect, usize)>,
-    /// `Tool::ALL` index currently capturing a keypress, if any.
-    pub recording: Option<usize>,
+    /// Keyboard page: (row rect, which binding it edits).
+    bind_rows: Vec<(Rect, BindTarget)>,
+    /// The binding currently capturing a keypress, if any.
+    pub recording: Option<BindTarget>,
     reset_keys: Rect,
     cancel: Rect,
     ok: Rect,
@@ -187,9 +225,9 @@ pub enum Hit {
     ToggleTips,
     ToggleHome,
     SetAccent([u8; 3]),
-    /// Keyboard page: start capturing a key for `Tool::ALL[i]`.
-    StartRecording(usize),
-    /// Keyboard page: restore the factory tool shortcuts.
+    /// Keyboard page: start capturing a key for this binding.
+    StartRecording(BindTarget),
+    /// Keyboard page: restore the factory shortcuts.
     ResetKeys,
     Cancel,
     Ok,
@@ -245,9 +283,9 @@ impl Prefs {
                 return Hit::SetAccent(*rgb);
             }
         }
-        for (r, i) in &self.bind_rows {
+        for (r, t) in &self.bind_rows {
             if r.contains(p) {
-                return Hit::StartRecording(*i);
+                return Hit::StartRecording(*t);
             }
         }
         if self.reset_keys.contains(p) {
@@ -426,52 +464,107 @@ impl Prefs {
         cy += 26.0;
 
         let row_w = W - SIDEBAR_W - PAD * 2.0;
-        for (i, tool) in Tool::ALL.iter().enumerate() {
-            let row = Rect::new(px, cy, px + row_w, cy + 24.0);
-            let hot = self.recording == Some(i);
-            if hot {
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    theme.accent.with_alpha(0.18),
-                    None,
-                    &row.to_rounded_rect(4.0),
-                );
-            }
-            tcx.draw(scene, tool.label(), 12.0, theme.text, px + 4.0, cy + 16.0);
-
-            let chip = Rect::new(row.x1 - 92.0, cy + 1.0, row.x1, cy + 23.0);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(4.0));
-            scene.stroke(
-                &Stroke::new(1.0),
-                Affine::IDENTITY,
-                if hot { theme.accent } else { theme.border },
-                None,
-                &chip.to_rounded_rect(4.0),
-            );
-            let label = if hot {
-                "Press a key…".to_string()
-            } else {
-                self.working.tool_keys[i]
-                    .map_or_else(|| "—".to_string(), |c| c.to_string())
-            };
-            let lw = tcx.measure(&label, 11.5);
-            tcx.draw(
+        let recording = self.recording;
+        for i in 0..Tool::ALL.len() {
+            kb_row(
                 scene,
-                &label,
-                11.5,
-                if hot { theme.accent } else { theme.text },
-                chip.center().x - lw / 2.0,
-                cy + 16.0,
+                tcx,
+                theme,
+                px,
+                row_w,
+                cy,
+                Tool::ALL[i].label(),
+                self.working.tool_keys[i],
+                recording,
+                BindTarget::Tool(i),
+                &mut self.bind_rows,
             );
+            cy += 27.0;
+        }
 
-            self.bind_rows.push((row, i));
+        cy += 10.0;
+        tcx.draw(scene, "Colours", 13.0, theme.text, px, cy + 4.0);
+        cy += 16.0;
+        for i in 0..PrefAction::ALL.len() {
+            kb_row(
+                scene,
+                tcx,
+                theme,
+                px,
+                row_w,
+                cy,
+                PrefAction::ALL[i].label(),
+                self.working.action_keys[i],
+                recording,
+                BindTarget::Action(i),
+                &mut self.bind_rows,
+            );
             cy += 27.0;
         }
 
         cy += 8.0;
         self.reset_keys = button(scene, tcx, theme, px, cy, "Reset", false);
     }
+}
+
+/// One Keyboard-page row: `name` on the left, its shortcut chip on the
+/// right; the row rect is recorded in `bind_rows` for hit-testing.
+#[allow(clippy::too_many_arguments)]
+fn kb_row(
+    scene: &mut Scene,
+    tcx: &mut TextContext,
+    theme: &Theme,
+    px: f64,
+    row_w: f64,
+    cy: f64,
+    name: &str,
+    chord: Option<KeyChord>,
+    recording: Option<BindTarget>,
+    target: BindTarget,
+    bind_rows: &mut Vec<(Rect, BindTarget)>,
+) {
+    let row = Rect::new(px, cy, px + row_w, cy + 24.0);
+    let hot = recording == Some(target);
+    if hot {
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            theme.accent.with_alpha(0.18),
+            None,
+            &row.to_rounded_rect(4.0),
+        );
+    }
+    tcx.draw(scene, name, 12.0, theme.text, px + 4.0, cy + 16.0);
+    let chip = Rect::new(row.x1 - 92.0, cy + 1.0, row.x1, cy + 23.0);
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        theme.bg,
+        None,
+        &chip.to_rounded_rect(4.0),
+    );
+    scene.stroke(
+        &Stroke::new(1.0),
+        Affine::IDENTITY,
+        if hot { theme.accent } else { theme.border },
+        None,
+        &chip.to_rounded_rect(4.0),
+    );
+    let label = if hot {
+        "Press a key…".to_string()
+    } else {
+        chord.map_or_else(|| "—".to_string(), |c| c.to_string())
+    };
+    let lw = tcx.measure(&label, 11.5);
+    tcx.draw(
+        scene,
+        &label,
+        11.5,
+        if hot { theme.accent } else { theme.text },
+        chip.center().x - lw / 2.0,
+        cy + 16.0,
+    );
+    bind_rows.push((row, target));
 }
 
 fn trim(v: f64) -> String {

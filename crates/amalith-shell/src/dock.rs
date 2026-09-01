@@ -435,6 +435,37 @@ impl DockModel {
             return None;
         }
         self.remove(panel);
+        Some(self.push_floating(panel, rect))
+    }
+
+    /// Place `panel` in its own floating group at `rect`. If it already
+    /// floats alone, that group is reused and moved. If it is docked (or
+    /// tabbed with others), it is torn out. If it isn't placed yet, a new
+    /// group is spawned.
+    pub fn float_alone(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
+        if let Some(f) = self.floating.iter_mut().find(|f| match &f.node {
+            Node::Tabs { panels, .. } => panels.as_slice() == [panel],
+            _ => false,
+        }) {
+            f.rect = rect;
+            return f.id;
+        }
+        if self.contains(panel) {
+            return self.detach(panel, rect).expect("panel was contained");
+        }
+        self.push_floating(panel, rect)
+    }
+
+    /// The floating group currently holding `panel`, if any.
+    pub fn floating_id_of(&self, panel: PanelId) -> Option<u64> {
+        self.floating.iter().find_map(|f| {
+            let mut ids = Vec::new();
+            collect(&f.node, &mut ids);
+            ids.contains(&panel).then_some(f.id)
+        })
+    }
+
+    fn push_floating(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.floating.push(Floating {
@@ -445,7 +476,7 @@ impl DockModel {
             },
             rect,
         });
-        Some(id)
+        id
     }
 
     pub fn floating(&self, id: u64) -> Option<&Floating> {
@@ -796,6 +827,25 @@ mod tests {
             m.floating.is_empty(),
             "floating group torn down when emptied"
         );
+    }
+
+    #[test]
+    fn float_alone_spawns_or_reuses_a_single_tab_group() {
+        let mut m = DockModel::new(tabs(&[A]));
+        let id = m.float_alone(C, [8.0, 9.0, 200.0, 300.0]);
+        assert_eq!(m.floating_id_of(C), Some(id));
+        assert_eq!(m.floating.len(), 1);
+        assert_eq!(m.floating[0].rect, [8.0, 9.0, 200.0, 300.0]);
+
+        let again = m.float_alone(C, [40.0, 50.0, 200.0, 300.0]);
+        assert_eq!(again, id);
+        assert_eq!(m.floating.len(), 1);
+        assert_eq!(m.floating[0].rect, [40.0, 50.0, 200.0, 300.0]);
+
+        let torn = m.float_alone(A, [0.0, 0.0, 100.0, 100.0]);
+        assert_ne!(torn, id);
+        assert!(m.right.is_empty());
+        assert_eq!(m.floating.len(), 2);
     }
 
     #[test]

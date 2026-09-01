@@ -26,6 +26,7 @@ use crate::panels::{Action, PaintSlot};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
+mod anchor;
 mod character;
 mod fill_stroke;
 mod opacity;
@@ -58,6 +59,9 @@ pub struct Ctx<'a> {
     pub stroke_open: bool,
     /// The type style the `character` segment shows.
     pub text_style: amalith_core::TextStyle,
+    /// Number of individually-selected path anchors — flips the
+    /// `anchor` (Convert) segment on.
+    pub anchor_sel_len: usize,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -69,6 +73,7 @@ pub enum SegKind {
     Stroke,
     Opacity,
     Character,
+    Anchor,
 }
 
 struct Segment {
@@ -84,6 +89,7 @@ struct Segment {
 /// list serves every selection kind.
 const SEGMENTS: &[Segment] = &[
     status::SEGMENT,
+    anchor::SEGMENT,
     character::SEGMENT,
     fill_stroke::SEGMENT,
     stroke::SEGMENT,

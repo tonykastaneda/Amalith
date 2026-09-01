@@ -555,6 +555,15 @@ impl Editor {
                 data.edit_subpaths(|sp| amalith_core::toggle_anchor_smooth(sp, anchor));
                 vec![Edit::SetPathData { id: object, data }]
             }
+            Command::SetAnchorSmooth {
+                object,
+                anchor,
+                smooth,
+            } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| amalith_core::set_anchor_smooth(sp, anchor, smooth));
+                vec![Edit::SetPathData { id: object, data }]
+            }
             Command::InsertAnchor {
                 object,
                 segment,
@@ -722,6 +731,18 @@ impl Editor {
             Command::SetStroke { objects, paint } => objects
                 .into_iter()
                 .map(|id| Edit::SetStroke { id, paint })
+                .collect(),
+            Command::SetPaints {
+                objects,
+                fill,
+                stroke,
+            } => objects
+                .into_iter()
+                .flat_map(|id| {
+                    fill.map(|paint| Edit::SetFill { id, paint })
+                        .into_iter()
+                        .chain(stroke.map(|paint| Edit::SetStroke { id, paint }))
+                })
                 .collect(),
             Command::SetStrokeWidth { objects, width } => objects
                 .into_iter()
