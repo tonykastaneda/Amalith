@@ -175,6 +175,10 @@ enum Drag {
     PenHandle { anchor: usize, from: Point },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
+    /// Color panel: dragging a channel slider.
+    ColorScrub { channel: u8, track: Rect },
+    /// Color panel: dragging the hue spectrum bar.
+    ColorSpectrum { track: Rect },
     /// Moving the colour-picker dialog by its title bar.
     MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.
@@ -312,6 +316,15 @@ impl FontMenuState {
             row
         }
     }
+}
+
+/// An open panel hamburger flyout. Items come from [`panels::menu`].
+#[derive(Clone, Copy)]
+struct PanelMenu {
+    panel: PanelId,
+    /// Hamburger button, in the host window's logical coords.
+    anchor: Rect,
+    win: WindowId,
 }
 
 /// One open document's worth of state. The *active* tab's copy lives
@@ -467,6 +480,8 @@ struct App {
     font_families: Vec<String>,
     /// An open Character-panel dropdown.
     font_menu: Option<FontMenuState>,
+    /// An open panel hamburger flyout.
+    panel_menu: Option<PanelMenu>,
     /// Hover tooltip, if the pointer has been resting on a labelled control.
     tooltip: Option<Tooltip>,
     /// Layers panel search: the current filter text, and whether the field
@@ -506,6 +521,10 @@ struct App {
     clipboard: Option<arboard::Clipboard>,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
+    /// Color panel slider space (RGB / HSB / CMYK).
+    color_mode: panels::ColorSpace,
+    /// Recently used solid colours for the Color panel, newest first.
+    recent_colors: Vec<amalith_core::Color>,
     /// Time + position of the last left press, for double-click detection.
     last_click: Option<(Instant, Point)>,
     /// In-progress Pen path — placed anchors (with bezier handles) in
@@ -576,6 +595,7 @@ impl App {
             text_blink: Instant::now(),
             font_families: Vec::new(),
             font_menu: None,
+            panel_menu: None,
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
@@ -593,6 +613,8 @@ impl App {
             stroke_popover: false,
             clipboard: None,
             picker: None,
+            color_mode: panels::ColorSpace::Rgb,
+            recent_colors: Vec::new(),
             last_click: None,
             pen: Vec::new(),
             pen_redo: Vec::new(),
@@ -650,6 +672,7 @@ impl App {
         self.last_pen = None;
         self.marquee = None;
         self.picker = None;
+        self.panel_menu = None;
     }
 
     /// Open `doc` in a new tab and make it active.
@@ -766,6 +789,51 @@ impl App {
             return;
         };
         self.set_paint(pk.slot, amalith_core::Paint::Solid(pk.color()));
+        self.push_recent(pk.color());
+    }
+
+    fn active_paint(&self) -> amalith_core::Paint {
+        match self.active_slot {
+            panels::PaintSlot::Fill => self
+                .representative()
+                .map(|a| a.fill)
+                .unwrap_or(self.doc.fill),
+            panels::PaintSlot::Stroke => self
+                .representative()
+                .map(|a| a.stroke)
+                .unwrap_or(self.doc.stroke),
+        }
+    }
+
+    fn push_recent(&mut self, c: amalith_core::Color) {
+        self.recent_colors.retain(|x| *x != c);
+        self.recent_colors.insert(0, c);
+        self.recent_colors.truncate(12);
+    }
+
+    fn apply_solid_rgb(&mut self, r: f32, g: f32, b: f32) {
+        let c = amalith_core::Color::rgb(r, g, b);
+        self.set_paint(self.active_slot, amalith_core::Paint::Solid(c));
+    }
+
+    fn set_color_channel(&mut self, channel: u8, t: f32) {
+        let (r, g, b) = self
+            .active_paint()
+            .color()
+            .map(|c| (c.r, c.g, c.b))
+            .unwrap_or((0.0, 0.0, 0.0));
+        let (r, g, b) = panels::color::apply_channel(self.color_mode, r, g, b, channel, t);
+        self.apply_solid_rgb(r, g, b);
+    }
+
+    fn set_color_spectrum(&mut self, t: f32) {
+        let (r, g, b) = self
+            .active_paint()
+            .color()
+            .map(|c| (c.r, c.g, c.b))
+            .unwrap_or((1.0, 0.0, 0.0));
+        let (r, g, b) = panels::color::apply_spectrum(r, g, b, t);
+        self.apply_solid_rgb(r, g, b);
     }
 
     /// Close the colour picker overlay. `apply` commits the pending colour
@@ -994,6 +1062,119 @@ impl App {
         }
         self.request_main_redraw();
         true
+    }
+
+    const PM_W: f64 = 168.0;
+    const PM_ROW: f64 = 28.0;
+    const PM_SEP: f64 = 9.0;
+    const PM_PAD: f64 = 8.0;
+
+    fn panel_menu_height(items: &[panels::MenuEntry]) -> f64 {
+        if items.is_empty() {
+            return Self::PM_PAD * 2.0 + 8.0;
+        }
+        let mut h = Self::PM_PAD * 2.0;
+        for e in items {
+            h += match e {
+                panels::MenuEntry::Item { .. } => Self::PM_ROW,
+                panels::MenuEntry::Separator => Self::PM_SEP,
+            };
+        }
+        h
+    }
+
+    fn panel_menu_flyout(anchor: Rect, items: &[panels::MenuEntry], wl: f64, hl: f64) -> Rect {
+        let w = Self::PM_W;
+        let h = Self::panel_menu_height(items);
+        let mut x = anchor.x1;
+        let mut y = anchor.y0;
+        if x + w > wl - 4.0 {
+            x = (anchor.x0 - w).max(4.0);
+        }
+        if y + h > hl - 4.0 {
+            y = (hl - h - 4.0).max(4.0);
+        }
+        Rect::new(x, y, x + w, y + h)
+    }
+
+    fn toggle_panel_menu(&mut self, panel: PanelId, anchor: Rect, win: WindowId) {
+        self.font_menu = None;
+        if self
+            .panel_menu
+            .as_ref()
+            .is_some_and(|m| m.panel == panel && m.win == win)
+        {
+            self.panel_menu = None;
+        } else {
+            self.panel_menu = Some(PanelMenu { panel, anchor, win });
+        }
+        self.request_main_redraw();
+        if let Some(h) = self.hosts.get(&win) {
+            h.window.request_redraw();
+        }
+    }
+
+    /// A click while a panel hamburger flyout is open. Returns true if the
+    /// press was consumed (inside the flyout, or a toggle on the same
+    /// hamburger). Closing on an outside click returns false so the press
+    /// can still open another hamburger.
+    fn panel_menu_click(&mut self, win: WindowId, p: Point) -> bool {
+        let Some(m) = self.panel_menu else {
+            return false;
+        };
+        if m.win != win {
+            self.panel_menu = None;
+            self.request_main_redraw();
+            return false;
+        }
+        if m.anchor.contains(p) {
+            self.panel_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let items = panels::menu(m.panel, &self.tip_ctx());
+        let (wl, hl) = self
+            .hosts
+            .get(&win)
+            .map(|h| {
+                let s = h.window.inner_size();
+                (s.width as f64 / self.scale, s.height as f64 / self.scale)
+            })
+            .unwrap_or((1280.0, 800.0));
+        let fly = Self::panel_menu_flyout(m.anchor, &items, wl, hl);
+        if !fly.contains(p) {
+            self.panel_menu = None;
+            self.request_main_redraw();
+            return false;
+        }
+        if let Some(id) = Self::hit_panel_menu_item(fly, &items, p) {
+            let panel = m.panel;
+            self.panel_menu = None;
+            self.apply_panel_action(panels::Action::PanelMenu { panel, id }, false);
+        }
+        self.request_main_redraw();
+        true
+    }
+
+    fn hit_panel_menu_item(
+        fly: Rect,
+        items: &[panels::MenuEntry],
+        p: Point,
+    ) -> Option<&'static str> {
+        let mut y = fly.y0 + Self::PM_PAD;
+        for e in items {
+            match e {
+                panels::MenuEntry::Separator => y += Self::PM_SEP,
+                panels::MenuEntry::Item { id, .. } => {
+                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::PM_ROW);
+                    if row.contains(p) {
+                        return Some(*id);
+                    }
+                    y += Self::PM_ROW;
+                }
+            }
+        }
+        None
     }
 
     /// Start an inline rename, seeding the buffer with the current name.
@@ -2381,6 +2562,8 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
+            color_mode: self.color_mode,
+            recent: &self.recent_colors,
         }
     }
 
@@ -2465,6 +2648,9 @@ impl App {
         if pid.0 == "picker" {
             self.picker = None;
         }
+        if self.panel_menu.as_ref().is_some_and(|m| m.panel == pid) {
+            self.panel_menu = None;
+        }
         if let Some(fid) = floating {
             let wid = self
                 .hosts
@@ -2540,6 +2726,7 @@ impl App {
             && self.home.is_none()
             && self.prefs.is_none()
             && self.font_menu.is_none()
+            && self.panel_menu.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -2839,11 +3026,17 @@ impl App {
             (sz.height as f64 / self.scale).max(1.0),
         );
         let theme = self.theme.clone();
-        layout::layout(&node, Rect::new(0.0, 0.0, wl, hl), &theme, &mut |p| {
-            self.text.measure(&tab_label(p), 12.0)
-                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                + chrome::PANEL_TAB_CLOSE_W
-        })
+        layout::layout(
+            &node,
+            Rect::new(0.0, 0.0, wl, hl),
+            &theme,
+            &mut |p| {
+                self.text.measure(&tab_label(p), 12.0)
+                    + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                    + chrome::PANEL_TAB_CLOSE_W
+            },
+            &panels::has_menu,
+        )
     }
 
 }
@@ -3101,17 +3294,25 @@ impl ApplicationHandler for App {
     }
 }
 
-/// Right rail: a Character/Swatches tab group over a Layers/Artboards one.
+/// Right rail: Color|Swatches on top, Character in the middle,
+/// Layers|Artboards at the bottom.
 fn demo_right_dock() -> Node {
     Node::Split {
         axis: Axis::Vertical,
         children: vec![
             Child {
                 node: Node::Tabs {
-                    panels: vec![PanelId("character"), PanelId("swatches")],
+                    panels: vec![PanelId("color"), PanelId("swatches")],
                     active: 0,
                 },
-                weight: 1.4,
+                weight: 1.5,
+            },
+            Child {
+                node: Node::Tabs {
+                    panels: vec![PanelId("character")],
+                    active: 0,
+                },
+                weight: 1.1,
             },
             Child {
                 node: Node::Tabs {
@@ -3271,6 +3472,7 @@ fn tab_label(panel: PanelId) -> String {
         "artboards" => "Artboards",
         "swatches" => "Swatches",
         "character" => "Character",
+        "color" => "Color",
         "picker" => "Color Picker",
         other => other,
     }
@@ -3297,11 +3499,17 @@ fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
 
 fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: Rect) -> Layout {
     match &rail.tree {
-        Some(tree) => layout::layout(tree, rect, theme, &mut |p| {
-            text.measure(&tab_label(p), 12.0)
-                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                + chrome::PANEL_TAB_CLOSE_W
-        }),
+        Some(tree) => layout::layout(
+            tree,
+            rect,
+            theme,
+            &mut |p| {
+                text.measure(&tab_label(p), 12.0)
+                    + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                    + chrome::PANEL_TAB_CLOSE_W
+            },
+            &panels::has_menu,
+        ),
         None => Layout::default(),
     }
 }
@@ -3348,9 +3556,10 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 6] = [
+const WINDOW_PANELS: [(&str, &str); 7] = [
     ("artboards", "Artboards"),
     ("character", "Character"),
+    ("color", "Color"),
     ("picker", "Color Picker"),
     ("layers", "Layers"),
     ("swatches", "Swatches"),

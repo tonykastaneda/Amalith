@@ -28,6 +28,12 @@ impl App {
             self.request_main_redraw();
             return;
         }
+        // The Home screen's recent-document grid.
+        if let Some(hm) = &mut self.home {
+            hm.on_scroll(dy);
+            self.request_main_redraw();
+            return;
+        }
         // An open font dropdown scrolls its (filtered) list.
         if let Some(m) = &mut self.font_menu {
             let shown = m.matches().len();

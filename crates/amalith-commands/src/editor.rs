@@ -952,6 +952,11 @@ impl Editor {
             };
             let parent = object.parent;
             let children = group.children.clone();
+            // World of a child is `group.transform * child.transform`.
+            // After the group is gone the child sits in the group's parent,
+            // so that product has to become the child's own transform or
+            // the group's move/scale/rotate would vanish.
+            let group_xf = object.transform;
 
             let list = shadow_children(&self.document, &mut shadow, parent);
             let group_index = list
@@ -975,6 +980,7 @@ impl Editor {
                     .expect("a group's own children list references a real object")
                     .clone();
                 child.parent = parent;
+                child.transform = group_xf * child.transform;
                 edits.push(Edit::RemoveObject { id: child_id });
                 edits.push(Edit::InsertObject {
                     object: Box::new(child),

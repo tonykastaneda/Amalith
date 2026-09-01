@@ -1,7 +1,7 @@
 //! Draws a [`Layout`] into a vello [`Scene`]: panel bodies, tab strips,
 //! tab labels, splitters, and the drop indicator.
 
-use vello::kurbo::{Affine, Rect, Stroke};
+use vello::kurbo::{Affine, Line, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
@@ -21,6 +21,16 @@ pub const PANEL_TAB_CLOSE_W: f64 = 22.0;
 /// The close-button hit / draw rect for a panel `tab`.
 pub fn panel_tab_close_rect(tab: Rect) -> Rect {
     Rect::new(tab.x1 - PANEL_TAB_CLOSE_W, tab.y0, tab.x1, tab.y1)
+}
+
+/// The hamburger button on the right of a panel group's tab strip.
+pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
+    Rect::new(
+        tab_strip.x1 - theme.panel_menu_w,
+        tab_strip.y0,
+        tab_strip.x1,
+        tab_strip.y1,
+    )
 }
 
 /// Paint every group and splitter in `layout`. `label(panel)` supplies the
@@ -74,15 +84,23 @@ pub fn paint(
                 ID,
                 xcol,
                 None,
-                &vello::kurbo::Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)),
+                &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)),
             );
             scene.stroke(
                 &Stroke::new(1.4),
                 ID,
                 xcol,
                 None,
-                &vello::kurbo::Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)),
+                &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)),
             );
+        }
+
+        if area.show_menu {
+            // Hamburger: three bars on the strip's right edge. Drawn last
+            // so it sits above any tab that ran long.
+            let menu = panel_menu_rect(area.tab_strip, theme);
+            scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &menu);
+            paint_hamburger(scene, menu, theme.text_dim);
         }
 
         scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);
@@ -147,6 +165,23 @@ fn rect_for_path(path: &NodePath, layout: &Layout, root: Rect) -> Option<Rect> {
         .map(|a| a.bounds)
 }
 
+fn paint_hamburger(scene: &mut Scene, r: Rect, color: vello::peniko::Color) {
+    let c = r.center();
+    let half = 5.5;
+    let gap = 3.4;
+    let stroke = Stroke::new(1.4);
+    for i in [-1, 0, 1] {
+        let y = c.y + i as f64 * gap;
+        scene.stroke(
+            &stroke,
+            ID,
+            color,
+            None,
+            &Line::new((c.x - half, y), (c.x + half, y)),
+        );
+    }
+}
+
 fn edge_line(r: Rect, side: Side) -> Rect {
     let t = 3.0;
     match side {
@@ -154,5 +189,22 @@ fn edge_line(r: Rect, side: Side) -> Rect {
         Side::Right => Rect::new(r.x1 - t, r.y0, r.x1, r.y1),
         Side::Top => Rect::new(r.x0, r.y0, r.x1, r.y0 + t),
         Side::Bottom => Rect::new(r.x0, r.y1 - t, r.x1, r.y1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vello::kurbo::Rect;
+
+    #[test]
+    fn hamburger_sits_on_the_right_of_the_tab_strip() {
+        let theme = Theme::default();
+        let strip = Rect::new(10.0, 20.0, 210.0, 47.3);
+        let m = panel_menu_rect(strip, &theme);
+        assert_eq!(m.x1, strip.x1);
+        assert_eq!(m.y0, strip.y0);
+        assert_eq!(m.y1, strip.y1);
+        assert!((m.width() - theme.panel_menu_w).abs() < 1e-9);
     }
 }

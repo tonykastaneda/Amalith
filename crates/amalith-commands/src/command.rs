@@ -199,10 +199,12 @@ pub enum Command {
     /// The inverse of [`Command::Group`]: dissolves each group in `ids`,
     /// splicing its children back into the group's own parent at the
     /// position the group occupied (preserving both the children's
-    /// relative order and stacking relative to untouched siblings). Errors
-    /// if any id isn't a group. Group descendants that are themselves
-    /// groups are left alone — this dissolves exactly the groups named,
-    /// not everything nested inside them.
+    /// relative order and stacking relative to untouched siblings). Each
+    /// child's transform is composed with the group's so on-screen
+    /// position, scale, and rotation survive. Errors if any id isn't a
+    /// group. Group descendants that are themselves groups are left
+    /// alone — this dissolves exactly the groups named, not everything
+    /// nested inside them.
     Ungroup {
         ids: Vec<ObjectId>,
     },

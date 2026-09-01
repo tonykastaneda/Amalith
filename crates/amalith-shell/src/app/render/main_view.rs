@@ -54,6 +54,8 @@ pub(in crate::app) fn paint_main(
     font_families: &[String],
     layer_query: &str,
     layer_search_focused: bool,
+    color_mode: panels::ColorSpace,
+    recent: &[amalith_core::Color],
 ) {
     scene.fill(
         Fill::NonZero,
@@ -180,6 +182,8 @@ pub(in crate::app) fn paint_main(
                 font_families,
                 layer_query,
                 layer_search_focused,
+                color_mode,
+                recent,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

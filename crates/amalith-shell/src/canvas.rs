@@ -192,7 +192,7 @@ pub fn paint(
             continue;
         }
         for &id in &layer.children {
-            paint_object(scene, doc, id, vt, drag, text, editing_text);
+            paint_object(scene, doc, id, vt, view.zoom, drag, text, editing_text);
         }
     }
 
@@ -205,6 +205,7 @@ pub fn paint(
                 doc,
                 id,
                 vt * Affine::translate(d.delta),
+                view.zoom,
                 None,
                 text,
                 editing_text,
@@ -559,22 +560,28 @@ fn kurbo_join(j: LineJoin) -> Join {
     }
 }
 
-/// A vello `Stroke` for `width` under `style` — cap, join, miter limit,
-/// and dash pattern. Alignment is applied separately by [`stroke_path`].
-fn stroke_spec(width: f64, style: &StrokeStyle) -> Stroke {
-    let mut s = Stroke::new(width)
+/// A vello `Stroke` for a document-space `width` under `style`. `px` is
+/// the uniform screen scale (view zoom) — object scale is *not* folded
+/// in, so a 10px stroke stays 10px after squash/stretch (Illustrator
+/// with Scale Strokes & Effects off).
+fn stroke_spec(width: f64, style: &StrokeStyle, px: f64) -> Stroke {
+    let mut s = Stroke::new(width * px)
         .with_caps(kurbo_cap(style.cap))
         .with_join(kurbo_join(style.join))
         .with_miter_limit(style.miter_limit.max(1.0));
     if let Some(pattern) = style.dash_pattern() {
-        s = s.with_dashes(style.dash_offset, pattern);
+        s = s.with_dashes(
+            style.dash_offset * px,
+            pattern.into_iter().map(|d| d * px),
+        );
     }
     s
 }
 
-/// Stroke `bp` (object-local space; `m` maps it to the screen) at `width`
-/// under `style`. For a closed path with `align` set to Inside / Outside,
-/// a double-width stroke is clipped to the wanted side of the outline.
+/// Stroke `bp` (object-local space; `m` maps it to the screen) at a
+/// document-space `width`. The path is baked into screen space and
+/// stroked with `Affine::IDENTITY` so object scale cannot fatten or
+/// squash the envelope. `zoom` is the view's uniform scale.
 fn stroke_path(
     scene: &mut Scene,
     m: Affine,
@@ -583,26 +590,35 @@ fn stroke_path(
     width: f64,
     style: &StrokeStyle,
     closed: bool,
+    zoom: f64,
 ) {
+    let px = zoom.max(1e-6);
+    let baked = m * bp;
     if !closed || style.align == StrokeAlign::Center || width <= 0.0 {
-        scene.stroke(&stroke_spec(width, style), m, color, None, bp);
+        scene.stroke(
+            &stroke_spec(width, style, px),
+            Affine::IDENTITY,
+            color,
+            None,
+            &baked,
+        );
         return;
     }
-    let wide = stroke_spec(width * 2.0, style);
+    let wide = stroke_spec(width * 2.0, style, px);
     match style.align {
         StrokeAlign::Inside => {
-            scene.push_clip_layer(Fill::NonZero, m, bp);
-            scene.stroke(&wide, m, color, None, bp);
+            scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &baked);
+            scene.stroke(&wide, Affine::IDENTITY, color, None, &baked);
             scene.pop_layer();
         }
         StrokeAlign::Outside => {
-            let pad = width + 2.0;
-            let outer = bp.bounding_box().inflate(pad, pad);
+            let pad = width * px + 2.0;
+            let outer = baked.bounding_box().inflate(pad, pad);
             let mut ring = BezPath::new();
             ring.extend(outer.path_elements(0.1));
-            ring.extend(bp.elements().iter().copied());
-            scene.push_clip_layer(Fill::EvenOdd, m, &ring);
-            scene.stroke(&wide, m, color, None, bp);
+            ring.extend(baked.elements().iter().copied());
+            scene.push_clip_layer(Fill::EvenOdd, Affine::IDENTITY, &ring);
+            scene.stroke(&wide, Affine::IDENTITY, color, None, &baked);
             scene.pop_layer();
         }
         StrokeAlign::Center => unreachable!(),
@@ -615,6 +631,7 @@ fn paint_object(
     doc: &Document,
     id: ObjectId,
     vt: Affine,
+    zoom: f64,
     drag: Option<DragPreview<'_>>,
     text: &mut TextContext,
     editing_text: Option<ObjectId>,
@@ -647,7 +664,7 @@ fn paint_object(
             }
         }
         if let Some(c) = stroke {
-            stroke_path(scene, m, c, bp, sw, &style, closed);
+            stroke_path(scene, m, c, bp, sw, &style, closed, zoom);
         }
     };
 
@@ -688,7 +705,7 @@ fn paint_object(
             // scaled/rotated/moved group snap back on release.
             let child_drag = if replacement.is_some() { None } else { drag };
             for &child in &g.children {
-                paint_object(scene, doc, child, m, child_drag, text, editing_text);
+                paint_object(scene, doc, child, m, zoom, child_drag, text, editing_text);
             }
         }
         ObjectKind::Text(td) => {

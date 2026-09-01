@@ -2,8 +2,9 @@
 //!
 //! Shown on launch and whenever the last document tab is closed: a left panel
 //! with the app mark, the welcome wordmark, and two external links (tutorials
-//! on YouTube, the repo on GitHub), plus a grid on the right — a "New
-//! Document" tile followed by one tile per recently-opened file.
+//! on YouTube, the repo on GitHub), plus a three-column grid on the right — a
+//! "New Document" tile, recent files, and dark-grey placeholders, with a
+//! scrollbar when the grid overflows.
 //!
 //! Rendered with vello + parley like the rest of the chrome. It's a full-window
 //! surface: while it's up, the canvas underneath takes no input. Artwork comes
@@ -40,6 +41,11 @@ const INK: Color = Color::from_rgb8(238, 238, 240);
 const DIM: Color = Color::from_rgb8(138, 138, 144);
 const DIVIDER: Color = Color::from_rgb8(48, 48, 51);
 const TILE_RECENT: Color = Color::from_rgb8(46, 46, 48);
+const TILE_PLACEHOLDER: Color = Color::from_rgb8(38, 38, 40);
+const SCROLL_THUMB: Color = Color::from_rgb8(90, 90, 94);
+/// Always fill at least this many cells (New Document + recents + blanks).
+const MIN_SLOTS: usize = 9;
+const COLS: usize = 3;
 
 /// What a press on the Home screen landed on.
 pub enum Hit {
@@ -87,6 +93,10 @@ pub struct Home {
     tile: ImageData,
     /// (path, display name), most-recent first.
     recents: Vec<(PathBuf, String)>,
+    /// Vertical scroll of the document grid, in px.
+    scroll: f64,
+    /// Last paint's max scroll; wheel clamping uses this.
+    max_scroll: f64,
     // Hit rectangles in window coordinates, refreshed each paint.
     hit_new: Rect,
     hit_recents: Vec<Rect>,
@@ -109,6 +119,8 @@ impl Home {
                     (p, n)
                 })
                 .collect(),
+            scroll: 0.0,
+            max_scroll: 0.0,
             hit_new: Rect::ZERO,
             hit_recents: Vec::new(),
             hit_youtube: Rect::ZERO,
@@ -137,6 +149,12 @@ impl Home {
             }
         }
         Hit::None
+    }
+
+    /// Wheel over the document grid. `dy` is the same sign as the rest of
+    /// the app (positive = scroll content down / reveal items above).
+    pub fn on_scroll(&mut self, dy: f64) {
+        self.scroll = (self.scroll - dy).clamp(0.0, self.max_scroll);
     }
 
     pub fn paint(
@@ -223,23 +241,37 @@ impl Home {
     ) {
         let area_x = split + 92.0;
         let area_top = 92.0;
-        let area_w = (wl - area_x - 56.0).max(240.0);
+        let area_bottom = hl - 40.0;
+        let scroll_w = 10.0;
+        let area_w = (wl - area_x - 56.0 - scroll_w).max(240.0);
 
-        let cols = 3usize;
         let gap = 30.0;
-        let tile = ((area_w - gap * (cols as f64 - 1.0)) / cols as f64).clamp(130.0, 215.0);
+        let tile = ((area_w - gap * (COLS as f64 - 1.0)) / COLS as f64).clamp(130.0, 215.0);
         let label_gap = 12.0;
         let cell_h = tile + label_gap + 24.0;
+        let row_stride = cell_h + gap;
 
+        let filled = 1 + self.recents.len();
+        let total = filled.max(MIN_SLOTS);
+        let rows = total.div_ceil(COLS);
+        let content_h = rows as f64 * row_stride - gap;
+        let viewport_h = (area_bottom - area_top).max(1.0);
+        self.max_scroll = (content_h - viewport_h).max(0.0);
+        self.scroll = self.scroll.clamp(0.0, self.max_scroll);
+
+        let clip = Rect::new(split, 0.0, wl, hl);
+        scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &clip);
+
+        self.hit_new = Rect::ZERO;
         self.hit_recents.clear();
-        let total = 1 + self.recents.len();
+        self.hit_recents.resize(self.recents.len(), Rect::ZERO);
         for idx in 0..total {
-            let col = idx % cols;
-            let row = idx / cols;
+            let col = idx % COLS;
+            let row = idx / COLS;
             let x = area_x + col as f64 * (tile + gap);
-            let y = area_top + row as f64 * (cell_h + gap);
-            if y + tile > hl - 20.0 {
-                break;
+            let y = area_top + row as f64 * row_stride - self.scroll;
+            if y + tile < area_top - 8.0 || y > area_bottom + 8.0 {
+                continue;
             }
             let tile_rect = Rect::from_origin_size((x, y), (tile, tile));
 
@@ -247,7 +279,7 @@ impl Home {
                 image_into(scene, &self.tile, tile_rect);
                 self.hit_new = tile_rect;
                 label(scene, tcx, theme, "New Document", tile_rect, label_gap, true);
-            } else {
+            } else if idx - 1 < self.recents.len() {
                 scene.fill(
                     Fill::NonZero,
                     Affine::IDENTITY,
@@ -257,9 +289,45 @@ impl Home {
                 );
                 let name = self.recents[idx - 1].1.clone();
                 label(scene, tcx, theme, &name, tile_rect, label_gap, false);
-                self.hit_recents.push(tile_rect);
+                self.hit_recents[idx - 1] = tile_rect;
+            } else {
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    TILE_PLACEHOLDER,
+                    None,
+                    &RoundedRect::from_rect(tile_rect, 18.0),
+                );
             }
         }
+
+        if self.max_scroll > 0.0 {
+            let track = Rect::new(
+                wl - 22.0,
+                area_top,
+                wl - 16.0,
+                area_bottom,
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::from_rgb8(28, 28, 30),
+                None,
+                &track.to_rounded_rect(3.0),
+            );
+            let frac = (viewport_h / content_h).clamp(0.12, 1.0);
+            let th = (track.height() * frac).max(28.0);
+            let ty = track.y0 + (track.height() - th) * (self.scroll / self.max_scroll);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                SCROLL_THUMB,
+                None,
+                &Rect::new(track.x0, ty, track.x1, ty + th).to_rounded_rect(3.0),
+            );
+        }
+
+        scene.pop_layer();
     }
 }
 

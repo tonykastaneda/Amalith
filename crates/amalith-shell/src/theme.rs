@@ -49,6 +49,8 @@ pub struct Theme {
     pub splitter_thickness: f64,
     /// Horizontal padding inside a tab, per side.
     pub tab_pad_x: f64,
+    /// Width reserved on the right of a tab strip for the panel hamburger.
+    pub panel_menu_w: f64,
 }
 
 impl Theme {
@@ -96,6 +98,7 @@ impl Default for Theme {
             tab_strip_h: 27.3,
             splitter_thickness: 6.0,
             tab_pad_x: 12.6,
+            panel_menu_w: 26.0,
         }
     }
 }

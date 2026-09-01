@@ -97,7 +97,12 @@ impl App {
             }
             panels::Action::PickerCancel => self.dismiss_picker(false),
             panels::Action::PickerOk => self.dismiss_picker(true),
-            panels::Action::SetPaint(paint) => self.set_paint(self.active_slot, paint),
+            panels::Action::SetPaint(paint) => {
+                self.set_paint(self.active_slot, paint);
+                if let Some(c) = paint.color() {
+                    self.push_recent(c);
+                }
+            }
             panels::Action::SwapPaints => {
                 std::mem::swap(&mut self.doc.fill, &mut self.doc.stroke);
                 if !self.doc.selection.is_empty() {
@@ -258,6 +263,44 @@ impl App {
                         smooth,
                     });
                 }
+            }
+            panels::Action::PanelMenu { panel, id } => {
+                if panel.0 == "color" {
+                    match id {
+                        "rgb" => self.color_mode = panels::ColorSpace::Rgb,
+                        "hsb" => self.color_mode = panels::ColorSpace::Hsb,
+                        "cmyk" => self.color_mode = panels::ColorSpace::Cmyk,
+                        "invert" => {
+                            let (r, g, b) = self
+                                .active_paint()
+                                .color()
+                                .map(|c| (c.r, c.g, c.b))
+                                .unwrap_or((0.0, 0.0, 0.0));
+                            let (r, g, b) = panels::color::invert_rgb(r, g, b);
+                            self.apply_solid_rgb(r, g, b);
+                            self.push_recent(amalith_core::Color::rgb(r, g, b));
+                        }
+                        "complement" => {
+                            let (r, g, b) = self
+                                .active_paint()
+                                .color()
+                                .map(|c| (c.r, c.g, c.b))
+                                .unwrap_or((0.0, 0.0, 0.0));
+                            let (r, g, b) = panels::color::complement_rgb(r, g, b);
+                            self.apply_solid_rgb(r, g, b);
+                            self.push_recent(amalith_core::Color::rgb(r, g, b));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            panels::Action::ColorScrub { channel, t, track } => {
+                self.set_color_channel(channel, t);
+                self.drag = Drag::ColorScrub { channel, track };
+            }
+            panels::Action::ColorSpectrum { t, track } => {
+                self.set_color_spectrum(t);
+                self.drag = Drag::ColorSpectrum { track };
             }
         }
         self.request_main_redraw();

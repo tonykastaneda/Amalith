@@ -8,6 +8,7 @@
 
 mod artboards;
 pub mod character;
+pub mod color;
 mod layers;
 mod swatches;
 pub mod tools;
@@ -106,6 +107,10 @@ pub struct Ctx<'a> {
     pub layer_query: &'a str,
     /// Layers panel: whether the search field holds keyboard focus.
     pub layer_search_focused: bool,
+    /// Color panel: RGB / HSB / CMYK slider set.
+    pub color_mode: ColorSpace,
+    /// Color panel: recently used solid colours, newest first.
+    pub recent: &'a [CoreColor],
 }
 
 /// A character-attribute flag toggled from the Character panel.
@@ -194,7 +199,46 @@ pub enum Action {
     SwapPaints,
     /// Fill/Stroke proxy: reset to white fill / black stroke.
     DefaultPaints,
+    /// An item from a panel's hamburger flyout (`id` is panel-defined).
+    PanelMenu {
+        panel: PanelId,
+        id: &'static str,
+    },
+    /// Color panel: scrub slider `channel` to `t` (0..1). `track` is the
+    /// screen rect so a drag can keep mapping the pointer.
+    ColorScrub { channel: u8, t: f32, track: Rect },
+    /// Color panel: pick a hue from the spectrum bar.
+    ColorSpectrum { t: f32, track: Rect },
 }
+
+/// One row in a panel hamburger flyout. Panels return these from [`menu`];
+/// the shell draws and hit-tests them. Empty for now — the flyout still
+/// opens so the chrome is in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuEntry {
+    Item {
+        id: &'static str,
+        label: &'static str,
+        checked: bool,
+    },
+    Separator,
+}
+
+/// Flyout items for the hamburger on panel `id`.
+pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
+    match id.0 {
+        "color" => color::menu(ctx),
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the hamburger should show on `id`'s tab strip. Hidden when
+/// [`menu`] is empty so unused chrome stays out of the way.
+pub fn has_menu(id: PanelId) -> bool {
+    matches!(id.0, "color")
+}
+
+pub use color::ColorSpace;
 
 /// Draw panel `id`'s body into `body`.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect, ctx: &Ctx) {
@@ -204,6 +248,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "artboards" => artboards::paint(scene, text, body, ctx),
         "swatches" => swatches::paint(scene, text, body, ctx),
         "character" => character::paint(scene, text, body, ctx),
+        "color" => color::paint(scene, text, body, ctx),
         "picker" => {
             if let Some(pk) = ctx.picker {
                 let mut local = pk;
@@ -224,6 +269,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "artboards" => artboards::hit(body, local, ctx),
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
+        "color" => color::hit(body, local, ctx),
         "picker" => {
             ctx.picker.map_or(Action::None, |mut pk| {
                 pk.origin = Point::new(body.x0, body.y0);
@@ -251,6 +297,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "tools" => tools::natural_height(width),
         "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
         "artboards" | "swatches" => 132.0,
+        "color" => color::NATURAL_H,
         "picker" => crate::picker::H,
         _ => 60.0,
     }
@@ -260,6 +307,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
 pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {
         "tools" => tools::tip(body, local, ctx),
+        "color" => color::tip(body, local, ctx).map(str::to_string),
         "picker" => Some("Color Picker".into()),
         "character" => character::tip(body, local, ctx).map(str::to_string),
         _ => None,
@@ -430,4 +478,19 @@ pub fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint
         (1.0, theme.border)
     };
     scene.stroke(&Stroke::new(w), ID, col, None, &r);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hamburger_starts_with_no_items() {
+        // Every panel shares the empty menu until it fills `menu()` in.
+        // The flyout still opens; it just has nothing to list.
+        assert!(matches!(
+            MenuEntry::Separator,
+            MenuEntry::Separator
+        ));
+    }
 }

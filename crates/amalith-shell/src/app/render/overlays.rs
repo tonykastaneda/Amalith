@@ -91,6 +91,90 @@ impl App {
         }
         self.content.pop_layer();
     }
+
+    pub(in crate::app) fn paint_panel_menu(&mut self, wl: f64, hl: f64) {
+        let Some(m) = self.panel_menu else {
+            return;
+        };
+        let items = panels::menu(m.panel, &self.tip_ctx());
+        let fly = Self::panel_menu_flyout(m.anchor, &items, wl, hl);
+        let th = &self.theme;
+        // Light the hamburger while its menu is open.
+        self.content
+            .fill(Fill::NonZero, ID, th.strip_active, None, &m.anchor);
+        let c = m.anchor.center();
+        let half = 5.5;
+        let gap = 3.4;
+        let stroke = Stroke::new(1.4);
+        for i in [-1, 0, 1] {
+            let y = c.y + i as f64 * gap;
+            self.content.stroke(
+                &stroke,
+                ID,
+                th.text,
+                None,
+                &vello::kurbo::Line::new((c.x - half, y), (c.x + half, y)),
+            );
+        }
+        self.content.fill(
+            Fill::NonZero,
+            ID,
+            th.bg,
+            None,
+            &fly.to_rounded_rect(6.0),
+        );
+        self.content.stroke(
+            &Stroke::new(1.0),
+            ID,
+            th.border,
+            None,
+            &fly.to_rounded_rect(6.0),
+        );
+        let mut y = fly.y0 + Self::PM_PAD;
+        for e in &items {
+            match e {
+                panels::MenuEntry::Separator => {
+                    let mid = y + Self::PM_SEP * 0.5;
+                    self.content.fill(
+                        Fill::NonZero,
+                        ID,
+                        th.border,
+                        None,
+                        &Rect::new(fly.x0 + 10.0, mid, fly.x1 - 10.0, mid + 1.0),
+                    );
+                    y += Self::PM_SEP;
+                }
+                panels::MenuEntry::Item {
+                    label, checked, ..
+                } => {
+                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::PM_ROW);
+                    if row.contains(self.pointer) {
+                        self.content
+                            .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
+                    }
+                    if *checked {
+                        self.text.draw(
+                            &mut self.content,
+                            "✓",
+                            12.0,
+                            th.text,
+                            row.x0 + 10.0,
+                            row.center().y + 4.0,
+                        );
+                    }
+                    self.text.draw(
+                        &mut self.content,
+                        label,
+                        12.5,
+                        th.text,
+                        row.x0 + 28.0,
+                        row.center().y + 4.5,
+                    );
+                    y += Self::PM_ROW;
+                }
+            }
+        }
+    }
 }
 
 /// A small dark tooltip box near `anchor` (screen px), clamped inside the

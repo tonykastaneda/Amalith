@@ -1795,6 +1795,77 @@ mod tests {
     }
 
     #[test]
+    fn ungroup_bakes_the_groups_transform_into_its_children() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(20.0, 0.0, 30.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(group_id) = editor
+            .execute(Command::Group {
+                ids: vec![a, b],
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let xf = Affine::translate((40.0, 15.0)) * Affine::scale(2.0);
+        editor
+            .execute(Command::SetTransform {
+                object: group_id,
+                transform: xf,
+            })
+            .unwrap();
+        let world_a = editor.document().world_transform(a);
+        let world_b = editor.document().world_transform(b);
+        let bounds_a = editor.document().bounds_of(a);
+        let bounds_b = editor.document().bounds_of(b);
+
+        editor.ungroup(&[group_id]).unwrap();
+        assert_eq!(editor.document().world_transform(a), world_a);
+        assert_eq!(editor.document().world_transform(b), world_b);
+        assert_eq!(editor.document().bounds_of(a), bounds_a);
+        assert_eq!(editor.document().bounds_of(b), bounds_b);
+        assert_eq!(
+            editor.document().object(a).unwrap().transform,
+            world_a
+        );
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().world_transform(a), world_a);
+        assert_eq!(
+            editor.document().object(group_id).unwrap().transform,
+            xf
+        );
+    }
+
+    #[test]
     fn ungroup_errors_on_a_non_group_object() {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor

@@ -287,6 +287,8 @@ impl App {
                 &self.font_families,
                 &self.layer_query,
                 self.layer_search_focused,
+                self.color_mode,
+                &self.recent_colors,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -324,6 +326,8 @@ impl App {
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
+                            color_mode: self.color_mode,
+                            recent: &self.recent_colors,
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -384,6 +388,9 @@ impl App {
             if let Some(pr) = &mut self.prefs {
                 pr.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
             }
+        }
+        if self.panel_menu.as_ref().is_some_and(|m| m.win == id) {
+            self.paint_panel_menu(wl, hl);
         }
         // Hover tooltip — topmost, in whichever window the pointer is over.
         if let Some(tt) = &self.tooltip {

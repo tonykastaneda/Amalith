@@ -170,6 +170,19 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            Drag::ColorScrub { channel, track } => {
+                let channel = *channel;
+                let track = *track;
+                let t = ((self.pointer.x - track.x0) / track.width()).clamp(0.0, 1.0) as f32;
+                self.set_color_channel(channel, t);
+                self.drag = Drag::ColorScrub { channel, track };
+            }
+            Drag::ColorSpectrum { track } => {
+                let track = *track;
+                let t = ((self.pointer.x - track.x0) / track.width()).clamp(0.0, 1.0) as f32;
+                self.set_color_spectrum(t);
+                self.drag = Drag::ColorSpectrum { track };
+            }
             Drag::DrawShape {
                 tool, start_doc, ..
             } => {
@@ -359,6 +372,11 @@ impl App {
             Drag::MovePicker { .. } => {}
             // The dialog keeps edits pending until its OK button (or Enter).
             Drag::PickColor { .. } => {}
+            Drag::ColorScrub { .. } | Drag::ColorSpectrum { .. } => {
+                if let Some(c) = self.active_paint().color() {
+                    self.push_recent(c);
+                }
+            }
             Drag::MoveObjects {
                 start_doc,
                 last_doc,

@@ -24,6 +24,12 @@ impl App {
         if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
             return;
         }
+        // An open panel hamburger flyout: clicks inside it are consumed;
+        // a click on its own hamburger toggles it shut; anything else
+        // closes it and falls through so another hamburger can open.
+        if self.panel_menu.is_some() && self.panel_menu_click(id, self.pointer) {
+            return;
+        }
         // The Preferences modal.
         if self.prefs.is_some() {
             let hit = self.prefs.as_mut().unwrap().on_press(self.pointer);
@@ -304,6 +310,15 @@ impl App {
                     }
                     for area in &laid.areas {
                         if area.tab_strip.contains(self.pointer) {
+                            let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
+                            if area.show_menu && burger.contains(self.pointer) {
+                                if let Some(pid) =
+                                    area.tabs.get(area.active).map(|t| t.panel)
+                                {
+                                    self.toggle_panel_menu(pid, burger, id);
+                                }
+                                return;
+                            }
                             if let Some(tab) =
                                 area.tabs.iter().position(|t| t.rect.contains(self.pointer))
                             {
@@ -351,6 +366,8 @@ impl App {
                                         font_families: &self.font_families,
                                         layer_query: &self.layer_query,
                                         layer_search_focused: self.layer_search_focused,
+                                        color_mode: self.color_mode,
+                                        recent: &self.recent_colors,
                                     };
                                     panels::hit(pid, area.body, self.pointer, &ctx)
                                 };
@@ -768,6 +785,13 @@ impl App {
                 let laid = self.floating_layout(fid);
                 for area in &laid.areas {
                     if area.tab_strip.contains(self.pointer) {
+                        let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
+                        if area.show_menu && burger.contains(self.pointer) {
+                            if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                                self.toggle_panel_menu(pid, burger, id);
+                            }
+                            return;
+                        }
                         let tab = area
                             .tabs
                             .iter()
@@ -816,6 +840,8 @@ impl App {
                                     font_families: &self.font_families,
                                     layer_query: &self.layer_query,
                                     layer_search_focused: self.layer_search_focused,
+                                    color_mode: self.color_mode,
+                                    recent: &self.recent_colors,
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };

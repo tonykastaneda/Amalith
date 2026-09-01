@@ -20,6 +20,8 @@ pub struct PanelArea {
     pub body: Rect,
     pub tabs: Vec<TabRect>,
     pub active: usize,
+    /// Draw the hamburger on this strip (active panel has menu items).
+    pub show_menu: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -72,16 +74,18 @@ pub struct Layout {
 
 /// Lay `root` out within `within`. `tab_width(panel)` gives each tab's
 /// pixel width — it takes `&mut` because measuring text mutates the font
-/// cache; a pure estimate works too.
+/// cache; a pure estimate works too. `has_menu` decides whether the
+/// hamburger slot is reserved on that group's strip.
 pub fn layout(
     root: &Node,
     within: Rect,
     theme: &Theme,
     tab_width: &mut dyn FnMut(PanelId) -> f64,
+    has_menu: &dyn Fn(PanelId) -> bool,
 ) -> Layout {
     let mut out = Layout::default();
     let mut path = Vec::new();
-    layout_node(root, within, theme, tab_width, &mut path, &mut out);
+    layout_node(root, within, theme, tab_width, has_menu, &mut path, &mut out);
     out
 }
 
@@ -90,6 +94,7 @@ fn layout_node(
     rect: Rect,
     theme: &Theme,
     tab_width: &mut dyn FnMut(PanelId) -> f64,
+    has_menu: &dyn Fn(PanelId) -> bool,
     path: &mut Vec<usize>,
     out: &mut Layout,
 ) {
@@ -98,15 +103,25 @@ fn layout_node(
             let strip_y1 = (rect.y0 + theme.tab_strip_h).min(rect.y1);
             let tab_strip = Rect::new(rect.x0, rect.y0, rect.x1, strip_y1);
             let body = Rect::new(rect.x0, strip_y1, rect.x1, rect.y1);
+            let show_menu = panels.get(*active).copied().is_some_and(has_menu);
+            // Leave the hamburger a clear slot when this group shows one.
+            let tab_limit = if show_menu {
+                (rect.x1 - theme.panel_menu_w).max(rect.x0)
+            } else {
+                rect.x1
+            };
 
             let mut x = rect.x0;
             let mut tabs = Vec::with_capacity(panels.len());
             for &panel in panels {
                 let w = tab_width(panel).max(8.0);
-                tabs.push(TabRect {
-                    panel,
-                    rect: Rect::new(x, tab_strip.y0, x + w, tab_strip.y1),
-                });
+                let x1 = (x + w).min(tab_limit);
+                if x1 > x + 1.0 {
+                    tabs.push(TabRect {
+                        panel,
+                        rect: Rect::new(x, tab_strip.y0, x1, tab_strip.y1),
+                    });
+                }
                 x += w;
             }
 
@@ -117,6 +132,7 @@ fn layout_node(
                 body,
                 tabs,
                 active: *active,
+                show_menu,
             });
         }
         Node::Split { axis, children } => {
@@ -154,7 +170,7 @@ fn layout_node(
 
             for (i, child) in children.iter().enumerate() {
                 path.push(i);
-                layout_node(&child.node, child_rects[i], theme, tab_width, path, out);
+                layout_node(&child.node, child_rects[i], theme, tab_width, has_menu, path, out);
                 path.pop();
 
                 if i + 1 < n {
@@ -297,7 +313,7 @@ mod tests {
     #[test]
     fn vertical_split_stacks_two_areas_with_a_splitter_between() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
 
         assert_eq!(lay.areas.len(), 2);
         assert_eq!(lay.splitters.len(), 1);
@@ -316,12 +332,34 @@ mod tests {
         assert_eq!(bottom.tabs.len(), 2);
         assert_eq!(bottom.tabs[0].rect.x0, 0.0);
         assert_eq!(bottom.tabs[1].rect.x0, 80.0);
+        assert!(!bottom.show_menu);
+    }
+
+    #[test]
+    fn hamburger_slot_is_reserved_only_when_the_active_tab_has_a_menu() {
+        let root = Rect::new(0.0, 0.0, 300.0, 400.0);
+        let lay = layout(
+            &stacked(),
+            root,
+            &theme(),
+            &mut |p| w80(p),
+            &|p| p == L,
+        );
+        let top = &lay.areas[0];
+        assert!(top.show_menu);
+        assert!(
+            top.tabs
+                .iter()
+                .all(|t| t.rect.x1 <= top.tab_strip.x1 - theme().panel_menu_w + 0.01),
+            "tabs must not cover the hamburger"
+        );
+        assert!(!lay.areas[1].show_menu);
     }
 
     #[test]
     fn splitter_frac_at_maps_a_pointer_to_a_boundary_fraction() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let sp = &lay.splitters[0];
         assert_eq!(sp.axis, Axis::Vertical);
         // Combined span is the whole 0..400 height. A pointer a quarter of
@@ -336,7 +374,7 @@ mod tests {
     #[test]
     fn cursor_near_left_edge_splits_the_whole_dock() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let t = hit_test(&lay, root, Point::new(6.0, 200.0), &theme());
         assert_eq!(
             t,
@@ -350,7 +388,7 @@ mod tests {
     #[test]
     fn cursor_in_a_tab_strip_inserts_a_tab_at_the_nearest_gap() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let bottom = &lay.areas[1];
         // Just past the midpoint of the first tab → insert before tab 1.
         let y = bottom.tab_strip.y0 + 4.0;
@@ -367,7 +405,7 @@ mod tests {
     #[test]
     fn cursor_in_a_group_body_centre_tabs_into_that_group() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let bottom = &lay.areas[1];
         let c = bottom.body.center();
         let t = hit_test(&lay, root, c, &theme());
@@ -383,7 +421,7 @@ mod tests {
     #[test]
     fn cursor_near_a_lower_group_body_top_splits_that_group() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let bottom = &lay.areas[1];
         // A few px below the body's top edge, mid-width, well clear of the
         // dock perimeter.
@@ -401,7 +439,7 @@ mod tests {
     #[test]
     fn cursor_outside_the_dock_floats() {
         let root = Rect::new(0.0, 0.0, 300.0, 400.0);
-        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p));
+        let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let t = hit_test(&lay, root, Point::new(-20.0, 200.0), &theme());
         assert_eq!(t, DropTarget::Float);
     }
