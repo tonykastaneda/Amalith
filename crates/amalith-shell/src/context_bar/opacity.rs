@@ -12,19 +12,19 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Opacity,
     applies: |_| true,
-    measure: |_| 112.0,
+    measure: |_| 129.0,
     paint,
     hit,
 };
 
 /// (opacity field, up, down) rects.
 fn parts(r: Rect) -> (Rect, Rect, Rect) {
-    field(r.x0 + 52.0, r.center().y, 46.0)
+    field(r.x0 + 60.0, r.center().y, 53.0)
 }
 
 fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let (f, up, down) = parts(r);
-    text.draw(scene, "Opacity", 11.5, ctx.theme.text_dim, r.x0, baseline(r));
+    text.draw(scene, "Opacity", 13.0, ctx.theme.text_dim, r.x0, baseline(r));
     let op = ctx
         .representative
         .map(|a| a.opacity)

@@ -11,6 +11,11 @@ use super::{Action, Ctx, ID, PAD};
 
 const BTN: f64 = 26.0;
 const GAP: f64 = 4.0;
+/// Gap between the two trios in an icon row (H-align | V-align, and the
+/// matching distribute pair). A fixed, modest break — not "shove the
+/// second trio to the far edge" — so a wide panel doesn't tear the row
+/// in half. Illustrator uses roughly this.
+const GROUP_GAP: f64 = 22.0;
 /// Section rhythm, shared by all four blocks so the panel reads as one
 /// system (matches the Transform / Pathfinder panels' spacing feel).
 const LABEL_DROP: f64 = 12.0; // section top → label baseline
@@ -42,12 +47,15 @@ fn group3(x0: f64, y: f64) -> [Rect; 3] {
     })
 }
 
-/// Left trio at `x0`, right trio flush to `x1`, with at least 16px between.
+/// Two trios left-packed from `x0` with a fixed [`GROUP_GAP`] between
+/// them. Only tightens the gap if the panel is too narrow to fit both
+/// trios at that spacing (never overlaps, never overflows `x1`).
 fn six(x0: f64, x1: f64, y: f64) -> [Rect; 6] {
     let g3 = 3.0 * BTN + 2.0 * GAP;
     let left = group3(x0, y);
-    let right0 = (x1 - g3).max(x0 + g3 + 16.0);
-    let right = group3(right0, y);
+    let want = x0 + g3 + GROUP_GAP;
+    let max = (x1 - g3).max(x0 + g3 + 6.0);
+    let right = group3(want.min(max), y);
     [left[0], left[1], left[2], right[0], right[1], right[2]]
 }
 

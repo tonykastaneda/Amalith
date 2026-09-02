@@ -12,7 +12,7 @@ use super::{baseline, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::FillStroke,
     applies: |ctx| !ctx.text_context,
-    measure: |_| 108.0,
+    measure: |_| 124.0,
     paint,
     hit,
 };
@@ -20,18 +20,18 @@ pub(super) const SEGMENT: Segment = Segment {
 /// (fill chip, stroke chip) rects inside the segment.
 fn chips(r: Rect) -> (Rect, Rect) {
     let cy = r.center().y;
-    let fill = Rect::from_center_size(Point::new(r.x0 + 39.0, cy), (18.0, 18.0));
-    let stroke = Rect::from_center_size(Point::new(r.x0 + 88.0, cy), (18.0, 18.0));
+    let fill = Rect::from_center_size(Point::new(r.x0 + 45.0, cy), (21.0, 21.0));
+    let stroke = Rect::from_center_size(Point::new(r.x0 + 101.0, cy), (21.0, 21.0));
     (fill, stroke)
 }
 
 fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let theme = ctx.theme;
     let (fill, stroke) = chips(r);
-    text.draw(scene, "Fill", 11.5, theme.text_dim, r.x0, baseline(r));
+    text.draw(scene, "Fill", 13.0, theme.text_dim, r.x0, baseline(r));
 
     let indicator = |scene: &mut Scene, chip: Rect| {
-        let s = Rect::from_center_size(Point::new(chip.x1 + 12.0, chip.center().y), (11.0, 11.0));
+        let s = Rect::from_center_size(Point::new(chip.x1 + 13.0, chip.center().y), (13.0, 13.0));
         scene.stroke(&Stroke::new(1.0), ID, theme.text_dim, None, &s);
     };
     panels::draw_paint_swatch(

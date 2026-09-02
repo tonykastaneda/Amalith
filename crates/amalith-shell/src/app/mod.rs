@@ -62,8 +62,9 @@ const APP_BAR_H: f64 = 30.0;
 const APP_BAR_H: f64 = 0.0;
 /// The document-tab strip, between the app bar and the options bar.
 const TAB_BAR_H: f64 = 29.4;
-/// The tool options strip, between the app bar and the canvas.
-const OPT_BAR_H: f64 = 30.0;
+/// The tool options strip, between the app bar and the canvas. Sized so
+/// its 23px-tall controls clear the edges — see `context_bar`.
+const OPT_BAR_H: f64 = 35.0;
 /// Total fixed chrome above the canvas / below the top of the window.
 const CHROME_TOP: f64 = APP_BAR_H + TAB_BAR_H + OPT_BAR_H;
 /// When a rail is empty, the strip of canvas along that edge that still

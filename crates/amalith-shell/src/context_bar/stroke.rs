@@ -12,7 +12,7 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Stroke,
     applies: |ctx| !ctx.text_context,
-    measure: |_| 118.0,
+    measure: |_| 136.0,
     paint,
     hit,
 };
@@ -20,8 +20,8 @@ pub(super) const SEGMENT: Segment = Segment {
 /// (link, weight field, up, down) rects.
 fn parts(r: Rect) -> (Rect, Rect, Rect, Rect) {
     let cy = r.center().y;
-    let link = Rect::new(r.x0 - 4.0, cy - 9.0, r.x0 + 42.0, cy + 9.0);
-    let (f, up, down) = field(r.x0 + 46.0, cy, 56.0);
+    let link = Rect::new(r.x0 - 4.0, cy - 10.5, r.x0 + 48.0, cy + 10.5);
+    let (f, up, down) = field(r.x0 + 53.0, cy, 64.0);
     (link, f, up, down)
 }
 
@@ -34,8 +34,8 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     } else {
         theme.text
     };
-    text.draw(scene, "Stroke", 11.5, link_color, r.x0, base);
-    let uw = text.measure("Stroke", 11.5);
+    text.draw(scene, "Stroke", 13.0, link_color, r.x0, base);
+    let uw = text.measure("Stroke", 13.0);
     scene.stroke(
         &Stroke::new(1.0),
         ID,

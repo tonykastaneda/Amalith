@@ -16,7 +16,7 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Xform,
     applies: |ctx| ctx.selection_len > 0 && !ctx.text_context,
-    measure: |_| 456.0,
+    measure: |_| 524.0,
     paint,
     hit,
 };
@@ -35,16 +35,16 @@ struct Parts {
 
 fn parts(r: Rect) -> Parts {
     let cy = r.center().y;
-    let mut x = r.x0 + 46.0; // after "Shape:"
-    let w = Rect::new(x, cy - 10.0, x + 68.0, cy + 10.0);
-    x = w.x1 + 6.0;
-    let lock = Rect::new(x, cy - 10.0, x + 20.0, cy + 10.0);
-    x = lock.x1 + 6.0;
-    let h = Rect::new(x, cy - 10.0, x + 68.0, cy + 10.0);
-    x = h.x1 + 16.0 + 62.0; // gap + "Transform"
-    let (xf, x_up, x_down) = field(x + 16.0, cy, 64.0); // after "X:"
-    x = x_down.x1 + 10.0;
-    let (yf, y_up, y_down) = field(x + 16.0, cy, 64.0); // after "Y:"
+    let mut x = r.x0 + 53.0; // after "Shape:"
+    let w = Rect::new(x, cy - 11.5, x + 78.0, cy + 11.5);
+    x = w.x1 + 7.0;
+    let lock = Rect::new(x, cy - 11.5, x + 23.0, cy + 11.5);
+    x = lock.x1 + 7.0;
+    let h = Rect::new(x, cy - 11.5, x + 78.0, cy + 11.5);
+    x = h.x1 + 18.0 + 71.0; // gap + "Transform"
+    let (xf, x_up, x_down) = field(x + 18.0, cy, 74.0); // after "X:"
+    x = x_down.x1 + 12.0;
+    let (yf, y_up, y_down) = field(x + 18.0, cy, 74.0); // after "Y:"
     Parts {
         w,
         h,
@@ -83,13 +83,13 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let base = baseline(r);
     let v = ctx.xform;
 
-    text.draw(scene, "Shape:", 11.5, theme.text_dim, r.x0, base);
+    text.draw(scene, "Shape:", 13.0, theme.text_dim, r.x0, base);
     draw_box(scene, text, theme, p.w, &shown(ctx, XformField::W, v));
     paint_lock(scene, p.lock, ctx.xform_constrain, theme);
     draw_box(scene, text, theme, p.h, &shown(ctx, XformField::H, v));
 
-    text.draw(scene, "Transform", 11.5, theme.text_dim, p.h.x1 + 16.0, base);
-    text.draw(scene, "X:", 11.5, theme.text, p.x.x0 - 16.0, base);
+    text.draw(scene, "Transform", 13.0, theme.text_dim, p.h.x1 + 18.0, base);
+    text.draw(scene, "X:", 13.0, theme.text, p.x.x0 - 18.0, base);
     draw_field(
         scene,
         text,
@@ -99,7 +99,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         p.x_down,
         &shown(ctx, XformField::X, v),
     );
-    text.draw(scene, "Y:", 11.5, theme.text, p.y.x0 - 16.0, base);
+    text.draw(scene, "Y:", 13.0, theme.text, p.y.x0 - 18.0, base);
     draw_field(
         scene,
         text,
@@ -124,10 +124,10 @@ fn draw_box(
     text.draw(
         scene,
         value,
-        11.5,
+        13.0,
         theme.text,
-        r.x0 + 6.0,
-        r.y0 + r.height() * 0.5 + 4.0,
+        r.x0 + 7.0,
+        r.y0 + r.height() * 0.5 + 4.5,
     );
 }
 
@@ -141,17 +141,17 @@ fn paint_lock(scene: &mut Scene, r: Rect, on: bool, theme: &crate::theme::Theme)
     let c = r.center();
     if on {
         // Linked chain: two rings.
-        let a = Rect::from_center_size(Point::new(c.x, c.y - 3.0), (7.0, 8.0));
-        let b = Rect::from_center_size(Point::new(c.x, c.y + 3.0), (7.0, 8.0));
+        let a = Rect::from_center_size(Point::new(c.x, c.y - 3.5), (8.0, 9.0));
+        let b = Rect::from_center_size(Point::new(c.x, c.y + 3.5), (8.0, 9.0));
         scene.stroke(&Stroke::new(1.4), ID, col, None, &a.to_rounded_rect(2.5));
         scene.stroke(&Stroke::new(1.4), ID, col, None, &b.to_rounded_rect(2.5));
     } else {
         // Broken link — a slash through a ring.
-        let a = Rect::from_center_size(c, (8.0, 10.0));
+        let a = Rect::from_center_size(c, (9.0, 11.5));
         scene.stroke(&Stroke::new(1.4), ID, col, None, &a.to_rounded_rect(2.5));
         let mut slash = BezPath::new();
-        slash.move_to((c.x - 5.0, c.y + 6.0));
-        slash.line_to((c.x + 5.0, c.y - 6.0));
+        slash.move_to((c.x - 6.0, c.y + 7.0));
+        slash.line_to((c.x + 6.0, c.y - 7.0));
         scene.stroke(&Stroke::new(1.4), ID, col, None, &slash);
     }
 }

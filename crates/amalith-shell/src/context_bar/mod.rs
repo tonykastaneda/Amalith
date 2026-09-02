@@ -37,7 +37,7 @@ mod xform;
 
 const ID: vello::kurbo::Affine = vello::kurbo::Affine::IDENTITY;
 /// Gap between adjacent segments; a hairline separator sits in the middle.
-const GAP: f64 = 22.0;
+const GAP: f64 = 25.0;
 
 /// The read-only slice of shell state a context-bar segment draws from.
 /// Built once per paint / hit — the one construction site is the price of
@@ -191,17 +191,17 @@ pub fn tip(bar: Rect, local: Point, ctx: &Ctx) -> Option<String> {
 
 // ---- shared segment widgets ---------------------------------------------
 
-/// Baseline y for 11.5px label text centred in `bar`.
+/// Baseline y for 13px label text centred in `bar`.
 fn baseline(bar: Rect) -> f64 {
-    bar.y0 + bar.height() * 0.5 + 4.0
+    bar.y0 + bar.height() * 0.5 + 4.5
 }
 
 /// A boxed numeric readout plus an up / down stepper column. Returns the
 /// (field, up, down) rects so `hit` can reuse the same geometry.
 fn field(x: f64, cy: f64, w: f64) -> (Rect, Rect, Rect) {
-    let field = Rect::new(x, cy - 10.0, x + w, cy + 10.0);
-    let up = Rect::new(field.x1, cy - 10.0, field.x1 + 13.0, cy);
-    let down = Rect::new(field.x1, cy, field.x1 + 13.0, cy + 10.0);
+    let field = Rect::new(x, cy - 11.5, x + w, cy + 11.5);
+    let up = Rect::new(field.x1, cy - 11.5, field.x1 + 15.0, cy);
+    let down = Rect::new(field.x1, cy, field.x1 + 15.0, cy + 11.5);
     (field, up, down)
 }
 
@@ -220,10 +220,10 @@ fn draw_field(
     text.draw(
         scene,
         value,
-        11.5,
+        13.0,
         theme.text,
-        field.x0 + 6.0,
-        field.y0 + field.height() * 0.5 + 4.0,
+        field.x0 + 7.0,
+        field.y0 + field.height() * 0.5 + 4.5,
     );
     let col = Rect::new(up.x0, up.y0, up.x1, down.y1);
     scene.fill(Fill::NonZero, ID, theme.bg, None, &col);
@@ -250,10 +250,10 @@ fn draw_combo(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect,
     text.draw(
         scene,
         value,
-        11.5,
+        13.0,
         theme.text,
-        r.x0 + 7.0,
-        r.y0 + r.height() * 0.5 + 4.0,
+        r.x0 + 8.0,
+        r.y0 + r.height() * 0.5 + 4.5,
     );
     let cx = r.x1 - 10.0;
     let cy = r.center().y;

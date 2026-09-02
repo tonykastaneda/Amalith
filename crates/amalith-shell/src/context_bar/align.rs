@@ -11,10 +11,10 @@ use crate::text::TextContext;
 
 use super::{Ctx, SegKind, Segment, ID};
 
-const BTN: f64 = 22.0;
+const BTN: f64 = 25.0;
 const GAP: f64 = 2.0;
-const GROUP: f64 = 8.0;
-const DROP_W: f64 = 32.0;
+const GROUP: f64 = 9.0;
+const DROP_W: f64 = 37.0;
 
 const ALIGN: [AlignKind; 6] = [
     AlignKind::HLeft,
@@ -119,13 +119,13 @@ fn paint(scene: &mut Scene, _text: &mut TextContext, r: Rect, ctx: &Ctx) {
 
 /// 9-dot grid (Align To) plus a dropdown caret, like Illustrator's Control bar.
 fn paint_drop_icon(scene: &mut Scene, r: Rect, ink: Color) {
-    let grid = Rect::new(r.x0 + 4.0, r.y0 + 5.0, r.x0 + 18.0, r.y1 - 5.0);
-    let d = 2.0;
+    let grid = Rect::new(r.x0 + 5.0, r.y0 + 6.0, r.x0 + 21.0, r.y1 - 6.0);
+    let d = 2.2;
     for row in 0..3 {
         for col in 0..3 {
             let p = Point::new(
-                grid.x0 + 2.0 + col as f64 * 5.0,
-                grid.y0 + 2.0 + row as f64 * 4.5,
+                grid.x0 + 2.0 + col as f64 * 5.5,
+                grid.y0 + 2.0 + row as f64 * 5.0,
             );
             scene.fill(
                 Fill::NonZero,
@@ -136,12 +136,12 @@ fn paint_drop_icon(scene: &mut Scene, r: Rect, ink: Color) {
             );
         }
     }
-    let cx = r.x1 - 7.0;
+    let cx = r.x1 - 8.0;
     let cy = r.center().y;
     let mut t = BezPath::new();
-    t.move_to((cx - 3.0, cy - 1.5));
-    t.line_to((cx + 3.0, cy - 1.5));
-    t.line_to((cx, cy + 2.5));
+    t.move_to((cx - 3.5, cy - 1.75));
+    t.line_to((cx + 3.5, cy - 1.75));
+    t.line_to((cx, cy + 3.0));
     t.close_path();
     scene.fill(Fill::NonZero, ID, ink, None, &t);
 }

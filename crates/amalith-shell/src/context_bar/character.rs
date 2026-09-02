@@ -13,7 +13,7 @@ use super::{baseline, draw_combo, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Character,
     applies: |ctx| ctx.text_context,
-    measure: |_| 500.0,
+    measure: |_| 575.0,
     paint,
     hit,
 };
@@ -28,16 +28,16 @@ struct Parts {
 
 fn parts(r: Rect) -> Parts {
     let cy = r.center().y;
-    let combo = |x: f64, w: f64| Rect::new(x, cy - 10.0, x + w, cy + 10.0);
-    let mut x = r.x0 + 74.0; // after "Character:"
-    let family = combo(x, 196.0);
-    x += 196.0 + 12.0;
-    let style = combo(x, 116.0);
-    x += 116.0 + 14.0;
-    let size_up = Rect::new(x, cy - 10.0, x + 13.0, cy);
-    let size_down = Rect::new(x, cy, x + 13.0, cy + 10.0);
-    x += 13.0 + 4.0;
-    let size_field = combo(x, 86.0);
+    let combo = |x: f64, w: f64| Rect::new(x, cy - 11.5, x + w, cy + 11.5);
+    let mut x = r.x0 + 85.0; // after "Character:"
+    let family = combo(x, 225.0);
+    x += 225.0 + 14.0;
+    let style = combo(x, 133.0);
+    x += 133.0 + 16.0;
+    let size_up = Rect::new(x, cy - 11.5, x + 15.0, cy);
+    let size_down = Rect::new(x, cy, x + 15.0, cy + 11.5);
+    x += 15.0 + 5.0;
+    let size_field = combo(x, 99.0);
     Parts {
         family,
         style,
@@ -51,7 +51,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let theme = ctx.theme;
     let s = &ctx.text_style;
     let p = parts(r);
-    text.draw(scene, "Character:", 11.5, theme.text_dim, r.x0, baseline(r));
+    text.draw(scene, "Character:", 13.0, theme.text_dim, r.x0, baseline(r));
     draw_combo(scene, text, theme, p.family, &s.family);
     draw_combo(scene, text, theme, p.style, &face_label(s.weight, s.italic));
 

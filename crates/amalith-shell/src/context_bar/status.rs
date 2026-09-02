@@ -11,7 +11,7 @@ use super::{baseline, Ctx, SegKind, Segment};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Status,
     applies: |_| true,
-    measure: |_| 92.0,
+    measure: |_| 106.0,
     paint,
     hit: |_, _, _| Action::None,
 };
@@ -22,5 +22,5 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         1 => "1 Selected".to_string(),
         n => format!("{n} Selected"),
     };
-    text.draw(scene, &label, 11.5, ctx.theme.text_dim, r.x0, baseline(r));
+    text.draw(scene, &label, 13.0, ctx.theme.text_dim, r.x0, baseline(r));
 }
