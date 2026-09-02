@@ -812,6 +812,20 @@ pub struct TextData {
     #[serde(default)]
     pub paragraph: Paragraph,
     pub local_bounds: Rect,
+    /// Text threading (linked area-text frames). The story's text lives on
+    /// the head frame (`thread_prev == None`); each downstream frame keeps
+    /// an empty `content` and displays the overflow of its predecessor.
+    #[serde(default)]
+    pub thread_next: Option<ObjectId>,
+    #[serde(default)]
+    pub thread_prev: Option<ObjectId>,
+}
+
+impl TextData {
+    /// This frame is part of a linked-text thread.
+    pub fn is_threaded(&self) -> bool {
+        self.thread_next.is_some() || self.thread_prev.is_some()
+    }
 }
 
 impl Default for TextData {
@@ -823,6 +837,8 @@ impl Default for TextData {
             align: TextAlign::Start,
             paragraph: Paragraph::default(),
             local_bounds: Rect::ZERO,
+            thread_next: None,
+            thread_prev: None,
         }
     }
 }

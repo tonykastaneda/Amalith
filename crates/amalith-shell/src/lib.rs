@@ -54,6 +54,7 @@ pub mod settings;
 pub mod stroke_panel;
 pub mod text;
 pub mod textedit;
+pub mod thread;
 pub mod theme;
 pub mod tool;
 pub mod workspace;

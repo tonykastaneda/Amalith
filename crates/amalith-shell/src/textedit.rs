@@ -41,6 +41,9 @@ pub struct TextEdit {
     style: TextStyle,
     align: TextAlign,
     paragraph: Paragraph,
+    /// Thread links carried through so a commit doesn't sever them.
+    thread_next: Option<amalith_core::ObjectId>,
+    thread_prev: Option<amalith_core::ObjectId>,
     /// True from the first keystroke — a never-touched object is discarded
     /// on commit.
     pub touched: bool,
@@ -74,11 +77,24 @@ impl TextEdit {
             style: style.clone(),
             align,
             paragraph,
+            thread_next: None,
+            thread_prev: None,
             touched: !seed.is_empty(),
         };
         this.apply_style(&style, tcx);
         this.set_paragraph(paragraph);
         this
+    }
+
+    /// Carry the source frame's thread links so [`Self::to_text_data`]
+    /// writes them back unchanged.
+    pub fn set_thread(
+        &mut self,
+        prev: Option<amalith_core::ObjectId>,
+        next: Option<amalith_core::ObjectId>,
+    ) {
+        self.thread_prev = prev;
+        self.thread_next = next;
     }
 
     /// Push the whole [`TextStyle`] into the editor's `StyleSet`. Only the
@@ -505,6 +521,8 @@ impl TextEdit {
             align: self.align,
             paragraph: self.paragraph,
             local_bounds: bounds,
+            thread_next: self.thread_next,
+            thread_prev: self.thread_prev,
         }
     }
 }
@@ -565,7 +583,7 @@ fn alignment(a: TextAlign) -> Alignment {
 /// (Illustrator point-type behaviour). `w` is the laid-out text width.
 /// Area text anchors at its box's top-left, so this only applies to
 /// [`TextKind::Point`].
-fn point_align_dx(align: TextAlign, w: f32) -> f64 {
+pub fn point_align_dx(align: TextAlign, w: f32) -> f64 {
     match align {
         TextAlign::Center | TextAlign::JustifyCenter => -(w as f64) / 2.0,
         TextAlign::End | TextAlign::JustifyRight => -(w as f64),
@@ -577,7 +595,7 @@ fn point_align_dx(align: TextAlign, w: f32) -> f64 {
 /// built and filed. Re-shaping a paragraph every frame is the dominant
 /// per-frame cost of a text box on the canvas, so this is memoized by
 /// everything that affects shaping (see [`TextLayoutKey`]).
-fn td_layout<'a>(tcx: &'a mut TextContext, td: &TextData) -> &'a Layout<Brush> {
+pub fn td_layout<'a>(tcx: &'a mut TextContext, td: &TextData) -> &'a Layout<Brush> {
     let key = TextLayoutKey::of(td);
     if tcx.td_cached(&key).is_none() {
         let width = match td.kind {
@@ -822,7 +840,10 @@ pub fn draw_glyph_runs<B: parley::style::Brush>(
             scene
                 .draw_glyphs(font)
                 .brush(&Brush::Solid(color))
-                .hint(true)
+                // Unhinted: hinting re-runs per frame at every pan offset and
+                // was ~30 ms/frame for a paragraph. Canvas text isn't hinted
+                // in Illustrator either.
+                .hint(false)
                 .transform(xf)
                 .glyph_transform(skew)
                 .font_size(size)

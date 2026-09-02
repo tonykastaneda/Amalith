@@ -38,6 +38,40 @@ impl App {
         let (wl, hl) = (width as f64 / scale, height as f64 / scale);
         let role = host.role;
 
+        // Previewed frame sizes for a live text-box resize (empty for any
+        // other drag) — owned here so `DragPreview` can borrow a slice.
+        let resize_previews: Vec<TextBoxPreview> = match &self.drag {
+            Drag::ResizeTextBox {
+                handle,
+                start_bounds,
+                frames,
+                start_doc,
+                cur_doc,
+            } => {
+                let rects = self.text_box_resize_rects(
+                    *handle,
+                    *start_bounds,
+                    frames,
+                    *start_doc,
+                    *cur_doc,
+                );
+                frames
+                    .iter()
+                    .filter_map(|&(id, origin, _, _)| {
+                        rects.iter().find(|(rid, _)| *rid == id).map(|(_, r)| {
+                            TextBoxPreview {
+                                id,
+                                width: r.width(),
+                                height: r.height(),
+                                origin_delta: Vec2::new(r.x0 - origin.x, r.y0 - origin.y),
+                            }
+                        })
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+
         let preview = match &self.drag {
             Drag::MoveObjects {
                 start_doc,
@@ -55,7 +89,7 @@ impl App {
                 xf: None,
                 anchors: None,
                 handle: None,
-                text_box: None,
+                text_boxes: &[],
             }),
             Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
                 ids: &self.doc.selection,
@@ -64,38 +98,17 @@ impl App {
                 xf: Some(preview),
                 anchors: None,
                 handle: None,
-                text_box: None,
+                text_boxes: &[],
             }),
-            Drag::ResizeTextBox {
-                object,
-                handle,
-                start_origin,
-                start_w,
-                start_h,
-                start_doc,
-                cur_doc,
-            } => {
-                let rect = textbox_resized_rect(
-                    *handle, *start_origin, *start_w, *start_h, *start_doc, *cur_doc,
-                );
-                Some(DragPreview {
-                    ids: &[],
-                    delta: Vec2::ZERO,
-                    dup: false,
-                    xf: None,
-                    anchors: None,
-                    handle: None,
-                    text_box: Some(TextBoxPreview {
-                        id: *object,
-                        width: rect.width(),
-                        height: rect.height(),
-                        origin_delta: Vec2::new(
-                            rect.x0 - start_origin.x,
-                            rect.y0 - start_origin.y,
-                        ),
-                    }),
-                })
-            }
+            Drag::ResizeTextBox { .. } => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                anchors: None,
+                handle: None,
+                text_boxes: &resize_previews,
+            }),
             Drag::MoveAnchors {
                 start_doc,
                 last_doc,
@@ -110,7 +123,7 @@ impl App {
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
                 handle: None,
-                text_box: None,
+                text_boxes: &[],
             }),
             Drag::MoveHandle {
                 object,
@@ -130,7 +143,7 @@ impl App {
                     *side,
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
-                text_box: None,
+                text_boxes: &[],
             }),
             _ => None,
         };
@@ -165,6 +178,18 @@ impl App {
             )),
             // Type tool rubber-band → the area-text box being dragged out.
             Drag::DrawText { start_doc, cur_doc } => Some((
+                Tool::Text,
+                convert::rect(shape_rect(
+                    *start_doc,
+                    *cur_doc,
+                    self.shift_down,
+                    self.alt_down,
+                )),
+            )),
+            // Threading a new frame from a loaded out-port.
+            Drag::ThreadNewBox {
+                start_doc, cur_doc, ..
+            } => Some((
                 Tool::Text,
                 convert::rect(shape_rect(
                     *start_doc,

@@ -542,6 +542,91 @@ impl Editor {
                 }]
             }
             Command::SetText { object, data } => vec![Edit::SetTextData { id: object, data }],
+            Command::SetTexts { items } => items
+                .into_iter()
+                .map(|(id, data)| Edit::SetTextData { id, data })
+                .collect(),
+            Command::ThreadText { from, to } => {
+                let text_of = |id: ObjectId| -> Option<amalith_core::TextData> {
+                    match &self.document.object(id)?.kind {
+                        amalith_core::ObjectKind::Text(t) => Some(t.clone()),
+                        _ => None,
+                    }
+                };
+                let from_td = text_of(from).ok_or(CommandError::NotText(from))?;
+                let to_td = text_of(to).ok_or(CommandError::NotText(to))?;
+                let old_next = from_td.thread_next;
+                let mut new_from = from_td;
+                new_from.thread_next = Some(to);
+                let mut new_to = to_td;
+                new_to.thread_prev = Some(from);
+                new_to.thread_next = old_next;
+                new_to.content = String::new();
+                let mut edits = vec![
+                    Edit::SetTextData {
+                        id: from,
+                        data: new_from,
+                    },
+                    Edit::SetTextData {
+                        id: to,
+                        data: new_to,
+                    },
+                ];
+                if let Some(old) = old_next {
+                    if let Some(mut old_td) = text_of(old) {
+                        old_td.thread_prev = Some(to);
+                        edits.push(Edit::SetTextData {
+                            id: old,
+                            data: old_td,
+                        });
+                    }
+                }
+                edits
+            }
+            Command::UnthreadText { object } => {
+                let text_of = |id: ObjectId| -> Option<amalith_core::TextData> {
+                    match &self.document.object(id)?.kind {
+                        amalith_core::ObjectKind::Text(t) => Some(t.clone()),
+                        _ => None,
+                    }
+                };
+                let td = text_of(object).ok_or(CommandError::NotText(object))?;
+                let (prev, next) = (td.thread_prev, td.thread_next);
+                if prev.is_none() && next.is_none() {
+                    vec![]
+                } else {
+                    let mut edits = Vec::new();
+                    let mut standalone = td.clone();
+                    standalone.thread_prev = None;
+                    standalone.thread_next = None;
+                    // A removed head hands its story to the next frame.
+                    if prev.is_none() {
+                        if let Some(n) = next {
+                            if let Some(mut n_td) = text_of(n) {
+                                n_td.thread_prev = None;
+                                n_td.content = std::mem::take(&mut standalone.content);
+                                edits.push(Edit::SetTextData { id: n, data: n_td });
+                            }
+                        }
+                    } else if let Some(p) = prev {
+                        if let Some(mut p_td) = text_of(p) {
+                            p_td.thread_next = next;
+                            edits.push(Edit::SetTextData { id: p, data: p_td });
+                        }
+                        if let Some(n) = next {
+                            if let Some(mut n_td) = text_of(n) {
+                                n_td.thread_prev = prev;
+                                edits.push(Edit::SetTextData { id: n, data: n_td });
+                            }
+                        }
+                    }
+                    edits.push(Edit::SetTextData {
+                        id: object,
+                        data: standalone,
+                    });
+                    edits
+                }
+            }
             Command::MoveObject { object, delta } => {
                 let current = self
                     .document

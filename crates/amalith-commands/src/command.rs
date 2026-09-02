@@ -117,6 +117,24 @@ pub enum Command {
         object: ObjectId,
         data: TextData,
     },
+    /// Replaces several text objects' `TextData` in one undoable step —
+    /// used when a multi-frame drag re-sizes every selected text box at
+    /// once.
+    SetTexts {
+        items: Vec<(ObjectId, TextData)>,
+    },
+    /// Links `to` after `from` in a text thread: `from.thread_next = to`,
+    /// `to.thread_prev = from`, and `to`'s own content is cleared (the
+    /// story lives on the head). Both must be text objects.
+    ThreadText {
+        from: ObjectId,
+        to: ObjectId,
+    },
+    /// Removes `object` from its thread, stitching its predecessor and
+    /// successor together. A no-op if it isn't threaded.
+    UnthreadText {
+        object: ObjectId,
+    },
     /// Translates an object by `delta`, in the coordinate space of the
     /// object's parent (document space for a layer-level object).
     MoveObject {

@@ -83,9 +83,9 @@ pub struct DragPreview<'a> {
     pub anchors: Option<(&'a [(ObjectId, usize)], amalith_core::Vec2)>,
     /// Live handle drag: `(object, anchor ordinal, side, local-space delta)`.
     pub handle: Option<(ObjectId, usize, amalith_core::HandleSide, amalith_core::Vec2)>,
-    /// Live area-text-box resize: the frame re-wraps at this width/height
-    /// (document px) and its origin shifts by `origin_delta`.
-    pub text_box: Option<TextBoxPreview>,
+    /// Live area-text-box resize: each frame re-wraps at its previewed
+    /// width/height (document px) with its origin shifted by `origin_delta`.
+    pub text_boxes: &'a [TextBoxPreview],
 }
 
 /// One area-text box being resized by a Selection-tool handle drag.
@@ -469,20 +469,26 @@ pub fn paint(
     // white arrow (no bounding box, no scale/rotate handles).
     if !selection.is_empty() && anchor_view.map_or(true, |av| av.peek) {
         // The oriented box, in screen px, transformed by any live
-        // scale/rotate preview.
+        // scale/rotate preview. During a text-box resize it follows the
+        // union of the previewed frames.
         let text_box_quad = drag
-            .and_then(|d| d.text_box)
-            .filter(|tb| selection.first() == Some(&tb.id))
-            .and_then(|tb| {
-                let c = doc.object(tb.id)?.transform.as_coeffs();
-                let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
-                let (x1, y1) = (x0 + tb.width, y0 + tb.height);
+            .map(|d| d.text_boxes)
+            .filter(|tbs| !tbs.is_empty())
+            .and_then(|tbs| {
+                let mut acc: Option<Rect> = None;
+                for tb in tbs {
+                    let c = doc.object(tb.id)?.transform.as_coeffs();
+                    let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
+                    let r = Rect::new(x0, y0, x0 + tb.width, y0 + tb.height);
+                    acc = Some(acc.map_or(r, |a| a.union(r)));
+                }
+                let r = acc?;
                 Some(
                     [
-                        Point::new(x0, y0),
-                        Point::new(x1, y0),
-                        Point::new(x1, y1),
-                        Point::new(x0, y1),
+                        Point::new(r.x0, r.y0),
+                        Point::new(r.x1, r.y0),
+                        Point::new(r.x1, r.y1),
+                        Point::new(r.x0, r.y1),
                     ]
                     .map(|p| vt * p),
                 )
@@ -531,7 +537,204 @@ pub fn paint(
                 None,
                 &center,
             );
+
+            // Text-thread ports on a single selected area-text frame.
+            if selection.len() == 1 {
+                if let Some(ObjectKind::Text(td)) = doc.object(selection[0]).map(|o| &o.kind) {
+                    if matches!(td.kind, amalith_core::TextKind::Area { .. }) {
+                        let white = Color::from_rgb8(0xff, 0xff, 0xff);
+                        let red = Color::from_rgb8(0xd0, 0x30, 0x30);
+                        let port = |scene: &mut Scene, c: Point, fill: Color, border: Color| {
+                            let r = Rect::from_center_size(c, (11.0, 11.0));
+                            scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
+                            scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, border, None, &r);
+                        };
+                        let overset = crate::thread::frame_overset(doc, text, selection[0]);
+                        // Ports sit just off the corner so they don't cover
+                        // the scale handle there (Illustrator).
+                        // In-port (top-left) — only when text flows in.
+                        if td.thread_prev.is_some() {
+                            port(
+                                scene,
+                                Point::new(q[0].x - 2.0, q[0].y - 17.0),
+                                theme.accent,
+                                theme.accent,
+                            );
+                        }
+                        // Out-port (bottom-right), lifted above the handle.
+                        let op = Point::new(q[2].x + 2.0, q[2].y - 17.0);
+                        if td.thread_next.is_some() {
+                            port(scene, op, theme.accent, theme.accent);
+                        } else if overset {
+                            port(scene, op, white, red);
+                            let pl = Stroke::new(1.5);
+                            scene.stroke(
+                                &pl,
+                                Affine::IDENTITY,
+                                red,
+                                None,
+                                &Line::new(
+                                    Point::new(op.x - 3.0, op.y),
+                                    Point::new(op.x + 3.0, op.y),
+                                ),
+                            );
+                            scene.stroke(
+                                &pl,
+                                Affine::IDENTITY,
+                                red,
+                                None,
+                                &Line::new(
+                                    Point::new(op.x, op.y - 3.0),
+                                    Point::new(op.x, op.y + 3.0),
+                                ),
+                            );
+                        } else {
+                            port(scene, op, white, theme.accent);
+                        }
+                    }
+                }
+            }
+
+            // In a multi-selection the union box doesn't show where each
+            // text frame is — outline every selected area-text frame in
+            // its own right so its bounds are always visible.
+            if selection.len() >= 2 {
+                let baby = Color::from_rgb8(0x8f, 0xc2, 0xf5);
+                for &id in selection {
+                    let Some(ObjectKind::Text(t)) = doc.object(id).map(|o| &o.kind) else {
+                        continue;
+                    };
+                    if !matches!(t.kind, amalith_core::TextKind::Area { .. }) {
+                        continue;
+                    }
+                    // Follow a live resize preview, else the committed box.
+                    let fq = if let Some(tb) =
+                        drag.and_then(|d| d.text_boxes.iter().copied().find(|tb| tb.id == id))
+                    {
+                        let c = doc.object(id).map(|o| o.transform.as_coeffs()).unwrap();
+                        let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
+                        Some([
+                            Point::new(x0, y0),
+                            Point::new(x0 + tb.width, y0),
+                            Point::new(x0 + tb.width, y0 + tb.height),
+                            Point::new(x0, y0 + tb.height),
+                        ])
+                    } else {
+                        select::selection_quad(doc, &[id])
+                    };
+                    if let Some(fq) = fq {
+                        let fq = fq.map(|p| vt * p);
+                        let mut p = BezPath::new();
+                        p.move_to(fq[0]);
+                        for c in &fq[1..] {
+                            p.line_to(*c);
+                        }
+                        p.close_path();
+                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, baby, None, &p);
+                    }
+                }
+                for &id in selection {
+                    let Some(ObjectKind::Text(t)) = doc.object(id).map(|o| &o.kind) else {
+                        continue;
+                    };
+                    let Some(next) = t.thread_next else { continue };
+                    if !selection.contains(&next) {
+                        continue;
+                    }
+                    let (Some(qa), Some(qb)) = (
+                        select::selection_quad(doc, &[id]),
+                        select::selection_quad(doc, &[next]),
+                    ) else {
+                        continue;
+                    };
+                    let seg = Line::new(
+                        vt * qa[2] + Vec2::new(2.0, -17.0),
+                        vt * qb[0] + Vec2::new(-2.0, -17.0),
+                    );
+                    scene.stroke(
+                        &Stroke::new(5.0),
+                        Affine::IDENTITY,
+                        Color::from_rgb8(0xff, 0xff, 0xff).with_alpha(0.9),
+                        None,
+                        &seg,
+                    );
+                    scene.stroke(&Stroke::new(3.0), Affine::IDENTITY, baby, None, &seg);
+                }
+            }
         }
+
+        // Baseline guide under every visible line of a selected text
+        // object (Illustrator draws these while the frame is selected).
+        for &id in selection {
+            let Some(obj) = doc.object(id) else { continue };
+            let ObjectKind::Text(td) = &obj.kind else { continue };
+            // A threaded downstream frame shows its slice of the story.
+            let owned: Option<amalith_core::TextData> = if td.is_threaded() {
+                crate::thread::head(doc, id).map(|head| {
+                    let story = match doc.object(head).map(|o| &o.kind) {
+                        Some(ObjectKind::Text(h)) => h.content.clone(),
+                        _ => String::new(),
+                    };
+                    let start = crate::thread::slices(doc, head, text)
+                        .get(&id)
+                        .map_or(0, |s| s.start.min(story.len()));
+                    let mut f = td.clone();
+                    f.content = story[start..].to_string();
+                    f
+                })
+            } else {
+                None
+            };
+            // Follow a live resize: re-wrap at the previewed size / origin.
+            let tb = drag.and_then(|d| d.text_boxes.iter().copied().find(|tb| tb.id == id));
+            let mut td = owned.unwrap_or_else(|| td.clone());
+            if let Some(tb) = tb {
+                td.kind = amalith_core::TextKind::Area {
+                    width: tb.width,
+                    height: Some(tb.height),
+                };
+            }
+            if td.content.is_empty() {
+                continue;
+            }
+            let (frame_w, frame_h, area) = match td.kind {
+                amalith_core::TextKind::Area { width, height } => (width, height, true),
+                amalith_core::TextKind::Point => (0.0, None, false),
+            };
+            let mut m = vt * convert::affine(doc.world_transform(id));
+            if let Some(tb) = tb {
+                m *= Affine::translate(tb.origin_delta);
+            }
+            let guide = theme.accent.with_alpha(0.55);
+            let layout = crate::textedit::td_layout(text, &td);
+            let dx = if area {
+                0.0
+            } else {
+                crate::textedit::point_align_dx(td.align, layout.width())
+            };
+            for line in layout.lines() {
+                let lm = line.metrics();
+                let by = lm.baseline as f64;
+                // Don't draw guides for lines clipped past a fixed-height box.
+                if frame_h.is_some_and(|h| by > h + 1.0) {
+                    break;
+                }
+                let (x0, x1) = if area {
+                    (0.0, frame_w)
+                } else {
+                    let x = dx + lm.offset as f64;
+                    (x, x + (lm.advance - lm.trailing_whitespace) as f64)
+                };
+                scene.stroke(
+                    &Stroke::new(0.75),
+                    Affine::IDENTITY,
+                    guide,
+                    None,
+                    &Line::new(m * Point::new(x0, by), m * Point::new(x1, by)),
+                );
+            }
+        }
+
         if let Some(kid) = key_object {
             if let Some(q) = select::selection_quad(doc, &[kid]) {
                 let extra = match drag {
@@ -921,7 +1124,10 @@ fn paint_object(
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
                 // Live area-text-box resize: re-wrap at the previewed frame
                 // size and shift the origin, without touching the document.
-                if let Some(tb) = drag.and_then(|d| d.text_box).filter(|tb| tb.id == id) {
+                if let Some(tb) = drag
+                    .map(|d| d.text_boxes)
+                    .and_then(|tbs| tbs.iter().copied().find(|tb| tb.id == id))
+                {
                     let mut preview = td.clone();
                     preview.kind = amalith_core::TextKind::Area {
                         width: tb.width,
@@ -929,6 +1135,22 @@ fn paint_object(
                     };
                     let pm = m * Affine::translate(tb.origin_delta);
                     crate::textedit::paint_text_data(scene, text, &preview, pm, color);
+                } else if td.is_threaded() {
+                    // Threaded frame: show the story's overflow starting at
+                    // this frame's byte offset, clipped to its box.
+                    if let Some(head) = crate::thread::head(doc, id) {
+                        let story = match doc.object(head).map(|o| &o.kind) {
+                            Some(ObjectKind::Text(h)) => h.content.clone(),
+                            _ => String::new(),
+                        };
+                        let slices = crate::thread::slices(doc, head, text);
+                        if let Some(sl) = slices.get(&id) {
+                            let start = sl.start.min(story.len());
+                            let mut frame = td.clone();
+                            frame.content = story[start..].to_string();
+                            crate::textedit::paint_text_data(scene, text, &frame, m, color);
+                        }
+                    }
                 } else {
                     crate::textedit::paint_text_data(scene, text, td, m, color);
                 }

@@ -16,8 +16,9 @@ impl App {
         }
         self.update_canvas_cursor();
         self.refresh_tooltip();
-        // Redraw so a drawn cursor glyph tracks the pointer.
-        if matches!(self.cursor_mode, CanvasCursor::Glyph | CanvasCursor::Zoom) {
+        // Redraw so any painted cursor glyph tracks the pointer — this
+        // covers the scale / rotate / loaded-text glyphs, not just Glyph.
+        if self.cursor_mode.is_drawn() {
             self.request_main_redraw();
         }
         match &self.drag {
@@ -225,6 +226,15 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::ThreadNewBox { from, start_doc, .. } => {
+                let (from, start_doc) = (*from, *start_doc);
+                self.drag = Drag::ThreadNewBox {
+                    from,
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::TextSelect => {
                 if let Some(p) = self.text_editor_point(self.pointer) {
                     if let Some(te) = &mut self.text_edit {
@@ -286,23 +296,18 @@ impl App {
                 self.request_main_redraw();
             }
             Drag::ResizeTextBox {
-                object,
                 handle,
-                start_origin,
-                start_w,
-                start_h,
+                start_bounds,
+                frames,
                 start_doc,
                 ..
             } => {
-                let (object, handle) = (*object, *handle);
-                let (start_origin, start_w, start_h, start_doc) =
-                    (*start_origin, *start_w, *start_h, *start_doc);
+                let (handle, start_bounds, start_doc) = (*handle, *start_bounds, *start_doc);
+                let frames = frames.clone();
                 self.drag = Drag::ResizeTextBox {
-                    object,
                     handle,
-                    start_origin,
-                    start_w,
-                    start_h,
+                    start_bounds,
+                    frames,
                     start_doc,
                     cur_doc: self.doc_point(self.pointer),
                 };
@@ -558,6 +563,22 @@ impl App {
                     self.create_text(amalith_core::TextKind::Point, start_doc);
                 }
             }
+            Drag::ThreadNewBox {
+                from,
+                start_doc,
+                cur_doc,
+            } => {
+                let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
+                let (w, h) = if r.width() > 4.0 && r.height() > 4.0 {
+                    (r.width(), r.height())
+                } else {
+                    // A plain click drops a default-size frame here.
+                    (360.0, 220.0)
+                };
+                if let Some(to) = self.create_empty_area_text(w, h, Point::new(r.x0, r.y0)) {
+                    self.thread_text(from, to);
+                }
+            }
             Drag::DrawArtboard {
                 start_doc,
                 cur_doc,
@@ -633,21 +654,21 @@ impl App {
                 }
             }
             Drag::ResizeTextBox {
-                object,
                 handle,
-                start_origin,
-                start_w,
-                start_h,
+                start_bounds,
+                frames,
                 start_doc,
                 cur_doc,
             } => {
                 if cur_doc != start_doc {
-                    let rect = textbox_resized_rect(
-                        handle, start_origin, start_w, start_h, start_doc, cur_doc,
+                    let rects = self.text_box_resize_rects(
+                        handle,
+                        start_bounds,
+                        &frames,
+                        start_doc,
+                        cur_doc,
                     );
-                    let origin_moved = (rect.x0 - start_origin.x).abs() > 1e-6
-                        || (rect.y0 - start_origin.y).abs() > 1e-6;
-                    self.resize_text_box(object, rect, origin_moved);
+                    self.resize_text_boxes(&rects);
                 }
             }
             Drag::Marquee { start } => {

@@ -174,16 +174,24 @@ enum Drag {
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
     },
-    /// Selection tool on a single area-text box: a handle drag resizes the
-    /// frame (width / height in document space) and the text re-wraps —
-    /// the glyphs are not scaled. Only for an axis-aligned box.
+    /// Loaded-text cursor: rubber-banding the frame that will receive
+    /// `from`'s overflow. Release creates it and threads the two.
+    ThreadNewBox {
+        from: ObjectId,
+        start_doc: Point,
+        cur_doc: Point,
+    },
+    /// Selection tool on area-text box(es): a handle drag resizes the
+    /// frame(s) (width / height in document space) and the text re-wraps —
+    /// the glyphs are not scaled. One frame follows the pointer edge-for-
+    /// edge; several scale proportionally within their union box. Only
+    /// while every selected object is an axis-aligned area-text frame.
     ResizeTextBox {
-        object: ObjectId,
         handle: Handle,
-        /// Box top-left in document space at press.
-        start_origin: Point,
-        start_w: f64,
-        start_h: f64,
+        /// Union box of every frame at press (doc space).
+        start_bounds: Rect,
+        /// `(id, top-left, width, height)` per frame at press.
+        frames: Vec<(ObjectId, Point, f64, f64)>,
         start_doc: Point,
         cur_doc: Point,
     },
@@ -458,6 +466,11 @@ enum CanvasCursor {
     /// Drawn curved-arrow rotate cursor — hovering just outside a corner.
     /// Carries the corner index (0 = NW, clockwise) so it can face that way.
     Rotate(u8),
+    /// Select arrow + link badge — hovering a text frame's out-port.
+    ThreadPort,
+    /// Loaded-text cursor — an out-port was clicked and the next press
+    /// drops the linked frame.
+    LoadedText,
 }
 
 impl CanvasCursor {
@@ -472,6 +485,8 @@ impl CanvasCursor {
                 | CanvasCursor::ScaleNESW
                 | CanvasCursor::ScaleNWSE
                 | CanvasCursor::Rotate(_)
+                | CanvasCursor::ThreadPort
+                | CanvasCursor::LoadedText
         )
     }
 }
@@ -517,6 +532,9 @@ struct App {
     /// Alignment + paragraph attributes a new text object starts with.
     text_align_default: amalith_core::TextAlign,
     para_defaults: amalith_core::Paragraph,
+    /// "Loaded text" cursor: the user clicked this frame's out-port and the
+    /// next press threads its overflow into a new / clicked frame.
+    text_load: Option<ObjectId>,
     /// Caret blink phase origin.
     text_blink: Instant,
     /// Installed font family names, sorted — built once, for the Character
@@ -691,6 +709,7 @@ impl App {
             text_defaults: amalith_core::TextStyle::default(),
             text_align_default: amalith_core::TextAlign::Start,
             para_defaults: amalith_core::Paragraph::default(),
+            text_load: None,
             text_blink: Instant::now(),
             font_families: Vec::new(),
             font_menu: None,
@@ -2099,6 +2118,7 @@ impl App {
                 if !self.doc.selection.is_empty() {
                     let ids = self.doc.selection.clone();
                     self.copy_selection(&ids);
+                    self.purge_threads(&ids);
                     let _ = self.doc.editor.execute(Command::DeleteObjects {
                         ids: std::mem::take(&mut self.doc.selection),
                     });
@@ -2847,13 +2867,16 @@ impl App {
         true
     }
 
-    /// If the selection is exactly one axis-aligned area-text box, returns
-    /// `(id, top-left, width, height)` in document space — the target of a
-    /// Selection-tool handle drag that resizes the frame instead of
-    /// scaling the glyphs. `None` for point text, rotated boxes, or a
-    /// multi-selection (those keep the normal Scale behaviour).
-    fn single_area_text_box(&self) -> Option<(ObjectId, Point, f64, f64)> {
-        if self.doc.selection.len() != 1 {
+    /// The head frame of `id`'s text thread (`id` itself if unthreaded or
+    /// already the head); `None` if `id` isn't a text object.
+    fn thread_head(&self, id: ObjectId) -> Option<ObjectId> {
+        crate::thread::head(self.doc.editor.document(), id)
+    }
+
+    /// The selected area-text frame whose out-port the pointer is over —
+    /// only its tail frame (no `thread_next`) offers a clickable port.
+    fn text_out_port_hit(&self) -> Option<ObjectId> {
+        if self.active_tool != Tool::Select || self.doc.selection.len() != 1 {
             return None;
         }
         let id = self.doc.selection[0];
@@ -2861,41 +2884,121 @@ impl App {
         let amalith_core::ObjectKind::Text(t) = &obj.kind else {
             return None;
         };
-        let amalith_core::TextKind::Area { width, height } = t.kind else {
+        if !matches!(t.kind, amalith_core::TextKind::Area { .. }) || t.thread_next.is_some() {
             return None;
-        };
-        let [a, b, c, d, e, f] = obj.transform.as_coeffs();
-        if (a - 1.0).abs() > 1e-9 || b.abs() > 1e-9 || c.abs() > 1e-9 || (d - 1.0).abs() > 1e-9 {
-            return None; // rotated / scaled box — leave it to Drag::Scale
         }
-        let h = height.unwrap_or_else(|| t.local_bounds.height());
-        Some((id, Point::new(e, f), width, h))
+        let q = select::selection_quad(self.doc.editor.document(), &[id])?;
+        // Matches the drawn out-port offset in `canvas.rs` (lifted off the
+        // corner scale handle).
+        let op = self.doc.view.to_screen() * q[2] + Vec2::new(2.0, -17.0);
+        (op.distance(self.pointer) <= 9.0).then_some(id)
     }
 
-    /// Commit a text-box resize: swap the object's `TextKind::Area`
-    /// dimensions and move its origin so the frame lands on `rect`. The
-    /// text re-wraps to the new width; a fixed height clips overflow.
-    fn resize_text_box(&mut self, object: ObjectId, rect: Rect, origin_moved: bool) {
-        let Some(amalith_core::ObjectKind::Text(t)) =
-            self.doc.editor.document().object(object).map(|o| &o.kind)
-        else {
-            return;
-        };
-        let mut data = t.clone();
-        data.kind = amalith_core::TextKind::Area {
-            width: rect.width(),
-            height: Some(rect.height()),
-        };
-        data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
-        let _ = self
-            .doc.editor
-            .execute(Command::SetText { object, data });
-        if origin_moved {
-            let items = vec![(
-                object,
-                amalith_core::Affine::translate((rect.x0, rect.y0)),
+    /// Every selected object as `(id, top-left, width, height)` in document
+    /// space — but only when *all* of them are axis-aligned area-text
+    /// frames. Empty otherwise, so a mixed or rotated selection keeps the
+    /// normal `Drag::Scale` behaviour.
+    fn area_text_boxes(&self) -> Vec<(ObjectId, Point, f64, f64)> {
+        let doc = self.doc.editor.document();
+        let mut out = Vec::with_capacity(self.doc.selection.len());
+        for &id in &self.doc.selection {
+            let Some(obj) = doc.object(id) else {
+                return Vec::new();
+            };
+            let amalith_core::ObjectKind::Text(t) = &obj.kind else {
+                return Vec::new();
+            };
+            let amalith_core::TextKind::Area { width, height } = t.kind else {
+                return Vec::new();
+            };
+            let [a, b, c, d, e, f] = obj.transform.as_coeffs();
+            if (a - 1.0).abs() > 1e-9 || b.abs() > 1e-9 || c.abs() > 1e-9 || (d - 1.0).abs() > 1e-9 {
+                return Vec::new(); // rotated / scaled — leave it to Drag::Scale
+            }
+            let h = height.unwrap_or_else(|| t.local_bounds.height());
+            out.push((id, Point::new(e, f), width, h));
+        }
+        out
+    }
+
+    /// New frame rect per box for a `ResizeTextBox` drag: a lone box
+    /// follows the dragged edge 1:1; several scale proportionally about
+    /// the opposite side of their union box.
+    fn text_box_resize_rects(
+        &self,
+        handle: Handle,
+        start_bounds: Rect,
+        frames: &[(ObjectId, Point, f64, f64)],
+        start_doc: Point,
+        dp: Point,
+    ) -> Vec<(ObjectId, Rect)> {
+        if frames.len() == 1 {
+            let (id, origin, w, h) = frames[0];
+            return vec![(
+                id,
+                textbox_resized_rect(handle, origin, w, h, start_doc, dp),
             )];
-            let _ = self.doc.editor.execute(Command::SetTransforms { items });
+        }
+        let m = handles::scaled_transform(
+            start_bounds,
+            handle,
+            dp,
+            self.shift_down,
+            self.alt_down,
+        );
+        frames
+            .iter()
+            .map(|&(id, origin, w, h)| {
+                let tl = m * origin;
+                let br = m * Point::new(origin.x + w, origin.y + h);
+                let r = Rect::new(tl.x.min(br.x), tl.y.min(br.y), tl.x.max(br.x), tl.y.max(br.y));
+                let r = Rect::new(
+                    r.x0,
+                    r.y0,
+                    r.x0 + r.width().max(TEXTBOX_MIN),
+                    r.y0 + r.height().max(TEXTBOX_MIN),
+                );
+                (id, r)
+            })
+            .collect()
+    }
+
+    /// Commit a text-box resize: for each `(id, rect)`, swap the object's
+    /// `TextKind::Area` dimensions and move its origin onto `rect`. Text
+    /// re-wraps; a fixed height clips overflow. One undo step.
+    fn resize_text_boxes(&mut self, rects: &[(ObjectId, Rect)]) {
+        let mut texts = Vec::new();
+        let mut xforms = Vec::new();
+        for &(id, rect) in rects {
+            let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            else {
+                continue;
+            };
+            let mut data = t.clone();
+            data.kind = amalith_core::TextKind::Area {
+                width: rect.width(),
+                height: Some(rect.height()),
+            };
+            data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+            texts.push((id, data));
+            let cur = self
+                .doc.editor
+                .document()
+                .object(id)
+                .map(|o| o.transform.as_coeffs())
+                .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+            if (cur[4] - rect.x0).abs() > 1e-6 || (cur[5] - rect.y0).abs() > 1e-6 {
+                xforms.push((id, amalith_core::Affine::translate((rect.x0, rect.y0))));
+            }
+        }
+        if !texts.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetTexts { items: texts });
+        }
+        if !xforms.is_empty() {
+            let _ = self
+                .doc.editor
+                .execute(Command::SetTransforms { items: xforms });
         }
         self.request_main_redraw();
     }
@@ -3003,6 +3106,8 @@ impl App {
             align: self.text_align_default,
             paragraph: self.para_defaults,
             local_bounds: amalith_core::Rect::ZERO,
+            thread_next: None,
+            thread_prev: None,
         };
         // Give the created state real bounds so it's selectable / hit-
         // testable even before the first commit — undoing back to it (⌘Z
@@ -3018,6 +3123,74 @@ impl App {
             self.doc.selection = vec![id];
             self.enter_text_edit(id, origin, None);
         }
+    }
+
+    /// A blank fixed-size area-text frame (no placeholder, not opened for
+    /// editing) — the receiving end of a text thread.
+    fn create_empty_area_text(&mut self, w: f64, h: f64, origin: Point) -> Option<ObjectId> {
+        let layer = self.ensure_layer();
+        let mut data = amalith_core::TextData {
+            content: String::new(),
+            kind: amalith_core::TextKind::Area {
+                width: w.max(TEXTBOX_MIN),
+                height: Some(h.max(TEXTBOX_MIN)),
+            },
+            style: self.text_defaults.clone(),
+            align: self.text_align_default,
+            paragraph: self.para_defaults,
+            local_bounds: amalith_core::Rect::ZERO,
+            thread_next: None,
+            thread_prev: None,
+        };
+        data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+        match self.doc.editor.execute(Command::CreateText {
+            layer,
+            data,
+            transform: amalith_core::Affine::translate((origin.x, origin.y)),
+            name: None,
+        }) {
+            Ok(CommandOutcome::Object(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Splice out any threaded text frames among `ids` before they're
+    /// deleted, so their neighbours stay linked and no dangling
+    /// `thread_next` / `thread_prev` is left behind.
+    fn purge_threads(&mut self, ids: &[ObjectId]) {
+        let threaded: Vec<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(
+                    self.doc.editor.document().object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Text(t)) if t.is_threaded()
+                )
+            })
+            .collect();
+        for id in threaded {
+            let _ = self
+                .doc.editor
+                .execute(Command::UnthreadText { object: id });
+        }
+    }
+
+    /// Link `to` after `from` in a text thread and select the pair.
+    fn thread_text(&mut self, from: ObjectId, to: ObjectId) {
+        if from == to {
+            return;
+        }
+        // Refuse a cycle: `to` must not already be upstream of `from`.
+        if crate::thread::chain(self.doc.editor.document(), to).contains(&from) {
+            return;
+        }
+        let _ = self
+            .doc.editor
+            .execute(Command::ThreadText { from, to });
+        self.doc.selection = vec![to];
+        self.text_load = None;
+        self.update_canvas_cursor();
+        self.request_main_redraw();
     }
 
     /// Type ▸ Create Outlines (⌘⇧O): replace each selected text object with
@@ -3111,7 +3284,21 @@ impl App {
 
     /// Open text object `id` for editing. `click` (screen point) places the
     /// caret; `None` selects all (fresh object).
-    fn enter_text_edit(&mut self, id: ObjectId, origin: Point, click: Option<Point>) {
+    fn enter_text_edit(&mut self, mut id: ObjectId, mut origin: Point, click: Option<Point>) {
+        // A threaded frame edits the whole story — retarget to the head
+        // frame, which owns the text.
+        if let Some(head) = self.thread_head(id) {
+            if head != id {
+                id = head;
+                let c = self
+                    .doc.editor
+                    .document()
+                    .object(id)
+                    .map(|o| o.transform.as_coeffs())
+                    .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+                origin = Point::new(c[4], c[5]);
+            }
+        }
         let Some(td) = self
             .doc.editor
             .document()
@@ -3133,6 +3320,7 @@ impl App {
             &td.content,
             &mut self.text,
         );
+        te.set_thread(td.thread_prev, td.thread_next);
         match click {
             Some(p) => {
                 let xf =
@@ -3713,6 +3901,21 @@ impl App {
         // default cursor.
         let mode = if over && matches!(self.drag, Drag::None) && !self.space_down {
             self.handle_hover_cursor().unwrap_or(mode)
+        } else {
+            mode
+        };
+        // Text threading: a loaded out-port, or hovering one.
+        let mode = if self.text_load.is_some() {
+            if over {
+                CanvasCursor::LoadedText
+            } else {
+                mode
+            }
+        } else if over
+            && matches!(self.drag, Drag::None)
+            && self.text_out_port_hit().is_some()
+        {
+            CanvasCursor::ThreadPort
         } else {
             mode
         };

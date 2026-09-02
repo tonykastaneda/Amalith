@@ -258,9 +258,9 @@ impl App {
             PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                 if pressed && !self.doc.selection.is_empty() =>
             {
-                let _ = self.doc.editor.execute(Command::DeleteObjects {
-                    ids: std::mem::take(&mut self.doc.selection),
-                });
+                let ids = std::mem::take(&mut self.doc.selection);
+                self.purge_threads(&ids);
+                let _ = self.doc.editor.execute(Command::DeleteObjects { ids });
                 self.request_main_redraw();
             }
             // ⌘ shortcuts (copy / paste / duplicate / group / all).
@@ -380,7 +380,11 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
-                        if self.picker.is_some() {
+                        if self.text_load.is_some() {
+                            // Cancel a loaded-text thread cursor.
+                            self.text_load = None;
+                            self.update_canvas_cursor();
+                        } else if self.picker.is_some() {
                             self.dismiss_picker(false);
                         } else if self.active_tool == Tool::Artboard {
                             // Exit the Artboard tool back to the

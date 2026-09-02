@@ -462,6 +462,32 @@ impl App {
                 }
                 let dp = self.doc_point(self.pointer);
 
+                // "Loaded text" cursor: a prior out-port click armed a
+                // thread. This press drops its target — an existing frame
+                // clicked, or a new one rubber-banded.
+                if let Some(from) = self.text_load {
+                    let visible = self.visible_doc_rect();
+                    let hit = select::topmost_selectable_at(self.doc.editor.document(), dp, visible)
+                        .filter(|id| {
+                            *id != from
+                                && matches!(
+                                    self.doc.editor.document().object(*id).map(|o| &o.kind),
+                                    Some(amalith_core::ObjectKind::Text(t))
+                                        if matches!(t.kind, amalith_core::TextKind::Area { .. })
+                                )
+                        });
+                    if let Some(to) = hit {
+                        self.thread_text(from, to);
+                    } else {
+                        self.drag = Drag::ThreadNewBox {
+                            from,
+                            start_doc: dp,
+                            cur_doc: dp,
+                        };
+                    }
+                    return;
+                }
+
                 // Track the artboard being worked in (any tool) for
                 // artboard-relative Paste in Front / Back. A press on the
                 // pasteboard keeps the previous value.
@@ -736,6 +762,15 @@ impl App {
                 // Selection tool (ported from amalith-app's `press`):
                 let visible = self.visible_doc_rect();
 
+                // Out-port of a single selected area-text frame → arm a
+                // thread (next press drops its target).
+                if let Some(id) = self.text_out_port_hit() {
+                    self.text_load = Some(id);
+                    self.update_canvas_cursor();
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // Transform handles / rotation halo win over object hits.
                 if !self.doc.selection.is_empty() {
                     if let Some(quad) =
@@ -755,24 +790,24 @@ impl App {
                             .collect();
                         if !start_xf.is_empty() {
                             if let Some(handle) = handles::hit_handle(self.pointer, scr) {
-                                // A single area-text box resizes its frame
-                                // (text re-wraps) rather than scaling.
-                                if let Some((object, origin, w, h)) = self.single_area_text_box() {
+                                let start_bounds =
+                                    select::union_bounds(self.doc.editor.document(), &self.doc.selection)
+                                        .unwrap();
+                                // If every selected object is an area-text
+                                // frame, a handle drag re-sizes the box(es)
+                                // and re-wraps — it doesn't scale glyphs.
+                                let boxes = self.area_text_boxes();
+                                if !boxes.is_empty() {
                                     self.drag = Drag::ResizeTextBox {
-                                        object,
                                         handle,
-                                        start_origin: origin,
-                                        start_w: w,
-                                        start_h: h,
+                                        start_bounds,
+                                        frames: boxes,
                                         start_doc: dp,
                                         cur_doc: dp,
                                     };
                                     self.request_main_redraw();
                                     return;
                                 }
-                                let start_bounds =
-                                    select::union_bounds(self.doc.editor.document(), &self.doc.selection)
-                                        .unwrap();
                                 self.drag = Drag::Scale {
                                     handle,
                                     start_bounds,

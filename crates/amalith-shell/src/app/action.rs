@@ -168,9 +168,9 @@ impl App {
             panels::Action::LayerRestack(dir) => self.restack(dir),
             panels::Action::DeleteObjects => {
                 if !self.doc.selection.is_empty() {
-                    let _ = self.doc.editor.execute(Command::DeleteObjects {
-                        ids: std::mem::take(&mut self.doc.selection),
-                    });
+                    let ids = std::mem::take(&mut self.doc.selection);
+                    self.purge_threads(&ids);
+                    let _ = self.doc.editor.execute(Command::DeleteObjects { ids });
                 }
             }
             panels::Action::DeleteArtboard => {

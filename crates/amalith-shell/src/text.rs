@@ -193,7 +193,11 @@ impl TextContext {
                 scene
                     .draw_glyphs(font)
                     .brush(&Brush::Solid(color))
-                    .hint(true)
+                    // Unhinted: hinting is a per-frame CPU cost vello can't
+                    // cache across sub-pixel offsets, and when the canvas
+                    // forces continuous redraws it re-hinted every glyph of
+                    // every panel / the options bar each frame (~30 ms).
+                    .hint(false)
                     .transform(transform)
                     .glyph_transform(glyph_xform)
                     .font_size(font_size)

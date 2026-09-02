@@ -358,6 +358,53 @@ pub(in crate::app) fn paint_main(
                 ][grip as usize % 8];
                 icons::draw_rotate_cursor(scene, pointer, angle);
             }
+            CanvasCursor::ThreadPort => {
+                // Select arrow + a small "linked frames" badge.
+                let sz = 30.0;
+                let (hx, hy) = cursor_hotspot(Tool::Select);
+                let x0 = pointer.x - sz * hx;
+                let y0 = pointer.y - sz * hy;
+                icons::draw_cursor(
+                    scene,
+                    icons::CURSOR_SELECT_SVG,
+                    Rect::new(x0, y0, x0 + sz, y0 + sz),
+                );
+                use vello::kurbo::Stroke;
+                let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+                let paper = vello::peniko::Color::WHITE;
+                let bx = x0 + sz * 0.58;
+                let by = y0 + sz * 0.34;
+                // two overlapping frames
+                for (dx, dy) in [(4.0, 4.0), (0.0, 0.0)] {
+                    let r = Rect::new(bx + dx, by + dy, bx + dx + 7.0, by + dy + 7.0);
+                    scene.fill(Fill::NonZero, ID, paper, None, &r);
+                    scene.stroke(&Stroke::new(1.2), ID, ink, None, &r);
+                }
+            }
+            CanvasCursor::LoadedText => {
+                // A little page-of-text glyph at the pointer.
+                use vello::kurbo::{Line, Stroke};
+                let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+                let paper = vello::peniko::Color::WHITE;
+                let x0 = pointer.x + 2.0;
+                let y0 = pointer.y + 2.0;
+                let page = Rect::new(x0, y0, x0 + 17.0, y0 + 21.0);
+                scene.fill(Fill::NonZero, ID, paper, None, &page);
+                scene.stroke(&Stroke::new(1.5), ID, ink, None, &page);
+                for i in 0..4 {
+                    let ly = y0 + 5.0 + i as f64 * 4.0;
+                    scene.stroke(
+                        &Stroke::new(1.5),
+                        ID,
+                        ink,
+                        None,
+                        &Line::new(
+                            vello::kurbo::Point::new(x0 + 3.0, ly),
+                            vello::kurbo::Point::new(x0 + 14.0 - (i % 2) as f64 * 4.0, ly),
+                        ),
+                    );
+                }
+            }
             _ => {}
         }
     }
