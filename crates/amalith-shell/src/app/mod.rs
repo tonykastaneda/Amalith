@@ -175,8 +175,15 @@ enum Drag {
     },
     /// Pen tool: dragging a bezier handle out of the anchor just placed.
     /// `from` is that anchor's point (document space), for the drag-slop
-    /// test and Shift constraint.
-    PenHandle { anchor: usize, from: Point },
+    /// test and Shift constraint. While `space_last` is `Some`, Space is
+    /// held and the drag is instead sliding the anchor itself (handles
+    /// carried rigidly, curvature frozen); it stores the previous cursor
+    /// point for the incremental translation.
+    PenHandle {
+        anchor: usize,
+        from: Point,
+        space_last: Option<Point>,
+    },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
     /// Color panel: dragging a channel slider.
@@ -390,7 +397,7 @@ impl Doc {
             rename: None,
             fill: amalith_core::Paint::Solid(amalith_core::Color::rgb(1.0, 1.0, 1.0)),
             stroke: amalith_core::Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
-            stroke_w: 1.0,
+            stroke_w: amalith_core::Appearance::DEFAULT_STROKE_WIDTH,
             stroke_style: StrokeStyle::default(),
             opacity: 1.0,
             view: CanvasView::default(),
@@ -1641,11 +1648,53 @@ impl App {
     /// anchor) and Alt (break the mirror). Safe to call on a pointer move
     /// or on a modifier change, so Shift snaps even with a still cursor.
     fn drag_pen_handle(&mut self) {
-        let Drag::PenHandle { anchor, from } = &self.drag else {
+        let Drag::PenHandle {
+            anchor,
+            from,
+            space_last,
+        } = &self.drag
+        else {
             return;
         };
-        let (anchor, from) = (*anchor, *from);
+        let (anchor, from, space_last) = (*anchor, *from, *space_last);
         let dp = self.doc_point(self.pointer);
+
+        // Space held: slide the anchor itself under the cursor, carrying
+        // its handles rigidly so the curvature pulled so far is frozen.
+        // Releasing Space resumes the handle pull from the new position.
+        if self.space_down {
+            let Some(a) = self.pen.get_mut(anchor) else {
+                return;
+            };
+            if let Some(prev) = space_last {
+                let d = dp - prev;
+                a.point += d;
+                if let Some(h) = a.handle_in.as_mut() {
+                    *h += d;
+                }
+                if let Some(h) = a.handle_out.as_mut() {
+                    *h += d;
+                }
+            }
+            let new_from = a.point;
+            self.drag = Drag::PenHandle {
+                anchor,
+                from: new_from,
+                space_last: Some(dp),
+            };
+            self.request_main_redraw();
+            return;
+        }
+        // Space just released — drop the marker; `from` already tracks the
+        // anchor's (possibly moved) point, so the pull resumes from there.
+        if space_last.is_some() {
+            self.drag = Drag::PenHandle {
+                anchor,
+                from,
+                space_last: None,
+            };
+        }
+
         let slop = 3.0 / self.doc.view.zoom;
         let alt = self.alt_down;
         let shift = self.shift_down;
@@ -2100,7 +2149,7 @@ impl App {
                 stroke: Some(self.doc.stroke),
             });
         }
-        if (self.doc.stroke_w - 1.0).abs() > f64::EPSILON {
+        if (self.doc.stroke_w - def.stroke_width).abs() > f64::EPSILON {
             let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                 objects: vec![id],
                 width: self.doc.stroke_w,
@@ -2541,6 +2590,11 @@ impl App {
             self.commit_text_edit();
         }
         if t != Tool::Pen {
+            // Switching tools ends the path in progress: 2+ anchors commit
+            // as an open path (matching Esc / Enter), a lone anchor drops.
+            if !self.pen.is_empty() {
+                self.commit_pen(false);
+            }
             self.pen.clear();
             self.pen_redo.clear();
         }
@@ -3309,7 +3363,9 @@ impl App {
             || (self.space_down && self.cmd_down)
         {
             CanvasCursor::Zoom
-        } else if self.space_down || matches!(self.drag, Drag::Pan { .. }) {
+        } else if (self.space_down && !matches!(self.drag, Drag::PenHandle { .. }))
+            || matches!(self.drag, Drag::Pan { .. })
+        {
             if matches!(self.drag, Drag::Pan { .. }) {
                 CanvasCursor::Grabbing
             } else {

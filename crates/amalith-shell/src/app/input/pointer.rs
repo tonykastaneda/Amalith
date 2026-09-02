@@ -435,6 +435,44 @@ impl App {
             // The handle drag has already been written into `self.pen` by
             // `on_cursor_move`; the anchor stays placed either way.
             Drag::PenHandle { .. } => {}
+            // Line tool: press → release makes a two-anchor open path.
+            // Shift snaps the angle to 45°.
+            Drag::DrawShape {
+                tool: Tool::Line,
+                start_doc,
+                cur_doc,
+            } => {
+                let end = if self.shift_down {
+                    constrained(Some(start_doc), cur_doc, true)
+                } else {
+                    cur_doc
+                };
+                if (end - start_doc).hypot() > 1.5 {
+                    let layer = self.ensure_layer();
+                    let cp = |p: Point| amalith_core::Point::new(p.x, p.y);
+                    let corner = |p: Point| amalith_core::Anchor {
+                        point: cp(p),
+                        handle_in: None,
+                        handle_out: None,
+                        mode: amalith_core::HandleMode::Corner,
+                    };
+                    let path = amalith_core::PathData::from_subpaths(vec![amalith_core::Subpath {
+                        anchors: vec![corner(start_doc), corner(end)],
+                        closed: false,
+                    }]);
+                    if let Ok(CommandOutcome::Object(id)) =
+                        self.doc.editor.execute(Command::CreatePath {
+                            layer,
+                            path,
+                            name: None,
+                        })
+                    {
+                        self.doc.selection = vec![id];
+                        self.apply_new_appearance(id);
+                    }
+                    self.request_main_redraw();
+                }
+            }
             Drag::DrawShape {
                 tool,
                 start_doc,
@@ -467,6 +505,7 @@ impl App {
                         Tool::Select
                         | Tool::DirectSelect
                         | Tool::Pen
+                        | Tool::Line
                         | Tool::Text
                         | Tool::Artboard => return,
                     };

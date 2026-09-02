@@ -12,7 +12,7 @@ use crate::dock::PanelId;
 use crate::textedit;
 use crate::tool::Tool;
 
-use super::super::{App, PastePlace};
+use super::super::{App, Drag, PastePlace};
 
 impl App {
     pub(in crate::app) fn on_key(&mut self, event: KeyEvent) {
@@ -201,6 +201,11 @@ impl App {
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Space) => {
                 self.space_down = pressed;
+                // A pen handle mid-pull arms / disarms the Space-to-move-
+                // anchor mode the instant Space changes, no cursor nudge.
+                if matches!(self.drag, Drag::PenHandle { .. }) {
+                    self.drag_pen_handle();
+                }
                 self.update_canvas_cursor();
                 // Toggle the hold-Space node peek.
                 self.request_main_redraw();
@@ -367,6 +372,11 @@ impl App {
                             // Exit the Artboard tool back to the
                             // tool that was active before it.
                             self.set_tool(self.pre_artboard_tool);
+                        } else if self.active_tool == Tool::Pen && !self.pen.is_empty() {
+                            // Illustrator: Esc ends the path in progress. Two
+                            // or more anchors commit as an open path (a line);
+                            // a lone anchor is dropped (`commit_pen` no-ops).
+                            self.commit_pen(false);
                         } else {
                             self.pen.clear();
                             self.pen_redo.clear();

@@ -82,6 +82,21 @@ impl App {
             _ => None,
         };
         let draw_shape = match &self.drag {
+            // Line preview: raw start → end (Shift snaps to 45°), packed
+            // into a Rect the canvas reads as its two endpoints — not a
+            // bbox, which would collapse a horizontal / vertical line.
+            Drag::DrawShape {
+                tool: Tool::Line,
+                start_doc,
+                cur_doc,
+            } => {
+                let end = if self.shift_down {
+                    constrained(Some(*start_doc), *cur_doc, true)
+                } else {
+                    *cur_doc
+                };
+                Some((Tool::Line, Rect::new(start_doc.x, start_doc.y, end.x, end.y)))
+            }
             Drag::DrawShape {
                 tool,
                 start_doc,
@@ -170,6 +185,10 @@ impl App {
                 anchors: &self.pen,
                 hover,
                 near_close,
+                fill: self.doc.fill.color().map(convert::color),
+                stroke: self.doc.stroke.color().map(convert::color),
+                stroke_w: self.doc.stroke_w,
+                style: self.doc.stroke_style,
             })
         } else {
             None

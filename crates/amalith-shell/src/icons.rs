@@ -42,6 +42,7 @@ pub enum Icon {
     Select,
     DirectSelect,
     Pen,
+    Line,
     Text,
     Rectangle,
     RoundedRect,
@@ -62,8 +63,8 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Polygon => POLYGON_SVG,
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
-        // Hand-drawn in `draw`; never reaches the brand-SVG path.
-        Icon::Text => "",
+        // Hand-drawn in `draw`; never reach the brand-SVG path.
+        Icon::Text | Icon::Line => "",
     }
 }
 
@@ -73,7 +74,22 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
         draw_type_glyph(scene, box_, color);
         return;
     }
+    if icon == Icon::Line {
+        draw_line_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// A bottom-left → top-right diagonal with a small end node at each tip —
+/// the Line Segment tool.
+fn draw_line_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let a = Point::new(box_.x0 + box_.width() * 0.14, box_.y1 - box_.height() * 0.14);
+    let b = Point::new(box_.x1 - box_.width() * 0.14, box_.y0 + box_.height() * 0.14);
+    scene.stroke(&Stroke::new((box_.width() * 0.09).max(1.6)), ID, color, None, &Line::new(a, b));
+    let r = (box_.width() * 0.08).max(1.5);
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(a, r));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(b, r));
 }
 
 /// A serif "T" — the Type tool.

@@ -121,6 +121,7 @@ fn tool_name(tool: Tool) -> &'static str {
         Tool::Select => "Select",
         Tool::DirectSelect => "DirectSelect",
         Tool::Pen => "Pen",
+        Tool::Line => "Line",
         Tool::Text => "Text",
         Tool::Rectangle => "Rectangle",
         Tool::RoundedRect => "RoundedRect",

@@ -113,6 +113,12 @@ pub struct PenPreview<'a> {
     pub hover: Point,
     /// The cursor is close enough to the first anchor to close the path.
     pub near_close: bool,
+    /// The appearance a commit would give the path — drawn live under the
+    /// blue guide so the path looks finished before you end it.
+    pub fill: Option<Color>,
+    pub stroke: Option<Color>,
+    pub stroke_w: f64,
+    pub style: StrokeStyle,
 }
 
 impl DragPreview<'_> {
@@ -319,6 +325,18 @@ pub fn paint(
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
                 scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &r);
             }
+            Tool::Line => {
+                // `r_doc` carries the endpoints in its corners, not a bbox.
+                let a = vt * Point::new(r_doc.x0, r_doc.y0);
+                let b = vt * Point::new(r_doc.x1, r_doc.y1);
+                scene.stroke(
+                    &Stroke::new(1.5),
+                    Affine::IDENTITY,
+                    theme.accent,
+                    None,
+                    &Line::new(a, b),
+                );
+            }
             _ => {
                 let p = shape_preview_path(tool, r);
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &p);
@@ -341,13 +359,35 @@ pub fn paint(
                     ),
                 }
             };
-            let mut path = BezPath::new();
-            path.move_to(vt * first.point);
+            // The path through the anchors already placed. This is what a
+            // commit would produce, so it carries the live fill + real
+            // stroke — it does *not* extend to the pen cursor.
+            let mut solid = BezPath::new();
+            solid.move_to(vt * first.point);
             let mut prev = first;
             for a in rest {
-                seg(&mut path, prev, a);
+                seg(&mut solid, prev, a);
                 prev = a;
             }
+            if pen.near_close {
+                solid.close_path();
+            }
+            if let Some(c) = pen.fill {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &solid);
+            }
+            if let Some(c) = pen.stroke {
+                scene.stroke(
+                    &stroke_spec(pen.stroke_w, &pen.style, view.zoom.max(1e-6)),
+                    Affine::IDENTITY,
+                    c,
+                    None,
+                    &solid,
+                );
+            }
+
+            // The blue guide adds the rubber-band segment out to the
+            // cursor — a hairline, never the object's stroke weight.
+            let mut guide = solid.clone();
             if !pen.near_close {
                 let cursor = PenAnchor {
                     point: pen.hover,
@@ -355,9 +395,9 @@ pub fn paint(
                     handle_out: None,
                     mode: amalith_core::HandleMode::Corner,
                 };
-                seg(&mut path, prev, &cursor);
+                seg(&mut guide, prev, &cursor);
             }
-            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, theme.accent, None, &path);
+            scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, theme.accent, None, &guide);
 
             let white = Color::from_rgb8(0xff, 0xff, 0xff);
             // Handle sticks + round handle dots.
@@ -758,15 +798,14 @@ fn paint_object(
     let sw = obj.appearance.stroke_width;
     let style = obj.appearance.stroke_style;
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
-        // Open paths (a line, an unclosed pen path) don't get a fill.
         let closed = bp
             .elements()
             .iter()
             .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
-        if closed {
-            if let Some(c) = fill {
-                scene.fill(Fill::NonZero, m, c, None, bp);
-            }
+        // An open path still fills — the fill closes the contour
+        // implicitly (Illustrator / SVG), while the stroke stays open.
+        if let Some(c) = fill {
+            scene.fill(Fill::NonZero, m, c, None, bp);
         }
         if let Some(c) = stroke {
             stroke_path(scene, m, c, bp, sw, &style, closed, zoom);

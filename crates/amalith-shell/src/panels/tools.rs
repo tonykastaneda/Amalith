@@ -22,7 +22,7 @@ const CELL: f64 = 36.0;
 /// Gap above the grid.
 const TOP: f64 = 4.0;
 /// Index of the Shape slot among [`slots`].
-const SHAPE_SLOT: usize = 4;
+const SHAPE_SLOT: usize = 5;
 
 /// The primitive tools the Shape slot collects, in flyout order.
 pub const SHAPE_TOOLS: [Tool; 5] = [
@@ -33,12 +33,13 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
     Tool::Star,
 ];
 
-/// The six visible slots; the Shape slot shows `shape`'s icon.
-fn slots(shape: Tool) -> [Tool; 6] {
+/// The visible slots; the Shape slot shows `shape`'s icon.
+fn slots(shape: Tool) -> [Tool; 7] {
     [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
+        Tool::Line,
         Tool::Text,
         shape,
         Tool::Artboard,
@@ -57,7 +58,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub(super) fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
-    let rows = 6usize.div_ceil(cols) as f64;
+    let rows = 7usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     TOP + rows * CELL + 12.0 + PROXY_H
 }

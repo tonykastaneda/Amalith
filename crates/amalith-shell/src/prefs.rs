@@ -91,6 +91,7 @@ pub fn key_char(code: KeyCode) -> Option<char> {
         Digit0 => '0', Digit1 => '1', Digit2 => '2', Digit3 => '3',
         Digit4 => '4', Digit5 => '5', Digit6 => '6', Digit7 => '7',
         Digit8 => '8', Digit9 => '9',
+        Backslash => '\\',
         _ => return None,
     })
 }
@@ -108,6 +109,7 @@ pub fn key_code(c: char) -> Option<KeyCode> {
         '0' => Digit0, '1' => Digit1, '2' => Digit2, '3' => Digit3,
         '4' => Digit4, '5' => Digit5, '6' => Digit6, '7' => Digit7,
         '8' => Digit8, '9' => Digit9,
+        '\\' => Backslash,
         _ => return None,
     })
 }
@@ -119,6 +121,7 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Select => KeyChord::plain(KeyV),
         Tool::DirectSelect => KeyChord::plain(KeyA),
         Tool::Pen => KeyChord::plain(KeyP),
+        Tool::Line => KeyChord::plain(Backslash),
         Tool::Text => KeyChord::plain(KeyT),
         Tool::Rectangle => KeyChord::plain(KeyM),
         Tool::Ellipse => KeyChord::plain(KeyL),

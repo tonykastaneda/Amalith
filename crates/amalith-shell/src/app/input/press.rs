@@ -549,13 +549,16 @@ impl App {
                     self.drag = Drag::PenHandle {
                         anchor: self.pen.len() - 1,
                         from: p,
+                        space_last: None,
                     };
                     self.request_main_redraw();
                     return;
                 }
 
-                // A shape tool rubber-bands a new object.
-                if self.active_tool.is_shape() {
+                // A shape tool rubber-bands a new object; the Line tool
+                // rubber-bands a single straight segment (same drag state,
+                // committed differently on release).
+                if self.active_tool.is_shape() || self.active_tool == Tool::Line {
                     self.drag = Drag::DrawShape {
                         tool: self.active_tool,
                         start_doc: dp,
