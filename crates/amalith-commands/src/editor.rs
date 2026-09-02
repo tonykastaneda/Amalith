@@ -85,6 +85,14 @@ impl Editor {
         }
     }
 
+    /// Drops the entire undo/redo history, making the document's current
+    /// state the non-undoable baseline. Used right after seeding a new
+    /// document (its starter artboards and layer) so the user can't undo
+    /// past having any artboard — matching Illustrator.
+    pub fn clear_history(&mut self) {
+        self.history = History::default();
+    }
+
     /// Snapshots `ids` (and, for any group, its full descendant tree) into
     /// the clipboard, replacing whatever was copied before. Does not
     /// mutate the document and is not undoable — only [`Command::Paste`],

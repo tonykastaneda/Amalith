@@ -285,6 +285,29 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::ResizeTextBox {
+                object,
+                handle,
+                start_origin,
+                start_w,
+                start_h,
+                start_doc,
+                ..
+            } => {
+                let (object, handle) = (*object, *handle);
+                let (start_origin, start_w, start_h, start_doc) =
+                    (*start_origin, *start_w, *start_h, *start_doc);
+                self.drag = Drag::ResizeTextBox {
+                    object,
+                    handle,
+                    start_origin,
+                    start_w,
+                    start_h,
+                    start_doc,
+                    cur_doc: self.doc_point(self.pointer),
+                };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -520,11 +543,13 @@ impl App {
             Drag::DrawText { start_doc, cur_doc } => {
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 4.0 && r.height() > 4.0 {
-                    // A real drag → area / paragraph type.
+                    // A real drag → area / paragraph type. The dragged
+                    // rectangle is the text box: fixed width and height,
+                    // text wraps inside it and overflows past the bottom.
                     self.create_text(
                         amalith_core::TextKind::Area {
                             width: r.width(),
-                            height: None,
+                            height: Some(r.height()),
                         },
                         Point::new(r.x0, r.y0),
                     );
@@ -605,6 +630,24 @@ impl App {
                         .collect();
                     let _ = self.doc.editor.execute(Command::SetTransforms { items });
                     self.request_main_redraw();
+                }
+            }
+            Drag::ResizeTextBox {
+                object,
+                handle,
+                start_origin,
+                start_w,
+                start_h,
+                start_doc,
+                cur_doc,
+            } => {
+                if cur_doc != start_doc {
+                    let rect = textbox_resized_rect(
+                        handle, start_origin, start_w, start_h, start_doc, cur_doc,
+                    );
+                    let origin_moved = (rect.x0 - start_origin.x).abs() > 1e-6
+                        || (rect.y0 - start_origin.y).abs() > 1e-6;
+                    self.resize_text_box(object, rect, origin_moved);
                 }
             }
             Drag::Marquee { start } => {

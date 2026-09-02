@@ -15,6 +15,7 @@ pub mod tools;
 pub mod transform;
 pub mod pathfinder;
 pub mod align;
+pub mod paragraph;
 
 use std::collections::HashSet;
 
@@ -106,6 +107,10 @@ pub struct Ctx<'a> {
     /// The type style the Character panel edits — the live text edit, else
     /// the selected text object, else the "new text" defaults.
     pub text_style: amalith_core::TextStyle,
+    /// Paragraph alignment + attributes the Paragraph panel edits, from
+    /// the same source as `text_style`.
+    pub text_align: amalith_core::TextAlign,
+    pub text_paragraph: amalith_core::Paragraph,
     /// True while a text object has the caret (Character panel shows "live").
     pub text_editing: bool,
     /// Installed font family names, sorted (for the family dropdown).
@@ -140,6 +145,16 @@ pub enum TextFlag {
     Superscript,
     Subscript,
     AllCaps,
+}
+
+/// A numeric field of the Paragraph panel (all in px / pt).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ParaField {
+    IndentStart,
+    IndentEnd,
+    IndentFirst,
+    SpaceBefore,
+    SpaceAfter,
 }
 
 /// Which Character-panel dropdown to open.
@@ -201,6 +216,11 @@ pub enum Action {
     ToggleTextFlag(TextFlag),
     /// Open a Character-panel dropdown, anchored at the given screen rect.
     OpenFontMenu(FontMenu, Rect),
+    // --- Paragraph panel ---
+    SetTextAlign(amalith_core::TextAlign),
+    /// Set one paragraph metric (px). `ParaField` picks which.
+    SetParagraphMetric(ParaField, f64),
+    ToggleHyphenate,
     // --- context bar ---
     /// Nudge the options-bar stroke Weight (`+1` / `-1`).
     StepWeight(i32),
@@ -287,6 +307,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "transform" => transform::paint(scene, text, body, ctx),
         "pathfinder" => pathfinder::paint(scene, text, body, ctx),
         "align" => align::paint(scene, text, body, ctx),
+        "paragraph" => paragraph::paint(scene, text, body, ctx),
         "picker" => {
             if let Some(pk) = ctx.picker {
                 let mut local = pk;
@@ -311,6 +332,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "transform" => transform::hit(body, local, ctx),
         "pathfinder" => pathfinder::hit(body, local, ctx),
         "align" => align::hit(body, local, ctx),
+        "paragraph" => paragraph::hit(body, local, ctx),
         "picker" => {
             ctx.picker.map_or(Action::None, |mut pk| {
                 pk.origin = Point::new(body.x0, body.y0);
@@ -353,6 +375,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "transform" => transform::natural_height(),
         "pathfinder" => pathfinder::natural_height(),
         "align" => align::natural_height(),
+        "paragraph" => paragraph::natural_height(),
         "picker" => crate::picker::H,
         _ => 60.0,
     }
@@ -370,6 +393,7 @@ fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
         "transform" => transform::natural_height(),
         "pathfinder" => pathfinder::natural_height(),
         "align" => align::natural_height(),
+        "paragraph" => paragraph::natural_height(),
         _ => return None,
     })
 }
@@ -442,6 +466,7 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         "transform" => transform::tip(body, local, ctx).map(str::to_string),
         "pathfinder" => pathfinder::tip(body, local, ctx).map(str::to_string),
         "align" => align::tip(body, local, ctx).map(str::to_string),
+        "paragraph" => paragraph::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }

@@ -709,13 +709,48 @@ pub enum TextKind {
 }
 
 /// Horizontal alignment of the text block against its anchor / box.
+/// The four `Justify*` variants differ only in how the *last* line of a
+/// paragraph sits; `JustifyAll` stretches it too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TextAlign {
     #[default]
     Start,
     Center,
     End,
-    Justify,
+    /// Justified, last line left. Old files stored plain `Justify` here.
+    #[serde(alias = "Justify")]
+    JustifyLeft,
+    JustifyCenter,
+    JustifyRight,
+    JustifyAll,
+}
+
+impl TextAlign {
+    /// Any of the four justified variants.
+    pub fn is_justified(self) -> bool {
+        matches!(
+            self,
+            Self::JustifyLeft | Self::JustifyCenter | Self::JustifyRight | Self::JustifyAll
+        )
+    }
+}
+
+/// Paragraph-level typography. Distances are in local px (= pt at 1:1).
+/// v1 applies to the whole text object.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub struct Paragraph {
+    /// Extra space above each paragraph.
+    pub space_before: f64,
+    /// Extra space below each paragraph.
+    pub space_after: f64,
+    /// Left (leading-edge) indent of every line.
+    pub indent_start: f64,
+    /// Right (trailing-edge) indent of every line.
+    pub indent_end: f64,
+    /// Additional indent of a paragraph's first line, relative to
+    /// `indent_start` (may be negative for a hanging indent).
+    pub indent_first: f64,
+    pub hyphenate: bool,
 }
 
 /// OpenType vertical position.
@@ -774,6 +809,8 @@ pub struct TextData {
     pub kind: TextKind,
     pub style: TextStyle,
     pub align: TextAlign,
+    #[serde(default)]
+    pub paragraph: Paragraph,
     pub local_bounds: Rect,
 }
 
@@ -784,6 +821,7 @@ impl Default for TextData {
             kind: TextKind::Point,
             style: TextStyle::default(),
             align: TextAlign::Start,
+            paragraph: Paragraph::default(),
             local_bounds: Rect::ZERO,
         }
     }

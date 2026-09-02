@@ -27,7 +27,9 @@ pub(crate) use std::time::{Duration, Instant};
 pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 pub(crate) use amalith_core::{ArtboardId, AssetId, Document, LayerId, ObjectId, StrokeStyle};
 pub(crate) use crate::anchors;
-pub(crate) use crate::canvas::{self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview};
+pub(crate) use crate::canvas::{
+    self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview, TextBoxPreview,
+};
 pub(crate) use crate::dock::{
     Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
 };
@@ -86,9 +88,14 @@ const TEAROFF_GRAB: Vec2 = Vec2::new(58.0, 13.0);
 
 const ID: Affine = Affine::IDENTITY;
 
-/// Placeholder dropped into a freshly created text object, selected so the
-/// first keystroke overwrites it.
+/// Placeholder dropped into a freshly created point-text object, selected
+/// so the first keystroke overwrites it.
 const TEXT_PLACEHOLDER: &str = "Lorem ipsum";
+
+/// Placeholder for a click-dragged area / paragraph text box — a block of
+/// filler so the frame reads as a text box on creation. Also selected on
+/// open, so the first keystroke clears it.
+const TEXT_PLACEHOLDER_PARAGRAPH: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
@@ -166,6 +173,19 @@ enum Drag {
         start_angle: f64,
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
+    },
+    /// Selection tool on a single area-text box: a handle drag resizes the
+    /// frame (width / height in document space) and the text re-wraps —
+    /// the glyphs are not scaled. Only for an axis-aligned box.
+    ResizeTextBox {
+        object: ObjectId,
+        handle: Handle,
+        /// Box top-left in document space at press.
+        start_origin: Point,
+        start_w: f64,
+        start_h: f64,
+        start_doc: Point,
+        cur_doc: Point,
     },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
@@ -494,6 +514,9 @@ struct App {
     text_edit: Option<textedit::TextEdit>,
     /// Style the next new text object gets.
     text_defaults: amalith_core::TextStyle,
+    /// Alignment + paragraph attributes a new text object starts with.
+    text_align_default: amalith_core::TextAlign,
+    para_defaults: amalith_core::Paragraph,
     /// Caret blink phase origin.
     text_blink: Instant,
     /// Installed font family names, sorted — built once, for the Character
@@ -666,6 +689,8 @@ impl App {
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
+            text_align_default: amalith_core::TextAlign::Start,
+            para_defaults: amalith_core::Paragraph::default(),
             text_blink: Instant::now(),
             font_families: Vec::new(),
             font_menu: None,
@@ -2009,6 +2034,9 @@ impl App {
             name: "Layer 1".into(),
             index: None,
         });
+        // The starter artboards + layer are the baseline, not undo steps —
+        // otherwise ⌘Z walks back to a document with no artboards at all.
+        editor.clear_history();
 
         let boot = self.newdoc.as_ref().is_some_and(|f| f.boot);
         self.newdoc = None;
@@ -2718,6 +2746,151 @@ impl App {
         self.text_defaults.clone()
     }
 
+    /// Alignment the Paragraph panel shows: live edit, else a selected
+    /// text object, else the new-text default.
+    fn active_text_align(&self) -> amalith_core::TextAlign {
+        if let Some(te) = &self.text_edit {
+            return te.align();
+        }
+        for &id in &self.doc.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            {
+                return t.align;
+            }
+        }
+        self.text_align_default
+    }
+
+    /// Paragraph attributes the Paragraph panel shows — same source order.
+    fn active_text_paragraph(&self) -> amalith_core::Paragraph {
+        if let Some(te) = &self.text_edit {
+            return te.paragraph();
+        }
+        for &id in &self.doc.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            {
+                return t.paragraph;
+            }
+        }
+        self.para_defaults
+    }
+
+    /// Apply an alignment to the live edit, else the selected text
+    /// objects, else the new-text default.
+    fn edit_text_align(&mut self, align: amalith_core::TextAlign) {
+        if let Some(te) = &mut self.text_edit {
+            te.set_align(align);
+            self.request_main_redraw();
+        } else if !self.edit_selected_text_data(|d| d.align = align) {
+            self.text_align_default = align;
+            self.request_main_redraw();
+        }
+    }
+
+    /// Mutate paragraph attributes the same way.
+    fn edit_paragraph(&mut self, f: impl Fn(&mut amalith_core::Paragraph)) {
+        if let Some(te) = &mut self.text_edit {
+            let mut p = te.paragraph();
+            f(&mut p);
+            te.set_paragraph(p);
+            self.request_main_redraw();
+        } else if !self.edit_selected_text_data(|d| f(&mut d.paragraph)) {
+            let mut p = self.para_defaults;
+            f(&mut p);
+            self.para_defaults = p;
+            self.request_main_redraw();
+        }
+    }
+
+    /// Run `f` over every selected text object's `TextData`, re-measure,
+    /// and commit each. Returns whether any text object was in the
+    /// selection.
+    fn edit_selected_text_data(&mut self, f: impl Fn(&mut amalith_core::TextData)) -> bool {
+        let ids: Vec<ObjectId> = self
+            .doc
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(
+                    self.doc.editor.document().object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Text(_))
+                )
+            })
+            .collect();
+        if ids.is_empty() {
+            return false;
+        }
+        for id in ids {
+            let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            else {
+                continue;
+            };
+            let mut data = t.clone();
+            f(&mut data);
+            data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+            let _ = self.doc.editor.execute(Command::SetText { object: id, data });
+        }
+        self.request_main_redraw();
+        true
+    }
+
+    /// If the selection is exactly one axis-aligned area-text box, returns
+    /// `(id, top-left, width, height)` in document space — the target of a
+    /// Selection-tool handle drag that resizes the frame instead of
+    /// scaling the glyphs. `None` for point text, rotated boxes, or a
+    /// multi-selection (those keep the normal Scale behaviour).
+    fn single_area_text_box(&self) -> Option<(ObjectId, Point, f64, f64)> {
+        if self.doc.selection.len() != 1 {
+            return None;
+        }
+        let id = self.doc.selection[0];
+        let obj = self.doc.editor.document().object(id)?;
+        let amalith_core::ObjectKind::Text(t) = &obj.kind else {
+            return None;
+        };
+        let amalith_core::TextKind::Area { width, height } = t.kind else {
+            return None;
+        };
+        let [a, b, c, d, e, f] = obj.transform.as_coeffs();
+        if (a - 1.0).abs() > 1e-9 || b.abs() > 1e-9 || c.abs() > 1e-9 || (d - 1.0).abs() > 1e-9 {
+            return None; // rotated / scaled box — leave it to Drag::Scale
+        }
+        let h = height.unwrap_or_else(|| t.local_bounds.height());
+        Some((id, Point::new(e, f), width, h))
+    }
+
+    /// Commit a text-box resize: swap the object's `TextKind::Area`
+    /// dimensions and move its origin so the frame lands on `rect`. The
+    /// text re-wraps to the new width; a fixed height clips overflow.
+    fn resize_text_box(&mut self, object: ObjectId, rect: Rect, origin_moved: bool) {
+        let Some(amalith_core::ObjectKind::Text(t)) =
+            self.doc.editor.document().object(object).map(|o| &o.kind)
+        else {
+            return;
+        };
+        let mut data = t.clone();
+        data.kind = amalith_core::TextKind::Area {
+            width: rect.width(),
+            height: Some(rect.height()),
+        };
+        data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+        let _ = self
+            .doc.editor
+            .execute(Command::SetText { object, data });
+        if origin_moved {
+            let items = vec![(
+                object,
+                amalith_core::Affine::translate((rect.x0, rect.y0)),
+            )];
+            let _ = self.doc.editor.execute(Command::SetTransforms { items });
+        }
+        self.request_main_redraw();
+    }
+
     /// True while text is the editing focus — the caret is in a text
     /// object, or the whole selection is text objects. Drives the
     /// options-bar Character cluster.
@@ -2810,11 +2983,16 @@ impl App {
         // Seed with placeholder text, selected on open (see `enter_text_edit`),
         // so the first keystroke replaces it — and so a click-away leaves a
         // visible object behind instead of nothing.
+        let placeholder = match kind {
+            amalith_core::TextKind::Area { .. } => TEXT_PLACEHOLDER_PARAGRAPH,
+            amalith_core::TextKind::Point => TEXT_PLACEHOLDER,
+        };
         let data = amalith_core::TextData {
-            content: TEXT_PLACEHOLDER.to_string(),
+            content: placeholder.to_string(),
             kind,
             style: self.text_defaults.clone(),
-            align: amalith_core::TextAlign::Start,
+            align: self.text_align_default,
+            paragraph: self.para_defaults,
             local_bounds: amalith_core::Rect::ZERO,
         };
         let cmd = Command::CreateText {
@@ -2938,6 +3116,7 @@ impl App {
             td.kind,
             td.style,
             td.align,
+            td.paragraph,
             &td.content,
             &mut self.text,
         );
@@ -3031,6 +3210,16 @@ impl App {
     }
 
     fn select_all(&mut self) {
+        // ⌘A while editing text selects the text, not every object. This
+        // also catches the macOS native "Select All" menu accelerator,
+        // which never reaches `text_edit_key`.
+        if self.text_edit.is_some() {
+            if let Some(te) = self.text_edit.as_mut() {
+                te.select_all(&mut self.text);
+            }
+            self.request_main_redraw();
+            return;
+        }
         let sel: Vec<ObjectId> = {
             let doc = self.doc.editor.document();
             doc.layers()
@@ -3288,6 +3477,8 @@ impl App {
             selected_layer: self.doc.selected_layer,
             selected_artboard: self.doc.selected_artboard,
             text_style: amalith_core::TextStyle::default(),
+            text_align: amalith_core::TextAlign::Start,
+            text_paragraph: amalith_core::Paragraph::default(),
             text_editing: false,
             font_families: &self.font_families,
             layer_query: &self.layer_query,
@@ -4157,7 +4348,7 @@ fn demo_right_dock() -> Node {
             },
             Child {
                 node: Node::Tabs {
-                    panels: vec![PanelId("character")],
+                    panels: vec![PanelId("character"), PanelId("paragraph")],
                     active: 0,
                 },
                 weight: 1.1,
@@ -4323,6 +4514,52 @@ fn shape_rect(a: Point, b: Point, square: bool, from_center: bool) -> amalith_co
     }
 }
 
+/// Smallest an area-text box may be dragged in document px.
+const TEXTBOX_MIN: f64 = 8.0;
+
+/// The new frame rect for a text-box handle drag: `handle` moves the
+/// edge(s) it touches by the pointer delta `(dp - start_doc)`; opposite
+/// edges stay put. Result is normalised and clamped to [`TEXTBOX_MIN`].
+fn textbox_resized_rect(
+    handle: Handle,
+    origin: Point,
+    w: f64,
+    h: f64,
+    start_doc: Point,
+    dp: Point,
+) -> Rect {
+    let (dx, dy) = (dp.x - start_doc.x, dp.y - start_doc.y);
+    let (mut x0, mut y0) = (origin.x, origin.y);
+    let (mut x1, mut y1) = (origin.x + w, origin.y + h);
+    if matches!(handle, Handle::W | Handle::Nw | Handle::Sw) {
+        x0 += dx;
+    }
+    if matches!(handle, Handle::E | Handle::Ne | Handle::Se) {
+        x1 += dx;
+    }
+    if matches!(handle, Handle::N | Handle::Nw | Handle::Ne) {
+        y0 += dy;
+    }
+    if matches!(handle, Handle::S | Handle::Sw | Handle::Se) {
+        y1 += dy;
+    }
+    if x1 - x0 < TEXTBOX_MIN {
+        if matches!(handle, Handle::W | Handle::Nw | Handle::Sw) {
+            x0 = x1 - TEXTBOX_MIN;
+        } else {
+            x1 = x0 + TEXTBOX_MIN;
+        }
+    }
+    if y1 - y0 < TEXTBOX_MIN {
+        if matches!(handle, Handle::N | Handle::Nw | Handle::Ne) {
+            y0 = y1 - TEXTBOX_MIN;
+        } else {
+            y1 = y0 + TEXTBOX_MIN;
+        }
+    }
+    Rect::new(x0, y0, x1, y1)
+}
+
 fn tab_label(panel: PanelId) -> String {
     match panel.0 {
         "tools" => "Tools",
@@ -4330,6 +4567,7 @@ fn tab_label(panel: PanelId) -> String {
         "artboards" => "Artboards",
         "swatches" => "Swatches",
         "character" => "Character",
+        "paragraph" => "Paragraph",
         "color" => "Color",
         "transform" => "Transform",
         "pathfinder" => "Pathfinder",
@@ -4417,12 +4655,13 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 9] = [
+const WINDOW_PANELS: [(&str, &str); 10] = [
     ("align", "Align"),
     ("artboards", "Artboards"),
     ("character", "Character"),
     ("color", "Color"),
     ("layers", "Layers"),
+    ("paragraph", "Paragraph"),
     ("pathfinder", "Pathfinder"),
     ("swatches", "Swatches"),
     ("tools", "Tools"),

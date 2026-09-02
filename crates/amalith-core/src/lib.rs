@@ -36,7 +36,7 @@ pub use object::{
     subpaths_to_bezpath, toggle_anchor_smooth, translate_anchor_n, Anchor, CompoundPathData,
     GroupData, HandleMode,
     HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
-    TextAlign, TextData, TextKind, TextPosition, TextStyle,
+    Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};

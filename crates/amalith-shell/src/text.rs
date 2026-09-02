@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use amalith_core::{TextData, TextKind, TextPosition};
 use parley::{
     FontContext, FontWeight, GenericFamily, Layout, LayoutContext, LineHeight,
     PositionedLayoutItem, StyleProperty,
@@ -14,6 +15,54 @@ use parley::{
 use vello::kurbo::Affine;
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
+
+/// Everything about a committed [`TextData`] that changes its parley
+/// layout — the key for [`TextContext::td_cache`]. Colour is applied at
+/// draw time, so it's excluded.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TextLayoutKey {
+    content: String,
+    family: String,
+    size: u64,
+    weight: u16,
+    italic: bool,
+    leading: u64,
+    tracking: u64,
+    underline: bool,
+    strikethrough: bool,
+    small_caps: bool,
+    position: u8,
+    align: u8,
+    wrap: u64,
+}
+
+impl TextLayoutKey {
+    pub fn of(td: &TextData) -> Self {
+        let s = &td.style;
+        Self {
+            content: td.content.clone(),
+            family: s.family.clone(),
+            size: s.size.to_bits(),
+            weight: s.weight,
+            italic: s.italic,
+            leading: s.leading.map(f64::to_bits).unwrap_or(u64::MAX),
+            tracking: s.tracking.to_bits(),
+            underline: s.underline,
+            strikethrough: s.strikethrough,
+            small_caps: s.small_caps,
+            position: match s.position {
+                TextPosition::Normal => 0,
+                TextPosition::Superscript => 1,
+                TextPosition::Subscript => 2,
+            },
+            align: td.align as u8,
+            wrap: match td.kind {
+                TextKind::Area { width, .. } => width.to_bits(),
+                TextKind::Point => u64::MAX,
+            },
+        }
+    }
+}
 
 /// Owns the font database and parley's reusable layout buffers.
 pub struct TextContext {
@@ -24,6 +73,10 @@ pub struct TextContext {
     /// [`Self::emit`]), so it isn't part of the key. Cleared wholesale
     /// when it grows large.
     cache: HashMap<(String, u32, bool), Layout<Brush>>,
+    /// Memoized full layouts for committed text objects — re-shaping a
+    /// paragraph every frame was the bulk of the per-frame cost of having
+    /// a text box on the canvas. Keyed by [`TextLayoutKey`].
+    td_cache: HashMap<TextLayoutKey, Layout<Brush>>,
 }
 
 impl Default for TextContext {
@@ -38,6 +91,7 @@ impl TextContext {
             fonts: FontContext::new(),
             layout: LayoutContext::new(),
             cache: HashMap::new(),
+            td_cache: HashMap::new(),
         }
     }
 
@@ -45,6 +99,20 @@ impl TextContext {
     /// `parley::PlainEditor` (see [`crate::textedit`]).
     pub fn parts(&mut self) -> (&mut FontContext, &mut LayoutContext<Brush>) {
         (&mut self.fonts, &mut self.layout)
+    }
+
+    /// A cached committed-text layout, or `None` on a miss.
+    pub fn td_cached(&self, key: &TextLayoutKey) -> Option<&Layout<Brush>> {
+        self.td_cache.get(key)
+    }
+
+    /// File a freshly built committed-text layout under `key`. Clears the
+    /// whole map first if it has grown large (a resize drag churns keys).
+    pub fn td_store(&mut self, key: TextLayoutKey, layout: Layout<Brush>) {
+        if self.td_cache.len() >= 256 {
+            self.td_cache.clear();
+        }
+        self.td_cache.insert(key, layout);
     }
 
     /// A memoized single-line layout with no wrapping. `size` is in px.

@@ -83,6 +83,18 @@ pub struct DragPreview<'a> {
     pub anchors: Option<(&'a [(ObjectId, usize)], amalith_core::Vec2)>,
     /// Live handle drag: `(object, anchor ordinal, side, local-space delta)`.
     pub handle: Option<(ObjectId, usize, amalith_core::HandleSide, amalith_core::Vec2)>,
+    /// Live area-text-box resize: the frame re-wraps at this width/height
+    /// (document px) and its origin shifts by `origin_delta`.
+    pub text_box: Option<TextBoxPreview>,
+}
+
+/// One area-text box being resized by a Selection-tool handle drag.
+#[derive(Clone, Copy)]
+pub struct TextBoxPreview {
+    pub id: ObjectId,
+    pub width: f64,
+    pub height: f64,
+    pub origin_delta: Vec2,
 }
 
 /// Anchor markers for the Direct Selection tool.
@@ -333,6 +345,16 @@ pub fn paint(
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
                 scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &r);
             }
+            Tool::Text => {
+                // Area-text box: dashed outline, no fill.
+                scene.stroke(
+                    &Stroke::new(1.0).with_dashes(0.0, [4.0, 3.0]),
+                    Affine::IDENTITY,
+                    theme.accent,
+                    None,
+                    &r,
+                );
+            }
             Tool::Line => {
                 // `r_doc` carries the endpoints in its corners, not a bbox.
                 let a = vt * Point::new(r_doc.x0, r_doc.y0);
@@ -448,13 +470,32 @@ pub fn paint(
     if !selection.is_empty() && anchor_view.map_or(true, |av| av.peek) {
         // The oriented box, in screen px, transformed by any live
         // scale/rotate preview.
-        let quad = select::selection_quad(doc, selection).map(|q| {
-            let extra = match drag {
-                Some(d) if d.xf.is_some() => xf_for_quad(doc, selection, d),
-                Some(d) if d.is_dragged(selection[0]) => Affine::translate(d.delta),
-                _ => Affine::IDENTITY,
-            };
-            q.map(|p| vt * extra * p)
+        let text_box_quad = drag
+            .and_then(|d| d.text_box)
+            .filter(|tb| selection.first() == Some(&tb.id))
+            .and_then(|tb| {
+                let c = doc.object(tb.id)?.transform.as_coeffs();
+                let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
+                let (x1, y1) = (x0 + tb.width, y0 + tb.height);
+                Some(
+                    [
+                        Point::new(x0, y0),
+                        Point::new(x1, y0),
+                        Point::new(x1, y1),
+                        Point::new(x0, y1),
+                    ]
+                    .map(|p| vt * p),
+                )
+            });
+        let quad = text_box_quad.or_else(|| {
+            select::selection_quad(doc, selection).map(|q| {
+                let extra = match drag {
+                    Some(d) if d.xf.is_some() => xf_for_quad(doc, selection, d),
+                    Some(d) if d.is_dragged(selection[0]) => Affine::translate(d.delta),
+                    _ => Affine::IDENTITY,
+                };
+                q.map(|p| vt * extra * p)
+            })
         });
         if let Some(q) = quad {
             let mut path = BezPath::new();
@@ -878,7 +919,19 @@ fn paint_object(
             // The object open in the Type tool is drawn live by the shell.
             if Some(id) != editing_text {
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
-                crate::textedit::paint_text_data(scene, text, td, m, color);
+                // Live area-text-box resize: re-wrap at the previewed frame
+                // size and shift the origin, without touching the document.
+                if let Some(tb) = drag.and_then(|d| d.text_box).filter(|tb| tb.id == id) {
+                    let mut preview = td.clone();
+                    preview.kind = amalith_core::TextKind::Area {
+                        width: tb.width,
+                        height: Some(tb.height),
+                    };
+                    let pm = m * Affine::translate(tb.origin_delta);
+                    crate::textedit::paint_text_data(scene, text, &preview, pm, color);
+                } else {
+                    crate::textedit::paint_text_data(scene, text, td, m, color);
+                }
             }
         }
         ObjectKind::Image(img) => {

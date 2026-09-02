@@ -174,8 +174,11 @@ impl App {
                 }
             }
             panels::Action::DeleteArtboard => {
-                if let Some(id) = self.doc.selected_artboard.take() {
-                    let _ = self.doc.editor.execute(Command::DeleteArtboard { id });
+                // A document always keeps at least one artboard.
+                if self.doc.editor.document().artboards().len() > 1 {
+                    if let Some(id) = self.doc.selected_artboard.take() {
+                        let _ = self.doc.editor.execute(Command::DeleteArtboard { id });
+                    }
                 }
             }
             panels::Action::NewArtboard => {
@@ -245,6 +248,25 @@ impl App {
                     }
                     TextFlag::AllCaps => {} // not modelled yet
                 });
+            }
+            panels::Action::SetTextAlign(a) => {
+                self.edit_text_align(a);
+            }
+            panels::Action::SetParagraphMetric(field, v) => {
+                use panels::ParaField;
+                self.edit_paragraph(move |p| {
+                    let slot = match field {
+                        ParaField::IndentStart => &mut p.indent_start,
+                        ParaField::IndentEnd => &mut p.indent_end,
+                        ParaField::IndentFirst => &mut p.indent_first,
+                        ParaField::SpaceBefore => &mut p.space_before,
+                        ParaField::SpaceAfter => &mut p.space_after,
+                    };
+                    *slot = v;
+                });
+            }
+            panels::Action::ToggleHyphenate => {
+                self.edit_paragraph(|p| p.hyphenate = !p.hyphenate);
             }
             panels::Action::OpenFontMenu(kind, anchor) => {
                 self.open_font_menu(kind, anchor);

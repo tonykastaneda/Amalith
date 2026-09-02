@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use amalith_core::geom as cg;
-use amalith_core::{TextAlign, TextData, TextKind, TextPosition, TextStyle};
+use amalith_core::{Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle};
 use parley::layout::PositionedLayoutItem;
 use skrifa::{
     instance::{LocationRef, Size},
@@ -20,12 +20,12 @@ use skrifa::{
 use parley::style::{
     FontFamily, FontFamilyName, FontFeatures, FontStyle, FontWeight, LineHeight, StyleProperty,
 };
-use parley::{Alignment, PlainEditor};
+use parley::{Alignment, Layout, PlainEditor};
 use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
 
-use crate::text::TextContext;
+use crate::text::{TextContext, TextLayoutKey};
 
 /// A caret size hint for `cursor_geometry`, in editor px.
 const CARET_W: f32 = 1.5;
@@ -40,18 +40,21 @@ pub struct TextEdit {
     kind: TextKind,
     style: TextStyle,
     align: TextAlign,
+    paragraph: Paragraph,
     /// True from the first keystroke — a never-touched object is discarded
     /// on commit.
     pub touched: bool,
 }
 
 impl TextEdit {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         object: amalith_core::ObjectId,
         origin: amalith_core::Point,
         kind: TextKind,
         style: TextStyle,
         align: TextAlign,
+        paragraph: Paragraph,
         seed: &str,
         tcx: &mut TextContext,
     ) -> Self {
@@ -62,12 +65,7 @@ impl TextEdit {
         } else {
             editor.set_width(None);
         }
-        editor.set_alignment(match align {
-            TextAlign::Start => Alignment::Start,
-            TextAlign::Center => Alignment::Center,
-            TextAlign::End => Alignment::End,
-            TextAlign::Justify => Alignment::Justify,
-        });
+        editor.set_alignment(alignment(align));
         let mut this = Self {
             object,
             origin,
@@ -75,9 +73,11 @@ impl TextEdit {
             kind,
             style: style.clone(),
             align,
+            paragraph,
             touched: !seed.is_empty(),
         };
         this.apply_style(&style, tcx);
+        this.set_paragraph(paragraph);
         this
     }
 
@@ -126,18 +126,32 @@ impl TextEdit {
         &self.style
     }
 
+    pub fn align(&self) -> TextAlign {
+        self.align
+    }
+
     pub fn kind(&self) -> TextKind {
         self.kind
     }
 
     pub fn set_align(&mut self, align: TextAlign) {
         self.align = align;
-        self.editor.set_alignment(match align {
-            TextAlign::Start => Alignment::Start,
-            TextAlign::Center => Alignment::Center,
-            TextAlign::End => Alignment::End,
-            TextAlign::Justify => Alignment::Justify,
-        });
+        self.editor.set_alignment(alignment(align));
+    }
+
+    pub fn paragraph(&self) -> Paragraph {
+        self.paragraph
+    }
+
+    /// Update the paragraph attributes. Left / right indent narrow the
+    /// area-text wrap width live; the rest are recorded for commit /
+    /// export.
+    pub fn set_paragraph(&mut self, p: Paragraph) {
+        self.paragraph = p;
+        if let TextKind::Area { width, .. } = self.kind {
+            let inner = (width - p.indent_start - p.indent_end).max(1.0);
+            self.editor.set_width(Some(inner as f32));
+        }
     }
 
     pub fn set_area_width(&mut self, width: f64) {
@@ -375,6 +389,40 @@ impl TextEdit {
         caret_on: bool,
         theme_blue: Color,
     ) {
+        // Refresh the editor's layout up front. Driver ops (typing,
+        // select-all, arrow keys) mark it dirty but don't rebuild, so
+        // `selection_geometry` / `cursor_geometry` would otherwise read a
+        // stale layout while the glyphs below draw from the fresh one —
+        // which showed up as a selection box covering only part of the text.
+        {
+            let (fc, lc) = tcx.parts();
+            self.editor.refresh_layout(fc, lc);
+        }
+
+        // Point text anchors on the click point per its alignment; shift the
+        // whole editor (selection, glyphs, caret) so a live edit previews it.
+        let xf = match self.kind {
+            TextKind::Point => {
+                let w = self.editor.try_layout().map(|l| l.width()).unwrap_or(0.0);
+                xf * Affine::translate((point_align_dx(self.align, w), 0.0))
+            }
+            TextKind::Area { .. } => xf,
+        };
+
+        // A fixed-height area box hides its text (and selection) past the
+        // bottom edge — the box stays the size you drew, overflow is the
+        // red tab's job to flag.
+        let box_clip = match self.kind {
+            TextKind::Area {
+                width,
+                height: Some(h),
+            } => {
+                scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(0.0, 0.0, width, h));
+                true
+            }
+            _ => false,
+        };
+
         // Selection under the glyphs.
         let sel = self.selection_rects();
         for r in &sel {
@@ -393,12 +441,19 @@ impl TextEdit {
             }
         }
 
-        // Fixed-height area box + overflow marker.
-        if let TextKind::Area {
-            width,
-            height: Some(box_h),
-        } = self.kind
-        {
+        if box_clip {
+            scene.pop_layer();
+        }
+
+        // Area-text box outline (always shown while editing) + a red
+        // overflow tab when a fixed-height box can't fit its text.
+        if let TextKind::Area { width, height } = self.kind {
+            let content_h = self
+                .editor
+                .try_layout()
+                .map(|l| l.height() as f64)
+                .unwrap_or(0.0);
+            let box_h = height.unwrap_or(content_h).max(1.0);
             scene.stroke(
                 &Stroke::new(1.0),
                 xf,
@@ -406,20 +461,17 @@ impl TextEdit {
                 None,
                 &Rect::new(0.0, 0.0, width, box_h),
             );
-            let content_h = self
-                .editor
-                .try_layout()
-                .map(|l| l.height() as f64)
-                .unwrap_or(0.0);
-            if content_h > box_h {
-                let m = Rect::new(width, box_h - 6.0, width + 6.0, box_h);
-                scene.fill(
-                    Fill::NonZero,
-                    xf,
-                    Color::from_rgb8(0xd0, 0x30, 0x30),
-                    None,
-                    &m,
-                );
+            if let Some(fixed) = height {
+                if content_h > fixed {
+                    let m = Rect::new(width, fixed - 6.0, width + 6.0, fixed);
+                    scene.fill(
+                        Fill::NonZero,
+                        xf,
+                        Color::from_rgb8(0xd0, 0x30, 0x30),
+                        None,
+                        &m,
+                    );
+                }
             }
         }
     }
@@ -433,9 +485,17 @@ impl TextEdit {
         let w = layout.width() as f64;
         let h = layout.height() as f64;
         let bounds = match self.kind {
-            TextKind::Point => amalith_core::Rect::new(0.0, 0.0, w, h),
+            TextKind::Point => {
+                // Same anchor offset `paint_text_data` / `measure_text_data`
+                // apply, so the committed object's bounds wrap its glyphs.
+                let dx = point_align_dx(self.align, layout.width());
+                amalith_core::Rect::new(dx, 0.0, dx + w, h)
+            }
             TextKind::Area { width, height } => {
-                amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h).max(h))
+                // A fixed-height box keeps its drawn size regardless of how
+                // much text it holds; an auto box (height None) grows to
+                // the content.
+                amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h))
             }
         };
         TextData {
@@ -443,6 +503,7 @@ impl TextEdit {
             kind: self.kind,
             style: self.style.clone(),
             align: self.align,
+            paragraph: self.paragraph,
             local_bounds: bounds,
         }
     }
@@ -490,8 +551,71 @@ fn alignment(a: TextAlign) -> Alignment {
         TextAlign::Start => Alignment::Start,
         TextAlign::Center => Alignment::Center,
         TextAlign::End => Alignment::End,
-        TextAlign::Justify => Alignment::Justify,
+        // parley has one Justify; the last-line variants are recorded on
+        // the model and honoured on export, not in the live layout yet.
+        TextAlign::JustifyLeft
+        | TextAlign::JustifyCenter
+        | TextAlign::JustifyRight
+        | TextAlign::JustifyAll => Alignment::Justify,
     }
+}
+
+/// Anchor offset for point text: the click point is the left edge for
+/// left-align, the centre for centre-align, the right edge for right-align
+/// (Illustrator point-type behaviour). `w` is the laid-out text width.
+/// Area text anchors at its box's top-left, so this only applies to
+/// [`TextKind::Point`].
+fn point_align_dx(align: TextAlign, w: f32) -> f64 {
+    match align {
+        TextAlign::Center | TextAlign::JustifyCenter => -(w as f64) / 2.0,
+        TextAlign::End | TextAlign::JustifyRight => -(w as f64),
+        _ => 0.0,
+    }
+}
+
+/// A committed [`TextData`]'s parley layout, from the cache or freshly
+/// built and filed. Re-shaping a paragraph every frame is the dominant
+/// per-frame cost of a text box on the canvas, so this is memoized by
+/// everything that affects shaping (see [`TextLayoutKey`]).
+fn td_layout<'a>(tcx: &'a mut TextContext, td: &TextData) -> &'a Layout<Brush> {
+    let key = TextLayoutKey::of(td);
+    if tcx.td_cached(&key).is_none() {
+        let width = match td.kind {
+            TextKind::Area { width, .. } => Some(width as f32),
+            TextKind::Point => None,
+        };
+        let (fc, lc) = tcx.parts();
+        let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
+        b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
+            FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
+        ]))));
+        b.push_default(StyleProperty::FontSize(td.style.size as f32));
+        b.push_default(StyleProperty::FontWeight(FontWeight::new(
+            td.style.weight as f32,
+        )));
+        b.push_default(StyleProperty::FontStyle(if td.style.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        }));
+        b.push_default(StyleProperty::LineHeight(line_height(&td.style)));
+        b.push_default(StyleProperty::LetterSpacing(
+            (td.style.tracking / 1000.0 * td.style.size) as f32,
+        ));
+        b.push_default(StyleProperty::Underline(td.style.underline));
+        b.push_default(StyleProperty::Strikethrough(td.style.strikethrough));
+        b.push_default(StyleProperty::FontFeatures(FontFeatures::from(features(
+            &td.style,
+        ))));
+        let mut layout = b.build(&td.content);
+        layout.break_all_lines(width);
+        layout.align(
+            alignment(td.align),
+            parley::layout::AlignmentOptions::default(),
+        );
+        tcx.td_store(key.clone(), layout);
+    }
+    tcx.td_cached(&key).expect("just stored")
 }
 
 /// Lay out a committed [`TextData`] and draw it with transform `xf`.
@@ -505,75 +629,43 @@ pub fn paint_text_data(
     if td.content.is_empty() {
         return;
     }
-    let width = match td.kind {
-        TextKind::Area { width, .. } => Some(width as f32),
-        TextKind::Point => None,
+    let layout = td_layout(tcx, td);
+    let xf = match td.kind {
+        TextKind::Point => xf * Affine::translate((point_align_dx(td.align, layout.width()), 0.0)),
+        TextKind::Area { .. } => xf,
     };
-    let (fc, lc) = tcx.parts();
-    let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
-    b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
-        FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
-    ]))));
-    b.push_default(StyleProperty::FontSize(td.style.size as f32));
-    b.push_default(StyleProperty::FontWeight(FontWeight::new(
-        td.style.weight as f32,
-    )));
-    b.push_default(StyleProperty::FontStyle(if td.style.italic {
-        FontStyle::Italic
-    } else {
-        FontStyle::Normal
-    }));
-    b.push_default(StyleProperty::LineHeight(line_height(&td.style)));
-    b.push_default(StyleProperty::LetterSpacing(
-        (td.style.tracking / 1000.0 * td.style.size) as f32,
-    ));
-    b.push_default(StyleProperty::Underline(td.style.underline));
-    b.push_default(StyleProperty::Strikethrough(td.style.strikethrough));
-    b.push_default(StyleProperty::FontFeatures(FontFeatures::from(features(
-        &td.style,
-    ))));
-    b.push_default(StyleProperty::Brush(Brush::Solid(color)));
-    let mut layout = b.build(&td.content);
-    layout.break_all_lines(width);
-    layout.align(
-        alignment(td.align),
-        parley::layout::AlignmentOptions::default(),
-    );
-    draw_glyph_runs(scene, &layout, xf, color);
+    // A fixed-height area box hides text past its bottom edge — but only
+    // pay for the GPU clip layer when something actually overflows.
+    let clip = match td.kind {
+        TextKind::Area {
+            width,
+            height: Some(h),
+        } if layout.height() as f64 > h + 0.5 => {
+            scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(0.0, 0.0, width, h));
+            true
+        }
+        _ => false,
+    };
+    draw_glyph_runs(scene, layout, xf, color);
+    if clip {
+        scene.pop_layer();
+    }
 }
 
 /// Lay out `td` and return its local bounds (top-left at the origin).
 pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::Rect {
-    let width = match td.kind {
-        TextKind::Area { width, .. } => Some(width as f32),
-        TextKind::Point => None,
-    };
-    let (fc, lc) = tcx.parts();
-    let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
-    b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
-        FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
-    ]))));
-    b.push_default(StyleProperty::FontSize(td.style.size as f32));
-    b.push_default(StyleProperty::FontWeight(FontWeight::new(
-        td.style.weight as f32,
-    )));
-    b.push_default(StyleProperty::FontStyle(if td.style.italic {
-        FontStyle::Italic
-    } else {
-        FontStyle::Normal
-    }));
-    b.push_default(StyleProperty::LineHeight(line_height(&td.style)));
-    b.push_default(StyleProperty::LetterSpacing(
-        (td.style.tracking / 1000.0 * td.style.size) as f32,
-    ));
-    let mut layout = b.build(&td.content);
-    layout.break_all_lines(width);
+    let layout = td_layout(tcx, td);
     let w = layout.width() as f64;
     let h = layout.height() as f64;
     match td.kind {
-        TextKind::Point => amalith_core::Rect::new(0.0, 0.0, w.max(1.0), h.max(1.0)),
+        TextKind::Point => {
+            // Match the anchor offset applied in `paint_text_data` so the
+            // local bounds track the drawn glyphs (selection box, hit test).
+            let dx = point_align_dx(td.align, layout.width());
+            amalith_core::Rect::new(dx, 0.0, dx + w.max(1.0), h.max(1.0))
+        }
         TextKind::Area { width, height } => {
-            amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h).max(h))
+            amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h))
         }
     }
 }

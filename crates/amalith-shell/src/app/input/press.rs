@@ -400,6 +400,8 @@ impl App {
                                         selected_layer: self.doc.selected_layer,
                                         selected_artboard: self.doc.selected_artboard,
                                         text_style: self.active_text_style(),
+                                        text_align: self.active_text_align(),
+                                        text_paragraph: self.active_text_paragraph(),
                                         text_editing: self.text_edit.is_some(),
                                         font_families: &self.font_families,
                                         layer_query: &self.layer_query,
@@ -753,6 +755,21 @@ impl App {
                             .collect();
                         if !start_xf.is_empty() {
                             if let Some(handle) = handles::hit_handle(self.pointer, scr) {
+                                // A single area-text box resizes its frame
+                                // (text re-wraps) rather than scaling.
+                                if let Some((object, origin, w, h)) = self.single_area_text_box() {
+                                    self.drag = Drag::ResizeTextBox {
+                                        object,
+                                        handle,
+                                        start_origin: origin,
+                                        start_w: w,
+                                        start_h: h,
+                                        start_doc: dp,
+                                        cur_doc: dp,
+                                    };
+                                    self.request_main_redraw();
+                                    return;
+                                }
                                 let start_bounds =
                                     select::union_bounds(self.doc.editor.document(), &self.doc.selection)
                                         .unwrap();
@@ -898,6 +915,8 @@ impl App {
                                     selected_layer: self.doc.selected_layer,
                                     selected_artboard: self.doc.selected_artboard,
                                     text_style: self.active_text_style(),
+                                    text_align: self.active_text_align(),
+                                    text_paragraph: self.active_text_paragraph(),
                                     text_editing: self.text_edit.is_some(),
                                     font_families: &self.font_families,
                                     layer_query: &self.layer_query,

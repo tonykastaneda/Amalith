@@ -55,6 +55,7 @@ impl App {
                 xf: None,
                 anchors: None,
                 handle: None,
+                text_box: None,
             }),
             Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
                 ids: &self.doc.selection,
@@ -63,7 +64,38 @@ impl App {
                 xf: Some(preview),
                 anchors: None,
                 handle: None,
+                text_box: None,
             }),
+            Drag::ResizeTextBox {
+                object,
+                handle,
+                start_origin,
+                start_w,
+                start_h,
+                start_doc,
+                cur_doc,
+            } => {
+                let rect = textbox_resized_rect(
+                    *handle, *start_origin, *start_w, *start_h, *start_doc, *cur_doc,
+                );
+                Some(DragPreview {
+                    ids: &[],
+                    delta: Vec2::ZERO,
+                    dup: false,
+                    xf: None,
+                    anchors: None,
+                    handle: None,
+                    text_box: Some(TextBoxPreview {
+                        id: *object,
+                        width: rect.width(),
+                        height: rect.height(),
+                        origin_delta: Vec2::new(
+                            rect.x0 - start_origin.x,
+                            rect.y0 - start_origin.y,
+                        ),
+                    }),
+                })
+            }
             Drag::MoveAnchors {
                 start_doc,
                 last_doc,
@@ -78,6 +110,7 @@ impl App {
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
                 handle: None,
+                text_box: None,
             }),
             Drag::MoveHandle {
                 object,
@@ -97,6 +130,7 @@ impl App {
                     *side,
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
+                text_box: None,
             }),
             _ => None,
         };
@@ -129,6 +163,18 @@ impl App {
                     self.alt_down,
                 )),
             )),
+            // Type tool rubber-band → the area-text box being dragged out.
+            Drag::DrawText { start_doc, cur_doc } => Some((
+                Tool::Text,
+                convert::rect(shape_rect(
+                    *start_doc,
+                    *cur_doc,
+                    self.shift_down,
+                    self.alt_down,
+                )),
+            )),
+            // (Resizing an area-text frame draws its own handle box via the
+            // text_box drag preview — no rubber-band here.)
             _ => None,
         };
         // Live outline for the Artboard tool (new-artboard rubber-band, or
@@ -275,6 +321,8 @@ impl App {
         let stroke_flyout = self.stroke_flyout_layout(wl);
         let stroke_style_shown = self.stroke_style_repr();
         let panel_text_style = self.active_text_style();
+        let panel_text_align = self.active_text_align();
+        let panel_text_paragraph = self.active_text_paragraph();
         let panel_text_editing = self.text_edit.is_some();
         match role {
             Role::Main => main_view::paint_main(
@@ -328,6 +376,8 @@ impl App {
                 stroke_flyout,
                 self.text_edit.as_ref().map(|t| t.object),
                 panel_text_style,
+                panel_text_align,
+                panel_text_paragraph,
                 panel_text_editing,
                 &self.font_families,
                 &self.layer_query,
@@ -384,6 +434,8 @@ impl App {
                             selected_layer: self.doc.selected_layer,
                             selected_artboard: self.doc.selected_artboard,
                             text_style: panel_text_style.clone(),
+                            text_align: panel_text_align,
+                            text_paragraph: panel_text_paragraph,
                             text_editing: panel_text_editing,
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
