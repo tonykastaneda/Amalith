@@ -11,9 +11,12 @@ use super::{Action, Ctx, ID, PAD};
 
 const BTN: f64 = 26.0;
 const GAP: f64 = 4.0;
-const LABEL: f64 = 14.0;
-const AFTER_LABEL: f64 = 8.0;
-const AFTER_ROW: f64 = 14.0;
+/// Section rhythm, shared by all four blocks so the panel reads as one
+/// system (matches the Transform / Pathfinder panels' spacing feel).
+const LABEL_DROP: f64 = 12.0; // section top → label baseline
+const LABEL_TO_ROW: f64 = 10.0; // label baseline → icon row top
+const ROW_TO_RULE: f64 = 14.0; // icon row bottom → divider
+const AFTER_RULE: f64 = 14.0; // divider → next section top
 
 struct L {
     lab_align: Point,
@@ -26,7 +29,7 @@ struct L {
     space_h: Rect,
     space_v: Rect,
     space_field: Rect,
-    split: Rect,
+    rule_c: Rect,
     lab_to: Point,
     to: [Rect; 3],
     bottom: f64,
@@ -53,38 +56,39 @@ fn layout(body: Rect) -> L {
     let x1 = body.x1 - PAD;
     let mut y = body.y0 + PAD;
 
-    let lab_align = Point::new(x0, y + LABEL);
-    y += LABEL + AFTER_LABEL;
+    // Every section: label, icon row, full-width divider — same cadence.
+    let section_label = |y: &mut f64| {
+        let p = Point::new(x0, *y + LABEL_DROP);
+        *y += LABEL_DROP + LABEL_TO_ROW;
+        p
+    };
+    let section_rule = |y: &mut f64| {
+        *y += BTN + ROW_TO_RULE;
+        let r = Rect::new(x0, *y, x1, *y + 1.0);
+        *y += 1.0 + AFTER_RULE;
+        r
+    };
+
+    let lab_align = section_label(&mut y);
     let align = six(x0, x1, y);
-    y += BTN + AFTER_ROW;
-    let rule_a = Rect::new(x0, y, x1, y + 1.0);
-    y += 12.0;
+    let rule_a = section_rule(&mut y);
 
-    let lab_dist = Point::new(x0, y + LABEL);
-    y += LABEL + AFTER_LABEL;
+    let lab_dist = section_label(&mut y);
     let dist = six(x0, x1, y);
-    y += BTN + AFTER_ROW;
-    let rule_b = Rect::new(x0, y, x1, y + 1.0);
-    y += 12.0;
+    let rule_b = section_rule(&mut y);
 
-    // Bottom: Distribute Spacing | Align To, labels on one row, icons below.
-    let to_w = 3.0 * BTN + 2.0 * GAP;
-    let to_x0 = (x1 - to_w).max(x0 + 2.0 * (BTN + GAP) + 56.0);
-    let split_x = to_x0 - 10.0;
-    let lab_space = Point::new(x0, y + LABEL);
-    let lab_to = Point::new(to_x0, y + LABEL);
-    y += LABEL + AFTER_LABEL;
-    let split = Rect::new(split_x, lab_space.y - 12.0, split_x + 1.0, y + BTN);
+    // Distribute Spacing: the two even-spacing buttons, then a field that
+    // runs to the panel edge like any other full-width control.
+    let lab_space = section_label(&mut y);
     let space_h = Rect::new(x0, y, x0 + BTN, y + BTN);
     let space_v = Rect::new(x0 + BTN + GAP, y, x0 + 2.0 * BTN + GAP, y + BTN);
     let field_x0 = space_v.x1 + 8.0;
-    let space_field = Rect::new(
-        field_x0,
-        y + 2.0,
-        (split_x - 8.0).max(field_x0 + 48.0),
-        y + BTN - 2.0,
-    );
-    let to = group3(to_x0, y);
+    let space_field = Rect::new(field_x0, y + 2.0, x1.max(field_x0 + 48.0), y + BTN - 2.0);
+    let rule_c = section_rule(&mut y);
+
+    // Align To: its own stacked section, left-aligned trio.
+    let lab_to = section_label(&mut y);
+    let to = group3(x0, y);
     y += BTN + PAD;
 
     L {
@@ -98,7 +102,7 @@ fn layout(body: Rect) -> L {
         space_h,
         space_v,
         space_field,
-        split,
+        rule_c,
         lab_to,
         to,
         bottom: y,
@@ -147,7 +151,6 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     }
 
     scene.fill(Fill::NonZero, ID, th.splitter, None, &l.rule_b);
-    scene.fill(Fill::NonZero, ID, th.splitter, None, &l.split);
     text.draw(
         scene,
         "Distribute Spacing:",
@@ -198,6 +201,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         l.space_field.center().y + 4.0,
     );
 
+    scene.fill(Fill::NonZero, ID, th.splitter, None, &l.rule_c);
     text.draw(scene, "Align To:", 11.0, th.text_dim, l.lab_to.x, l.lab_to.y);
     for (r, to) in l.to.iter().zip(TO) {
         let on = ctx.align_to == to;

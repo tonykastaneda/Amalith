@@ -90,6 +90,17 @@ impl App {
                 return;
             }
         }
+        // Over a fixed-layout panel whose content overflows its body →
+        // scroll that panel. (⌘ still zooms, handled below.)
+        if !self.cmd_down && dy.abs() > 0.1 {
+            if let Some((pid, body)) = self.scrollable_panel_at(self.pointer) {
+                let max = crate::panels::max_scroll(pid, body.width(), body.height());
+                let cur = self.panel_scroll_of(pid);
+                self.panel_scroll.insert(pid, (cur - dy).clamp(0.0, max));
+                self.request_main_redraw();
+                return;
+            }
+        }
         if self.cmd_down {
             // ⌘ + scroll → zoom at the cursor. Wins over Transform-field
             // nudge so zoom still works with the pointer over the panel.

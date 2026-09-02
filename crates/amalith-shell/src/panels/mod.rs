@@ -343,6 +343,80 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
     }
 }
 
+/// Full content height of a panel whose layout is a pure function of its
+/// width (independent of document state), so a scroll range is well
+/// defined. `None` for the dynamic list panels (layers / artboards /
+/// swatches / picker), which own their overflow behaviour.
+fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
+    Some(match id.0 {
+        "character" => character::natural_height(),
+        "tools" => tools::natural_height(width),
+        "color" => color::NATURAL_H,
+        "transform" => transform::natural_height(),
+        "pathfinder" => pathfinder::natural_height(),
+        "align" => align::natural_height(),
+        _ => return None,
+    })
+}
+
+/// Largest useful scroll offset for panel `id` in an on-screen body of
+/// `body_h` logical px — `content - body_h`, or `0` if it fits or isn't a
+/// scrollable panel.
+pub fn max_scroll(id: PanelId, width: f64, body_h: f64) -> f64 {
+    fixed_content_height(id, width)
+        .map(|c| (c - body_h).max(0.0))
+        .unwrap_or(0.0)
+}
+
+/// The rect to hand a panel's [`paint`] / [`hit`] / [`tip`], given its
+/// real on-screen `body` and a scroll offset. When the panel's content
+/// overflows `body`, this is `body` slid up by the clamped scroll and
+/// stretched to the full content height (`x0` / `x1` unchanged); callers
+/// keep their clip layer at the real `body`, and test `body.contains`
+/// with the real rect. Returns the clamped scroll actually applied, for
+/// the scrollbar.
+pub fn scrolled_body(id: PanelId, body: Rect, scroll: f64) -> (Rect, f64) {
+    let Some(content) = fixed_content_height(id, body.width()) else {
+        return (body, 0.0);
+    };
+    let overflow = (content - body.height()).max(0.0);
+    if overflow <= 0.0 {
+        return (body, 0.0);
+    }
+    let s = scroll.clamp(0.0, overflow);
+    (
+        Rect::new(body.x0, body.y0 - s, body.x1, body.y0 - s + content),
+        s,
+    )
+}
+
+/// Thin scroll indicator down the right edge of `body`, drawn only when
+/// the panel actually overflows. Call inside the panel's clip layer,
+/// after its `paint`.
+pub fn paint_scrollbar(scene: &mut Scene, body: Rect, id: PanelId, scroll: f64, theme: &Theme) {
+    let Some(content) = fixed_content_height(id, body.width()) else {
+        return;
+    };
+    if content <= body.height() + 0.5 {
+        return;
+    }
+    let track_w = 3.0;
+    let x1 = body.x1 - 2.0;
+    let x0 = x1 - track_w;
+    let frac_vis = (body.height() / content).clamp(0.0, 1.0);
+    let thumb_h = (body.height() * frac_vis).max(24.0);
+    let travel = body.height() - thumb_h;
+    let frac_scr = (scroll / (content - body.height())).clamp(0.0, 1.0);
+    let y0 = body.y0 + travel * frac_scr;
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.splitter,
+        None,
+        &Rect::new(x0, y0, x1, y0 + thumb_h).to_rounded_rect(track_w * 0.5),
+    );
+}
+
 /// Hover text for the control at `local` in panel `id`'s body, if any.
 pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {

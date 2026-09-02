@@ -300,6 +300,7 @@ impl App {
                 self.align_spacing,
                 self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
                 self.key_object,
+                &self.panel_scroll,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -312,7 +313,9 @@ impl App {
                     let area = laid.areas.first();
                     let pid = area.and_then(|a| a.tabs.get(a.active).map(|t| t.panel));
                     if let (Some(area), Some(pid)) = (area, pid) {
-                        let body = area.body;
+                        let clip_body = area.body;
+                        let (body, scroll) =
+                            panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid));
                         let ctx = panels::Ctx {
                             theme: &self.theme,
                             doc: self.doc.editor.document(),
@@ -353,8 +356,15 @@ impl App {
                                 .map(|(s, _)| s.as_str()),
                             key_object: self.key_object,
                         };
-                        self.content.push_clip_layer(Fill::NonZero, ID, &body);
+                        self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
+                        panels::paint_scrollbar(
+                            &mut self.content,
+                            clip_body,
+                            pid,
+                            scroll,
+                            &self.theme,
+                        );
                         self.content.pop_layer();
                     }
                 }
@@ -434,46 +444,52 @@ impl App {
         self.scene.reset();
         self.scene.append(&self.content, Some(Affine::scale(scale)));
 
-        let host = self.hosts.get_mut(&id).unwrap();
-        let device = &self.context.devices[host.surface.dev_id];
-        let surface_texture = match host.surface.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            _ => return,
-        };
-        host.renderer
-            .render_to_texture(
+        {
+            let host = self.hosts.get_mut(&id).unwrap();
+            let device = &self.context.devices[host.surface.dev_id];
+            let surface_texture = match host.surface.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(t)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+                _ => return,
+            };
+            host.renderer
+                .render_to_texture(
+                    &device.device,
+                    &device.queue,
+                    &self.scene,
+                    &host.surface.target_view,
+                    &vello::RenderParams {
+                        base_color: palette::css::BLACK,
+                        width,
+                        height,
+                        antialiasing_method: AaConfig::Area,
+                    },
+                )
+                .expect("render");
+            let mut encoder =
+                device
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("surface blit"),
+                    });
+            host.surface.blitter.copy(
                 &device.device,
-                &device.queue,
-                &self.scene,
+                &mut encoder,
                 &host.surface.target_view,
-                &vello::RenderParams {
-                    base_color: palette::css::BLACK,
-                    width,
-                    height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .expect("render");
-        let mut encoder = device
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("surface blit"),
-            });
-        host.surface.blitter.copy(
-            &device.device,
-            &mut encoder,
-            &host.surface.target_view,
-            &surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default()),
-        );
-        device.queue.submit([encoder.finish()]);
-        surface_texture.present();
+                &surface_texture
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default()),
+            );
+            device.queue.submit([encoder.finish()]);
+            surface_texture.present();
+        }
 
-        // Keep the window pumping frames. Cheap under AutoVsync and it
-        // sidesteps a class of "first RedrawRequested was dropped" bugs
-        // where the window opens blank until an event happens to arrive.
-        host.window.request_redraw();
+        // A frame reached the screen. Rendering is on demand from here —
+        // `about_to_wait` no longer pumps a redraw every loop — so record
+        // the two bits it needs to decide whether to wake us again: the
+        // first frame is now guaranteed, and the caret-blink phase this
+        // frame showed.
+        self.first_frame_done = true;
+        self.last_caret_drawn = self.text_blink_on();
     }
 }

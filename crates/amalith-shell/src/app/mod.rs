@@ -22,7 +22,7 @@ mod render;
 pub(crate) use std::collections::HashMap;
 pub(crate) use std::num::NonZeroUsize;
 pub(crate) use std::sync::Arc;
-pub(crate) use std::time::Instant;
+pub(crate) use std::time::{Duration, Instant};
 
 pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
 pub(crate) use amalith_core::{ArtboardId, AssetId, Document, LayerId, ObjectId, StrokeStyle};
@@ -48,7 +48,7 @@ pub(crate) use vello::{AaConfig, Renderer, RendererOptions, Scene};
 pub(crate) use winit::application::ApplicationHandler;
 pub(crate) use winit::dpi::{LogicalPosition, LogicalSize};
 pub(crate) use winit::event::{ElementState, MouseButton, WindowEvent};
-pub(crate) use winit::event_loop::{ActiveEventLoop, EventLoop};
+pub(crate) use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 pub(crate) use winit::keyboard::{KeyCode, PhysicalKey};
 pub(crate) use winit::window::{Window, WindowId};
 
@@ -284,6 +284,10 @@ struct Tooltip {
     text: String,
     anchor: Point,
     since: Instant,
+    /// Set once its reveal frame (350ms after `since`) has been drawn, so
+    /// `about_to_wait` asks for that one frame and then leaves it alone
+    /// instead of repainting on every housekeeping wake.
+    shown: bool,
 }
 
 /// An open Character-panel dropdown (font family / style / size).
@@ -593,6 +597,20 @@ struct App {
     /// Which of our windows currently hold OS focus. Non-empty ⇒ Amalith
     /// is the active app, and floating panels stay above the main window.
     focused: std::collections::HashSet<WindowId>,
+    /// Vertical scroll offset per panel, for the fixed-layout panels
+    /// (align, transform, pathfinder, character, color, tools) whose
+    /// content can be taller than a short docked / floating body. Stored
+    /// loosely; `panels::scrolled_body` clamps to the live range on read.
+    panel_scroll: std::collections::HashMap<PanelId, f64>,
+    /// Set once the first frame has actually presented. Until then
+    /// `about_to_wait` keeps nudging a redraw (and holds `ControlFlow::
+    /// Poll`) so a dropped initial `RedrawRequested` can't leave the
+    /// window blank. After it, rendering is strictly on demand.
+    first_frame_done: bool,
+    /// Caret blink phase as of the last painted frame. `about_to_wait`
+    /// asks for a new frame only when this would flip — edge-triggered, so
+    /// an open text edit costs ~2 repaints/sec, not a continuous loop.
+    last_caret_drawn: bool,
     /// The native menu bar (macOS NSMenu / Windows HMENU), once the app has
     /// resumed.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -677,6 +695,9 @@ impl App {
             about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
+            panel_scroll: std::collections::HashMap::new(),
+            first_frame_done: false,
+            last_caret_drawn: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_menu: None,
         }
@@ -693,10 +714,61 @@ impl App {
             .map(|h| &h.window)
     }
 
+    /// Mark every open window for one repaint. Rendering is on demand — a
+    /// frame is produced only after a call like this, or a `WaitUntil` wake
+    /// in `about_to_wait` for one of the few things that animate without an
+    /// input event. Floating panel windows mirror the main document's
+    /// state, so they repaint alongside it; in the common case (nothing
+    /// torn off) `self.hosts` is just the main window.
     fn request_main_redraw(&self) {
-        if let Some(w) = self.main_window() {
-            w.request_redraw();
+        for host in self.hosts.values() {
+            host.window.request_redraw();
         }
+    }
+
+    /// Stored scroll offset for a panel (0 if none). Clamped to the live
+    /// range by `panels::scrolled_body` wherever it's consumed.
+    fn panel_scroll_of(&self, id: PanelId) -> f64 {
+        self.panel_scroll.get(&id).copied().unwrap_or(0.0)
+    }
+
+    /// The scrollable panel under `p` (rail or floating) and its real body
+    /// rect, if that panel's content overflows its body. Used by the wheel
+    /// handler to route scroll into the panel instead of the canvas.
+    fn scrollable_panel_at(&mut self, p: Point) -> Option<(PanelId, Rect)> {
+        let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
+            [RailSide::Left, RailSide::Right]
+                .iter()
+                .flat_map(|&side| {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
+                        return Vec::new();
+                    }
+                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                })
+                .collect()
+        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
+            self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })
+        }) {
+            self.floating_layout(fid).areas
+        } else {
+            return None;
+        };
+        for area in &areas {
+            if area.body.contains(p) {
+                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                    if panels::max_scroll(pid, area.body.width(), area.body.height()) > 0.0 {
+                        return Some((pid, area.body));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Move the live (active) document state off `App` into a [`Doc`],
@@ -3112,8 +3184,9 @@ impl App {
             }
             if area.body.contains(self.pointer) {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                    let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
                     let ctx = self.tip_ctx();
-                    return panels::tip(pid, area.body, self.pointer, &ctx);
+                    return panels::tip(pid, pbody, self.pointer, &ctx);
                 }
             }
         }
@@ -3130,6 +3203,7 @@ impl App {
                     text: n.clone(),
                     anchor: self.pointer,
                     since: Instant::now(),
+                    shown: false,
                 });
                 self.request_main_redraw();
             }
@@ -3541,13 +3615,13 @@ impl App {
 }
 
 impl ApplicationHandler for App {
-    /// Fires every loop iteration. Requesting redraws here guarantees the
-    /// first frame paints even if the post-`resumed` `request_redraw` was
-    /// dropped; once running it just tops up the vsync-throttled loop.
+    /// Fires once per loop iteration, right before the loop would sleep.
+    /// Does the housekeeping that has no event behind it (native-menu
+    /// clicks, macOS drops, finished image decodes, view-fit), then sets
+    /// `ControlFlow`: `Wait` when the app is idle, `WaitUntil` when
+    /// something is mid-animation, `Poll` only until the first frame lands.
+    /// Rendering itself is on demand — see [`App::request_main_redraw`].
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Only the Windows path calls `event_loop.exit()` from here.
-        #[cfg(not(target_os = "windows"))]
-        let _ = event_loop;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let actions = self
@@ -3589,9 +3663,75 @@ impl ApplicationHandler for App {
                 self.request_main_redraw();
             }
         }
-        for host in self.hosts.values() {
-            host.window.request_redraw();
+
+        // --- Frame scheduling --------------------------------------------
+        //
+        // Until the first frame has presented, keep pumping: a dropped
+        // initial `RedrawRequested` otherwise leaves the window blank.
+        if !self.first_frame_done {
+            for host in self.hosts.values() {
+                host.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
         }
+
+        // Soonest moment we need to wake for an animation, if any. `merge`
+        // keeps the nearest deadline.
+        let mut wake: Option<Duration> = None;
+        fn merge(cur: Option<Duration>, d: Duration) -> Option<Duration> {
+            Some(cur.map_or(d, |c| c.min(d)))
+        }
+
+        // Caret blink while a text object holds the caret. Toggles every
+        // 530ms; ask for a frame only when the phase actually flips, then
+        // sleep until the next flip.
+        if self.text_edit.is_some() {
+            if self.text_blink_on() != self.last_caret_drawn {
+                self.request_main_redraw();
+            }
+            let phase = self.text_blink.elapsed().as_millis() % 1060;
+            let to_flip = if phase < 530 { 530 - phase } else { 1060 - phase };
+            wake = merge(wake, Duration::from_millis(to_flip as u64 + 8));
+        }
+
+        // Hover tooltip: revealed 350ms after it is set, with no event in
+        // between. Draw that one reveal frame, then leave it be.
+        let reveal = Duration::from_millis(350);
+        let reveal_now = matches!(&self.tooltip, Some(tt)
+            if !tt.shown && self.pointer_win.is_some() && tt.since.elapsed() >= reveal);
+        if reveal_now {
+            if let Some(tt) = &mut self.tooltip {
+                tt.shown = true;
+            }
+            self.request_main_redraw();
+        } else if let Some(tt) = &self.tooltip {
+            if !tt.shown && self.pointer_win.is_some() {
+                wake = merge(wake, reveal.saturating_sub(tt.since.elapsed()) + Duration::from_millis(8));
+            }
+        }
+
+        // A held Shape-slot press opens its flyout after 300ms (handled
+        // above); wake in time to notice.
+        if let Some((t, _)) = self.shape_press {
+            if self.shape_flyout.is_none() {
+                wake = merge(
+                    wake,
+                    Duration::from_millis(300).saturating_sub(t.elapsed()) + Duration::from_millis(8),
+                );
+            }
+        }
+
+        // A finished background image decode has no wake channel of its
+        // own — poll while jobs are outstanding, then fall back to sleep.
+        if !self.lod_inflight.is_empty() {
+            wake = merge(wake, Duration::from_millis(30));
+        }
+
+        event_loop.set_control_flow(match wake {
+            Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
+            None => ControlFlow::Wait,
+        });
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {

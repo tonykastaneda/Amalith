@@ -618,7 +618,8 @@ impl App {
             if pid.0 != "transform" {
                 continue;
             }
-            return panels::transform::field_at(area.body, self.pointer);
+            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
+            return panels::transform::field_at(pbody, self.pointer);
         }
         None
     }
@@ -729,7 +730,8 @@ impl App {
             if pid.0 != "align" {
                 continue;
             }
-            return panels::align::spacing_field_at(area.body, self.pointer);
+            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
+            return panels::align::spacing_field_at(pbody, self.pointer);
         }
         false
     }

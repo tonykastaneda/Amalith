@@ -351,6 +351,12 @@ impl App {
                         }
                         if area.body.contains(self.pointer) {
                             if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
+                                let pbody = panels::scrolled_body(
+                                    pid,
+                                    area.body,
+                                    self.panel_scroll_of(pid),
+                                )
+                                .0;
                                 let rep = self.representative();
                                 let action = {
                                     let ctx = panels::Ctx {
@@ -393,14 +399,14 @@ impl App {
                                             .map(|(s, _)| s.as_str()),
                                         key_object: self.key_object,
                                     };
-                                    panels::hit(pid, area.body, self.pointer, &ctx)
+                                    panels::hit(pid, pbody, self.pointer, &ctx)
                                 };
                                 if action == panels::Action::ShapeSlot {
                                     // Start a press: a hold opens the
                                     // flyout, a quick release re-picks
                                     // the last shape tool.
                                     let anchor =
-                                        panels::tools::shape_slot_rect(area.body);
+                                        panels::tools::shape_slot_rect(pbody);
                                     self.shape_press = Some((Instant::now(), anchor));
                                 } else {
                                     let spawn =
@@ -843,7 +849,8 @@ impl App {
                     if area.body.contains(self.pointer) {
                         if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
                             let rep = self.representative();
-                            let body = area.body;
+                            let body =
+                                panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
                             let action = {
                                 let ctx = panels::Ctx {
                                     theme: &self.theme,

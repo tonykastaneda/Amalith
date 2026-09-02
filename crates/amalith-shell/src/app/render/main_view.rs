@@ -65,6 +65,7 @@ pub(in crate::app) fn paint_main(
     align_spacing: Option<f64>,
     align_spacing_edit: Option<&str>,
     key_object: Option<ObjectId>,
+    panel_scroll: &std::collections::HashMap<PanelId, f64>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -205,11 +206,17 @@ pub(in crate::app) fn paint_main(
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                    // Clip to the body so a panel dragged shorter than its
-                    // content spills nothing past the splitter — matches
-                    // the floating-panel path.
+                    // Clip to the real body so a panel shorter than its
+                    // content spills nothing past the splitter; the panel
+                    // itself is drawn into a body slid up by its scroll.
+                    let (pbody, scroll) = panels::scrolled_body(
+                        pid,
+                        area.body,
+                        panel_scroll.get(&pid).copied().unwrap_or(0.0),
+                    );
                     scene.push_clip_layer(Fill::NonZero, ID, &area.body);
-                    panels::paint(scene, text, pid, area.body, &ctx);
+                    panels::paint(scene, text, pid, pbody, &ctx);
+                    panels::paint_scrollbar(scene, area.body, pid, scroll, theme);
                     scene.pop_layer();
                 }
             }
