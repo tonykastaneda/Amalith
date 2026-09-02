@@ -9,11 +9,15 @@ description = "Amalith's custom UI shell: winit + wgpu + vello. Windows, input, 
 name = "amalith_shell"
 path = "src/lib.rs"
 
-# Binary name is the process name macOS shows in the Dock tooltip and the
-# bold app menu (there's no .app bundle to override it yet).
+# Binary name: the .app / .exe / Dock name. See scripts/package.sh.
 [[bin]]
 name = "Amalith"
 path = "src/main.rs"
+
+# build.rs embeds the Windows app icon into Amalith.exe (only acts when the
+# *target* is Windows; harmless everywhere else).
+[build-dependencies]
+embed-resource = "3"
 
 [dependencies]
 vello = "0.10"

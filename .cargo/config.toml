@@ -1,0 +1,4 @@
+# Windows cross build (cargo xwin): link the C runtime statically so
+# Amalith.exe runs with no "install the VC++ redistributable" prompt.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
