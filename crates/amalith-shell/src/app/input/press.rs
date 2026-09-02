@@ -89,6 +89,16 @@ impl App {
                         p.working.home_on_last_close = !p.working.home_on_last_close;
                     }
                 }
+                prefs::Hit::ToggleCullOutline => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.show_cull_outline = !p.working.show_cull_outline;
+                    }
+                }
+                prefs::Hit::SetCullInset(v) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.cull_inset = v;
+                    }
+                }
                 prefs::Hit::None => {}
             }
             self.request_main_redraw();

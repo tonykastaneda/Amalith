@@ -320,6 +320,8 @@ impl App {
                 self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
                 self.key_object,
                 &self.panel_scroll,
+                self.settings.cull_inset,
+                self.settings.show_cull_outline,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

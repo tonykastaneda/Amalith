@@ -2490,7 +2490,10 @@ impl App {
             .view
             .to_screen()
             .inverse()
-            .transform_rect_bbox(canvas::cull_rect(self.canvas_viewport()));
+            .transform_rect_bbox(canvas::cull_rect(
+                self.canvas_viewport(),
+                self.settings.cull_inset,
+            ));
         let doc = self.doc.editor.document();
         let mut out = std::collections::HashSet::new();
         fn walk(

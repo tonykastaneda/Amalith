@@ -141,14 +141,15 @@ impl DragPreview<'_> {
     }
 }
 
-/// Inset from the canvas viewport where objects start to cull. Drawn as a
-/// dashed line so the threshold is visible while we tune it.
+/// Default inset from the canvas viewport where objects start to cull.
+/// The live value is `Settings::cull_inset` (Preferences ▸ Debug).
 pub const CULL_INSET: f64 = 48.0;
 
 /// Screen-space rect used for object / image culling, inset from `viewport`
-/// so the boundary sits on the canvas instead of under the rails.
-pub fn cull_rect(viewport: Rect) -> Rect {
-    let i = CULL_INSET;
+/// by `inset` logical px so the boundary sits on the canvas, not under the
+/// rails.
+pub fn cull_rect(viewport: Rect, inset: f64) -> Rect {
+    let i = inset.max(0.0);
     Rect::new(
         viewport.x0 + i,
         viewport.y0 + i,
@@ -180,6 +181,8 @@ pub fn paint(
     editing_text: Option<ObjectId>,
     images: &HashMap<AssetId, ImageLods>,
     key_object: Option<ObjectId>,
+    cull_inset: f64,
+    show_cull: bool,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -196,7 +199,7 @@ pub fn paint(
     );
 
     let vt = view.to_screen();
-    let cull = cull_rect(viewport);
+    let cull = cull_rect(viewport, cull_inset);
 
     for (i, ab) in doc.artboards().iter().enumerate() {
         let r = vt.transform_rect_bbox(convert::rect(ab.rect));
@@ -598,23 +601,26 @@ pub fn paint(
         }
     }
 
-    // Debug: the dashed line is the cull threshold. Objects whose bounds
-    // fully leave this rect are not drawn (and rasters are not decoded).
-    scene.stroke(
-        &Stroke::new(1.5).with_dashes(0.0, [8.0, 6.0]),
-        Affine::IDENTITY,
-        Color::from_rgb8(0xff, 0x3b, 0x8a),
-        None,
-        &cull,
-    );
-    text.draw(
-        scene,
-        "cull",
-        11.0,
-        Color::from_rgb8(0xff, 0x3b, 0x8a),
-        cull.x0 + 6.0,
-        cull.y0 + 14.0,
-    );
+    // Debug (Preferences ▸ Debug ▸ Show Cull Outline): the dashed line is
+    // the cull threshold — objects whose bounds fully leave it are not
+    // drawn, and their rasters are not decoded.
+    if show_cull {
+        scene.stroke(
+            &Stroke::new(1.5).with_dashes(0.0, [8.0, 6.0]),
+            Affine::IDENTITY,
+            Color::from_rgb8(0xff, 0x3b, 0x8a),
+            None,
+            &cull,
+        );
+        text.draw(
+            scene,
+            "cull",
+            11.0,
+            Color::from_rgb8(0xff, 0x3b, 0x8a),
+            cull.x0 + 6.0,
+            cull.y0 + 14.0,
+        );
+    }
 
     scene.pop_layer();
 }

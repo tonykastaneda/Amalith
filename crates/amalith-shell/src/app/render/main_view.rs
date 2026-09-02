@@ -66,6 +66,8 @@ pub(in crate::app) fn paint_main(
     align_spacing_edit: Option<&str>,
     key_object: Option<ObjectId>,
     panel_scroll: &std::collections::HashMap<PanelId, f64>,
+    cull_inset: f64,
+    show_cull: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -105,6 +107,8 @@ pub(in crate::app) fn paint_main(
         editing_text,
         images,
         key_object,
+        cull_inset,
+        show_cull,
     );
 
     if let Some(m) = marquee {

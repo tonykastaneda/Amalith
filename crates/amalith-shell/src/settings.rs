@@ -60,6 +60,12 @@ pub fn load() -> Settings {
             }
             "show_tooltips" => s.show_tooltips = v == "true",
             "home_on_last_close" => s.home_on_last_close = v == "true",
+            "show_cull_outline" => s.show_cull_outline = v == "true",
+            "cull_inset" => {
+                if let Ok(n) = v.parse::<f64>() {
+                    s.cull_inset = n.clamp(0.0, 1000.0);
+                }
+            }
             "accent" => {
                 if let Some(rgb) = parse_hex(v) {
                     s.accent = rgb;
@@ -97,8 +103,16 @@ pub fn save(s: &Settings) {
         return;
     };
     let mut body = format!(
-        "nudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\naccent = {:02x}{:02x}{:02x}\n",
-        s.nudge_step, s.show_tooltips, s.home_on_last_close, s.accent[0], s.accent[1], s.accent[2],
+        "nudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\naccent = {:02x}{:02x}{:02x}\n\
+         show_cull_outline = {}\ncull_inset = {}\n",
+        s.nudge_step,
+        s.show_tooltips,
+        s.home_on_last_close,
+        s.accent[0],
+        s.accent[1],
+        s.accent[2],
+        s.show_cull_outline,
+        s.cull_inset,
     );
     for (i, tool) in Tool::ALL.iter().enumerate() {
         let v = s.tool_keys[i].map_or_else(String::new, |c| c.to_string());

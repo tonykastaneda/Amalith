@@ -185,6 +185,11 @@ pub struct Settings {
     pub tool_keys: [Option<KeyChord>; Tool::ALL.len()],
     /// Command shortcut per [`PrefAction::ALL`] position.
     pub action_keys: [Option<KeyChord>; PrefAction::ALL.len()],
+    /// Debug: draw the dashed cull-boundary outline on the canvas.
+    pub show_cull_outline: bool,
+    /// Debug: inset (logical px) from the viewport where off-screen
+    /// objects stop being drawn / decoded. Larger = cull further out.
+    pub cull_inset: f64,
 }
 
 impl Settings {
@@ -205,6 +210,8 @@ impl Default for Settings {
             accent: ACCENTS[0].1,
             tool_keys: Settings::default_tool_keys(),
             action_keys: Settings::default_action_keys(),
+            show_cull_outline: false,
+            cull_inset: crate::canvas::CULL_INSET,
         }
     }
 }
@@ -219,7 +226,7 @@ pub const ACCENTS: [(&str, [u8; 3]); 6] = [
     ("Graphite", [0x9a, 0x9a, 0x9a]),
 ];
 
-pub const CATEGORIES: [&str; 2] = ["General", "Keyboard"];
+pub const CATEGORIES: [&str; 3] = ["General", "Keyboard", "Debug"];
 
 const W: f64 = 660.0;
 const H: f64 = 440.0;
@@ -236,6 +243,9 @@ pub struct Prefs {
     inc_down: Rect,
     check_tips: Rect,
     check_home: Rect,
+    check_cull: Rect,
+    cull_up: Rect,
+    cull_down: Rect,
     accent_swatches: Vec<(Rect, [u8; 3])>,
     /// Keyboard page: (row rect, which binding it edits).
     bind_rows: Vec<(Rect, BindTarget)>,
@@ -253,6 +263,8 @@ pub enum Hit {
     IncStep(f64),
     ToggleTips,
     ToggleHome,
+    ToggleCullOutline,
+    SetCullInset(f64),
     SetAccent([u8; 3]),
     /// Keyboard page: start capturing a key for this binding.
     StartRecording(BindTarget),
@@ -273,6 +285,9 @@ impl Prefs {
             inc_down: Rect::ZERO,
             check_tips: Rect::ZERO,
             check_home: Rect::ZERO,
+            check_cull: Rect::ZERO,
+            cull_up: Rect::ZERO,
+            cull_down: Rect::ZERO,
             accent_swatches: Vec::new(),
             bind_rows: Vec::new(),
             recording: None,
@@ -306,6 +321,15 @@ impl Prefs {
         }
         if self.check_home.contains(p) {
             return Hit::ToggleHome;
+        }
+        if self.check_cull.contains(p) {
+            return Hit::ToggleCullOutline;
+        }
+        if self.cull_up.contains(p) {
+            return Hit::SetCullInset((self.working.cull_inset + 8.0).min(1000.0));
+        }
+        if self.cull_down.contains(p) {
+            return Hit::SetCullInset((self.working.cull_inset - 8.0).max(0.0));
         }
         for (r, rgb) in &self.accent_swatches {
             if r.contains(p) {
@@ -392,10 +416,21 @@ impl Prefs {
         self.inc_down = Rect::ZERO;
         self.check_tips = Rect::ZERO;
         self.check_home = Rect::ZERO;
+        self.check_cull = Rect::ZERO;
+        self.cull_up = Rect::ZERO;
+        self.cull_down = Rect::ZERO;
         self.reset_keys = Rect::ZERO;
 
         if self.category == 1 {
             self.paint_keyboard(scene, tcx, theme, px, oy);
+            let by = oy + H - 40.0;
+            self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
+            self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+            return;
+        }
+
+        if self.category == 2 {
+            self.paint_debug(scene, tcx, theme, px, oy);
             let by = oy + H - 40.0;
             self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
             self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
@@ -533,6 +568,75 @@ impl Prefs {
 
         cy += 8.0;
         self.reset_keys = button(scene, tcx, theme, px, cy, "Reset", false);
+    }
+
+    /// The Debug page — cull-outline visibility and distance.
+    fn paint_debug(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        theme: &Theme,
+        px: f64,
+        oy: f64,
+    ) {
+        let mut cy = oy + 60.0;
+        tcx.draw(scene, "Debug", 13.0, theme.text, px, cy);
+        cy += 30.0;
+
+        self.check_cull = checkbox(
+            scene,
+            tcx,
+            theme,
+            px,
+            cy,
+            "Show Cull Outline",
+            self.working.show_cull_outline,
+        );
+        cy += 36.0;
+
+        tcx.draw(scene, "Cull Distance", 12.0, theme.text_dim, px, cy + 14.0);
+        let fx = px + 170.0;
+        let field = Rect::new(fx, cy, fx + 90.0, cy + 22.0);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(4.0));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(4.0));
+        tcx.draw(
+            scene,
+            &format!("{} px", trim(self.working.cull_inset)),
+            12.0,
+            theme.text,
+            fx + 8.0,
+            cy + 15.0,
+        );
+        self.cull_up = Rect::new(field.x1 - 16.0, cy + 1.0, field.x1, cy + 11.0);
+        self.cull_down = Rect::new(field.x1 - 16.0, cy + 11.0, field.x1, cy + 21.0);
+        tri(scene, self.cull_up.center(), true, theme.text_dim);
+        tri(scene, self.cull_down.center(), false, theme.text_dim);
+        cy += 42.0;
+
+        tcx.draw(
+            scene,
+            "How far past the visible canvas an object is kept before it",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 4.0,
+        );
+        tcx.draw(
+            scene,
+            "stops drawing. Larger culls further out; the dashed magenta",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 20.0,
+        );
+        tcx.draw(
+            scene,
+            "line marks the threshold when Show Cull Outline is on.",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 36.0,
+        );
     }
 }
 
