@@ -89,6 +89,11 @@ impl App {
                         p.working.home_on_last_close = !p.working.home_on_last_close;
                     }
                 }
+                prefs::Hit::ToggleFps => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.show_fps = !p.working.show_fps;
+                    }
+                }
                 prefs::Hit::ToggleCullOutline => {
                     if let Some(p) = &mut self.prefs {
                         p.working.show_cull_outline = !p.working.show_cull_outline;

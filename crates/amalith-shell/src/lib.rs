@@ -47,6 +47,7 @@ pub mod panels;
 pub mod picker;
 pub mod prefs;
 pub mod recent;
+pub mod rulers;
 pub mod sample;
 pub mod select;
 pub mod settings;

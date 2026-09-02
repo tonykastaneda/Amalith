@@ -38,7 +38,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
-    recent, sample, select, settings, stroke_panel, textedit, Theme,
+    recent, rulers, sample, select, settings, stroke_panel, textedit, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -610,6 +610,16 @@ struct App {
     /// content can be taller than a short docked / floating body. Stored
     /// loosely; `panels::scrolled_body` clamps to the live range on read.
     panel_scroll: std::collections::HashMap<PanelId, f64>,
+    /// Canvas rulers along the top / left edges (⌘R). Origin is the
+    /// document origin; when on, `canvas_viewport` insets by `rulers::THICK`.
+    rulers: bool,
+    /// Cached static ruler layer — rebuilt only when the view or canvas
+    /// region changes. Key: `(pan.x, pan.y, zoom, region)`.
+    ruler_cache: Option<(f64, f64, f64, Rect, Scene)>,
+    /// Wall-clock instant of the previous `redraw`, and a smoothed
+    /// frames-per-second estimate for the debug counter.
+    last_frame: Option<Instant>,
+    fps: f32,
     /// Set once the first frame has actually presented. Until then
     /// `about_to_wait` keeps nudging a redraw (and holds `ControlFlow::
     /// Poll`) so a dropped initial `RedrawRequested` can't leave the
@@ -704,6 +714,10 @@ impl App {
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
             panel_scroll: std::collections::HashMap::new(),
+            rulers: false,
+            ruler_cache: None,
+            last_frame: None,
+            fps: 0.0,
             first_frame_done: false,
             last_caret_drawn: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -1915,11 +1929,15 @@ impl App {
         };
         let mut editor = Editor::new(doc);
         let gap = 48.0;
+        // Centre the whole row on the document origin, then tile right.
+        let row_w = n_ab as f64 * wpx + (n_ab.saturating_sub(1)) as f64 * gap;
+        let x0 = -row_w / 2.0;
+        let y0 = -hpx / 2.0;
         for i in 0..n_ab {
-            let x = i as f64 * (wpx + gap);
+            let x = x0 + i as f64 * (wpx + gap);
             let _ = editor.execute(Command::CreateArtboard {
                 name: format!("Artboard {}", i + 1),
-                rect: amalith_core::Rect::new(x, 0.0, x + wpx, hpx),
+                rect: amalith_core::Rect::new(x, y0, x + wpx, y0 + hpx),
                 index: None,
             });
         }
@@ -3112,11 +3130,20 @@ impl App {
             .transform_rect_bbox(Rect::new(left, CHROME_TOP, right, h))
     }
 
-    /// The canvas viewport in screen (logical) px.
-    fn canvas_viewport(&self) -> Rect {
+    /// The full canvas region between the rails, below the chrome —
+    /// before any ruler inset. The ruler strips live in its top / left.
+    fn canvas_region(&self) -> Rect {
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, right) = self.canvas_x_span();
         Rect::new(left, CHROME_TOP, right, h)
+    }
+
+    /// The canvas viewport in screen (logical) px — `canvas_region` inset
+    /// by the ruler strips when they're on.
+    fn canvas_viewport(&self) -> Rect {
+        let r = self.canvas_region();
+        let i = if self.rulers { rulers::THICK } else { 0.0 };
+        Rect::new(r.x0 + i, r.y0 + i, r.x1, r.y1)
     }
 
     /// Fit the view so the document's artboards are centred in the canvas.

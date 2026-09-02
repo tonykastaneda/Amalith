@@ -191,7 +191,7 @@ impl App {
                         let (w, h) = (r.width(), r.height());
                         amalith_core::Rect::new(r.x1 + 40.0, r.y0, r.x1 + 40.0 + w, r.y0 + h)
                     })
-                    .unwrap_or_else(|| amalith_core::Rect::new(0.0, 0.0, 1200.0, 800.0));
+                    .unwrap_or_else(|| amalith_core::Rect::new(-600.0, -400.0, 600.0, 400.0));
                 if let Ok(CommandOutcome::Artboard(id)) = self.doc.editor.execute(Command::CreateArtboard {
                     name: format!("Artboard {n}"),
                     rect,

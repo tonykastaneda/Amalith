@@ -11,7 +11,9 @@ pub fn document() -> Document {
         Artboard::new(
             ArtboardId::new(),
             "Artboard 1",
-            Rect::new(0.0, 0.0, 1280.0, 800.0),
+            // Centred on the document origin — the ruler origin sits at
+            // the artboard's centre.
+            Rect::new(-640.0, -400.0, 640.0, 400.0),
         ),
         0,
     );

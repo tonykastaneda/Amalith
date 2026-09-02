@@ -9,6 +9,25 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn redraw(&mut self, id: WindowId) {
+        // Frame-rate estimate: wall-clock between consecutive redraws.
+        // Meaningful only while something is animating (pan / drag) —
+        // rendering is on demand, so it freezes at the last burst's rate
+        // when idle. A big gap (idle → resume) reseeds rather than
+        // averaging in a huge dt.
+        let now = Instant::now();
+        if let Some(prev) = self.last_frame {
+            let dt = now.duration_since(prev).as_secs_f32();
+            if dt > 1e-4 {
+                let inst = 1.0 / dt;
+                self.fps = if self.fps <= 0.0 || dt > 0.4 {
+                    inst
+                } else {
+                    self.fps * 0.9 + inst * 0.1
+                };
+            }
+        }
+        self.last_frame = Some(now);
+
         self.warm_images();
         let Some(host) = self.hosts.get_mut(&id) else {
             return;
@@ -322,6 +341,7 @@ impl App {
                 &self.panel_scroll,
                 self.settings.cull_inset,
                 self.settings.show_cull_outline,
+                self.rulers,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -392,6 +412,9 @@ impl App {
             }
         }
         if matches!(role, Role::Main) {
+            if self.rulers {
+                self.paint_rulers();
+            }
             // Live text edit — drawn over the canvas, clipped to the viewport.
             if let Some(obj) = self.text_edit.as_ref().map(|t| t.object) {
                 let vp = self.canvas_viewport();
@@ -462,6 +485,28 @@ impl App {
                 );
             }
         }
+        // FPS counter (Preferences ▸ Debug ▸ Show FPS Counter) — bottom
+        // centre, over everything.
+        if matches!(role, Role::Main) && self.settings.show_fps {
+            let s = format!("{:.0} fps", self.fps.max(0.0));
+            let tw = self.text.measure(&s, 11.0);
+            let pill = Rect::from_center_size(Point::new(wl * 0.5, hl - 16.0), (tw + 20.0, 18.0));
+            self.content.fill(
+                Fill::NonZero,
+                ID,
+                Color::from_rgba8(0, 0, 0, 150),
+                None,
+                &pill.to_rounded_rect(4.0),
+            );
+            self.text.draw(
+                &mut self.content,
+                &s,
+                11.0,
+                Color::from_rgb8(0x66, 0xff, 0x99),
+                pill.x0 + 10.0,
+                pill.center().y + 4.0,
+            );
+        }
         self.scene.reset();
         self.scene.append(&self.content, Some(Affine::scale(scale)));
 
@@ -512,5 +557,28 @@ impl App {
         // frame showed.
         self.first_frame_done = true;
         self.last_caret_drawn = self.text_blink_on();
+    }
+
+    /// Append the canvas rulers to `self.content`. The static layer
+    /// (strips, ticks, labels — the parley-heavy part) is cached and only
+    /// rebuilt when the view or canvas region changes; the pointer marker
+    /// is redrawn every frame.
+    fn paint_rulers(&mut self) {
+        let region = self.canvas_region();
+        let v = self.doc.view;
+        let key = (v.pan.x, v.pan.y, v.zoom, region);
+        let fresh = self
+            .ruler_cache
+            .as_ref()
+            .is_some_and(|(px, py, z, r, _)| (*px, *py, *z, *r) == key);
+        if !fresh {
+            let mut layer = Scene::new();
+            rulers::build(&mut layer, &mut self.text, &self.theme, region, &v);
+            self.ruler_cache = Some((v.pan.x, v.pan.y, v.zoom, region, layer));
+        }
+        if let Some((_, _, _, _, layer)) = &self.ruler_cache {
+            self.content.append(layer, None);
+        }
+        rulers::marker(&mut self.content, &self.theme, region, self.pointer);
     }
 }

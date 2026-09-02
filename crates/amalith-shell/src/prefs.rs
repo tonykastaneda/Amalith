@@ -185,6 +185,8 @@ pub struct Settings {
     pub tool_keys: [Option<KeyChord>; Tool::ALL.len()],
     /// Command shortcut per [`PrefAction::ALL`] position.
     pub action_keys: [Option<KeyChord>; PrefAction::ALL.len()],
+    /// Debug: show the bottom-centre FPS counter.
+    pub show_fps: bool,
     /// Debug: draw the dashed cull-boundary outline on the canvas.
     pub show_cull_outline: bool,
     /// Debug: inset (logical px) from the viewport where off-screen
@@ -210,6 +212,7 @@ impl Default for Settings {
             accent: ACCENTS[0].1,
             tool_keys: Settings::default_tool_keys(),
             action_keys: Settings::default_action_keys(),
+            show_fps: true,
             show_cull_outline: false,
             cull_inset: crate::canvas::CULL_INSET,
         }
@@ -243,6 +246,7 @@ pub struct Prefs {
     inc_down: Rect,
     check_tips: Rect,
     check_home: Rect,
+    check_fps: Rect,
     check_cull: Rect,
     cull_up: Rect,
     cull_down: Rect,
@@ -263,6 +267,7 @@ pub enum Hit {
     IncStep(f64),
     ToggleTips,
     ToggleHome,
+    ToggleFps,
     ToggleCullOutline,
     SetCullInset(f64),
     SetAccent([u8; 3]),
@@ -285,6 +290,7 @@ impl Prefs {
             inc_down: Rect::ZERO,
             check_tips: Rect::ZERO,
             check_home: Rect::ZERO,
+            check_fps: Rect::ZERO,
             check_cull: Rect::ZERO,
             cull_up: Rect::ZERO,
             cull_down: Rect::ZERO,
@@ -321,6 +327,9 @@ impl Prefs {
         }
         if self.check_home.contains(p) {
             return Hit::ToggleHome;
+        }
+        if self.check_fps.contains(p) {
+            return Hit::ToggleFps;
         }
         if self.check_cull.contains(p) {
             return Hit::ToggleCullOutline;
@@ -416,6 +425,7 @@ impl Prefs {
         self.inc_down = Rect::ZERO;
         self.check_tips = Rect::ZERO;
         self.check_home = Rect::ZERO;
+        self.check_fps = Rect::ZERO;
         self.check_cull = Rect::ZERO;
         self.cull_up = Rect::ZERO;
         self.cull_down = Rect::ZERO;
@@ -581,6 +591,17 @@ impl Prefs {
     ) {
         let mut cy = oy + 60.0;
         tcx.draw(scene, "Debug", 13.0, theme.text, px, cy);
+        cy += 30.0;
+
+        self.check_fps = checkbox(
+            scene,
+            tcx,
+            theme,
+            px,
+            cy,
+            "Show FPS Counter",
+            self.working.show_fps,
+        );
         cy += 30.0;
 
         self.check_cull = checkbox(

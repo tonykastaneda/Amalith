@@ -68,6 +68,7 @@ pub(in crate::app) fn paint_main(
     panel_scroll: &std::collections::HashMap<PanelId, f64>,
     cull_inset: f64,
     show_cull: bool,
+    rulers: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -88,7 +89,15 @@ pub(in crate::app) fn paint_main(
     } else {
         rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
     };
-    let viewport = Rect::new(left_x, CHROME_TOP, right_x.max(left_x), height);
+    // Full canvas region between the rails; the rulers (when on) sit in a
+    // strip along its top / left, and content is inset to match
+    // `App::canvas_viewport`.
+    let full = Rect::new(left_x, CHROME_TOP, right_x.max(left_x), height);
+    let viewport = if rulers {
+        Rect::new(full.x0 + rulers::THICK, full.y0 + rulers::THICK, full.x1, full.y1)
+    } else {
+        full
+    };
     canvas::paint(
         scene,
         doc,
@@ -115,6 +124,9 @@ pub(in crate::app) fn paint_main(
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
+
+    // Rulers (when on) are drawn by `App::paint_rulers` after this fn
+    // returns — their static layer is cached across frames.
 
     // Document-tab strip (canvas x-span, between options bar and canvas).
     let tab_strip = tab_bar_rect(left_x, right_x);
