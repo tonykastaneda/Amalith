@@ -53,6 +53,9 @@ pub struct Ctx<'a> {
     /// First selected object's appearance, for the fill / stroke / weight /
     /// opacity readouts.
     pub representative: Option<amalith_core::Appearance>,
+    /// Selection holds more than one distinct fill / stroke.
+    pub fill_mixed: bool,
+    pub stroke_mixed: bool,
     pub active_slot: PaintSlot,
     /// Stored stroke width / opacity, shown when nothing is selected.
     pub cur_weight: f64,

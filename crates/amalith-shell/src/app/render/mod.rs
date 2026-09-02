@@ -239,6 +239,7 @@ impl App {
 
         self.content.reset();
         let representative = self.representative();
+        let (fill_mixed, stroke_mixed) = self.selection_paint_mixed();
         let active_artboard = self.current_artboard();
         // App-bar status: a file error wins, else the current file name.
         let status_text: Option<String> = self.doc.io_error.clone().or_else(|| {
@@ -288,6 +289,8 @@ impl App {
                 self.active_slot,
                 self.picker,
                 representative,
+                fill_mixed,
+                stroke_mixed,
                 self.doc.fill,
                 self.doc.stroke,
                 self.pointer,
@@ -366,6 +369,8 @@ impl App {
                             active_tool: self.active_tool,
                             pointer: self.pointer,
                             representative,
+                            fill_mixed,
+                            stroke_mixed,
                             active_slot: self.active_slot,
                             picker: self.picker,
                             cur_fill: self.doc.fill,

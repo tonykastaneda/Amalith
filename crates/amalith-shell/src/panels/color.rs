@@ -368,8 +368,24 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     }
 
     // Stroke behind, fill in front.
-    draw_paint_swatch(scene, th, l.stroke, stroke, ctx.active_slot == PaintSlot::Stroke);
-    draw_paint_swatch(scene, th, l.fill, fill, ctx.active_slot == PaintSlot::Fill);
+    draw_paint_swatch(
+        scene,
+        text,
+        th,
+        l.stroke,
+        stroke,
+        ctx.active_slot == PaintSlot::Stroke,
+        ctx.stroke_mixed,
+    );
+    draw_paint_swatch(
+        scene,
+        text,
+        th,
+        l.fill,
+        fill,
+        ctx.active_slot == PaintSlot::Fill,
+        ctx.fill_mixed,
+    );
 
     // Swap arrows.
     let sc = l.swap.center();

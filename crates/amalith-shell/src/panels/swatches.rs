@@ -62,18 +62,22 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     // Stroke behind, fill in front (Illustrator's overlap).
     draw_paint_swatch(
         scene,
+        text,
         ctx.theme,
         l.stroke,
         rep.map(|a| a.stroke).unwrap_or(Paint::None),
         ctx.active_slot == PaintSlot::Stroke,
+        ctx.stroke_mixed,
     );
     draw_paint_swatch(
         scene,
+        text,
         ctx.theme,
         l.fill,
         rep.map(|a| a.fill)
             .unwrap_or(Paint::Solid(CoreColor::rgb(0.87, 0.87, 0.87))),
         ctx.active_slot == PaintSlot::Fill,
+        ctx.fill_mixed,
     );
 
     let cur_w = rep.map(|a| a.stroke_width);
@@ -97,7 +101,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     }
 
     for (p, r) in &l.swatches {
-        draw_paint_swatch(scene, ctx.theme, *r, *p, false);
+        draw_paint_swatch(scene, text, ctx.theme, *r, *p, false, false);
     }
 }
 

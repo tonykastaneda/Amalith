@@ -36,22 +36,26 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     };
     panels::draw_paint_swatch(
         scene,
+        text,
         theme,
         fill,
         ctx.representative
             .map(|a| a.fill)
             .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
         ctx.active_slot == PaintSlot::Fill,
+        ctx.fill_mixed,
     );
     indicator(scene, fill);
     panels::draw_paint_swatch(
         scene,
+        text,
         theme,
         stroke,
         ctx.representative
             .map(|a| a.stroke)
             .unwrap_or(amalith_core::Paint::None),
         ctx.active_slot == PaintSlot::Stroke,
+        ctx.stroke_mixed,
     );
     indicator(scene, stroke);
 }

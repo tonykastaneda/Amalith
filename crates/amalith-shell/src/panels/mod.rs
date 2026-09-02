@@ -83,6 +83,10 @@ pub struct Ctx<'a> {
     pub pointer: Point,
     /// Appearance of the first selected object, if any (for the swatches).
     pub representative: Option<Appearance>,
+    /// The selection has more than one distinct fill / stroke — the
+    /// proxies show a "?" swatch.
+    pub fill_mixed: bool,
+    pub stroke_mixed: bool,
     pub active_slot: PaintSlot,
     /// Current state for the Color Picker panel, when it is open.
     pub picker: Option<crate::picker::Picker>,
@@ -587,17 +591,37 @@ fn draw_name_field(
 }
 
 /// A single fill / stroke colour chip. `active` gives it the blue border.
-pub fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint, active: bool) {
-    match paint {
-        Paint::None => {
-            scene.fill(Fill::NonZero, ID, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
-            let mut slash = BezPath::new();
-            slash.move_to((r.x0, r.y1));
-            slash.line_to((r.x1, r.y0));
-            scene.stroke(&Stroke::new(1.5), ID, Color::from_rgb8(0xd0, 0x30, 0x30), None, &slash);
-        }
-        Paint::Solid(c) => {
-            scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &r);
+#[allow(clippy::too_many_arguments)]
+pub fn draw_paint_swatch(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    r: Rect,
+    paint: Paint,
+    active: bool,
+    mixed: bool,
+) {
+    if mixed {
+        scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x3c, 0x3c, 0x3c), None, &r);
+        mixed_marks(scene, text, r);
+    } else {
+        match paint {
+            Paint::None => {
+                scene.fill(Fill::NonZero, ID, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
+                let mut slash = BezPath::new();
+                slash.move_to((r.x0, r.y1));
+                slash.line_to((r.x1, r.y0));
+                scene.stroke(
+                    &Stroke::new(1.5),
+                    ID,
+                    Color::from_rgb8(0xd0, 0x30, 0x30),
+                    None,
+                    &slash,
+                );
+            }
+            Paint::Solid(c) => {
+                scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &r);
+            }
         }
     }
     let (w, col) = if active {
@@ -606,6 +630,32 @@ pub fn draw_paint_swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint
         (1.0, theme.border)
     };
     scene.stroke(&Stroke::new(w), ID, col, None, &r);
+}
+
+/// A grey "?" pattern for a swatch whose value isn't single-valued: one
+/// question mark at each corner and one in the centre (Illustrator's
+/// mixed-appearance cue), or just a centred one on a small swatch.
+pub(crate) fn mixed_marks(scene: &mut Scene, text: &mut TextContext, r: Rect) {
+    let ink = Color::from_rgb8(0xdc, 0xdc, 0xdc);
+    let big = r.height() >= 28.0;
+    let sz = (r.height() * if big { 0.30 } else { 0.62 }).clamp(7.0, 15.0) as f32;
+    let w = text.measure("?", sz);
+    let put = |scene: &mut Scene, text: &mut TextContext, cx: f64, cy: f64| {
+        text.draw(scene, "?", sz, ink, cx - w * 0.5, cy + sz as f64 * 0.36);
+    };
+    put(scene, text, r.center().x, r.center().y);
+    if big {
+        let ix = r.width() * 0.25;
+        let iy = r.height() * 0.27;
+        for (cx, cy) in [
+            (r.x0 + ix, r.y0 + iy),
+            (r.x1 - ix, r.y0 + iy),
+            (r.x0 + ix, r.y1 - iy),
+            (r.x1 - ix, r.y1 - iy),
+        ] {
+            put(scene, text, cx, cy);
+        }
+    }
 }
 
 #[cfg(test)]

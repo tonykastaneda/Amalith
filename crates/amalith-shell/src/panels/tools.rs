@@ -129,8 +129,23 @@ fn slot_paints(ctx: &Ctx) -> (Paint, Paint) {
 
 /// One proxy swatch. The foreground colour has a white inset; the rear
 /// swatch is hollow so fill and stroke stay legible where they overlap.
-fn swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint, hollow: bool) {
+/// `mixed` overrides the colour with a grey "?" pattern.
+fn swatch(
+    scene: &mut Scene,
+    text: &mut crate::text::TextContext,
+    theme: &Theme,
+    r: Rect,
+    paint: Paint,
+    hollow: bool,
+    mixed: bool,
+) {
     let bg = theme.panel_bg;
+    if mixed {
+        scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x3c, 0x3c, 0x3c), None, &r);
+        super::mixed_marks(scene, text, r);
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
+        return;
+    }
     match paint {
         Paint::None => {
             scene.fill(Fill::NonZero, ID, Color::WHITE, None, &r);
@@ -159,19 +174,20 @@ fn swatch(scene: &mut Scene, theme: &Theme, r: Rect, paint: Paint, hollow: bool)
     }
 }
 
-fn paint_proxy(scene: &mut Scene, body: Rect, ctx: &Ctx) {
+fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rect, ctx: &Ctx) {
     let th = ctx.theme;
     let p = proxy(body);
     let (fill, stroke) = slot_paints(ctx);
     let fill_active = ctx.active_slot == PaintSlot::Fill;
+    let (fm, sm) = (ctx.fill_mixed, ctx.stroke_mixed);
 
     // Inactive swatch first so the active one sits on top.
     if fill_active {
-        swatch(scene, th, p.stroke, stroke, true);
-        swatch(scene, th, p.fill, fill, false);
+        swatch(scene, text, th, p.stroke, stroke, true, sm);
+        swatch(scene, text, th, p.fill, fill, false, fm);
     } else {
-        swatch(scene, th, p.fill, fill, false);
-        swatch(scene, th, p.stroke, stroke, true);
+        swatch(scene, text, th, p.fill, fill, false, fm);
+        swatch(scene, text, th, p.stroke, stroke, true, sm);
     }
 
     // Swap arrows (top-right): a right-angle elbow with a head at each end.
@@ -254,7 +270,7 @@ fn paint_proxy(scene: &mut Scene, body: Rect, ctx: &Ctx) {
     scene.stroke(&Stroke::new(2.0), ID, SLASH_RED, None, &slash);
 }
 
-pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx: &Ctx) {
+pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
     for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
         let r = cell(body, i, cols);
@@ -287,7 +303,7 @@ pub(super) fn paint(scene: &mut Scene, _text: &mut TextContext, body: Rect, ctx:
     }
 
     // Fill / Stroke colour proxy.
-    paint_proxy(scene, body, ctx);
+    paint_proxy(scene, text, body, ctx);
 }
 
 pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
