@@ -2077,11 +2077,20 @@ impl App {
             MenuAction::ImportSvg => self.import_svg(),
             MenuAction::Place => self.place_image_dialog(),
             MenuAction::Undo => {
+                // macOS routes ⌘Z through this native item, not the
+                // keyboard handler — commit any open text edit first so the
+                // typed text is on the undo stack (matches keyboard ⌘Z).
+                if self.text_edit.is_some() {
+                    self.commit_text_edit();
+                }
                 let _ = self.doc.editor.undo();
                 self.prune_selection();
                 self.request_main_redraw();
             }
             MenuAction::Redo => {
+                if self.text_edit.is_some() {
+                    self.commit_text_edit();
+                }
                 let _ = self.doc.editor.redo();
                 self.prune_selection();
                 self.request_main_redraw();
@@ -2987,7 +2996,7 @@ impl App {
             amalith_core::TextKind::Area { .. } => TEXT_PLACEHOLDER_PARAGRAPH,
             amalith_core::TextKind::Point => TEXT_PLACEHOLDER,
         };
-        let data = amalith_core::TextData {
+        let mut data = amalith_core::TextData {
             content: placeholder.to_string(),
             kind,
             style: self.text_defaults.clone(),
@@ -2995,6 +3004,10 @@ impl App {
             paragraph: self.para_defaults,
             local_bounds: amalith_core::Rect::ZERO,
         };
+        // Give the created state real bounds so it's selectable / hit-
+        // testable even before the first commit — undoing back to it (⌘Z
+        // right after typing) must not leave a zero-size, unclickable box.
+        data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
         let cmd = Command::CreateText {
             layer,
             data,
