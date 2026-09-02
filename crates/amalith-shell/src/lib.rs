@@ -56,6 +56,7 @@ pub mod text;
 pub mod textedit;
 pub mod theme;
 pub mod tool;
+pub mod workspace;
 
 pub use dock::{Axis, Child, DockModel, DropTarget, Floating, Node, NodePath, PanelId, Side};
 pub use layout::{hit_test, Layout, PanelArea, SplitterHandle, TabRect};

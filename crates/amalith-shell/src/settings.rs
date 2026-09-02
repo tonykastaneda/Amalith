@@ -11,30 +11,33 @@ use std::str::FromStr;
 use crate::prefs::{KeyChord, PrefAction, Settings};
 use crate::tool::Tool;
 
-/// `~/Library/Application Support/Amalith/settings.txt` (macOS),
-/// `%APPDATA%\Amalith\settings.txt` (Windows),
-/// `$XDG_CONFIG_HOME/amalith/settings.txt` or `~/.config/…` (Linux).
-fn store_path() -> Option<PathBuf> {
+/// `~/Library/Application Support/Amalith` (macOS), `%APPDATA%\Amalith`
+/// (Windows), `$XDG_CONFIG_HOME/amalith` or `~/.config/amalith` (Linux).
+/// Where `settings.txt`, `recents.txt` and `layout.json` live.
+pub(crate) fn config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    let dir = {
+    {
         let home = std::env::var_os("HOME")?;
-        PathBuf::from(home).join("Library/Application Support/Amalith")
-    };
+        Some(PathBuf::from(home).join("Library/Application Support/Amalith"))
+    }
     #[cfg(target_os = "windows")]
-    let dir = {
+    {
         let base = std::env::var_os("APPDATA")?;
-        PathBuf::from(base).join("Amalith")
-    };
+        Some(PathBuf::from(base).join("Amalith"))
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
-    let dir = {
+    {
         if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
-            PathBuf::from(x).join("amalith")
+            Some(PathBuf::from(x).join("amalith"))
         } else {
             let home = std::env::var_os("HOME")?;
-            PathBuf::from(home).join(".config/amalith")
+            Some(PathBuf::from(home).join(".config/amalith"))
         }
-    };
-    Some(dir.join("settings.txt"))
+    }
+}
+
+fn store_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("settings.txt"))
 }
 
 /// Load settings, starting from [`Settings::default`] and overriding with

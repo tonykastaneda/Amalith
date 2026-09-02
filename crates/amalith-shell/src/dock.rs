@@ -13,13 +13,31 @@
 
 use std::collections::VecDeque;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 /// Opaque, stable identifier for a panel kind. The app maps these to real
 /// panels via its registry; the dock never dereferences one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PanelId(pub &'static str);
 
+// `PanelId` wraps a `&'static str`, so serde can't fill one in directly on
+// load. Equality / hashing compare the string *contents* (derived), so a
+// leaked copy of the name is interchangeable with the original static —
+// and the panel-name set is tiny and fixed, so the leak is bounded.
+impl Serialize for PanelId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.0)
+    }
+}
+impl<'de> Deserialize<'de> for PanelId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(PanelId(Box::leak(s.into_boxed_str())))
+    }
+}
+
 /// A node in a dock tree.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Node {
     /// A row (`Horizontal`) or column (`Vertical`) of children, each with a
     /// weight; weights are normalized on read, so any positive values work.
@@ -28,14 +46,14 @@ pub enum Node {
     Tabs { panels: Vec<PanelId>, active: usize },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Child {
     pub node: Node,
     /// Relative size along the parent split's axis. Only ratios matter.
     pub weight: f32,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Axis {
     Horizontal,
     Vertical,
@@ -107,7 +125,7 @@ const SPLIT_GAP: f32 = 6.0;
 /// One docked column: a single [`Node`] tree (or empty) plus how wide the
 /// whole rail is. All the tree mechanics live here so every rail — left,
 /// right, and any future one — behaves identically.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rail {
     pub tree: Option<Node>,
     /// Rail width in logical points; the user drags the rail's inner edge

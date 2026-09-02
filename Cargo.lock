@@ -101,6 +101,8 @@ dependencies = [
  "png",
  "pollster",
  "rfd",
+ "serde",
+ "serde_json",
  "skrifa",
  "vello",
  "winit",

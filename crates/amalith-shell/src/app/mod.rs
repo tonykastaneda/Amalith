@@ -38,7 +38,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
-    recent, rulers, sample, select, settings, stroke_panel, textedit, Theme,
+    recent, rulers, sample, select, settings, stroke_panel, textedit, workspace, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -243,9 +243,10 @@ enum Drag {
 enum MenuAction {
     About,
     Preferences,
-    /// Windows "Exit". macOS uses the predefined Quit item and never emits
-    /// this. Handled in `about_to_wait`, where the event loop is reachable.
-    #[cfg(target_os = "windows")]
+    /// Quit / Exit. Routed here (not the macOS predefined Quit) so
+    /// `about_to_wait` can `event_loop.exit()` and `App::exiting` can
+    /// save the layout on the way out.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Quit,
     New,
     Open,
@@ -639,6 +640,16 @@ struct App {
 
 impl App {
     fn new() -> Self {
+        // Default "Essentials Classic" layout, then overlay whatever the
+        // last session (or a picked workspace) saved.
+        let mut dock = DockModel::new(demo_right_dock());
+        dock.left = Rail::with(demo_left_dock());
+        dock.left.width = 80.0; // two tool columns
+        let mut rulers = false;
+        if let Some(saved) = workspace::load() {
+            saved.apply_to(&mut dock);
+            rulers = saved.rulers;
+        }
         Self {
             context: RenderContext::new(),
             hosts: HashMap::new(),
@@ -646,12 +657,7 @@ impl App {
             scene: Scene::new(),
             content: Scene::new(),
             text: TextContext::new(),
-            dock: {
-                let mut d = DockModel::new(demo_right_dock());
-                d.left = Rail::with(demo_left_dock());
-                d.left.width = 80.0; // two tool columns
-                d
-            },
+            dock,
             doc: Doc::new(Editor::new(sample::document())),
             tabs: vec![Doc::placeholder()],
             active: 0,
@@ -716,7 +722,7 @@ impl App {
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
             panel_scroll: std::collections::HashMap::new(),
-            rulers: false,
+            rulers,
             ruler_cache: None,
             ruler_menu: None,
             last_frame: None,
@@ -749,6 +755,11 @@ impl App {
         for host in self.hosts.values() {
             host.window.request_redraw();
         }
+    }
+
+    /// Persist the current dock arrangement + view toggles to `layout.json`.
+    fn save_layout(&self) {
+        workspace::save(&workspace::Layout::capture(&self.dock, self.rulers));
     }
 
     /// Stored scroll offset for a panel (0 if none). Clamped to the live
@@ -2019,7 +2030,7 @@ impl App {
         match action {
             // Quit is dispatched in `about_to_wait`, which holds the event
             // loop; it never reaches here.
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             MenuAction::Quit => {}
             MenuAction::About => {
                 if self.about.is_none() {
@@ -2734,6 +2745,8 @@ impl App {
             selection_len: self.doc.selection.len(),
             text_context: self.text_context(),
             representative: None,
+            fill_mixed: false,
+            stroke_mixed: false,
             active_slot: self.active_slot,
             cur_weight: self.doc.stroke_w,
             cur_opacity: self.doc.opacity,
@@ -2756,6 +2769,8 @@ impl App {
             selection_len: self.doc.selection.len(),
             text_context: self.text_context(),
             representative: self.representative(),
+            fill_mixed: false,
+            stroke_mixed: false,
             active_slot: self.active_slot,
             cur_weight: self.doc.stroke_w,
             cur_opacity: self.doc.opacity,
@@ -3016,15 +3031,40 @@ impl App {
     }
 
     fn select_all(&mut self) {
-        self.doc.selection = self
-            .doc.editor
-            .document()
-            .layers()
-            .iter()
-            .flat_map(|l| l.children.iter().copied())
-            .collect();
+        let sel: Vec<ObjectId> = {
+            let doc = self.doc.editor.document();
+            doc.layers()
+                .iter()
+                .filter(|l| l.visible)
+                .flat_map(|l| l.children.iter().copied())
+                .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
+                .collect()
+        };
+        self.doc.selection = sel;
         self.sync_align_mode();
         self.request_main_redraw();
+    }
+
+    /// `(fill_mixed, stroke_mixed)` — true when the object selection holds
+    /// more than one distinct value for that paint. The Fill / Stroke
+    /// proxies show a grey "?" swatch instead of a colour when so.
+    fn selection_paint_mixed(&self) -> (bool, bool) {
+        let doc = self.doc.editor.document();
+        let mut paints = self
+            .doc
+            .selection
+            .iter()
+            .filter_map(|id| doc.object(*id))
+            .map(|o| (o.appearance.fill, o.appearance.stroke));
+        let Some((f0, s0)) = paints.next() else {
+            return (false, false);
+        };
+        let (mut fm, mut sm) = (false, false);
+        for (f, s) in paints {
+            fm |= f != f0;
+            sm |= s != s0;
+        }
+        (fm, sm)
     }
 
     /// The OS clipboard handle, created on first use (some platforms only
@@ -3236,6 +3276,8 @@ impl App {
             active_tool: self.active_tool,
             pointer: self.pointer,
             representative: None,
+            fill_mixed: false,
+            stroke_mixed: false,
             active_slot: self.active_slot,
             picker: self.picker,
             cur_fill: self.doc.fill,
@@ -3772,8 +3814,8 @@ impl ApplicationHandler for App {
                 .map(NativeMenu::drain)
                 .unwrap_or_default();
             for action in actions {
-                #[cfg(target_os = "windows")]
                 if matches!(action, MenuAction::Quit) {
+                    // `exiting` saves the layout on the way out.
                     event_loop.exit();
                     continue;
                 }
@@ -3874,6 +3916,13 @@ impl ApplicationHandler for App {
             Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
             None => ControlFlow::Wait,
         });
+    }
+
+    /// Fires once as the event loop is about to terminate (main window
+    /// closed, ⌘Q / Exit, ⌘W of the last tab). Save the dock layout so
+    /// the next launch comes back the way it was left.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_layout();
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -4442,8 +4491,11 @@ impl NativeMenu {
         // macOS has a real "Quit" that ends the process cleanly. Windows
         // has no app menu convention and `PostQuitMessage` doesn't stop
         // winit's loop, so use a plain item routed to `event_loop.exit()`.
+        // Route Quit through our own dispatcher on every platform so
+        // `App::exiting` gets a chance to save the layout — the macOS
+        // predefined Quit terminates without unwinding winit's loop.
         #[cfg(target_os = "macos")]
-        let quit_i = PredefinedMenuItem::quit(Some("Quit Amalith"));
+        let quit_i = mk("Quit Amalith", sup, Code::KeyQ);
         #[cfg(not(target_os = "macos"))]
         let quit_i = MenuItem::new("Exit", true, None);
         let app = Submenu::with_items(
@@ -4532,9 +4584,6 @@ impl NativeMenu {
         for (id, item) in &window_checks {
             items.push((item.id().clone(), MenuAction::TogglePanel(id)));
         }
-        // The macOS Quit is predefined and self-handles; the Windows Exit
-        // item routes through our dispatcher.
-        #[cfg(target_os = "windows")]
         items.push((quit_i.id().clone(), MenuAction::Quit));
         Self {
             items,
