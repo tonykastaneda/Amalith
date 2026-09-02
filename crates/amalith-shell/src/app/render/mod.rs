@@ -239,6 +239,7 @@ impl App {
 
         self.content.reset();
         let representative = self.representative();
+        let active_artboard = self.current_artboard();
         // App-bar status: a file error wins, else the current file name.
         let status_text: Option<String> = self.doc.io_error.clone().or_else(|| {
             self.doc.file_path
@@ -307,6 +308,7 @@ impl App {
                 self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                 self.doc.selected_layer,
                 self.doc.selected_artboard,
+                active_artboard,
                 // On Home, the modal is drawn in the overlay pass below so it
                 // lands on top of the Home screen.
                 self.newdoc.as_ref().filter(|_| self.home.is_none()),
@@ -447,6 +449,7 @@ impl App {
             }
             self.paint_font_menu();
             self.paint_align_to_menu();
+            self.paint_ruler_menu();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that.
             if let Some(hm) = &mut self.home {
@@ -566,17 +569,34 @@ impl App {
     fn paint_rulers(&mut self) {
         let region = self.canvas_region();
         let v = self.doc.view;
-        let key = (v.pan.x, v.pan.y, v.zoom, region);
+        // Ruler `0` sits at the active artboard's top-left (Illustrator
+        // default): the artboard last worked in, else the first one, else
+        // the document origin.
+        let active = self.current_artboard();
+        let origin = {
+            let doc = self.doc.editor.document();
+            active
+                .and_then(|id| doc.artboard(id))
+                .or_else(|| doc.artboards().first())
+                .map(|a| Point::new(a.rect.x0, a.rect.y0))
+                .unwrap_or(Point::ZERO)
+        };
+        let unit = self.doc.editor.document().settings.default_unit;
+        let key = (v.pan.x, v.pan.y, v.zoom, region, origin.x, origin.y, unit);
         let fresh = self
             .ruler_cache
             .as_ref()
-            .is_some_and(|(px, py, z, r, _)| (*px, *py, *z, *r) == key);
+            .is_some_and(|(px, py, z, r, ox, oy, u, _)| {
+                (*px, *py, *z, *r, *ox, *oy, *u) == key
+            });
         if !fresh {
             let mut layer = Scene::new();
-            rulers::build(&mut layer, &mut self.text, &self.theme, region, &v);
-            self.ruler_cache = Some((v.pan.x, v.pan.y, v.zoom, region, layer));
+            rulers::build(&mut layer, &mut self.text, &self.theme, region, &v, origin, unit);
+            self.ruler_cache = Some((
+                v.pan.x, v.pan.y, v.zoom, region, origin.x, origin.y, unit, layer,
+            ));
         }
-        if let Some((_, _, _, _, layer)) = &self.ruler_cache {
+        if let Some((.., layer)) = &self.ruler_cache {
             self.content.append(layer, None);
         }
         rulers::marker(&mut self.content, &self.theme, region, self.pointer);

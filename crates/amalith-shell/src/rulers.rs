@@ -11,6 +11,7 @@
 //! caches its output and only rebuilds it when the view changes.
 //! [`marker`] draws the per-frame pointer lines.
 
+use amalith_core::Unit;
 use vello::kurbo::{Affine, BezPath, Line, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -48,13 +49,14 @@ fn nice_step(raw: f64) -> f64 {
     n * pow
 }
 
-/// A ruler value without a trailing `.0` when it's integral.
+/// A ruler value in its display unit, trimmed of trailing zeros.
 fn label(v: f64) -> String {
-    if v.fract().abs() < 1e-6 {
-        format!("{}", v as i64)
-    } else {
-        format!("{v:.2}")
+    if v.abs() < 1e-9 {
+        return "0".to_string();
     }
+    let s = format!("{v:.5}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_string()
 }
 
 /// The two strip rects for `region`: (top, left).
@@ -66,14 +68,18 @@ fn strips(region: Rect) -> (Rect, Rect) {
 }
 
 /// Draw the static rulers (strips, ticks, labels) over `region` — the
-/// full canvas rect between the rails, below the chrome. No pointer
-/// marker; that changes every mouse move and is drawn by [`marker`].
+/// full canvas rect between the rails, below the chrome. `origin` is the
+/// document-space point that reads `(0, 0)` on the rulers (the active
+/// artboard's top-left). No pointer marker; that changes every mouse
+/// move and is drawn by [`marker`].
 pub fn build(
     scene: &mut Scene,
     text: &mut TextContext,
     theme: &Theme,
     region: Rect,
     view: &CanvasView,
+    origin: Point,
+    unit: Unit,
 ) {
     let (top, left) = strips(region);
     let corner = Rect::new(region.x0, region.y0, region.x0 + THICK, region.y0 + THICK);
@@ -97,8 +103,11 @@ pub fn build(
     );
 
     let zoom = view.zoom.max(1e-9);
-    let step = nice_step(LABEL_PX / zoom);
-    let minor = step / 5.0;
+    // Work the tick grid in the display unit so labels land on round
+    // values (1 / 2 / 5 × 10ⁿ of that unit); `minor` is in doc px.
+    let step_u = nice_step(unit.from_px(LABEL_PX / zoom));
+    let minor_u = step_u / 5.0;
+    let minor = unit.to_px(minor_u);
     let major_ink = theme.text_dim;
     let minor_ink = theme.text_dim.with_alpha(0.5);
     let stroke = Stroke::new(1.0);
@@ -109,16 +118,19 @@ pub fn build(
     let x_lo = left.x1 + 1.0;
     let mut minors = BezPath::new();
     let mut majors = BezPath::new();
-    let i0 = (((x_lo - view.pan.x) / zoom) / minor).ceil() as i64;
-    let i1 = (((top.x1 - view.pan.x) / zoom) / minor).floor() as i64;
+    // `i` counts ticks from `origin`, so the `0` tick lands exactly on
+    // the active artboard's left edge and labels count from there.
+    let i0 = (((x_lo - view.pan.x) / zoom - origin.x) / minor).ceil() as i64;
+    let i1 = (((top.x1 - view.pan.x) / zoom - origin.x) / minor).floor() as i64;
     for i in i0..=i1 {
-        let v = i as f64 * minor;
+        let rel = i as f64 * minor;
         // Whole-pixel tick + label so hairlines stay crisp and glyphs
         // hit the atlas as the view pans.
-        let sx = (view.pan.x + v * zoom).round();
+        let sx = (view.pan.x + (rel + origin.x) * zoom).round();
         if i % 5 == 0 {
             majors.move_to((sx, top.y1 - THICK * 0.6));
             majors.line_to((sx, top.y1));
+            let v = i as f64 * minor_u;
             text.draw(scene, &label(v), LABEL_SIZE, major_ink, sx + 3.0, top.y0 + 11.0);
         } else {
             minors.move_to((sx, top.y1 - THICK * 0.3));
@@ -132,14 +144,15 @@ pub fn build(
     let y_lo = left.y0 + THICK + 1.0;
     let mut minors = BezPath::new();
     let mut majors = BezPath::new();
-    let i0 = (((y_lo - view.pan.y) / zoom) / minor).ceil() as i64;
-    let i1 = (((left.y1 - view.pan.y) / zoom) / minor).floor() as i64;
+    let i0 = (((y_lo - view.pan.y) / zoom - origin.y) / minor).ceil() as i64;
+    let i1 = (((left.y1 - view.pan.y) / zoom - origin.y) / minor).floor() as i64;
     for i in i0..=i1 {
-        let v = i as f64 * minor;
-        let sy = (view.pan.y + v * zoom).round();
+        let rel = i as f64 * minor;
+        let sy = (view.pan.y + (rel + origin.y) * zoom).round();
         if i % 5 == 0 {
             majors.move_to((left.x1 - THICK * 0.6, sy));
             majors.line_to((left.x1, sy));
+            let v = i as f64 * minor_u;
             text.draw_column(
                 scene,
                 &label(v),

@@ -232,13 +232,7 @@ fn fmt(v: f64) -> String {
 }
 
 pub fn unit_label(u: Unit) -> &'static str {
-    match u {
-        Unit::Px => "Pixels",
-        Unit::Pt => "Points",
-        Unit::In => "Inches",
-        Unit::Mm => "Millimeters",
-        Unit::Cm => "Centimeters",
-    }
+    u.label()
 }
 const UNITS: [Unit; 5] = [Unit::Px, Unit::Pt, Unit::In, Unit::Mm, Unit::Cm];
 const COLORS: [ColorMode; 2] = [ColorMode::Cmyk, ColorMode::Rgb];

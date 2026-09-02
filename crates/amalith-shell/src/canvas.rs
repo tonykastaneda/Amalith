@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use amalith_core::{
-    AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign, StrokeStyle,
+    ArtboardId, AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign,
+    StrokeStyle,
 };
 use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
 use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
@@ -183,6 +184,7 @@ pub fn paint(
     key_object: Option<ObjectId>,
     cull_inset: f64,
     show_cull: bool,
+    active_artboard: Option<ArtboardId>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -203,6 +205,7 @@ pub fn paint(
 
     for (i, ab) in doc.artboards().iter().enumerate() {
         let r = vt.transform_rect_bbox(convert::rect(ab.rect));
+        let active = active_artboard == Some(ab.id);
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
@@ -217,21 +220,23 @@ pub fn paint(
             None,
             &r,
         );
+        // Thin black outline on every artboard (Illustrator); the active
+        // one gets a slightly heavier line.
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(if active { 1.6 } else { 1.0 }),
             Affine::IDENTITY,
-            theme.artboard_border,
+            Color::from_rgb8(0x00, 0x00, 0x00),
             None,
             &r,
         );
-        text.draw(
-            scene,
-            &format!("{:02} - {}", i + 1, ab.name),
-            11.0,
-            theme.artboard_label,
-            r.x0,
-            r.y0 - 6.0,
-        );
+        // Name label above the artboard. The active one reads brighter
+        // and bold; same size as the rest.
+        let name = format!("{:02} - {}", i + 1, ab.name);
+        if active {
+            text.draw_bold(scene, &name, 11.0, theme.text, r.x0, r.y0 - 6.0);
+        } else {
+            text.draw(scene, &name, 11.0, theme.artboard_label, r.x0, r.y0 - 6.0);
+        }
     }
 
     for layer in doc.layers() {

@@ -17,7 +17,7 @@
 use crate::error::CommandError;
 use amalith_core::{
     Affine, Artboard, ArtboardId, Asset, AssetId, Document, DocumentError, Layer, LayerId, Object,
-    ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData,
+    ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +32,9 @@ pub(crate) enum Edit {
     RenameArtboard {
         id: ArtboardId,
         name: String,
+    },
+    SetDocumentUnit {
+        unit: Unit,
     },
     ResizeArtboard {
         id: ArtboardId,
@@ -133,6 +136,10 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or(CommandError::ArtboardNotFound(id))?;
             let old_name = std::mem::replace(&mut artboard.name, name);
             Ok((Edit::RenameArtboard { id, name: old_name }, None))
+        }
+        Edit::SetDocumentUnit { unit } => {
+            let old = std::mem::replace(&mut doc.settings.default_unit, unit);
+            Ok((Edit::SetDocumentUnit { unit: old }, None))
         }
         Edit::ResizeArtboard { id, rect } => {
             let artboard = doc

@@ -21,23 +21,63 @@ pub enum Unit {
     Px,
     /// PostScript/Illustrator point: 1/72 inch.
     Pt,
+    /// Pica: 12 points, 1/6 inch.
+    Pc,
     /// Inch.
     In,
+    /// Foot: 12 inches.
+    Ft,
+    /// Yard: 36 inches.
+    Yd,
     /// Millimeter.
     Mm,
     /// Centimeter.
     Cm,
+    /// Meter.
+    M,
 }
 
 impl Unit {
+    /// Every unit, in the order rulers / menus present them.
+    pub const ALL: [Unit; 9] = [
+        Unit::Px,
+        Unit::Pt,
+        Unit::Pc,
+        Unit::In,
+        Unit::Ft,
+        Unit::Yd,
+        Unit::Mm,
+        Unit::Cm,
+        Unit::M,
+    ];
+
+    /// Human-readable name.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Unit::Px => "Pixels",
+            Unit::Pt => "Points",
+            Unit::Pc => "Picas",
+            Unit::In => "Inches",
+            Unit::Ft => "Feet",
+            Unit::Yd => "Yards",
+            Unit::Mm => "Millimeters",
+            Unit::Cm => "Centimeters",
+            Unit::M => "Meters",
+        }
+    }
+
     /// How many of this unit fit in one inch.
     pub const fn per_inch(self) -> f64 {
         match self {
             Unit::Px => 96.0,
             Unit::Pt => 72.0,
+            Unit::Pc => 6.0,
             Unit::In => 1.0,
+            Unit::Ft => 1.0 / 12.0,
+            Unit::Yd => 1.0 / 36.0,
             Unit::Mm => 25.4,
             Unit::Cm => 2.54,
+            Unit::M => 0.0254,
         }
     }
 

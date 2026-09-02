@@ -139,12 +139,13 @@ fn default_opacity() -> f32 {
 }
 
 impl Appearance {
-    pub const DEFAULT_STROKE_WIDTH: f64 = 10.0;
+    /// 5 pt, in canonical px (96/72 px per pt).
+    pub const DEFAULT_STROKE_WIDTH: f64 = 5.0 * 96.0 / 72.0;
 }
 
 impl Default for Appearance {
     /// Every new object's starting appearance: a light fill and a dark
-    /// 10px stroke, both visible immediately — not Illustrator's actual
+    /// 5pt stroke, both visible immediately — not Illustrator's actual
     /// default (black fill, no stroke), because every primitive tool here
     /// is meant to draw with a visible stroke out of the box for now.
     fn default() -> Self {
@@ -169,7 +170,7 @@ mod tests {
             appearance.stroke.color(),
             Some(Color::rgb(0.18, 0.18, 0.18))
         );
-        assert_eq!(appearance.stroke_width, 10.0);
+        assert_eq!(appearance.stroke_width, 5.0 * 96.0 / 72.0);
         assert_eq!(appearance.opacity, 1.0);
     }
 

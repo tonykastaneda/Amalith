@@ -360,6 +360,7 @@ impl Editor {
                 .map(|id| Edit::RemoveObject { id })
                 .collect(),
             Command::RenameArtboard { id, name } => vec![Edit::RenameArtboard { id, name }],
+            Command::SetDocumentUnit { unit } => vec![Edit::SetDocumentUnit { unit }],
             Command::RenameLayer { id, name } => vec![Edit::RenameLayer { id, name }],
             Command::RenameObject { id, name } => vec![Edit::RenameObject { id, name }],
             Command::ResizeArtboard { id, rect } => vec![Edit::ResizeArtboard { id, rect }],

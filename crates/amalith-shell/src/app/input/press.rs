@@ -35,6 +35,10 @@ impl App {
         if self.align_to_menu.is_some() && self.align_to_menu_click(self.pointer) {
             return;
         }
+        if self.ruler_menu.is_some() {
+            self.ruler_menu_click(self.pointer);
+            return;
+        }
         // An open panel hamburger flyout: clicks inside it are consumed;
         // a click on its own hamburger toggles it shut; anything else
         // closes it and falls through so another hamburger can open.

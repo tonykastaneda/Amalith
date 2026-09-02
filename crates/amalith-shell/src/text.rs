@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use parley::{
-    FontContext, GenericFamily, Layout, LayoutContext, LineHeight, PositionedLayoutItem,
-    StyleProperty,
+    FontContext, FontWeight, GenericFamily, Layout, LayoutContext, LineHeight,
+    PositionedLayoutItem, StyleProperty,
 };
 use vello::kurbo::Affine;
 use vello::peniko::{Brush, Color, Fill};
@@ -19,10 +19,11 @@ use vello::{Glyph, Scene};
 pub struct TextContext {
     fonts: FontContext,
     layout: LayoutContext<Brush>,
-    /// Memoized single-line layouts, keyed by `(text, size.to_bits())`.
-    /// The glyph colour is applied at draw time (see [`Self::emit`]), so
-    /// it isn't part of the key. Cleared wholesale when it grows large.
-    cache: HashMap<(String, u32), Layout<Brush>>,
+    /// Memoized single-line layouts, keyed by `(text, size.to_bits(),
+    /// bold)`. The glyph colour is applied at draw time (see
+    /// [`Self::emit`]), so it isn't part of the key. Cleared wholesale
+    /// when it grows large.
+    cache: HashMap<(String, u32, bool), Layout<Brush>>,
 }
 
 impl Default for TextContext {
@@ -50,8 +51,8 @@ impl TextContext {
     /// Repeated strings (labels, numbers, tool names) are laid out once
     /// and reused every frame — parley shaping is the bulk of per-frame
     /// text cost.
-    fn build(&mut self, text: &str, size: f32) -> &Layout<Brush> {
-        let key = (text.to_owned(), size.to_bits());
+    fn build(&mut self, text: &str, size: f32, bold: bool) -> &Layout<Brush> {
+        let key = (text.to_owned(), size.to_bits(), bold);
         if !self.cache.contains_key(&key) {
             if self.cache.len() >= 1024 {
                 self.cache.clear();
@@ -62,6 +63,11 @@ impl TextContext {
                 parley::LineHeight::FontSizeRelative(1.3),
             ));
             builder.push_default(GenericFamily::SystemUi);
+            builder.push_default(StyleProperty::FontWeight(if bold {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            }));
             builder.push_default(StyleProperty::Brush(Brush::Solid(Color::WHITE)));
             let mut layout = builder.build(text);
             layout.break_all_lines(None);
@@ -72,7 +78,7 @@ impl TextContext {
 
     /// Advance width of `text` at `size`, in logical px.
     pub fn measure(&mut self, text: &str, size: f32) -> f64 {
-        self.build(text, size).width() as f64
+        self.build(text, size, false).width() as f64
     }
 
     /// Lay `text` out wrapped to `wrap_width` px, `line_height` as a multiple
@@ -156,7 +162,33 @@ impl TextContext {
     /// Draw `text` at `size` in `color`, with its left edge at `x` and its
     /// alphabetic baseline at `y`.
     pub fn draw(&mut self, scene: &mut Scene, text: &str, size: f32, color: Color, x: f64, y: f64) {
-        let layout = self.build(text, size);
+        self.draw_weighted(scene, text, size, color, x, y, false);
+    }
+
+    /// Like [`Self::draw`] but bold.
+    pub fn draw_bold(
+        &mut self,
+        scene: &mut Scene,
+        text: &str,
+        size: f32,
+        color: Color,
+        x: f64,
+        y: f64,
+    ) {
+        self.draw_weighted(scene, text, size, color, x, y, true);
+    }
+
+    fn draw_weighted(
+        &mut self,
+        scene: &mut Scene,
+        text: &str,
+        size: f32,
+        color: Color,
+        x: f64,
+        y: f64,
+        bold: bool,
+    ) {
+        let layout = self.build(text, size, bold);
         // parley positions runs from the layout origin; shift so the first
         // baseline lands on `y`.
         let first_baseline = layout
@@ -185,7 +217,7 @@ impl TextContext {
         y: f64,
         row_h: f64,
     ) {
-        let layout = self.build(text, size);
+        let layout = self.build(text, size, false);
         for line in layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {

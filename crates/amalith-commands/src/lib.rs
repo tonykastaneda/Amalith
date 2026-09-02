@@ -1976,7 +1976,10 @@ mod tests {
         let appearance = editor.document().object(object).unwrap().appearance;
         assert!(matches!(appearance.fill, Paint::Solid(_)));
         assert!(matches!(appearance.stroke, Paint::Solid(_)));
-        assert_eq!(appearance.stroke_width, 10.0);
+        assert_eq!(
+            appearance.stroke_width,
+            amalith_core::Appearance::DEFAULT_STROKE_WIDTH
+        );
     }
 
     #[test]

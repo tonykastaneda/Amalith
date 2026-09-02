@@ -136,6 +136,15 @@ impl App {
             }
             return;
         }
+        if self.ruler_menu.is_some() {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.ruler_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
         if self.panel_menu.is_some() {
             if event.state.is_pressed()
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))

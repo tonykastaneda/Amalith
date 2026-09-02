@@ -613,9 +613,11 @@ struct App {
     /// Canvas rulers along the top / left edges (⌘R). Origin is the
     /// document origin; when on, `canvas_viewport` insets by `rulers::THICK`.
     rulers: bool,
-    /// Cached static ruler layer — rebuilt only when the view or canvas
-    /// region changes. Key: `(pan.x, pan.y, zoom, region)`.
-    ruler_cache: Option<(f64, f64, f64, Rect, Scene)>,
+    /// Cached static ruler layer — rebuilt only when the view, canvas
+    /// region, ruler origin, or display unit changes.
+    ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
+    /// Right-click unit menu on the rulers, anchored at the click (screen).
+    ruler_menu: Option<Point>,
     /// Wall-clock instant of the previous `redraw`, and a smoothed
     /// frames-per-second estimate for the debug counter.
     last_frame: Option<Instant>,
@@ -716,6 +718,7 @@ impl App {
             panel_scroll: std::collections::HashMap::new(),
             rulers: false,
             ruler_cache: None,
+            ruler_menu: None,
             last_frame: None,
             fps: 0.0,
             first_frame_done: false,
@@ -1215,6 +1218,56 @@ impl App {
             (amalith_commands::AlignTo::KeyObject, "Align to Key Object"),
             (amalith_commands::AlignTo::Artboard, "Align to Artboard"),
         ]
+    }
+
+    // --- Ruler right-click unit menu ---------------------------------
+    const RM_W: f64 = 168.0;
+    const RM_ROW: f64 = 24.0;
+    const RM_PAD: f64 = 6.0;
+
+    fn ruler_menu_rect(anchor: Point) -> Rect {
+        let n = amalith_core::Unit::ALL.len() as f64;
+        let h = Self::RM_PAD * 2.0 + Self::RM_ROW * n;
+        Rect::new(anchor.x, anchor.y, anchor.x + Self::RM_W, anchor.y + h)
+    }
+
+    /// A press while the ruler unit menu is open. Consumes it.
+    fn ruler_menu_click(&mut self, p: Point) {
+        let Some(anchor) = self.ruler_menu.take() else {
+            return;
+        };
+        let fly = Self::ruler_menu_rect(anchor);
+        if fly.contains(p) {
+            let i = ((p.y - fly.y0 - Self::RM_PAD) / Self::RM_ROW).floor();
+            if i >= 0.0 {
+                if let Some(&unit) = amalith_core::Unit::ALL.get(i as usize) {
+                    let _ = self
+                        .doc
+                        .editor
+                        .execute(Command::SetDocumentUnit { unit });
+                }
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    /// Right mouse press: opens the ruler unit menu when over a ruler
+    /// strip, else dismisses any menu already open.
+    fn on_right_press(&mut self) {
+        if self.ruler_menu.take().is_some() {
+            self.request_main_redraw();
+            return;
+        }
+        if self.rulers && self.pointer_win == self.main_id {
+            let r = self.canvas_region();
+            let over = r.contains(self.pointer)
+                && (self.pointer.y < r.y0 + rulers::THICK
+                    || self.pointer.x < r.x0 + rulers::THICK);
+            if over {
+                self.ruler_menu = Some(self.pointer);
+                self.request_main_redraw();
+            }
+        }
     }
 
     fn align_to_menu_rect(anchor: Rect) -> Rect {
@@ -3219,6 +3272,7 @@ impl App {
             || !matches!(self.drag, Drag::None)
             || self.font_menu.is_some()
             || self.align_to_menu.is_some()
+            || self.ruler_menu.is_some()
             || self.prefs.is_some()
         {
             return None;
@@ -3385,6 +3439,7 @@ impl App {
             && self.prefs.is_none()
             && self.font_menu.is_none()
             && self.panel_menu.is_none()
+            && self.ruler_menu.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -3975,6 +4030,11 @@ impl ApplicationHandler for App {
                 button: MouseButton::Left,
                 ..
             } => self.on_release(),
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } if Some(id) == self.main_id => self.on_right_press(),
             WindowEvent::Ime(ime) if Some(id) == self.main_id => {
                 if let Some(te) = &mut self.text_edit {
                     te.ime(&ime, &mut self.text);

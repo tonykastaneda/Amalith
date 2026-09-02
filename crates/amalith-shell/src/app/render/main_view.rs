@@ -36,6 +36,7 @@ pub(in crate::app) fn paint_main(
     renaming: Option<(panels::RenameId, &str)>,
     selected_layer: Option<LayerId>,
     selected_artboard: Option<ArtboardId>,
+    active_artboard: Option<ArtboardId>,
     newdoc_form: Option<&newdoc::NewDocForm>,
     tab_labels: &[String],
     active_tab: usize,
@@ -118,6 +119,7 @@ pub(in crate::app) fn paint_main(
         key_object,
         cull_inset,
         show_cull,
+        active_artboard,
     );
 
     if let Some(m) = marquee {

@@ -78,9 +78,9 @@ impl App {
                                 let g = self.theme.splitter_thickness;
                                 let w = sp.before.width();
                                 let min_a =
-                                    a.node.min_height(w, strip_h, g, &panels::min_body_height);
+                                    a.node.min_height(w, strip_h, g, &panels::rail_floor);
                                 let min_b =
-                                    b.node.min_height(w, strip_h, g, &panels::min_body_height);
+                                    b.node.min_height(w, strip_h, g, &panels::rail_floor);
                                 let span = sp.after.y1 - sp.before.y0;
                                 if span > 0.0 {
                                     let lo = (min_a / span) as f32;

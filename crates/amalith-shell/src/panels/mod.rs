@@ -323,11 +323,22 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     }
 }
 
+/// Smallest body a splitter drag may leave a panel with, in a rail. The
+/// fixed-layout panels (align, transform, …) can be dragged well below
+/// their content height now that they scroll — they only need room for a
+/// couple of rows plus the scrollbar. The list panels keep their real
+/// functional minimum ([`min_body_height`]).
+pub fn rail_floor(id: PanelId, width: f64) -> f64 {
+    if fixed_content_height(id, width).is_some() {
+        52.0
+    } else {
+        min_body_height(id, width)
+    }
+}
+
 /// A panel's natural body height — the shortest it can be before its
-/// content would be clipped. The dock uses this to stop a splitter drag
-/// from shrinking a stacked panel down over its own contents. Fixed-layout
-/// panels report their full height; list panels report a short floor and
-/// clip past it.
+/// content would be clipped. Fixed-layout panels report their full
+/// height; list panels report a short floor and clip past it.
 pub fn min_body_height(id: PanelId, width: f64) -> f64 {
     match id.0 {
         "character" => character::natural_height(),

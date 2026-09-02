@@ -92,6 +92,52 @@ impl App {
         self.content.pop_layer();
     }
 
+    pub(in crate::app) fn paint_ruler_menu(&mut self) {
+        let Some(anchor) = self.ruler_menu else {
+            return;
+        };
+        let fly = Self::ruler_menu_rect(anchor);
+        let th = &self.theme;
+        self.content
+            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(4.0));
+        self.content.stroke(
+            &Stroke::new(1.0),
+            ID,
+            th.border,
+            None,
+            &fly.to_rounded_rect(4.0),
+        );
+        let cur = self.doc.editor.document().settings.default_unit;
+        let mut y = fly.y0 + Self::RM_PAD;
+        for unit in amalith_core::Unit::ALL {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::RM_ROW);
+            if row.contains(self.pointer) {
+                self.content
+                    .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
+            }
+            let on = unit == cur;
+            if on {
+                self.text.draw(
+                    &mut self.content,
+                    "✓",
+                    12.0,
+                    th.accent,
+                    row.x0 + 10.0,
+                    row.center().y + 4.0,
+                );
+            }
+            self.text.draw(
+                &mut self.content,
+                unit.label(),
+                12.5,
+                if on { th.accent } else { th.text },
+                row.x0 + 28.0,
+                row.center().y + 4.5,
+            );
+            y += Self::RM_ROW;
+        }
+    }
+
     pub(in crate::app) fn paint_align_to_menu(&mut self) {
         let Some(anchor) = self.align_to_menu else {
             return;
