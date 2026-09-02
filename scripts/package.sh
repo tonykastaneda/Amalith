@@ -33,11 +33,7 @@ mkdir -p "$dist"
 
 # ---------------------------------------------------------------- macOS -------
 echo "########## macOS ##########"
-"$root/scripts/package-macos.sh"
-# Stable name alongside the versioned one.
-if [ -f "$dist/$APP-$VERSION.dmg" ]; then
-  cp -f "$dist/$APP-$VERSION.dmg" "$dist/$APP.dmg"
-fi
+"$root/scripts/package-macos.sh"   # writes dist/Amalith.dmg
 
 # -------------------------------------------------------------- Windows -------
 echo

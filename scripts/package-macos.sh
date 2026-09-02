@@ -97,15 +97,15 @@ else
 fi
 
 # --- optional: notarize app + staple, then dmg + notarize + staple ---------
+dmg="$out/$APP_NAME.dmg"
 if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
-  zip="$out/$APP_NAME-$VERSION.zip"
+  zip="$(mktemp -d)/$APP_NAME.zip"
   echo "==> notarize app ($NOTARY_PROFILE)"
   ditto -c -k --keepParent "$app" "$zip"
   xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$app"
-  rm -f "$zip"
+  rm -rf "$(dirname "$zip")"
 
-  dmg="$out/$APP_NAME-$VERSION.dmg"
   echo "==> build + notarize $dmg"
   rm -f "$dmg"
   stage="$(mktemp -d)"
@@ -120,4 +120,4 @@ fi
 
 echo
 echo "done: $app"
-[ -f "$out/$APP_NAME-$VERSION.dmg" ] && echo "      $out/$APP_NAME-$VERSION.dmg"
+[ -f "$dmg" ] && echo "      $dmg"
