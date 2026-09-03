@@ -113,10 +113,7 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 .download-card__topline p { margin: 0; }
 .download-card__topline > span { color: #8f8e87; }
 .platform-icon { width: 112px; height: 112px; margin: 76px 0 62px; background: var(--yellow); color: var(--ink); display: grid; place-items: center; border-radius: 26px; box-shadow: 0 18px 50px rgba(0,0,0,.24); }
-.platform-icon--mac span { font-family: Arial, Helvetica, sans-serif; font-size: 58px; line-height: 1; transform: translateY(-2px); }
-.platform-icon--linux span { font-family: "Courier New", monospace; font-size: 37px; font-weight: 800; letter-spacing: -.12em; transform: translateX(-3px); }
-.platform-icon--windows { grid-template-columns: repeat(2, 29px); grid-template-rows: repeat(2, 29px); gap: 5px; }
-.platform-icon--windows span { width: 29px; height: 29px; background: var(--ink); }
+.platform-icon img { width: 68%; height: 68%; object-fit: contain; }
 .download-card__copy { flex: 1; }
 .download-card__copy > p:first-child { margin: 0 0 13px; color: #9b9a92; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
 .download-card h2 { margin: 0 0 24px; font-size: clamp(38px, 3.4vw, 57px); line-height: .94; letter-spacing: -.055em; }
@@ -244,8 +241,6 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
   .downloads-hero__copy { margin-top: 80px; }
   .download-card { min-height: 540px; padding: 28px 24px; }
   .platform-icon { width: 96px; height: 96px; border-radius: 22px; }
-  .platform-icon--windows { grid-template-columns: repeat(2, 25px); grid-template-rows: repeat(2, 25px); gap: 4px; }
-  .platform-icon--windows span { width: 25px; height: 25px; }
   .downloads-note { padding-inline: 24px; }
   .downloads-note h2 { font-size: 46px; }
   .downloads-footer { min-height: 230px; padding-inline: 24px; }

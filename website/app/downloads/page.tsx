@@ -14,39 +14,23 @@ const platforms = [
     name: "macOS",
     detail: "Native desktop app",
     note: "Built to feel at home on Mac, with a fast native canvas and familiar creative workflows.",
-    icon: "mac",
+    icon: `${basePath}/brand/platform/mac.svg`,
   },
   {
     number: "02",
     name: "Windows 10/11",
     detail: "64-bit desktop app",
     note: "A self-contained Windows build designed to get you from download to canvas quickly.",
-    icon: "windows",
+    icon: `${basePath}/brand/platform/win.svg`,
   },
   {
     number: "03",
     name: "Linux",
     detail: "Multiple package formats",
     note: "AppImage, Debian, RPM, Arch Linux, and Flatpak options are planned for launch.",
-    icon: "linux",
+    icon: `${basePath}/brand/platform/linux.svg`,
   },
 ] as const;
-
-function PlatformIcon({ platform }: { platform: (typeof platforms)[number]["icon"] }) {
-  if (platform === "windows") {
-    return (
-      <div className="platform-icon platform-icon--windows" aria-hidden="true">
-        <span /><span /><span /><span />
-      </div>
-    );
-  }
-
-  return (
-    <div className={`platform-icon platform-icon--${platform}`} aria-hidden="true">
-      <span>{platform === "mac" ? "⌘" : ">_"}</span>
-    </div>
-  );
-}
 
 export default function Downloads() {
   return (
@@ -69,7 +53,9 @@ export default function Downloads() {
                 <p>{platform.number} / Desktop</p>
                 <span>In development</span>
               </div>
-              <PlatformIcon platform={platform.icon} />
+              <div className="platform-icon" aria-hidden="true">
+                <img src={platform.icon} alt="" />
+              </div>
               <div className="download-card__copy">
                 <p>{platform.detail}</p>
                 <h2>{platform.name}</h2>
