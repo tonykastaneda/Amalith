@@ -544,7 +544,40 @@ pub fn paint(
             // area-text frame.
             if selection.len() == 1 {
                 if let Some(ObjectKind::Text(td)) = doc.object(selection[0]).map(|o| &o.kind) {
-                    if matches!(td.kind, amalith_core::TextKind::Area { .. }) {
+                    let is_area = matches!(td.kind, amalith_core::TextKind::Area { .. });
+                    // Point/Area convert widget: a dot off the right edge.
+                    // Filled = area, hollow = point. Double-click toggles.
+                    {
+                        let redge = Point::new(
+                            (q[1].x + q[2].x) * 0.5,
+                            (q[1].y + q[2].y) * 0.5,
+                        );
+                        let dot_c = Point::new(redge.x + 16.0, redge.y);
+                        scene.stroke(
+                            &Stroke::new(1.25),
+                            Affine::IDENTITY,
+                            theme.accent,
+                            None,
+                            &Line::new(redge, dot_c),
+                        );
+                        let dot = vello::kurbo::Circle::new(dot_c, 4.5);
+                        let paper = Color::from_rgb8(0xff, 0xff, 0xff);
+                        scene.fill(
+                            Fill::NonZero,
+                            Affine::IDENTITY,
+                            if is_area { theme.accent } else { paper },
+                            None,
+                            &dot,
+                        );
+                        scene.stroke(
+                            &Stroke::new(1.25),
+                            Affine::IDENTITY,
+                            if is_area { paper } else { theme.accent },
+                            None,
+                            &dot,
+                        );
+                    }
+                    if is_area {
                         // Auto-fit tab: bottom-edge centre, on a short
                         // stem below the box. Double-click snaps the box
                         // height to the text. A filled accent square so it

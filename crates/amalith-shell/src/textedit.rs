@@ -688,6 +688,27 @@ pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::
     }
 }
 
+/// `td`'s text with every soft wrap baked into a hard newline — for
+/// converting area type to point type so the visible line layout is kept
+/// (a 3-line wrapped paragraph becomes 3 lines with returns, not one).
+pub fn hard_wrapped_content(td: &TextData, tcx: &mut TextContext) -> String {
+    let layout = td_layout(tcx, td);
+    let src = td.content.clone();
+    let mut lines = layout.lines().peekable();
+    let mut out = String::new();
+    while let Some(line) = lines.next() {
+        let seg = src
+            .get(line.text_range())
+            .unwrap_or("")
+            .trim_end_matches(['\n', '\r', ' ', '\t']);
+        out.push_str(seg);
+        if lines.peek().is_some() {
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Sinks one glyph's contours into a core [`BezPath`], each point pushed
 /// through `xf`.
 struct OutlineSink<'a> {

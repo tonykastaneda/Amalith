@@ -3532,6 +3532,69 @@ impl App {
 
     /// The selected area-text frame whose out-port the pointer is over —
     /// only its tail frame (no `thread_next`) offers a clickable port.
+    /// A single selected text object whose right-edge point/area convert
+    /// dot the pointer is over. Matches the dot drawn in `canvas.rs`.
+    fn text_convert_hit(&self) -> Option<ObjectId> {
+        if self.active_tool != Tool::Select || self.doc.selection.len() != 1 {
+            return None;
+        }
+        let id = self.doc.selection[0];
+        let obj = self.doc.editor.document().object(id)?;
+        if !matches!(obj.kind, amalith_core::ObjectKind::Text(_)) {
+            return None;
+        }
+        let q = select::selection_quad(self.doc.editor.document(), &[id])?;
+        let redge = Point::new((q[1].x + q[2].x) * 0.5, (q[1].y + q[2].y) * 0.5);
+        let scr = self.doc.view.to_screen() * redge + Vec2::new(16.0, 0.0);
+        (scr.distance(self.pointer) <= 8.0).then_some(id)
+    }
+
+    /// Toggle a text object between point and area type (double-click the
+    /// convert dot). Area → point drops the frame + any thread links;
+    /// point → area boxes the text at its current measured size.
+    fn toggle_text_kind(&mut self, id: ObjectId) {
+        use amalith_core::TextKind;
+        let Some(mut td) = self
+            .doc
+            .editor
+            .document()
+            .object(id)
+            .and_then(|o| match &o.kind {
+                amalith_core::ObjectKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        match td.kind {
+            TextKind::Area { .. } => {
+                // Un-thread first so a chain isn't left dangling.
+                if td.is_threaded() {
+                    self.purge_threads(&[id]);
+                    td.thread_prev = None;
+                    td.thread_next = None;
+                }
+                // Bake the frame's soft wraps into hard returns so the
+                // point text keeps the same line layout.
+                td.content = textedit::hard_wrapped_content(&td, &mut self.text);
+                td.kind = TextKind::Point;
+            }
+            TextKind::Point => {
+                let m = textedit::measure_text_data(&td, &mut self.text);
+                td.kind = TextKind::Area {
+                    width: m.width().max(TEXTBOX_MIN),
+                    height: Some(m.height().max(TEXTBOX_MIN)),
+                };
+            }
+        }
+        td.local_bounds = textedit::measure_text_data(&td, &mut self.text);
+        let _ = self.doc.editor.execute(Command::SetText {
+            object: id,
+            data: td,
+        });
+        self.request_main_redraw();
+    }
+
     /// A single selected area-text frame whose bottom-centre auto-fit tab
     /// the pointer is over. Matches the tab drawn in `canvas.rs`.
     fn text_autofit_hit(&self) -> Option<ObjectId> {
@@ -4654,10 +4717,12 @@ impl App {
         // Hovering a transform grip / rotation halo wins over the tool's
         // default cursor — unless the pointer is over an area-text
         // auto-fit tab, which sits in the rotation-halo zone below the box.
+        let over_text_widget =
+            self.text_autofit_hit().is_some() || self.text_convert_hit().is_some();
         let mode = if over
             && matches!(self.drag, Drag::None)
             && !self.space_down
-            && self.text_autofit_hit().is_none()
+            && !over_text_widget
         {
             self.handle_hover_cursor().unwrap_or(mode)
         } else if self.text_autofit_hit().is_some() {

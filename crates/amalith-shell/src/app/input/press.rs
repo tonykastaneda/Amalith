@@ -945,6 +945,16 @@ impl App {
                     return;
                 }
 
+                // Right-edge convert dot: double-click toggles the text
+                // object between point and area type.
+                if let Some(id) = self.text_convert_hit() {
+                    if double {
+                        self.toggle_text_kind(id);
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // Bottom-centre auto-fit tab of an area-text frame:
                 // double-click snaps the height to the text; a plain press
                 // drags the height like the S scale handle.
