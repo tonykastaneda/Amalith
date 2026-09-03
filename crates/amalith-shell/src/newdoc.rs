@@ -14,6 +14,10 @@ use crate::theme::Theme;
 const ID: Affine = Affine::IDENTITY;
 const FH: f64 = 30.0;
 
+/// Amalith brand yellow (`#f4be18`) — the art-placeholder fill until real
+/// pieces are wired in.
+const BRAND_YELLOW: Color = Color::from_rgb8(0xf4, 0xbe, 0x18);
+
 /// A text-editable field.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
@@ -370,7 +374,11 @@ impl L {
 
 /// Fully-resolved modal geometry for a window + scroll offset.
 pub struct Layout {
+    /// The form column, flush with the window's right edge.
     pub panel: Rect,
+    /// The dead space left of the form — a full-bleed art placeholder
+    /// (brand yellow for now; real pieces will cycle here later).
+    pub art: Rect,
     /// The clipped, scrollable content region (panel minus footer).
     pub scroll_rect: Rect,
     pub content_h: f64,
@@ -384,32 +392,33 @@ pub struct Layout {
 }
 
 pub fn layout(win: Rect, raw_scroll: f64) -> Layout {
-    let pw = 600.0_f64.min(win.width() - 80.0).max(360.0);
-    let ph = 760.0_f64.min(win.height() - 56.0).max(360.0);
-    let panel = Rect::from_center_size(
-        Point::new(win.width() * 0.5, win.height() * 0.5),
-        (pw, ph),
-    );
+    // The whole form is a fixed-width column pinned to the right edge of
+    // the window; everything left of it is the art placeholder.
+    let pw = 500.0_f64.min(win.width() * 0.46).max(340.0);
+    let panel = Rect::new((win.x1 - pw).max(win.x0), win.y0, win.x1, win.y1);
+    let art = Rect::new(win.x0, win.y0, panel.x0, win.y1);
 
-    let x = panel.x0 + 30.0;
-    let cw = panel.width() - 60.0 - 12.0; // leave room for the scrollbar
+    let x = panel.x0 + 34.0;
+    let cw = panel.width() - 34.0 - 26.0; // leave room for the scrollbar
     let (content, content_h) = build_content(x, cw);
 
     let scroll_rect = Rect::new(panel.x0, panel.y0, panel.x1, panel.y1 - FOOTER_H);
-    let max_scroll = (content_h + 16.0 - scroll_rect.height()).max(0.0);
+    let max_scroll = (content_h + 24.0 - scroll_rect.height()).max(0.0);
     let scroll = raw_scroll.clamp(0.0, max_scroll);
-    let l = content.shifted(scroll_rect.y0 + 8.0 - scroll);
+    let l = content.shifted(scroll_rect.y0 + 20.0 - scroll);
 
+    // Create / Cancel pinned to the window's bottom-right corner.
     let create = Rect::new(
-        panel.x1 - 30.0 - 110.0,
-        panel.y1 - 14.0 - 34.0,
-        panel.x1 - 30.0,
-        panel.y1 - 14.0,
+        panel.x1 - 24.0 - 104.0,
+        panel.y1 - 16.0 - 34.0,
+        panel.x1 - 24.0,
+        panel.y1 - 16.0,
     );
-    let close = Rect::new(create.x0 - 14.0 - 96.0, create.y0, create.x0 - 14.0, create.y1);
+    let close = Rect::new(create.x0 - 12.0 - 92.0, create.y0, create.x0 - 12.0, create.y1);
 
     Layout {
         panel,
+        art,
         scroll_rect,
         content_h,
         scroll,
@@ -572,11 +581,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     let x = l.name.x0;
     let right = l.name.x1;
 
-    if form.boot {
-        // Boot screen: the form fills the window, no dim, no card.
-        scene.fill(Fill::NonZero, ID, theme.bg, None, &win);
-    } else {
-        // Modal over a document: dim the canvas, draw a card.
+    if !form.boot {
+        // Modal over a document: dim whatever's behind the whole screen.
         scene.fill(
             Fill::NonZero,
             ID,
@@ -584,9 +590,20 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
             None,
             &win,
         );
-        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &lay.panel);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &lay.panel);
     }
+    // Left: full-bleed art placeholder (brand yellow for now).
+    if lay.art.width() > 1.0 {
+        scene.fill(Fill::NonZero, ID, BRAND_YELLOW, None, &lay.art);
+    }
+    // Right: the form column, with a hairline seam against the art.
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &lay.panel);
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(lay.panel.x0, lay.panel.y0, lay.panel.x0 + 1.0, lay.panel.y1),
+    );
 
     let caption = |scene: &mut Scene, text: &mut TextContext, s: &str, r: Rect| {
         text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 8.0);
@@ -699,7 +716,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
         None,
         &Rect::new(footer.x0, footer.y0, footer.x1, footer.y0 + 1.0),
     );
-    draw_button(scene, text, theme, lay.close, "Close", false);
+    draw_button(scene, text, theme, lay.close, "Cancel", false);
     draw_button(scene, text, theme, lay.create, "Create", true);
 }
 

@@ -2,7 +2,7 @@
 //! New Document modal, the font dropdown, the Stroke flyout, and the
 //! context bar.
 
-use vello::kurbo::Vec2;
+use vello::kurbo::{Rect, Vec2};
 use winit::event::MouseScrollDelta;
 
 use crate::context_bar;
@@ -22,9 +22,15 @@ impl App {
             // Pixel-based (trackpad): physical px → logical.
             MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
         };
-        // The New Document modal scrolls its content.
-        if let Some(form) = &mut self.newdoc {
-            form.scroll = (form.scroll - dy).max(0.0);
+        // The New Document modal scrolls its content. Clamp against the
+        // real range now — storing an unbounded value makes scrolling back
+        // feel frozen while the excess unwinds.
+        if self.newdoc.is_some() {
+            let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+            if let Some(form) = &mut self.newdoc {
+                let lay = crate::newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll - dy);
+                form.scroll = lay.scroll;
+            }
             self.request_main_redraw();
             return;
         }
