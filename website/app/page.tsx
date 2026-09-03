@@ -121,7 +121,7 @@ export default function Home() {
           <div><p>Community</p><a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a><a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues <ArrowUpRight /></a></div>
         </div>
         <p className="footer-note">
-          Built in public. Made for designers. Made with <span className="footer-heart" aria-label="love">♥</span> in Bell, California.
+          Built in public. Made for designers. <span className="footer-heart" aria-label="love">♥</span> from Bell, California.
         </p>
       </footer>
     </>

@@ -34,7 +34,7 @@ export default function WhyAmalith() {
           </div>
         </div>
         <p className="footer-note">
-          Built in public. Made for designers. Made with <span className="footer-heart" aria-label="love">♥</span> in Bell, California.
+          Built in public. Made for designers. <span className="footer-heart" aria-label="love">♥</span> from Bell, California.
         </p>
       </footer>
     </>
