@@ -460,6 +460,22 @@ impl App {
                     self.update_canvas_cursor();
                     return;
                 }
+                // Hand tool = a persistent pan drag.
+                if self.active_tool == Tool::Hand {
+                    self.drag = Drag::Pan { last: self.pointer };
+                    self.update_canvas_cursor();
+                    return;
+                }
+                // Zoom tool: click steps zoom at the cursor; drag is
+                // Illustrator's scrubby zoom (same as Space+⌘ drag).
+                if self.active_tool == Tool::Zoom {
+                    self.drag = Drag::ScrubZoom {
+                        anchor: self.pointer,
+                        last: self.pointer,
+                    };
+                    self.update_canvas_cursor();
+                    return;
+                }
                 let dp = self.doc_point(self.pointer);
 
                 // "Loaded text" cursor: a prior out-port click armed a

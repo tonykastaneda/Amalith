@@ -148,6 +148,8 @@ fn tool_name(tool: Tool) -> &'static str {
         Tool::Polygon => "Polygon",
         Tool::Star => "Star",
         Tool::Artboard => "Artboard",
+        Tool::Hand => "Hand",
+        Tool::Zoom => "Zoom",
     }
 }
 

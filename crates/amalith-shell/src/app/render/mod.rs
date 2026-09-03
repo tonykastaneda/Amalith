@@ -341,7 +341,17 @@ impl App {
             } else {
                 PenHint::Draw
             };
-            (self.effective_tool(), hint)
+            // Selection tool: badge the cursor when a click would select
+            // something.
+            let over_selectable = self.active_tool == Tool::Select
+                && matches!(self.drag, Drag::None)
+                && select::topmost_selectable_at(
+                    self.doc.editor.document(),
+                    self.doc_point(self.pointer),
+                    self.visible_doc_rect(),
+                )
+                .is_some();
+            (self.effective_tool(), hint, over_selectable)
         });
         let stroke_flyout = self.stroke_flyout_layout(wl);
         let stroke_style_shown = self.stroke_style_repr();

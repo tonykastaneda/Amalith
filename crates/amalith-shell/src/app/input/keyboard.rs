@@ -340,6 +340,14 @@ impl App {
                         self.rulers = !self.rulers;
                         self.request_main_redraw();
                     }
+                    // View zoom: ⌘+ / ⌘− step, ⌘0 fit, ⌘1 actual size.
+                    // `Equal` is the `=`/`+` key; on most layouts ⌘+ needs
+                    // Shift, so accept it with or without.
+                    KeyCode::Equal => self.zoom_step(1.6),
+                    KeyCode::Minus => self.zoom_step(1.0 / 1.6),
+                    KeyCode::Digit0 if self.alt_down => self.fit_view(),
+                    KeyCode::Digit0 => self.zoom_fit(),
+                    KeyCode::Digit1 if !self.shift_down => self.zoom_actual(),
                     // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
                     KeyCode::BracketRight => {
                         if self.alt_down {

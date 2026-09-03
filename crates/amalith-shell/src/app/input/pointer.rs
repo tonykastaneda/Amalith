@@ -409,8 +409,16 @@ impl App {
             Drag::None
             | Drag::Splitter { .. }
             | Drag::RailWidth { .. }
-            | Drag::Pan { .. }
-            | Drag::ScrubZoom { .. } => {}
+            | Drag::Pan { .. } => {}
+            // A scrubby-zoom that never moved = a click: step-zoom at the
+            // point (Alt / left-drag direction = out).
+            Drag::ScrubZoom { anchor, last } => {
+                if (last - anchor).hypot() < 4.0 {
+                    let f = if self.alt_down { 1.0 / 1.6 } else { 1.6 };
+                    self.doc.view.zoom_at(f, anchor);
+                    self.request_main_redraw();
+                }
+            }
             Drag::MovePicker { .. } => {}
             // The dialog keeps edits pending until its OK button (or Enter).
             Drag::PickColor { .. } => {}
@@ -535,7 +543,9 @@ impl App {
                         | Tool::Pen
                         | Tool::Line
                         | Tool::Text
-                        | Tool::Artboard => return,
+                        | Tool::Artboard
+                        | Tool::Hand
+                        | Tool::Zoom => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];

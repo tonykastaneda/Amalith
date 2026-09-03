@@ -42,7 +42,7 @@ pub(in crate::app) fn paint_main(
     newdoc_form: Option<&newdoc::NewDocForm>,
     tab_labels: &[String],
     active_tab: usize,
-    cursor_glyph: Option<(Tool, PenHint)>,
+    cursor_glyph: Option<(Tool, PenHint, bool)>,
     anchor_sel_len: usize,
     zoom_cursor: Option<bool>,
     cursor_mode: CanvasCursor,
@@ -300,7 +300,7 @@ pub(in crate::app) fn paint_main(
     }
 
     // The active tool's on-document glyph, standing in for the OS cursor.
-    if let Some((tool, hint)) = cursor_glyph {
+    if let Some((tool, hint, over_selectable)) = cursor_glyph {
         let sz = 30.0;
         let (hx, hy) = cursor_hotspot(tool);
         let x0 = pointer.x - sz * hx;
@@ -313,6 +313,27 @@ pub(in crate::app) fn paint_main(
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
+        // A small filled square off the arrow's tail — "this is selectable".
+        if tool == Tool::Select && over_selectable {
+            let c = vello::kurbo::Point::new(x0 + sz * 0.66, y0 + sz * 0.64);
+            let a = 3.2;
+            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            let halo = vello::peniko::Color::WHITE;
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                halo,
+                None,
+                &Rect::new(c.x - a - 1.2, c.y - a - 1.2, c.x + a + 1.2, c.y + a + 1.2),
+            );
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                ink,
+                None,
+                &Rect::new(c.x - a, c.y - a, c.x + a, c.y + a),
+            );
+        }
         // A small "+" badge when a click would insert an anchor.
         if tool == Tool::Pen && hint == PenHint::AddPoint {
             use vello::kurbo::{Line, Stroke};

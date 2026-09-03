@@ -50,6 +50,8 @@ pub enum Icon {
     Polygon,
     Star,
     Artboard,
+    Hand,
+    Zoom,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -64,7 +66,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
-        Icon::Text | Icon::Line => "",
+        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom => "",
     }
 }
 
@@ -78,7 +80,73 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
         draw_line_glyph(scene, box_, color);
         return;
     }
+    if icon == Icon::Hand {
+        draw_hand_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Zoom {
+        draw_zoom_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// A four-finger mitt + thumb — the Hand tool.
+fn draw_hand_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let (x, y) = (box_.x0, box_.y0);
+    // Palm.
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(x + w * 0.24, y + h * 0.42, x + w * 0.78, y + h * 0.84),
+    );
+    // Four fingers.
+    let fw = w * 0.115;
+    for (i, top) in [0.20, 0.14, 0.16, 0.24].into_iter().enumerate() {
+        let fx = x + w * 0.27 + i as f64 * (fw + w * 0.04);
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            color,
+            None,
+            &Rect::new(fx, y + h * top, fx + fw, y + h * 0.58),
+        );
+    }
+    // Thumb.
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(x + w * 0.13, y + h * 0.50, x + w * 0.29, y + h * 0.74),
+    );
+}
+
+/// A magnifying glass — the Zoom tool.
+fn draw_zoom_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let c = Point::new(box_.x0 + w * 0.42, box_.y0 + box_.height() * 0.42);
+    let r = w * 0.26;
+    scene.stroke(
+        &Stroke::new((w * 0.09).max(1.6)),
+        ID,
+        color,
+        None,
+        &Circle::new(c, r),
+    );
+    let handle_a = Point::new(c.x + r * 0.72, c.y + r * 0.72);
+    let handle_b = Point::new(box_.x1 - w * 0.12, box_.y1 - box_.height() * 0.12);
+    scene.stroke(
+        &Stroke::new((w * 0.13).max(2.0)),
+        ID,
+        color,
+        None,
+        &Line::new(handle_a, handle_b),
+    );
 }
 
 /// A bottom-left → top-right diagonal with a small end node at each tip —

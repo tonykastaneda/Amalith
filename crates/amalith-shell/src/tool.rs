@@ -15,10 +15,12 @@ pub enum Tool {
     Polygon,
     Star,
     Artboard,
+    Hand,
+    Zoom,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 13] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -30,6 +32,8 @@ impl Tool {
         Tool::Polygon,
         Tool::Star,
         Tool::Artboard,
+        Tool::Hand,
+        Tool::Zoom,
     ];
 
     /// A drag-a-box shape tool.
@@ -53,6 +57,8 @@ impl Tool {
             Tool::Polygon => "Polygon",
             Tool::Star => "Star",
             Tool::Artboard => "Artboard",
+            Tool::Hand => "Hand",
+            Tool::Zoom => "Zoom",
         }
     }
 
@@ -67,6 +73,8 @@ impl Tool {
             Tool::Rectangle => "M",
             Tool::Ellipse => "L",
             Tool::Artboard => "⇧O",
+            Tool::Hand => "H",
+            Tool::Zoom => "Z",
             _ => "",
         }
     }
@@ -84,6 +92,8 @@ impl Tool {
             Tool::Polygon => Icon::Polygon,
             Tool::Star => Icon::Star,
             Tool::Artboard => Icon::Artboard,
+            Tool::Hand => Icon::Hand,
+            Tool::Zoom => Icon::Zoom,
         }
     }
 }

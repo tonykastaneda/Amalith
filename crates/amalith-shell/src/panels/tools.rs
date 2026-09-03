@@ -34,7 +34,7 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
 ];
 
 /// The visible slots; the Shape slot shows `shape`'s icon.
-fn slots(shape: Tool) -> [Tool; 7] {
+fn slots(shape: Tool) -> [Tool; 9] {
     [
         Tool::Select,
         Tool::DirectSelect,
@@ -43,6 +43,8 @@ fn slots(shape: Tool) -> [Tool; 7] {
         Tool::Text,
         shape,
         Tool::Artboard,
+        Tool::Hand,
+        Tool::Zoom,
     ]
 }
 
@@ -58,7 +60,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub(super) fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
-    let rows = 7usize.div_ceil(cols) as f64;
+    let rows = 9usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     TOP + rows * CELL + 12.0 + PROXY_H
 }

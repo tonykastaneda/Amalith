@@ -293,6 +293,11 @@ enum MenuAction {
     BringToFront,
     SendBackward,
     SendToBack,
+    /// View menu.
+    ZoomIn,
+    ZoomOut,
+    FitArtboard,
+    FitAll,
     /// Window menu: show/hide the panel with this id.
     TogglePanel(&'static str),
 }
@@ -2149,6 +2154,10 @@ impl App {
             MenuAction::BringToFront => self.restack_extreme(true),
             MenuAction::SendBackward => self.restack(-1),
             MenuAction::SendToBack => self.restack_extreme(false),
+            MenuAction::ZoomIn => self.zoom_step(1.6),
+            MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
+            MenuAction::FitArtboard => self.zoom_fit(),
+            MenuAction::FitAll => self.fit_view(),
         }
     }
 
@@ -3657,6 +3666,33 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Multiply the zoom by `factor`, keeping the canvas centre fixed
+    /// (⌘+ / ⌘− and the Zoom-tool click).
+    fn zoom_step(&mut self, factor: f64) {
+        self.doc.view.zoom_at(factor, self.canvas_viewport().center());
+        self.request_main_redraw();
+    }
+
+    /// ⌘0 — fit the artboard in play, else every artboard.
+    fn zoom_fit(&mut self) {
+        let rect = self
+            .current_artboard()
+            .and_then(|id| self.doc.editor.document().artboard(id).map(|a| a.rect));
+        match rect {
+            Some(r) => self.fit_view_to(r),
+            None => self.fit_view(),
+        }
+    }
+
+    /// ⌘1 — 100%, keeping the canvas centre fixed.
+    fn zoom_actual(&mut self) {
+        let z = self.doc.view.zoom;
+        if (z - 1.0).abs() > 1e-6 {
+            self.doc.view.zoom_at(1.0 / z, self.canvas_viewport().center());
+        }
+        self.request_main_redraw();
+    }
+
     /// A minimal [`panels::Ctx`] for hit-only / tip-only queries.
     fn tip_ctx(&self) -> panels::Ctx<'_> {
         panels::Ctx {
@@ -3881,6 +3917,11 @@ impl App {
         } else if matches!(self.drag, Drag::ScrubZoom { .. })
             || (self.space_down && self.cmd_down)
         {
+            // Mid-scrub the +/− follows drag direction (set in the drag
+            // handler); otherwise it follows Alt.
+            if !matches!(self.drag, Drag::ScrubZoom { .. }) {
+                self.zoom_sign = if self.alt_down { -1 } else { 1 };
+            }
             CanvasCursor::Zoom
         } else if (self.space_down && !matches!(self.drag, Drag::PenHandle { .. }))
             || matches!(self.drag, Drag::Pan { .. })
@@ -3894,6 +3935,11 @@ impl App {
             match self.effective_tool() {
                 Tool::Text => CanvasCursor::IBeam,
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
+                Tool::Hand => CanvasCursor::Grab,
+                Tool::Zoom => {
+                    self.zoom_sign = if self.alt_down { -1 } else { 1 };
+                    CanvasCursor::Zoom
+                }
                 _ => CanvasCursor::Crosshair,
             }
         };
@@ -4519,6 +4565,13 @@ impl ApplicationHandler for App {
                     if matches!(self.drag, Drag::PenHandle { .. }) {
                         self.drag_pen_handle();
                     }
+                    // Zoom tool / ⌘Space: Alt flips the magnifier + ↔ −.
+                    if self.effective_tool() == Tool::Zoom
+                        || (self.space_down && self.cmd_down)
+                    {
+                        self.update_canvas_cursor();
+                        self.request_main_redraw();
+                    }
                     if now_direct != was_direct || !matches!(self.drag, Drag::None) {
                         self.request_main_redraw();
                     }
@@ -4916,6 +4969,7 @@ impl NativeMenu {
         let _ = window;
         let sup = Some(prim);
         let sup_shift = Some(prim | Modifiers::SHIFT);
+        let sup_alt = Some(prim | Modifiers::ALT);
         let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
 
         let new_i = mk("New", sup, Code::KeyN);
@@ -4935,6 +4989,10 @@ impl NativeMenu {
         let front_i = mk("Bring to Front", sup_shift, Code::BracketRight);
         let backward_i = mk("Send Backward", sup, Code::BracketLeft);
         let back_i = mk("Send to Back", sup_shift, Code::BracketLeft);
+        let zoom_in_i = mk("Zoom In", sup, Code::Equal);
+        let zoom_out_i = mk("Zoom Out", sup, Code::Minus);
+        let fit_artboard_i = mk("Fit Artboard in Window", sup, Code::Digit0);
+        let fit_all_i = mk("Fit All in Window", sup_alt, Code::Digit0);
 
         let sep = PredefinedMenuItem::separator;
         let about_i = MenuItem::new("About Amalith", true, None);
@@ -4976,6 +5034,18 @@ impl NativeMenu {
             ],
         )
         .expect("edit menu");
+        let view = Submenu::with_items(
+            "View",
+            true,
+            &[
+                &zoom_in_i,
+                &zoom_out_i,
+                &sep(),
+                &fit_artboard_i,
+                &fit_all_i,
+            ],
+        )
+        .expect("view menu");
 
         let window_checks: Vec<(&'static str, CheckMenuItem)> = WINDOW_PANELS
             .iter()
@@ -4993,6 +5063,7 @@ impl NativeMenu {
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
+        menu.append(&view).expect("append view menu");
         menu.append(&panels_menu).expect("append panels menu");
         #[cfg(target_os = "macos")]
         menu.init_for_nsapp();
@@ -5034,6 +5105,10 @@ impl NativeMenu {
             (front_i.id().clone(), MenuAction::BringToFront),
             (backward_i.id().clone(), MenuAction::SendBackward),
             (back_i.id().clone(), MenuAction::SendToBack),
+            (zoom_in_i.id().clone(), MenuAction::ZoomIn),
+            (zoom_out_i.id().clone(), MenuAction::ZoomOut),
+            (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
+            (fit_all_i.id().clone(), MenuAction::FitAll),
         ];
         let mut items = items;
         for (id, item) in &window_checks {
