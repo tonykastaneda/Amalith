@@ -1,10 +1,14 @@
 //! The Home / Welcome screen.
 //!
 //! Shown on launch and whenever the last document tab is closed: a left panel
-//! with the app mark, the welcome wordmark, and two external links (tutorials
-//! on YouTube, the repo on GitHub), plus a three-column grid on the right — a
+//! with the app mark, the welcome wordmark, and a short stack of external
+//! links (News, Docs, GitHub), plus a three-column grid on the right — a
 //! "New Document" tile, recent files, and dark-grey placeholders, with a
 //! scrollbar when the grid overflows.
+//!
+//! The YouTube tutorials link is kept in the code but hidden for now (see
+//! `Badge::Youtube` / `hit_youtube`) — bring it back once the app is closer
+//! to feature-complete.
 //!
 //! Rendered with vello + parley like the rest of the chrome. It's a full-window
 //! surface: while it's up, the canvas underneath takes no input. Artwork comes
@@ -12,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use vello::kurbo::{Affine, Rect, RoundedRect, Vec2};
+use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke, Vec2};
 use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
@@ -25,10 +29,14 @@ const YOUTUBE_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/youtube
 const GITHUB_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/github.png");
 const TILE_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/newdoc-tile.png");
 
-/// A blanket YouTube search, per the brief.
+/// A blanket YouTube search, per the brief. Hidden for now — kept so the
+/// link can be restored without redoing the wiring.
+#[allow(dead_code)]
 pub const YOUTUBE_URL: &str =
     "https://www.youtube.com/results?search_query=Illustrator+Tutorial";
 pub const GITHUB_URL: &str = "https://github.com/tonykastaneda/Amalith";
+pub const NEWS_URL: &str = "https://amalith.app/news";
+pub const DOCS_URL: &str = "https://amalith.app/docs";
 
 const SPLIT: f64 = 0.39;
 const PAD: f64 = 56.0;
@@ -52,7 +60,11 @@ pub enum Hit {
     None,
     NewDocument,
     Recent(usize),
+    /// Hidden for now; kept so the arm in `press.rs` still compiles.
+    #[allow(dead_code)]
     Youtube,
+    News,
+    Docs,
     Github,
 }
 
@@ -88,6 +100,8 @@ fn display_name(path: &Path) -> String {
 pub struct Home {
     mark: ImageData,
     welcome: ImageData,
+    /// Decoded but not painted right now — see the module docs.
+    #[allow(dead_code)]
     youtube: ImageData,
     github: ImageData,
     tile: ImageData,
@@ -100,7 +114,10 @@ pub struct Home {
     // Hit rectangles in window coordinates, refreshed each paint.
     hit_new: Rect,
     hit_recents: Vec<Rect>,
+    /// Stays `Rect::ZERO` while the YouTube row is hidden.
     hit_youtube: Rect,
+    hit_news: Rect,
+    hit_docs: Rect,
     hit_github: Rect,
 }
 
@@ -124,6 +141,8 @@ impl Home {
             hit_new: Rect::ZERO,
             hit_recents: Vec::new(),
             hit_youtube: Rect::ZERO,
+            hit_news: Rect::ZERO,
+            hit_docs: Rect::ZERO,
             hit_github: Rect::ZERO,
         })
     }
@@ -139,6 +158,12 @@ impl Home {
         }
         if self.hit_youtube.contains(pt) {
             return Hit::Youtube;
+        }
+        if self.hit_news.contains(pt) {
+            return Hit::News;
+        }
+        if self.hit_docs.contains(pt) {
+            return Hit::Docs;
         }
         if self.hit_github.contains(pt) {
             return Hit::Github;
@@ -208,22 +233,34 @@ impl Home {
             &Rect::new(PAD, dy, split - PAD, dy + 1.0),
         );
 
-        // Link rows.
+        // Link rows. The YouTube tutorials row is hidden for now; its hit
+        // rect stays empty so `on_press` can never resolve to it.
+        self.hit_youtube = Rect::ZERO;
         let y0 = dy + 46.0;
-        self.hit_youtube = link_row(
+        let stride = BADGE + 32.0;
+        self.hit_news = link_row(
             scene,
             tcx,
-            &self.youtube,
+            Badge::News,
             y0,
             split,
-            "New to Amalith?",
-            "20+ Years of Tutorials Ready at Launch",
+            "News",
+            "Latest from Amalith",
+        );
+        self.hit_docs = link_row(
+            scene,
+            tcx,
+            Badge::Docs,
+            y0 + stride,
+            split,
+            "Docs",
+            "Guides and Reference",
         );
         self.hit_github = link_row(
             scene,
             tcx,
-            &self.github,
-            y0 + BADGE + 32.0,
+            Badge::Img(&self.github),
+            y0 + stride * 2.0,
             split,
             "Github",
             "Changelogs and New Releases",
@@ -331,24 +368,118 @@ impl Home {
     }
 }
 
+/// The little square at the head of a link row: an art PNG, or a drawn
+/// monoline glyph for the rows that don't have dedicated art yet.
+enum Badge<'a> {
+    Img(&'a ImageData),
+    News,
+    Docs,
+}
+
 fn link_row(
     scene: &mut Scene,
     tcx: &mut TextContext,
-    badge: &ImageData,
+    badge: Badge<'_>,
     y: f64,
     split: f64,
     title: &str,
     sub: &str,
 ) -> Rect {
-    image_into(
-        scene,
-        badge,
-        Rect::from_origin_size((PAD, y), (BADGE, BADGE)),
-    );
+    let box_ = Rect::from_origin_size((PAD, y), (BADGE, BADGE));
+    match badge {
+        Badge::Img(img) => image_into(scene, img, box_),
+        Badge::News => draw_news_badge(scene, box_),
+        Badge::Docs => draw_docs_badge(scene, box_),
+    }
     let tx = PAD + BADGE + 18.0;
     tcx.draw(scene, title, 15.0, INK, tx, y + 20.0);
     tcx.draw(scene, sub, 12.0, DIM, tx, y + 39.0);
     Rect::new(PAD - 6.0, y - 6.0, split - PAD, y + BADGE + 6.0)
+}
+
+/// Rounded-grey badge background shared by the drawn glyphs.
+fn badge_bg(scene: &mut Scene, box_: Rect) {
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        TILE_RECENT,
+        None,
+        &RoundedRect::from_rect(box_, 12.0),
+    );
+}
+
+/// A newspaper: framed page, masthead bar, three text lines.
+fn draw_news_badge(scene: &mut Scene, box_: Rect) {
+    badge_bg(scene, box_);
+    let g = box_.inset(-12.0);
+    let stroke = Stroke::new(1.6);
+    scene.stroke(
+        &stroke,
+        Affine::IDENTITY,
+        INK,
+        None,
+        &RoundedRect::from_rect(g, 2.0),
+    );
+    // Masthead.
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        INK,
+        None,
+        &Rect::new(g.x0 + 3.0, g.y0 + 3.0, g.x1 - 3.0, g.y0 + 7.0),
+    );
+    // Text lines.
+    for i in 0..3 {
+        let ly = g.y0 + 12.0 + i as f64 * 4.5;
+        let x1 = if i == 2 { g.x1 - 7.0 } else { g.x1 - 3.0 };
+        scene.stroke(
+            &Stroke::new(1.4),
+            Affine::IDENTITY,
+            INK,
+            None,
+            &line_path((g.x0 + 3.0, ly), (x1, ly)),
+        );
+    }
+}
+
+/// A document page with a folded top-right corner and three text lines.
+fn draw_docs_badge(scene: &mut Scene, box_: Rect) {
+    badge_bg(scene, box_);
+    let g = box_.inset(-13.0);
+    let fold = 7.0;
+    let mut page = BezPath::new();
+    page.move_to((g.x0, g.y0));
+    page.line_to((g.x1 - fold, g.y0));
+    page.line_to((g.x1, g.y0 + fold));
+    page.line_to((g.x1, g.y1));
+    page.line_to((g.x0, g.y1));
+    page.close_path();
+    scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, INK, None, &page);
+    // Folded corner.
+    let mut corner = BezPath::new();
+    corner.move_to((g.x1 - fold, g.y0));
+    corner.line_to((g.x1 - fold, g.y0 + fold));
+    corner.line_to((g.x1, g.y0 + fold));
+    scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, INK, None, &corner);
+    // Text lines.
+    for i in 0..3 {
+        let ly = g.y0 + 13.0 + i as f64 * 5.0;
+        let x1 = if i == 2 { g.x1 - 6.0 } else { g.x1 - 4.0 };
+        scene.stroke(
+            &Stroke::new(1.4),
+            Affine::IDENTITY,
+            INK,
+            None,
+            &line_path((g.x0 + 4.0, ly), (x1, ly)),
+        );
+    }
+}
+
+fn line_path(a: (f64, f64), b: (f64, f64)) -> BezPath {
+    let mut p = BezPath::new();
+    p.move_to(a);
+    p.line_to(b);
+    p
 }
 
 /// Centred caption under a tile. `selected` draws the accent highlight pill.

@@ -91,6 +91,10 @@ pub(in crate::app) fn paint_main(
     guide_lines: &[(amalith_core::GuideOrient, f64, GuideMark)],
     // Outline (wireframe) view active.
     outline_mode: bool,
+    // Isolation-mode group, if any.
+    isolate: Option<ObjectId>,
+    // Layers panel drag-reorder indicator: (visible-row index, into-container).
+    layer_drop: Option<(i64, bool)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -142,11 +146,52 @@ pub(in crate::app) fn paint_main(
         show_cull,
         active_artboard,
         outline_mode,
+        isolate,
     );
 
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
+    }
+
+    // Clip masks are otherwise invisible — outline them in the accent
+    // colour when a clip group is selected, or when the pointer is over
+    // a mask's contour (inside isolation or not).
+    {
+        let vt = view.to_screen();
+        let draw_contour = |scene: &mut Scene, mid: ObjectId| {
+            if let Some(bez) = select::object_contour(doc, mid) {
+                scene.stroke(&Stroke::new(1.5), ID, theme.accent, None, &(vt * bez));
+            }
+        };
+        let dp = vt.inverse() * pointer;
+        match isolate {
+            // In isolation: highlight this group's mask on contour hover.
+            Some(root) => {
+                if let Some(mid) = select::clip_mask_at_contour(doc, root, dp, 4.0 / view.zoom) {
+                    draw_contour(scene, mid);
+                }
+            }
+            // Not isolated: selected clip groups always show their mask;
+            // hovering a clip group's mask contour previews it.
+            None => {
+                for &id in selection {
+                    if let Some(mid) = select::clip_mask_of(doc, id) {
+                        draw_contour(scene, mid);
+                    }
+                }
+                let vis = vt.inverse().transform_rect_bbox(viewport);
+                if let Some(hit) = select::topmost_selectable_at(doc, dp, vis) {
+                    if !selection.contains(&hit) {
+                        if let Some(mid) =
+                            select::clip_mask_at_contour(doc, hit, dp, 4.0 / view.zoom)
+                        {
+                            draw_contour(scene, mid);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Ruler guides — full-canvas lines, clipped to the viewport.
@@ -295,6 +340,7 @@ pub(in crate::app) fn paint_main(
                 layer_query,
                 layer_search_focused,
                 layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
+                layer_drop,
                 color_mode,
                 recent,
                 xform_ref,
@@ -304,6 +350,7 @@ pub(in crate::app) fn paint_main(
                 align_spacing,
                 align_spacing_edit,
                 key_object,
+                shape_dialog: None,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

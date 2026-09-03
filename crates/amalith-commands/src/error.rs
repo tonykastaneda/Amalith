@@ -44,4 +44,6 @@ pub enum CommandError {
     NoStrokeToExpand,
     #[error("nothing to align")]
     NothingToAlign,
+    #[error("cannot move a group into itself")]
+    CannotReparent,
 }

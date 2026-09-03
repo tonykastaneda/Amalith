@@ -210,6 +210,11 @@ impl App {
                 return;
             }
         }
+        // The exact-size shape dialog takes every key while open.
+        if self.shape_dialog.is_some() {
+            self.shape_dialog_key(&event);
+            return;
+        }
         // The New Document modal, then an inline rename, each
         // swallow all keyboard input while active.
         if self.newdoc.is_some() {
@@ -458,6 +463,9 @@ impl App {
                         }
                         self.request_main_redraw();
                     }
+                    // ⌘7 make clipping mask, ⌘⌥7 release.
+                    KeyCode::Digit7 if self.alt_down => self.clip_release(),
+                    KeyCode::Digit7 => self.clip_make(),
                     // Select: ⌘A all, ⌥⌘A active artboard, ⇧⌘A deselect.
                     KeyCode::KeyA if self.shift_down => self.deselect(),
                     KeyCode::KeyA if self.alt_down => self.select_all_artboard(),
@@ -539,7 +547,10 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
-                        if self.text_load.is_some() {
+                        if !self.isolation.is_empty() {
+                            // Step out one isolation-mode level.
+                            self.pop_isolation();
+                        } else if self.text_load.is_some() {
                             // Cancel a loaded-text thread cursor.
                             self.text_load = None;
                             self.update_canvas_cursor();

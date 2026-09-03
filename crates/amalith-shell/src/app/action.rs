@@ -98,6 +98,33 @@ impl App {
             }
             panels::Action::PickerCancel => self.dismiss_picker(false),
             panels::Action::PickerOk => self.dismiss_picker(true),
+            panels::Action::ShapeField(i) => {
+                if let Some(d) = self.shape_dialog.as_mut() {
+                    d.focus_field(i);
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
+            panels::Action::ShapeStep(i, delta) => {
+                if let Some(d) = self.shape_dialog.as_mut() {
+                    d.step(i, delta as f64);
+                }
+                self.request_main_redraw();
+            }
+            panels::Action::ShapeLink => {
+                if let Some(d) = self.shape_dialog.as_mut() {
+                    d.toggle_link();
+                }
+                self.request_main_redraw();
+            }
+            panels::Action::ShapeOption(tag) => {
+                if let Some(d) = self.shape_dialog.as_mut() {
+                    d.apply_option(tag);
+                }
+                self.request_main_redraw();
+            }
+            panels::Action::ShapeCancel => self.close_shape_dialog(false),
+            panels::Action::ShapeOk => self.close_shape_dialog(true),
             panels::Action::SetPaint(paint) => {
                 self.set_paint(self.active_slot, paint);
                 if let Some(c) = paint.color() {

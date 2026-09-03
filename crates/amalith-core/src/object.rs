@@ -679,6 +679,11 @@ impl PathData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GroupData {
     pub children: Vec<ObjectId>,
+    /// When set, this is a clip group: `clip` names the child (which must
+    /// also be in `children`) whose silhouette masks the other children.
+    /// The clip child is not drawn in its own right.
+    #[serde(default)]
+    pub clip: Option<ObjectId>,
 }
 
 /// One or more subpaths treated as a single fillable shape (even/odd or

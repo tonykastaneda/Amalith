@@ -40,7 +40,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
-    recent, rulers, sample, select, settings, stroke_panel, textedit, workspace, Theme,
+    recent, rulers, sample, select, settings, shapedialog, stroke_panel, textedit, workspace, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -142,6 +142,16 @@ enum Drag {
     MovingFloating { id: u64, grab: Vec2, pos: Point },
     /// Dragging a rail's inner edge to widen / narrow the whole rail.
     RailWidth { side: RailSide },
+    /// Dragging a Layers-panel row to restack / reparent the current
+    /// selection. `body` is the panel's scrolled body rect (screen px) so
+    /// the drop target can be recomputed as the pointer moves; the drag
+    /// only "takes" (and `App::layer_drop` populates) once the pointer
+    /// leaves a small slop circle around `press`.
+    LayerDrag {
+        body: Rect,
+        press: Point,
+        moved: bool,
+    },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
     /// Illustrator scrubby zoom (Space+⌘ drag): zoom anchored at
@@ -331,6 +341,9 @@ enum MenuAction {
     ZoomOut,
     FitArtboard,
     FitAll,
+    /// Object ▸ Clipping Mask ▸ Make / Release.
+    ClipMake,
+    ClipRelease,
     /// Type ▸ Convert to Area / Point Type (toggles by selection state).
     ConvertTextKind,
     /// Help ▸ Amalith Help — opens the docs site.
@@ -385,6 +398,8 @@ enum SameKind {
 
 #[derive(Clone, Copy, PartialEq)]
 enum CtxAction {
+    ClipMake,
+    ClipRelease,
     ToggleGuides,
     ToggleGuideLock,
     ReleaseGuides,
@@ -627,6 +642,15 @@ struct App {
     active: usize,
     /// The New Document modal, when open.
     newdoc: Option<newdoc::NewDocForm>,
+    /// The exact-size shape dialog (Rectangle / Ellipse / Polygon / Star),
+    /// opened by a plain click with a primitive tool. Free-floating like
+    /// the colour picker; never a dockable panel.
+    shape_dialog: Option<shapedialog::ShapeDialog>,
+    /// Values the shape dialog reopens with — last committed per tool.
+    shape_params: shapedialog::Params,
+    /// Set on a plain shape-tool click (release has no `event_loop`); the
+    /// dialog window is spawned right after, in `window_event`.
+    pending_shape_dialog: Option<(Tool, Point)>,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -783,6 +807,18 @@ struct App {
     selected_guides: Vec<amalith_core::GuideId>,
     /// Outline (wireframe) view — View ▸ Outline, ⌘Y.
     outline_mode: bool,
+    /// Isolation-mode breadcrumb: the groups drilled into (outermost
+    /// first). Empty = not isolated. Selection, hit-testing and the dim
+    /// scrim scope to the last entry.
+    isolation: Vec<ObjectId>,
+    /// Isolation breadcrumb bar hit rects from the last paint: `(rect,
+    /// depth)` — a click truncates the breadcrumb to `depth`.
+    iso_bar: Vec<(Rect, usize)>,
+    /// Live Layers-panel drag-reorder target: `(parent, insert index,
+    /// visible-row index, into-container)`. `Some` only while a
+    /// [`Drag::LayerDrag`] is past the slop threshold. The first two drive
+    /// the `Reparent` command on release; the last two draw the indicator.
+    layer_drop: Option<(amalith_core::ObjectParent, usize, i64, bool)>,
     /// Cached static ruler layer — rebuilt only when the view, canvas
     /// region, ruler origin, or display unit changes.
     ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
@@ -842,6 +878,9 @@ impl App {
             active: 0,
             // Boot into the Home screen; New Document opens from there.
             newdoc: None,
+            shape_dialog: None,
+            shape_params: shapedialog::Params::default(),
+            pending_shape_dialog: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -913,6 +952,9 @@ impl App {
             guides_locked,
             selected_guides: Vec::new(),
             outline_mode: false,
+            isolation: Vec::new(),
+            iso_bar: Vec::new(),
+            layer_drop: None,
             ruler_cache: None,
             ruler_menu: None,
             ctx_menu: None,
@@ -1056,6 +1098,8 @@ impl App {
         self.last_pen = None;
         self.marquee = None;
         self.picker = None;
+        self.pending_shape_dialog = None;
+        self.close_shape_dialog(false);
         self.panel_menu = None;
     }
 
@@ -1587,6 +1631,7 @@ impl App {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_type(self.text_convert_menu_state());
+            m.sync_clip(self.clip_state());
         }
     }
     fn toggle_outline_mode(&mut self) {
@@ -1634,7 +1679,22 @@ impl App {
     /// Build and show the canvas context menu at `at` (screen px).
     fn open_ctx_menu(&mut self, at: Point) {
         let has_guides = !self.doc.editor.document().guides().is_empty();
-        let items = vec![
+        let (can_clip, can_release) = self.clip_state();
+        let mut items = vec![];
+        if can_clip || can_release {
+            items.push(CtxItem::Action {
+                label: "Make Clipping Mask".into(),
+                action: CtxAction::ClipMake,
+                enabled: can_clip,
+            });
+            items.push(CtxItem::Action {
+                label: "Release Clipping Mask".into(),
+                action: CtxAction::ClipRelease,
+                enabled: can_release,
+            });
+            items.push(CtxItem::Sep);
+        }
+        items.extend([
             CtxItem::Action {
                 label: if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.into(),
                 action: CtxAction::ToggleGuides,
@@ -1650,7 +1710,7 @@ impl App {
                 action: CtxAction::ReleaseGuides,
                 enabled: has_guides,
             },
-        ];
+        ]);
         let h = Self::ctx_menu_height(&items);
         let (w, wh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let origin = Point::new(
@@ -1689,6 +1749,8 @@ impl App {
         }
         if let Some(a) = hit {
             match a {
+                CtxAction::ClipMake => self.clip_make(),
+                CtxAction::ClipRelease => self.clip_release(),
                 CtxAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
                 CtxAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
                 CtxAction::ReleaseGuides => self.release_guides(),
@@ -2513,6 +2575,179 @@ impl App {
         }
     }
 
+    // --- Exact-size shape dialogs -------------------------------------
+
+    /// The float-only panel id standing in for `tool`'s exact-size dialog.
+    fn shape_panel_id(tool: Tool) -> PanelId {
+        PanelId(match tool {
+            Tool::Rectangle => "shapedlg.rect",
+            Tool::RoundedRect => "shapedlg.round",
+            Tool::Ellipse => "shapedlg.ellipse",
+            Tool::Polygon => "shapedlg.polygon",
+            Tool::Star => "shapedlg.star",
+            _ => "shapedlg.rect",
+        })
+    }
+
+    /// True when floating group `fid` holds a panel that must never dock
+    /// and never shows in the Window menu — the colour picker or a shape
+    /// dialog.
+    fn is_float_only(&self, fid: u64) -> bool {
+        if self.dock.floating_id_of(PanelId("picker")) == Some(fid) {
+            return true;
+        }
+        self.shape_dialog
+            .as_ref()
+            .is_some_and(|d| self.dock.floating_id_of(Self::shape_panel_id(d.tool)) == Some(fid))
+    }
+
+    /// Open the exact-size dialog for `tool` (anchored at document-space
+    /// `anchor`) as its own floating window — same plumbing as the colour
+    /// picker: movable by the tab strip, not dockable, not in the Window
+    /// menu.
+    fn spawn_shape_dialog(&mut self, event_loop: &ActiveEventLoop, tool: Tool, anchor: Point) {
+        if !tool.is_shape() {
+            return;
+        }
+        self.close_shape_dialog(false);
+        self.shape_dialog = Some(shapedialog::ShapeDialog::open(
+            tool,
+            anchor,
+            &self.shape_params,
+        ));
+        self.text_blink = Instant::now();
+
+        let pid = Self::shape_panel_id(tool);
+        let fw = shapedialog::W;
+        let fh = shapedialog::body_height(tool) + self.theme.tab_strip_h;
+        let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let o = self.main_inner_origin();
+        let pos = Point::new(
+            o.x + ((mw - fw) * 0.5).max(4.0),
+            o.y + ((mh - fh) * 0.5).max(4.0),
+        );
+        let rect = [pos.x as f32, pos.y as f32, fw as f32, fh as f32];
+        let id = self.dock.float_alone(pid, rect);
+
+        let attrs = Window::default_attributes()
+            .with_title(tab_label(pid))
+            .with_decorations(false)
+            .with_resizable(false)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_inner_size(LogicalSize::new(fw, fh))
+            .with_position(LogicalPosition::new(pos.x, pos.y));
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs)
+                .expect("create shape dialog window"),
+        );
+        let wid = window.id();
+        let host = self.make_host(window.clone(), Role::Floating(id));
+        self.hosts.insert(wid, host);
+        window.request_redraw();
+        self.request_main_redraw();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+    }
+
+    /// Close the shape dialog and its window. `commit` first creates the
+    /// shape from the entered values.
+    fn close_shape_dialog(&mut self, commit: bool) {
+        let Some(mut dlg) = self.shape_dialog.take() else {
+            return;
+        };
+        let pid = Self::shape_panel_id(dlg.tool);
+        if commit {
+            dlg.commit_all();
+            dlg.write_params(&mut self.shape_params);
+            let layer = self.ensure_layer();
+            let cmd = match dlg.geometry() {
+                shapedialog::Geometry::Rect(rect) => Command::CreateRect {
+                    layer,
+                    rect,
+                    name: None,
+                },
+                shapedialog::Geometry::Ellipse(rect) => Command::CreateEllipse {
+                    layer,
+                    rect,
+                    name: None,
+                },
+                shapedialog::Geometry::Path(path) => Command::CreatePath {
+                    layer,
+                    path,
+                    name: None,
+                },
+            };
+            if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+                self.doc.selection = vec![id];
+                self.apply_new_appearance(id);
+                self.sync_align_mode();
+            }
+        }
+        // Drop the panel and close the window it lived in.
+        self.dock.remove(pid);
+        let dead: Vec<WindowId> = self
+            .hosts
+            .iter()
+            .filter_map(|(wid, h)| match h.role {
+                Role::Floating(fid) if self.dock.floating(fid).is_none() => Some(*wid),
+                _ => None,
+            })
+            .collect();
+        for wid in dead {
+            self.hosts.remove(&wid);
+            self.focused.remove(&wid);
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.request_main_redraw();
+    }
+
+    fn shape_dialog_key(&mut self, event: &winit::event::KeyEvent) {
+        if !event.state.is_pressed() {
+            return;
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.close_shape_dialog(false);
+                return;
+            }
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.close_shape_dialog(true);
+                return;
+            }
+            _ => {}
+        }
+        let Some(dlg) = self.shape_dialog.as_mut() else {
+            return;
+        };
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Tab) => {
+                if self.shift_down {
+                    dlg.focus_prev();
+                } else {
+                    dlg.focus_next();
+                }
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => dlg.backspace(),
+            PhysicalKey::Code(KeyCode::ArrowUp) => dlg.focus_prev(),
+            PhysicalKey::Code(KeyCode::ArrowDown) => dlg.focus_next(),
+            _ => {
+                if let Some(txt) = &event.text {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        dlg.push_char(ch);
+                    }
+                }
+            }
+        }
+        self.text_blink = Instant::now();
+        self.request_main_redraw();
+    }
+
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
@@ -2604,6 +2839,8 @@ impl App {
             MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
             MenuAction::FitArtboard => self.zoom_fit(),
             MenuAction::FitAll => self.fit_view(),
+            MenuAction::ClipMake => self.clip_make(),
+            MenuAction::ClipRelease => self.clip_release(),
             MenuAction::HelpDocs => crate::about::open_url("https://amalith.app/docs"),
             MenuAction::ConvertTextKind => {
                 if let Some(&id) = self.doc.selection.first() {
@@ -4399,6 +4636,187 @@ impl App {
         }
     }
 
+    // --- Isolation mode --------------------------------------------------
+
+    /// The group the canvas is currently scoped into, if any.
+    fn isolation_root(&self) -> Option<ObjectId> {
+        self.isolation.last().copied()
+    }
+
+    /// Drop breadcrumb entries whose object no longer exists. Every level
+    /// except the deepest must still be a group to drill through; the
+    /// deepest may be a bare object (path / shape / image).
+    fn prune_isolation(&mut self) {
+        let doc = self.doc.editor.document();
+        let n = self.isolation.len();
+        let good = self
+            .isolation
+            .iter()
+            .enumerate()
+            .take_while(|(i, id)| match doc.object(**id).map(|o| &o.kind) {
+                None => false,
+                Some(amalith_core::ObjectKind::Group(_)) => true,
+                Some(_) => *i + 1 == n,
+            })
+            .count();
+        if good != self.isolation.len() {
+            self.isolation.truncate(good);
+        }
+    }
+
+    /// Enter (or drill deeper into) isolation on `id`. Any object except
+    /// text can be isolated: a group opens its contents; a bare path,
+    /// shape or image just dims everything else and scopes selection to
+    /// itself.
+    fn enter_isolation(&mut self, id: ObjectId) {
+        let is_group = match self.doc.editor.document().object(id).map(|o| &o.kind) {
+            Some(amalith_core::ObjectKind::Text(_)) | None => return,
+            Some(amalith_core::ObjectKind::Group(_)) => true,
+            Some(_) => false,
+        };
+        if self.isolation.last() == Some(&id) {
+            return;
+        }
+        self.isolation.push(id);
+        self.doc.selection = if is_group { Vec::new() } else { vec![id] };
+        self.sync_align_mode();
+        self.request_main_redraw();
+    }
+
+    /// Step out one breadcrumb level.
+    fn pop_isolation(&mut self) {
+        if let Some(id) = self.isolation.pop() {
+            self.doc.selection = if self.doc.editor.document().object(id).is_some() {
+                vec![id]
+            } else {
+                Vec::new()
+            };
+            self.request_main_redraw();
+        }
+    }
+
+    /// Truncate the breadcrumb to `depth` groups (0 = fully exit).
+    fn isolation_to_depth(&mut self, depth: usize) {
+        if depth >= self.isolation.len() {
+            return;
+        }
+        let keep = self.isolation.get(depth.wrapping_sub(1)).copied();
+        self.isolation.truncate(depth);
+        self.doc.selection = match keep {
+            Some(id) if self.doc.editor.document().object(id).is_some() => vec![id],
+            _ => Vec::new(),
+        };
+        self.request_main_redraw();
+    }
+
+    /// Breadcrumb labels: the owning layer, then each isolated group.
+    fn isolation_crumbs(&self) -> Vec<String> {
+        if self.isolation.is_empty() {
+            return Vec::new();
+        }
+        let doc = self.doc.editor.document();
+        let mut out = Vec::new();
+        // Owning layer of the outermost isolated group.
+        let mut walk = self.isolation[0];
+        let layer_name = loop {
+            match doc.object(walk).map(|o| o.parent) {
+                Some(amalith_core::ObjectParent::Layer(l)) => {
+                    break doc.layers().iter().find(|x| x.id == l).map(|x| x.name.clone());
+                }
+                Some(amalith_core::ObjectParent::Group(g)) => walk = g,
+                None => break None,
+            }
+        };
+        out.push(layer_name.unwrap_or_else(|| "Layer".into()));
+        for &id in &self.isolation {
+            let name = doc
+                .object(id)
+                .and_then(|o| o.name.clone())
+                .unwrap_or_else(|| match doc.object(id).map(|o| &o.kind) {
+                    Some(amalith_core::ObjectKind::Group(g)) if g.clip.is_some() => {
+                        "Clip Group".into()
+                    }
+                    Some(amalith_core::ObjectKind::Group(_)) => "Group".into(),
+                    Some(amalith_core::ObjectKind::Path(_)) => "Path".into(),
+                    Some(amalith_core::ObjectKind::CompoundPath(_)) => "Compound Path".into(),
+                    Some(amalith_core::ObjectKind::Image(_)) => "Image".into(),
+                    Some(amalith_core::ObjectKind::Symbol(_)) => "Symbol".into(),
+                    Some(amalith_core::ObjectKind::Text(_)) => "Type".into(),
+                    None => "Object".into(),
+                });
+            out.push(name);
+        }
+        out
+    }
+
+    /// Object ▸ Clipping Mask ▸ Make (⌘7) — wrap the selection in a clip
+    /// group masked by its topmost member.
+    fn clip_make(&mut self) {
+        if self.doc.selection.len() < 2 {
+            return;
+        }
+        if let Ok(CommandOutcome::Object(g)) = self.doc.editor.execute(Command::ClipMake {
+            objects: self.doc.selection.clone(),
+            name: None,
+        }) {
+            self.doc.selection = vec![g];
+        }
+        self.request_main_redraw();
+    }
+
+    /// Object ▸ Clipping Mask ▸ Release (⌘⌥7) — dissolve every selected
+    /// clip group.
+    fn clip_release(&mut self) {
+        let groups: Vec<ObjectId> = self
+            .doc
+            .selection
+            .iter()
+            .copied()
+            .filter(|id| {
+                matches!(
+                    self.doc.editor.document().object(*id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Group(g)) if g.clip.is_some()
+                )
+            })
+            .collect();
+        if groups.is_empty() {
+            return;
+        }
+        let mut freed = Vec::new();
+        for g in groups {
+            if let Ok(CommandOutcome::Object(id)) =
+                self.doc.editor.execute(Command::ClipRelease { group: g })
+            {
+                freed.push(id);
+            }
+        }
+        if !freed.is_empty() {
+            self.doc.selection = freed;
+        }
+        self.prune_selection();
+        self.request_main_redraw();
+    }
+
+    /// Whether the selection can be made into a clip group / has one to
+    /// release — for enabling the Object menu items.
+    fn clip_state(&self) -> (bool, bool) {
+        // Make needs 2+ objects whose frontmost is a plain shape.
+        let can_make = self.doc.selection.len() >= 2
+            && self.frontmost_selected().is_some_and(|id| {
+                matches!(
+                    self.doc.editor.document().object(id).map(|o| &o.kind),
+                    Some(amalith_core::ObjectKind::Path(_) | amalith_core::ObjectKind::CompoundPath(_))
+                )
+            });
+        let can_release = self.doc.selection.iter().any(|id| {
+            matches!(
+                self.doc.editor.document().object(*id).map(|o| &o.kind),
+                Some(amalith_core::ObjectKind::Group(g)) if g.clip.is_some()
+            )
+        });
+        (can_make, can_release)
+    }
+
     /// `(fill_mixed, stroke_mixed)` — true when the object selection holds
     /// more than one distinct value for that paint. The Fill / Stroke
     /// proxies show a grey "?" swatch instead of a colour when so.
@@ -4676,6 +5094,7 @@ impl App {
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
             layer_scroll: self.panel_scroll_of(PanelId("layers")),
+            layer_drop: None,
             color_mode: self.color_mode,
             recent: &self.recent_colors,
             xform_ref: self.xform_ref,
@@ -4688,6 +5107,7 @@ impl App {
             align_spacing: self.align_spacing,
             align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
             key_object: self.key_object,
+            shape_dialog: None,
         }
     }
 
@@ -4787,6 +5207,9 @@ impl App {
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
         if pid.0 == "picker" {
             self.picker = None;
+        }
+        if panels::shape_dialog_tool(pid).is_some() {
+            self.shape_dialog = None;
         }
         if self.panel_menu.as_ref().is_some_and(|m| m.panel == pid) {
             self.panel_menu = None;
@@ -5309,7 +5732,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -5524,7 +5947,12 @@ impl ApplicationHandler for App {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.on_release(),
+            } => {
+                self.on_release();
+                if let Some((tool, anchor)) = self.pending_shape_dialog.take() {
+                    self.spawn_shape_dialog(event_loop, tool, anchor);
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button: MouseButton::Right,
@@ -5538,11 +5966,18 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
-                if Some(id) == self.main_id {
-                    let was_direct = self.effective_tool() == Tool::DirectSelect;
+                let was_direct = self.effective_tool() == Tool::DirectSelect;
+                // Keep the modifier flags live for the free-floating dialog
+                // windows too (Shift-Tab in a shape dialog, etc.).
+                if Some(id) == self.main_id
+                    || self.shape_dialog.is_some()
+                    || self.picker.is_some()
+                {
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
                     self.alt_down = m.state().alt_key();
+                }
+                if Some(id) == self.main_id {
                     // Toggling the temporary white-arrow gesture shows or
                     // hides the node overlay; a live drag reacts to
                     // Shift-lock / Alt-copy changing under it.
@@ -5571,7 +6006,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. }
-                if Some(id) == self.main_id || self.picker.is_some() =>
+                if Some(id) == self.main_id
+                    || self.picker.is_some()
+                    || self.shape_dialog.is_some() =>
             {
                 self.on_key(event);
             }
@@ -5835,6 +6272,11 @@ fn tab_label(panel: PanelId) -> String {
         "pathfinder" => "Pathfinder",
         "align" => "Align",
         "picker" => "Color Picker",
+        "shapedlg.rect" => "Rectangle",
+        "shapedlg.round" => "Rounded Rectangle",
+        "shapedlg.ellipse" => "Ellipse",
+        "shapedlg.polygon" => "Polygon",
+        "shapedlg.star" => "Star",
         other => other,
     }
     .to_string()
@@ -5949,6 +6391,9 @@ struct NativeMenu {
     /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
     /// selection.
     convert_text_i: muda::MenuItem,
+    /// Object ▸ Clipping Mask ▸ (Make, Release) — enabled tracks the
+    /// selection.
+    clip_items: (muda::MenuItem, muda::MenuItem),
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
@@ -6002,6 +6447,9 @@ impl NativeMenu {
         let same_weight_i = MenuItem::new("Stroke Weight", true, None);
         let same_font_i = MenuItem::new("Font Family", true, None);
         let same_size_i = MenuItem::new("Font Size", true, None);
+        let clip_make_i = MenuItem::new("Make", false, Some(Accelerator::new(sup, Code::Digit7)));
+        let clip_release_i =
+            MenuItem::new("Release", false, Some(Accelerator::new(sup_alt, Code::Digit7)));
         let forward_i = mk("Bring Forward", sup, Code::BracketRight);
         let front_i = mk("Bring to Front", sup_shift, Code::BracketRight);
         let backward_i = mk("Send Backward", sup, Code::BracketLeft);
@@ -6114,6 +6562,9 @@ impl NativeMenu {
             ],
         )
         .expect("same menu");
+        let clip_menu = Submenu::with_items("Clipping Mask", true, &[&clip_make_i, &clip_release_i])
+            .expect("clip menu");
+        let object_menu = Submenu::with_items("Object", true, &[&clip_menu]).expect("object menu");
         let select_menu = Submenu::with_items(
             "Select",
             true,
@@ -6173,6 +6624,7 @@ impl NativeMenu {
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
+        menu.append(&object_menu).expect("append object menu");
         menu.append(&select_menu).expect("append select menu");
         menu.append(&type_menu).expect("append type menu");
         menu.append(&view).expect("append view menu");
@@ -6236,6 +6688,8 @@ impl NativeMenu {
             (outline_i.id().clone(), MenuAction::ToggleOutline),
             (convert_text_i.id().clone(), MenuAction::ConvertTextKind),
             (help_docs_i.id().clone(), MenuAction::HelpDocs),
+            (clip_make_i.id().clone(), MenuAction::ClipMake),
+            (clip_release_i.id().clone(), MenuAction::ClipRelease),
             (guides_show_i.id().clone(), MenuAction::ToggleGuides),
             (guides_lock_i.id().clone(), MenuAction::ToggleGuideLock),
             (clear_guides_i.id().clone(), MenuAction::ClearGuides),
@@ -6257,8 +6711,15 @@ impl NativeMenu {
             guide_checks: (guides_show_i, guides_lock_i),
             outline_check: outline_i,
             convert_text_i,
+            clip_items: (clip_make_i, clip_release_i),
             _menu: menu,
         }
+    }
+
+    /// Enable/disable the Clipping Mask items to match the selection.
+    fn sync_clip(&self, (can_make, can_release): (bool, bool)) {
+        self.clip_items.0.set_enabled(can_make);
+        self.clip_items.1.set_enabled(can_release);
     }
 
     /// Match the View ▸ Outline checkmark to the live toggle.

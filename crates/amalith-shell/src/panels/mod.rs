@@ -9,7 +9,7 @@
 mod artboards;
 pub mod character;
 pub mod color;
-mod layers;
+pub(crate) mod layers;
 mod swatches;
 pub mod tools;
 pub mod transform;
@@ -121,6 +121,10 @@ pub struct Ctx<'a> {
     pub layer_search_focused: bool,
     /// Layers panel: wheel-scroll offset of the row list, px.
     pub layer_scroll: f64,
+    /// Layers panel: live drag-reorder indicator — `(visible-row index, into)`.
+    /// The drop line sits at the top of that row; when `into` is set the row
+    /// itself (a group / layer) is outlined as the drop container instead.
+    pub layer_drop: Option<(i64, bool)>,
     /// Color panel: RGB / HSB / CMYK slider set.
     pub color_mode: ColorSpace,
     /// Color panel: recently used solid colours, newest first.
@@ -136,6 +140,21 @@ pub struct Ctx<'a> {
     pub align_spacing_edit: Option<&'a str>,
     /// Object that stays put for Align To Key Object (thicker outline).
     pub key_object: Option<ObjectId>,
+    /// The exact-size shape dialog and its caret-blink phase, when one of
+    /// the `shapedlg.*` float-only panels is being drawn / hit-tested.
+    pub shape_dialog: Option<(&'a crate::shapedialog::ShapeDialog, bool)>,
+}
+
+/// The primitive tool a `shapedlg.*` panel id stands for.
+pub(crate) fn shape_dialog_tool(id: PanelId) -> Option<Tool> {
+    Some(match id.0 {
+        "shapedlg.rect" => Tool::Rectangle,
+        "shapedlg.round" => Tool::RoundedRect,
+        "shapedlg.ellipse" => Tool::Ellipse,
+        "shapedlg.polygon" => Tool::Polygon,
+        "shapedlg.star" => Tool::Star,
+        _ => return None,
+    })
 }
 
 /// A character-attribute flag toggled from the Character panel.
@@ -187,6 +206,13 @@ pub enum Action {
     PickerHue(f32),
     PickerCancel,
     PickerOk,
+    /// Exact-size shape dialog.
+    ShapeField(usize),
+    ShapeStep(usize, i32),
+    ShapeLink,
+    ShapeOption(u32),
+    ShapeCancel,
+    ShapeOk,
     SetPaint(Paint),
     SetStrokeWidth(f64),
     /// Layers panel: flip an object's `visible` / `locked` flag.
@@ -327,6 +353,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::picker::paint(scene, &local, ctx.theme.text, ctx.theme, text);
             }
         }
+        s if shape_dialog_tool(PanelId(s)).is_some() => {
+            if let Some((dlg, caret)) = ctx.shape_dialog {
+                crate::shapedialog::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
         _ => {}
     }
 }
@@ -356,6 +387,17 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
                 _ => Action::None,
                 }
             })
+        }
+        s if shape_dialog_tool(PanelId(s)).is_some() => {
+            match ctx.shape_dialog.map(|(d, _)| d.hit(body, local)) {
+                Some(crate::shapedialog::Hit::Field(i)) => Action::ShapeField(i),
+                Some(crate::shapedialog::Hit::Step(i, d)) => Action::ShapeStep(i, d),
+                Some(crate::shapedialog::Hit::Link) => Action::ShapeLink,
+                Some(crate::shapedialog::Hit::Option(tag)) => Action::ShapeOption(tag),
+                Some(crate::shapedialog::Hit::Cancel) => Action::ShapeCancel,
+                Some(crate::shapedialog::Hit::Ok) => Action::ShapeOk,
+                _ => Action::None,
+            }
         }
         _ => Action::None,
     }
@@ -389,6 +431,9 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "align" => align::natural_height(),
         "paragraph" => paragraph::natural_height(),
         "picker" => crate::picker::H,
+        s if shape_dialog_tool(PanelId(s)).is_some() => {
+            crate::shapedialog::body_height(shape_dialog_tool(PanelId(s)).unwrap())
+        }
         _ => 60.0,
     }
 }

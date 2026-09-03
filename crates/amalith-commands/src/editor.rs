@@ -802,6 +802,123 @@ impl Editor {
                 }
                 edits
             }
+            Command::Reparent {
+                ids,
+                parent,
+                index,
+            } => {
+                // Target parent must exist and be able to hold children.
+                match parent {
+                    ObjectParent::Layer(l) => {
+                        self.document
+                            .layer(l)
+                            .ok_or(CommandError::LayerNotFound(l))?;
+                    }
+                    ObjectParent::Group(g) => {
+                        let o = self
+                            .document
+                            .object(g)
+                            .ok_or(CommandError::ObjectNotFound(g))?;
+                        if !matches!(o.kind, ObjectKind::Group(_)) {
+                            return Err(CommandError::Document(DocumentError::NotAGroup(g)));
+                        }
+                    }
+                }
+
+                let raw: Vec<ObjectId> = ids;
+                let set: HashSet<ObjectId> = raw.iter().copied().collect();
+                // Every id must exist; a group can't be moved into itself
+                // or into one of its own descendants.
+                for &id in &raw {
+                    self.document
+                        .object(id)
+                        .ok_or(CommandError::ObjectNotFound(id))?;
+                    let mut p = parent;
+                    loop {
+                        match p {
+                            ObjectParent::Group(g) if g == id => {
+                                return Err(CommandError::CannotReparent);
+                            }
+                            ObjectParent::Group(g) => match self.document.object(g) {
+                                Some(o) => p = o.parent,
+                                None => break,
+                            },
+                            ObjectParent::Layer(_) => break,
+                        }
+                    }
+                }
+                // Drop ids that ride along inside another moved id — their
+                // own `RemoveObject` would hit a parent that's already gone.
+                let ids: Vec<ObjectId> = raw
+                    .iter()
+                    .copied()
+                    .filter(|&id| {
+                        let mut p = self.document.object(id).map(|o| o.parent);
+                        while let Some(ObjectParent::Group(g)) = p {
+                            if set.contains(&g) {
+                                return false;
+                            }
+                            p = self.document.object(g).map(|o| o.parent);
+                        }
+                        true
+                    })
+                    .collect();
+                if ids.is_empty() {
+                    return Ok(Vec::new());
+                }
+
+                let moved: HashSet<ObjectId> = ids.iter().copied().collect();
+                let cur = self.document.children_of(parent).to_vec();
+                let removed_before = cur
+                    .iter()
+                    .take(index.min(cur.len()))
+                    .filter(|c| moved.contains(c))
+                    .count();
+                let in_parent = cur.iter().filter(|c| moved.contains(c)).count();
+                let after_len = cur.len() - in_parent;
+                let base = index.saturating_sub(removed_before).min(after_len);
+
+                // No-op guard: same parent, same resulting order.
+                if ids
+                    .iter()
+                    .all(|id| self.document.object(*id).map(|o| o.parent) == Some(parent))
+                {
+                    let mut after: Vec<ObjectId> =
+                        cur.iter().copied().filter(|c| !moved.contains(c)).collect();
+                    for (n, &id) in ids.iter().rev().enumerate() {
+                        after.insert(base + n, id);
+                    }
+                    if after == cur {
+                        return Ok(Vec::new());
+                    }
+                }
+
+                let new_world_inv = match parent {
+                    ObjectParent::Layer(_) => Affine::IDENTITY,
+                    ObjectParent::Group(g) => self.document.world_transform(g).inverse(),
+                };
+
+                let mut edits = Vec::with_capacity(ids.len() * 2);
+                for &id in &ids {
+                    edits.push(Edit::RemoveObject { id });
+                }
+                // Insert front-to-back at the same index: each insert nudges
+                // the earlier ones one slot frontward, so `ids[0]` lands
+                // frontmost of the moved block.
+                for &id in &ids {
+                    let obj = self.document.object(id).expect("validated above");
+                    let mut clone = obj.clone();
+                    // Keep the object visually put: rebase its local
+                    // transform onto the new parent's coordinate space.
+                    clone.transform = new_world_inv * self.document.world_transform(id);
+                    clone.parent = parent;
+                    edits.push(Edit::InsertObject {
+                        object: Box::new(clone),
+                        index: base,
+                    });
+                }
+                edits
+            }
             Command::Group { ids, name } => {
                 if ids.is_empty() {
                     return Err(CommandError::NothingToGroup);
@@ -877,6 +994,89 @@ impl Editor {
             }
             Command::Ungroup { .. } => {
                 unreachable!("Editor::execute intercepts Command::Ungroup before calling compile")
+            }
+            Command::ClipMake { objects, name } => {
+                if objects.len() < 2 {
+                    return Err(CommandError::NothingToGroup);
+                }
+                let mut parent = None;
+                for &id in &objects {
+                    let object = self
+                        .document
+                        .object(id)
+                        .ok_or(CommandError::ObjectNotFound(id))?;
+                    match parent {
+                        None => parent = Some(object.parent),
+                        Some(p) if p == object.parent => {}
+                        Some(_) => return Err(CommandError::ObjectsSpanMultipleParents),
+                    }
+                }
+                let parent = parent.expect("objects is non-empty");
+                let selected: std::collections::HashSet<ObjectId> =
+                    objects.iter().copied().collect();
+                let siblings = self.document.children_of(parent);
+                let topmost_index = siblings
+                    .iter()
+                    .rposition(|id| selected.contains(id))
+                    .expect("validated above");
+                let group_index = siblings[..=topmost_index]
+                    .iter()
+                    .filter(|id| !selected.contains(id))
+                    .count();
+                let group_children: Vec<ObjectId> = siblings
+                    .iter()
+                    .copied()
+                    .filter(|id| selected.contains(id))
+                    .collect();
+                // Topmost (last in stacking order) member is the clip
+                // path — it must be a plain shape.
+                let clip_id = group_children.last().copied();
+                if let Some(cid) = clip_id {
+                    match self.document.object(cid).map(|o| &o.kind) {
+                        Some(ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) => {}
+                        _ => return Err(CommandError::NotAPath(cid)),
+                    }
+                }
+
+                let group_id = ObjectId::new();
+                let mut group = Object::new(
+                    group_id,
+                    parent,
+                    ObjectKind::Group(amalith_core::GroupData {
+                        children: Vec::new(),
+                        clip: clip_id,
+                    }),
+                );
+                group.name = name;
+                let mut edits = vec![Edit::InsertObject {
+                    object: Box::new(group),
+                    index: group_index,
+                }];
+                for (index, &child_id) in group_children.iter().enumerate() {
+                    let mut child = self
+                        .document
+                        .object(child_id)
+                        .expect("child_id from this parent's children")
+                        .clone();
+                    child.parent = ObjectParent::Group(group_id);
+                    edits.push(Edit::RemoveObject { id: child_id });
+                    edits.push(Edit::InsertObject {
+                        object: Box::new(child),
+                        index,
+                    });
+                }
+                edits
+            }
+            Command::ClipRelease { group } => {
+                match self.document.object(group).map(|o| &o.kind) {
+                    Some(ObjectKind::Group(g)) if g.clip.is_some() => {}
+                    Some(ObjectKind::Group(_)) => return Err(CommandError::NothingToUngroup),
+                    _ => return Err(CommandError::ObjectNotFound(group)),
+                }
+                let mut edits = vec![Edit::SetClip { group, clip: None }];
+                let (ungroup_edits, _freed) = self.compile_ungroup(&[group])?;
+                edits.extend(ungroup_edits);
+                edits
             }
             Command::SetFill { objects, paint } => objects
                 .into_iter()

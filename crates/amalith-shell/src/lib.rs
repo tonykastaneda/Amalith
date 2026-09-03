@@ -54,6 +54,7 @@ pub mod sample;
 pub mod scripts;
 pub mod scroll_view;
 pub mod select;
+pub mod shapedialog;
 pub mod settings;
 pub mod stroke_panel;
 pub mod text;

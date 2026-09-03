@@ -212,6 +212,34 @@ impl App {
                 self.set_color_spectrum(t);
                 self.drag = Drag::ColorSpectrum { track };
             }
+            Drag::LayerDrag { body, press, moved } => {
+                let (body, press, was_moved) = (*body, *press, *moved);
+                let far = (self.pointer - press).hypot() > 4.0;
+                if !was_moved && !far {
+                    return;
+                }
+                self.drag = Drag::LayerDrag {
+                    body,
+                    press,
+                    moved: true,
+                };
+                let ids = crate::panels::layers::order_front_to_back(
+                    self.doc.editor.document(),
+                    &self.doc.expanded_groups,
+                    &self.doc.selection,
+                );
+                self.layer_drop = crate::panels::layers::drop_target(
+                    body,
+                    self.pointer,
+                    self.doc.editor.document(),
+                    &self.doc.expanded_groups,
+                    &self.layer_query,
+                    self.panel_scroll_of(PanelId("layers")),
+                    &ids,
+                )
+                .map(|d| (d.parent, d.index, d.row, d.into));
+                self.request_main_redraw();
+            }
             Drag::DrawShape {
                 tool, start_doc, ..
             } => {
@@ -452,10 +480,10 @@ impl App {
                 w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
                 w.request_redraw();
             }
-            // The colour picker is a free-floating dialog: never offer a
-            // re-dock target, so dragging it off the document window just
-            // moves it.
-            if self.dock.floating_id_of(PanelId("picker")) != Some(id) {
+            // The colour picker and the shape dialogs are free-floating
+            // dialogs: never offer a re-dock target, so dragging one off
+            // the document window just moves it.
+            if !self.is_float_only(id) {
                 self.redock_preview = Some(self.resolve_redock(global));
             } else {
                 self.redock_preview = None;
@@ -496,6 +524,40 @@ impl App {
                 if let Some(c) = self.active_paint().color() {
                     self.push_recent(c);
                 }
+            }
+            Drag::LayerDrag { body, moved, .. } => {
+                if moved {
+                    let ids = crate::panels::layers::order_front_to_back(
+                        self.doc.editor.document(),
+                        &self.doc.expanded_groups,
+                        &self.doc.selection,
+                    );
+                    let target = crate::panels::layers::drop_target(
+                        body,
+                        self.pointer,
+                        self.doc.editor.document(),
+                        &self.doc.expanded_groups,
+                        &self.layer_query,
+                        self.panel_scroll_of(PanelId("layers")),
+                        &ids,
+                    );
+                    if let Some(d) = target {
+                        if self
+                            .doc
+                            .editor
+                            .execute(amalith_commands::Command::Reparent {
+                                ids,
+                                parent: d.parent,
+                                index: d.index,
+                            })
+                            .is_ok()
+                        {
+                            self.sync_align_mode();
+                        }
+                    }
+                }
+                self.layer_drop = None;
+                self.request_main_redraw();
             }
             Drag::MoveObjects {
                 start_doc,
@@ -584,6 +646,16 @@ impl App {
                 start_doc,
                 cur_doc,
             } => {
+                // A plain click — under ~3 screen px of travel — opens the
+                // exact-size dialog instead of dropping a zero-size shape.
+                // The window is spawned in `window_event` (no `event_loop`
+                // here).
+                if tool.is_shape()
+                    && (cur_doc - start_doc).hypot() * self.doc.view.zoom < 3.0
+                {
+                    self.pending_shape_dialog = Some((tool, start_doc));
+                    return;
+                }
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 0.5 && r.height() > 0.5 {
                     let layer = self.ensure_layer();
@@ -833,7 +905,10 @@ impl App {
                     .to_screen()
                     .inverse()
                     .transform_rect_bbox(r_screen);
-                let hits = select::within(self.doc.editor.document(), r_doc);
+                let hits = match self.isolation_root() {
+                    Some(root) => select::within_in(self.doc.editor.document(), root, r_doc),
+                    None => select::within(self.doc.editor.document(), r_doc),
+                };
                 if self.shift_down {
                     for id in hits {
                         if !self.doc.selection.contains(&id) {
@@ -961,8 +1036,7 @@ impl App {
             }
             Drag::MovingFloating { id, grab, pos } => {
                 let global_cursor = pos + grab;
-                let picker_float = self.dock.floating_id_of(PanelId("picker")) == Some(id);
-                let (side, target) = if picker_float {
+                let (side, target) = if self.is_float_only(id) {
                     (RailSide::Right, DropTarget::Float)
                 } else {
                     self.resolve_redock(global_cursor)

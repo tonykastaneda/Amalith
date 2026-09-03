@@ -27,8 +27,16 @@ pub(super) const SEARCH_H: f64 = 34.0;
 /// query shows the whole tree; otherwise only rows whose name contains
 /// the query (case-insensitive), flattened.
 fn visible_rows(ctx: &Ctx) -> Vec<LayerRow> {
-    let rows = layer_rows(ctx.doc, ctx.expanded);
-    let q = ctx.layer_query.trim().to_lowercase();
+    rows_filtered(ctx.doc, ctx.expanded, ctx.layer_query)
+}
+
+fn rows_filtered(
+    doc: &Document,
+    expanded: &HashSet<ObjectId>,
+    query: &str,
+) -> Vec<LayerRow> {
+    let rows = layer_rows(doc, expanded);
+    let q = query.trim().to_lowercase();
     if q.is_empty() {
         return rows;
     }
@@ -187,10 +195,159 @@ fn owning_layer(doc: &Document, mut id: ObjectId) -> Option<LayerId> {
     }
 }
 
+/// Where a Layers-panel drag would land.
+pub(crate) struct LayerDrop {
+    /// Container the dragged objects move under.
+    pub parent: ObjectParent,
+    /// Insertion index into `parent`'s child list, in the document's
+    /// current (pre-move) state — the `Reparent` command adjusts for slots
+    /// vacated by objects already in `parent`.
+    pub index: usize,
+    /// Visible row the indicator anchors to (`0..=rows.len()`).
+    pub row: i64,
+    /// Highlight `rows[row]` as the drop container instead of drawing a
+    /// gap line above it.
+    pub into: bool,
+}
+
+/// `ids` reordered front-to-back to match the panel's row order, so the
+/// `Reparent` command receives them the way Illustrator collapses a
+/// multi-row drag.
+pub(crate) fn order_front_to_back(
+    doc: &Document,
+    expanded: &HashSet<ObjectId>,
+    ids: &[ObjectId],
+) -> Vec<ObjectId> {
+    let set: HashSet<ObjectId> = ids.iter().copied().collect();
+    let mut out: Vec<ObjectId> = layer_rows(doc, expanded)
+        .into_iter()
+        .filter_map(|r| match r.kind {
+            RowKind::Object { id, .. } if set.contains(&id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    for &id in ids {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// Would putting the dragged set under `parent` nest a dragged group
+/// inside itself? (The `Reparent` command rejects it too; this keeps the
+/// drop indicator from showing there.)
+fn parent_blocked(doc: &Document, moved: &[ObjectId], parent: ObjectParent) -> bool {
+    let mut p = parent;
+    loop {
+        match p {
+            ObjectParent::Group(g) if moved.contains(&g) => return true,
+            ObjectParent::Group(g) => match doc.object(g) {
+                Some(o) => p = o.parent,
+                None => return false,
+            },
+            ObjectParent::Layer(_) => return false,
+        }
+    }
+}
+
+/// Resolve the drop target for a Layers-panel drag whose pointer is at
+/// `pointer` (screen px). `moved` is the set being dragged. `None` when
+/// the pointer is outside the row list or the drop would be illegal.
+pub(crate) fn drop_target(
+    body: Rect,
+    pointer: Point,
+    doc: &Document,
+    expanded: &HashSet<ObjectId>,
+    query: &str,
+    scroll_raw: f64,
+    moved: &[ObjectId],
+) -> Option<LayerDrop> {
+    let list = list_rect(body);
+    if pointer.x < list.x0 || pointer.x > list.x1 || pointer.y < list.y0 || pointer.y > list.y1 {
+        return None;
+    }
+    let rows = rows_filtered(doc, expanded, query);
+    if rows.is_empty() {
+        return None;
+    }
+    let scroll = clamp_scroll(scroll_raw, rows.len(), list.height());
+    let f = (pointer.y - list.y0 + scroll) / ROW_H;
+    if f < 0.0 {
+        return None;
+    }
+    let i = (f.floor() as usize).min(rows.len() - 1);
+    let frac = f - f.floor();
+    let row = &rows[i];
+
+    // Index of `id` within its parent's child list.
+    let child_index = |id: ObjectId| -> Option<(ObjectParent, usize)> {
+        let parent = doc.object(id)?.parent;
+        let k = doc.children_of(parent).iter().position(|&c| c == id)?;
+        Some((parent, k))
+    };
+    let front_of = |parent: ObjectParent| doc.children_of(parent).len();
+
+    // Three bands: top / middle / bottom of the hovered row.
+    let zone_into = frac >= 0.30 && frac < 0.70;
+    let above = if zone_into { false } else { frac < 0.5 };
+
+    let make = |parent: ObjectParent, index: usize, drop_row: i64, into: bool| {
+        if parent_blocked(doc, moved, parent) {
+            None
+        } else {
+            Some(LayerDrop {
+                parent,
+                index,
+                row: drop_row,
+                into,
+            })
+        }
+    };
+
+    match row.kind {
+        RowKind::Layer(lid) => {
+            let p = ObjectParent::Layer(lid);
+            if zone_into {
+                make(p, front_of(p), i as i64, true)
+            } else if above {
+                // Front (top) of this layer.
+                make(p, front_of(p), i as i64, false)
+            } else {
+                // Just below the header = above the frontmost child.
+                make(p, front_of(p), i as i64 + 1, false)
+            }
+        }
+        RowKind::Object { id, is_group } => {
+            let (parent, k) = child_index(id)?;
+            if zone_into && is_group {
+                let gp = ObjectParent::Group(id);
+                make(gp, front_of(gp), i as i64, true)
+            } else if zone_into {
+                // Not a container — treat as the nearer gap.
+                if frac < 0.5 {
+                    make(parent, k + 1, i as i64, false)
+                } else {
+                    make(parent, k, i as i64 + 1, false)
+                }
+            } else if above {
+                make(parent, k + 1, i as i64, false)
+            } else if is_group && row.expanded {
+                // Below an open group header = front of its children.
+                let gp = ObjectParent::Group(id);
+                make(gp, front_of(gp), i as i64 + 1, false)
+            } else {
+                make(parent, k, i as i64 + 1, false)
+            }
+        }
+    }
+}
+
 fn kind_name(doc: &Document, id: ObjectId) -> String {
     match doc.object(id).map(|o| &o.kind) {
         Some(ObjectKind::Path(_)) => "Path",
         Some(ObjectKind::CompoundPath(_)) => "Compound Path",
+        Some(ObjectKind::Group(g)) if g.clip.is_some() => "Clip Group",
         Some(ObjectKind::Group(_)) => "Group",
         Some(ObjectKind::Text(_)) => "Text",
         Some(ObjectKind::Image(_)) => "Image",
@@ -310,6 +467,36 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                 };
                 draw_name_field(scene, text, ctx.theme, indent + COL * 3.0, r, &row.label, name_c, editing);
             }
+        }
+    }
+
+    // Drag-reorder indicator.
+    if let Some((drop_row, into)) = ctx.layer_drop {
+        let y = list.y0 + drop_row as f64 * ROW_H - scroll;
+        if into {
+            let rr = Rect::new(list.x0 + 1.0, y, list.x1 - 1.0, y + ROW_H);
+            scene.stroke(
+                &Stroke::new(2.0),
+                ID,
+                ctx.theme.accent,
+                None,
+                &rr.to_rounded_rect(3.0),
+            );
+        } else {
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                ctx.theme.accent,
+                None,
+                &Rect::new(list.x0 + 3.0, y - 1.0, list.x1 - 3.0, y + 1.0),
+            );
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                ctx.theme.accent,
+                None,
+                &vello::kurbo::Circle::new((list.x0 + 4.0, y), 2.5),
+            );
         }
     }
     scene.pop_layer();

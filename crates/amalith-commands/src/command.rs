@@ -6,8 +6,8 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, GuideId, GuideOrient, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle,
-    TextData, Unit, Vec2,
+    Affine, ArtboardId, GuideId, GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData,
+    Rect, StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -227,6 +227,22 @@ pub enum Command {
         ids: Vec<ObjectId>,
         steps: i32,
     },
+    /// Moves `ids` under `parent` (a layer or a group), as one undo group.
+    /// The ids need not currently share a parent; they are spliced in
+    /// contiguously so that — reading front to back — they keep the order
+    /// given, landing so the frontmost sits just in front of `parent`'s
+    /// existing child at stacking position `index` (an index into
+    /// `parent`'s child list *before* this move; positions vacated by ids
+    /// already in `parent` are accounted for). Each object keeps its
+    /// on-screen position: its transform is rebased by the difference
+    /// between its old and new parent's world transforms. Errors if
+    /// `parent` is missing / not a group, or if moving a group would put
+    /// it inside itself. A move that changes nothing compiles to no edits.
+    Reparent {
+        ids: Vec<ObjectId>,
+        parent: ObjectParent,
+        index: usize,
+    },
     /// Inserts a deep copy of [`crate::Editor`]'s clipboard (see
     /// [`crate::Editor::copy`]) as one undo group. `delta` translates each
     /// pasted root in its target parent's coordinate space; group
@@ -261,6 +277,18 @@ pub enum Command {
     /// nested inside them.
     Ungroup {
         ids: Vec<ObjectId>,
+    },
+    /// Makes a clipping mask: wraps `objects` in a new clip group (like
+    /// [`Command::Group`]) whose topmost member becomes the clip path.
+    /// Yields [`CommandOutcome::Object`] for the new group.
+    ClipMake {
+        objects: Vec<ObjectId>,
+        name: Option<String>,
+    },
+    /// Releases a clip group: clears its clip and dissolves it like
+    /// [`Command::Ungroup`]. Errors if `group` isn't a clip group.
+    ClipRelease {
+        group: ObjectId,
     },
     /// Sets every listed object's fill paint, one undo group.
     SetFill {

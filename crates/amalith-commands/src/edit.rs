@@ -114,6 +114,10 @@ pub(crate) enum Edit {
     RemoveAsset {
         id: AssetId,
     },
+    SetClip {
+        group: ObjectId,
+        clip: Option<ObjectId>,
+    },
     InsertGuide {
         guide: Guide,
         index: usize,
@@ -309,6 +313,16 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .remove_asset(id)
                 .ok_or(DocumentError::AssetNotFound(id))?;
             Ok((Edit::InsertAsset { asset, index }, None))
+        }
+        Edit::SetClip { group, clip } => {
+            let object = doc.object_mut(group).ok_or(CommandError::ObjectNotFound(group))?;
+            match &mut object.kind {
+                ObjectKind::Group(g) => {
+                    let old = std::mem::replace(&mut g.clip, clip);
+                    Ok((Edit::SetClip { group, clip: old }, None))
+                }
+                _ => Err(CommandError::ObjectNotFound(group)),
+            }
         }
         Edit::InsertGuide { guide, index } => {
             let id = guide.id;

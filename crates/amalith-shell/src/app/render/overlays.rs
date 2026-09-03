@@ -138,6 +138,58 @@ impl App {
         }
     }
 
+    /// The isolation-mode breadcrumb bar across the top of the canvas.
+    pub(in crate::app) fn paint_isolation_bar(&mut self) {
+        self.iso_bar.clear();
+        if self.isolation.is_empty() {
+            return;
+        }
+        let crumbs = self.isolation_crumbs();
+        let region = self.canvas_region();
+        let inset = if self.rulers { crate::rulers::THICK } else { 0.0 };
+        let bar = Rect::new(region.x0 + inset, region.y0 + inset, region.x1, region.y0 + inset + 24.0);
+        let th = &self.theme;
+        self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &bar);
+        self.content.fill(
+            Fill::NonZero,
+            ID,
+            th.border,
+            None,
+            &Rect::new(bar.x0, bar.y1, bar.x1, bar.y1 + 1.0),
+        );
+        // "<" back arrow.
+        let arrow = Rect::new(bar.x0 + 4.0, bar.y0, bar.x0 + 22.0, bar.y1);
+        {
+            use vello::kurbo::BezPath;
+            let cy = bar.center().y;
+            let mut p = BezPath::new();
+            p.move_to((arrow.x0 + 11.0, cy - 4.0));
+            p.line_to((arrow.x0 + 6.0, cy));
+            p.line_to((arrow.x0 + 11.0, cy + 4.0));
+            self.content
+                .stroke(&Stroke::new(1.5), ID, th.text, None, &p);
+        }
+        self.iso_bar.push((arrow, self.isolation.len() - 1));
+
+        let mut x = arrow.x1 + 6.0;
+        for (i, label) in crumbs.iter().enumerate() {
+            if i > 0 {
+                self.text.draw(&mut self.content, "›", 12.0, self.theme.text_dim, x, bar.center().y + 4.0);
+                x += 12.0;
+            }
+            let w = self.text.measure(label, 12.5);
+            let last = i == crumbs.len() - 1;
+            let col = if last { self.theme.text } else { self.theme.text_dim };
+            self.text.draw(&mut self.content, label, 12.5, col, x, bar.center().y + 4.5);
+            // crumb 0 = owning layer; crumbs 1.. map to isolation depth i.
+            if i >= 1 {
+                self.iso_bar
+                    .push((Rect::new(x - 3.0, bar.y0, x + w + 3.0, bar.y1), i));
+            }
+            x += w + 8.0;
+        }
+    }
+
     pub(in crate::app) fn paint_ctx_menu(&mut self) {
         let Some(menu) = &self.ctx_menu else {
             return;

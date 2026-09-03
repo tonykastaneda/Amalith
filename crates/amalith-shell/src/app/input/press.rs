@@ -57,6 +57,15 @@ impl App {
         if self.ctx_menu.is_some() && self.ctx_menu_click(self.pointer) {
             return;
         }
+        // Isolation breadcrumb bar.
+        if !self.isolation.is_empty() {
+            if let Some(&(_, depth)) =
+                self.iso_bar.iter().find(|(r, _)| r.contains(self.pointer))
+            {
+                self.isolation_to_depth(depth);
+                return;
+            }
+        }
         // An open panel hamburger flyout: clicks inside it are consumed;
         // a click on its own hamburger toggles it shut; anything else
         // closes it and falls through so another hamburger can open.
@@ -240,6 +249,8 @@ impl App {
                     match hit {
                         Some(home::Hit::NewDocument) => self.open_new_doc(),
                         Some(home::Hit::Youtube) => about::open_url(home::YOUTUBE_URL),
+                        Some(home::Hit::News) => about::open_url(home::NEWS_URL),
+                        Some(home::Hit::Docs) => about::open_url(home::DOCS_URL),
                         Some(home::Hit::Github) => about::open_url(home::GITHUB_URL),
                         Some(home::Hit::Recent(i)) => {
                             let path = self
@@ -482,6 +493,7 @@ impl App {
                                         layer_query: &self.layer_query,
                                         layer_search_focused: self.layer_search_focused,
                         layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                        layer_drop: None,
                                         color_mode: self.color_mode,
                                         recent: &self.recent_colors,
                                         xform_ref: self.xform_ref,
@@ -497,6 +509,7 @@ impl App {
                                             .as_ref()
                                             .map(|(s, _)| s.as_str()),
                                         key_object: self.key_object,
+                                        shape_dialog: None,
                                     };
                                     panels::hit(pid, pbody, self.pointer, &ctx)
                                 };
@@ -510,9 +523,22 @@ impl App {
                                 } else {
                                     let spawn =
                                         double && matches!(action, panels::Action::OpenPicker(_));
+                                    // Pressing an object row also arms a
+                                    // drag-reorder (the click already
+                                    // selected it).
+                                    let arm_drag = !double
+                                        && pid == PanelId("layers")
+                                        && matches!(action, panels::Action::Select(_));
                                     self.apply_panel_action(action, double);
                                     if spawn {
                                         self.spawn_picker_window(event_loop);
+                                    }
+                                    if arm_drag {
+                                        self.drag = Drag::LayerDrag {
+                                            body: pbody,
+                                            press: self.pointer,
+                                            moved: false,
+                                        };
                                     }
                                 }
                             }
@@ -1049,16 +1075,30 @@ impl App {
                     hit,
                 };
                 let doc = self.doc.editor.document();
-                if let Some(id) = select::topmost_selectable_at(doc, dp, visible) {
+                let iso_root = self.isolation_root();
+                let hit = match iso_root {
+                    Some(root) => {
+                        select::topmost_in(doc, root, dp, 4.0 / self.doc.view.zoom)
+                    }
+                    None => select::topmost_selectable_at(doc, dp, visible),
+                };
+                if let Some(id) = hit {
+                    let kind = doc.object(id).map(|o| &o.kind);
                     // Double-click a text object → edit it (temporary Type tool).
-                    if double
-                        && matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Text(_)))
-                    {
+                    if double && matches!(kind, Some(amalith_core::ObjectKind::Text(_))) {
                         let c = doc
                             .object(id)
                             .map(|o| o.transform.as_coeffs())
                             .unwrap_or([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
                         self.enter_text_edit(id, Point::new(c[4], c[5]), Some(self.pointer));
+                        return;
+                    }
+                    // Double-click any non-text object → drill into it
+                    // (isolation mode): a group opens its contents, a bare
+                    // path / shape / image just dims everything else and
+                    // scopes selection to itself. Text was handled above.
+                    if double {
+                        self.enter_isolation(id);
                         return;
                     }
                     if self.shift_down {
@@ -1080,6 +1120,10 @@ impl App {
                         }
                         self.drag = start_move(dp, Some(id));
                     }
+                } else if iso_root.is_some() && double {
+                    // Double-click on empty canvas steps out one level; a
+                    // single click just deselects / starts a marquee.
+                    self.pop_isolation();
                 } else {
                     // Empty space: a press inside the selection box drags
                     // the selection; otherwise it's a marquee.
@@ -1165,6 +1209,7 @@ impl App {
                                     layer_query: &self.layer_query,
                                     layer_search_focused: self.layer_search_focused,
                         layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                        layer_drop: None,
                                     color_mode: self.color_mode,
                                     recent: &self.recent_colors,
                                     xform_ref: self.xform_ref,
@@ -1180,14 +1225,25 @@ impl App {
                                         .as_ref()
                                         .map(|(s, _)| s.as_str()),
                                     key_object: self.key_object,
+                                    shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };
                             let spawn =
                                 double && matches!(action, panels::Action::OpenPicker(_));
+                            let arm_drag = !double
+                                && pid == PanelId("layers")
+                                && matches!(action, panels::Action::Select(_));
                             self.apply_panel_action(action, double);
                             if spawn {
                                 self.spawn_picker_window(event_loop);
+                            }
+                            if arm_drag {
+                                self.drag = Drag::LayerDrag {
+                                    body,
+                                    press: self.pointer,
+                                    moved: false,
+                                };
                             }
                         }
                         return;

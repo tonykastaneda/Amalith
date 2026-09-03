@@ -206,6 +206,8 @@ pub fn paint(
     active_artboard: Option<ArtboardId>,
     // Outline (wireframe) view — objects render as hairline contours only.
     outline: bool,
+    // Isolation mode: dim everything, then repaint this group on top.
+    isolate: Option<ObjectId>,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -279,6 +281,27 @@ pub fn paint(
                 outline,
             );
         }
+    }
+
+    // Isolation mode: scrim the whole canvas, then repaint the isolated
+    // group at full strength so only its contents are editable-looking.
+    if let Some(root) = isolate.filter(|id| doc.object(*id).is_some()) {
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            theme.canvas_bg.with_alpha(0.62),
+            None,
+            &viewport,
+        );
+        let parent_m = match doc.object(root).map(|o| o.parent) {
+            Some(amalith_core::ObjectParent::Group(g)) => {
+                vt * convert::affine(doc.world_transform(g))
+            }
+            _ => vt,
+        };
+        paint_object(
+            scene, doc, root, parent_m, view.zoom, cull, drag, text, editing_text, images, outline,
+        );
     }
 
     // Duplicate drag: draw the copy-to-be at the offset, full opacity —
@@ -1179,7 +1202,31 @@ fn paint_object(
             // relative to it. Dropping it here is what made a
             // scaled/rotated/moved group snap back on release.
             let child_drag = if replacement.is_some() { None } else { drag };
+
+            // Clip group: the `clip` child (always a shape) masks the rest.
+            let clip = g.clip.filter(|cid| g.children.contains(cid));
+            let clipped = clip.and_then(|cid| {
+                let cobj = doc.object(cid)?;
+                let cm = m * convert::affine(cobj.transform);
+                let bez = match &cobj.kind {
+                    ObjectKind::Path(pd) => convert::bez_path(&pd.geometry),
+                    ObjectKind::CompoundPath(cp) => {
+                        let mut b = BezPath::new();
+                        for sub in &cp.subpaths {
+                            b.extend(convert::bez_path(sub));
+                        }
+                        b
+                    }
+                    _ => return None,
+                };
+                scene.push_clip_layer(Fill::NonZero, cm, &bez);
+                Some(())
+            });
+
             for &child in &g.children {
+                if Some(child) == clip {
+                    continue; // the mask itself isn't drawn
+                }
                 paint_object(
                     scene,
                     doc,
@@ -1193,6 +1240,9 @@ fn paint_object(
                     images,
                     outline,
                 );
+            }
+            if clipped.is_some() {
+                scene.pop_layer();
             }
         }
         ObjectKind::Text(td) => {

@@ -29,6 +29,8 @@ impl App {
         self.last_frame = Some(now);
 
         self.warm_images();
+        self.prune_isolation();
+        let iso_root = self.isolation_root();
         let Some(host) = self.hosts.get_mut(&id) else {
             return;
         };
@@ -494,6 +496,8 @@ impl App {
                 rotate_pivot,
                 &guide_lines,
                 self.outline_mode,
+                iso_root,
+                self.layer_drop.map(|(_, _, row, into)| (row, into)),
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
@@ -509,6 +513,7 @@ impl App {
                         let clip_body = area.body;
                         let (body, scroll) =
                             panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid));
+                        let caret_blink = self.text_blink_on();
                         let ctx = panels::Ctx {
                             theme: &self.theme,
                             doc: self.doc.editor.document(),
@@ -538,6 +543,11 @@ impl App {
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
                             layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                            layer_drop: if pid == PanelId("layers") {
+                                self.layer_drop.map(|(_, _, row, into)| (row, into))
+                            } else {
+                                None
+                            },
                             color_mode: self.color_mode,
                             recent: &self.recent_colors,
                             xform_ref: self.xform_ref,
@@ -553,6 +563,10 @@ impl App {
                                 .as_ref()
                                 .map(|(s, _)| s.as_str()),
                             key_object: self.key_object,
+                            shape_dialog: self
+                                .shape_dialog
+                                .as_ref()
+                                .map(|d| (d, caret_blink)),
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -604,6 +618,7 @@ impl App {
             }
             self.paint_font_menu();
             self.paint_align_to_menu();
+            self.paint_isolation_bar();
             self.paint_ruler_menu();
             self.paint_ctx_menu();
             // The Home screen covers the canvas; the New Document modal and
