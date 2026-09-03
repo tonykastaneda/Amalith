@@ -960,6 +960,20 @@ impl App {
         self.panel_scroll.get(&id).copied().unwrap_or(0.0)
     }
 
+    /// Full content height of panel `id` at `body` — pure-layout panels
+    /// from `panels`, the Layers list from the live document.
+    fn panel_content_h(&self, id: PanelId, body: Rect) -> f64 {
+        if id == PanelId("layers") {
+            panels::layers_content_height(
+                self.doc.editor.document(),
+                &self.doc.expanded_groups,
+                &self.layer_query,
+            )
+        } else {
+            panels::max_scroll(id, body.width(), body.height()) + body.height()
+        }
+    }
+
     /// The scrollable panel under `p` (rail or floating) and its real body
     /// rect, if that panel's content overflows its body. Used by the wheel
     /// handler to route scroll into the panel instead of the canvas.
@@ -990,7 +1004,7 @@ impl App {
         for area in &areas {
             if area.body.contains(p) {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                    if panels::max_scroll(pid, area.body.width(), area.body.height()) > 0.0 {
+                    if self.panel_content_h(pid, area.body) > area.body.height() + 0.5 {
                         return Some((pid, area.body));
                     }
                 }
@@ -4350,6 +4364,7 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
+            layer_scroll: self.panel_scroll_of(PanelId("layers")),
             color_mode: self.color_mode,
             recent: &self.recent_colors,
             xform_ref: self.xform_ref,

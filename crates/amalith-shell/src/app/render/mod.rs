@@ -537,6 +537,7 @@ impl App {
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
+                            layer_scroll: self.panel_scroll_of(PanelId("layers")),
                             color_mode: self.color_mode,
                             recent: &self.recent_colors,
                             xform_ref: self.xform_ref,

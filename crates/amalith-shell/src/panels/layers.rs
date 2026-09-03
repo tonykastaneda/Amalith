@@ -11,8 +11,8 @@ use vello::Scene;
 use crate::text::TextContext;
 
 use super::{
-    draw_name_field, panel_footer_rects, paint_panel_footer, row_rect, Action, Ctx, RenameId, FOOTER_H,
-    ID, PAD, ROW_H,
+    draw_name_field, panel_footer_rects, paint_panel_footer, Action, Ctx, RenameId, FOOTER_H, ID,
+    PAD, ROW_H,
 };
 
 /// Per-depth indent, and the width of each icon column (triangle, eye,
@@ -89,6 +89,7 @@ fn draw_search(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect)
     }
 }
 
+#[derive(Clone, Copy)]
 enum RowKind {
     Layer(LayerId),
     Object { id: ObjectId, is_group: bool },
@@ -146,6 +147,36 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
     rows
 }
 
+/// Number of rows the list would show for `doc` under the current filter.
+fn row_count(doc: &Document, expanded: &HashSet<ObjectId>, query: &str) -> usize {
+    let rows = layer_rows(doc, expanded);
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        rows.len()
+    } else {
+        rows.iter()
+            .filter(|r| r.label.to_lowercase().contains(&q))
+            .count()
+    }
+}
+
+/// Full height the Layers panel wants: search strip + every row + footer.
+/// The shell uses this to decide the wheel-scroll range.
+pub(super) fn content_height(doc: &Document, expanded: &HashSet<ObjectId>, query: &str) -> f64 {
+    SEARCH_H + row_count(doc, expanded, query) as f64 * ROW_H + FOOTER_H
+}
+
+/// The scrollable list area (between the search strip and the footer).
+fn list_rect(body: Rect) -> Rect {
+    Rect::new(body.x0, body.y0 + SEARCH_H, body.x1, body.y1 - FOOTER_H)
+}
+
+/// Scroll offset clamped to what the current row count allows.
+fn clamp_scroll(raw: f64, n_rows: usize, list_h: f64) -> f64 {
+    let max = (n_rows as f64 * ROW_H - list_h).max(0.0);
+    raw.clamp(0.0, max)
+}
+
 /// The layer that ultimately contains `id` (walking out through groups).
 fn owning_layer(doc: &Document, mut id: ObjectId) -> Option<LayerId> {
     loop {
@@ -171,14 +202,24 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
 
 pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     draw_search(scene, text, ctx, body);
-    let list = Rect::new(body.x0, body.y0 + SEARCH_H, body.x1, body.y1);
+    let list = list_rect(body);
+    let rows = visible_rows(ctx);
+    let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list.height());
+    let first = (scroll / ROW_H).floor() as usize;
+    let last = (first + (list.height() / ROW_H).ceil() as usize + 2).min(rows.len());
+    let content_h = rows.len() as f64 * ROW_H;
+
     let hot_row = if list.contains(ctx.pointer) {
-        Some(((ctx.pointer.y - list.y0) / ROW_H).floor() as i64)
+        Some(((ctx.pointer.y - list.y0 + scroll) / ROW_H).floor() as i64)
     } else {
         None
     };
-    for (i, row) in visible_rows(ctx).into_iter().enumerate() {
-        let r = row_rect(list, i);
+
+    scene.push_clip_layer(Fill::NonZero, ID, &list);
+    for i in first..last {
+        let row = &rows[i];
+        let ry = list.y0 + i as f64 * ROW_H - scroll;
+        let r = Rect::new(list.x0, ry, list.x1, ry + ROW_H);
         let indent = body.x0 + PAD + row.depth as f64 * INDENT;
 
         match row.kind {
@@ -271,6 +312,21 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             }
         }
     }
+    scene.pop_layer();
+
+    // Scroll indicator down the list's right edge.
+    if content_h > list.height() + 0.5 {
+        let frac = (list.height() / content_h).min(1.0);
+        let th = (list.height() * frac).max(24.0);
+        let ty = list.y0 + (list.height() - th) * (scroll / (content_h - list.height()));
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            ctx.theme.text_dim.with_alpha(0.5),
+            None,
+            &Rect::new(list.x1 - 4.0, ty, list.x1 - 1.0, ty + th).to_rounded_rect(1.5),
+        );
+    }
 
     let has_sel = !ctx.selection.is_empty();
     paint_panel_footer(
@@ -304,7 +360,8 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::FocusLayerSearch;
     }
     let rows = visible_rows(ctx);
-    let i = ((local.y - (body.y0 + SEARCH_H)) / ROW_H).floor();
+    let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list_rect(body).height());
+    let i = ((local.y - (body.y0 + SEARCH_H) + scroll) / ROW_H).floor();
     if i < 0.0 {
         return Action::None;
     }

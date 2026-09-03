@@ -119,6 +119,8 @@ pub struct Ctx<'a> {
     pub layer_query: &'a str,
     /// Layers panel: whether the search field holds keyboard focus.
     pub layer_search_focused: bool,
+    /// Layers panel: wheel-scroll offset of the row list, px.
+    pub layer_scroll: f64,
     /// Color panel: RGB / HSB / CMYK slider set.
     pub color_mode: ColorSpace,
     /// Color panel: recently used solid colours, newest first.
@@ -294,6 +296,16 @@ pub fn has_menu(id: PanelId) -> bool {
 }
 
 pub use color::ColorSpace;
+
+/// Full content height of the Layers panel for the given document state —
+/// the shell's wheel handler uses it to size the scroll range.
+pub fn layers_content_height(
+    doc: &Document,
+    expanded: &std::collections::HashSet<ObjectId>,
+    query: &str,
+) -> f64 {
+    layers::content_height(doc, expanded, query)
+}
 
 /// Draw panel `id`'s body into `body`.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect, ctx: &Ctx) {

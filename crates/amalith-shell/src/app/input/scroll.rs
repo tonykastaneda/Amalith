@@ -116,7 +116,7 @@ impl App {
         // scroll that panel. (⌘ still zooms, handled below.)
         if !self.cmd_down && dy.abs() > 0.1 {
             if let Some((pid, body)) = self.scrollable_panel_at(self.pointer) {
-                let max = crate::panels::max_scroll(pid, body.width(), body.height());
+                let max = (self.panel_content_h(pid, body) - body.height()).max(0.0);
                 let cur = self.panel_scroll_of(pid);
                 self.panel_scroll.insert(pid, (cur - dy).clamp(0.0, max));
                 self.request_main_redraw();

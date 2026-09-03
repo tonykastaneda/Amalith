@@ -294,6 +294,7 @@ pub(in crate::app) fn paint_main(
                 font_families,
                 layer_query,
                 layer_search_focused,
+                layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
                 color_mode,
                 recent,
                 xform_ref,
