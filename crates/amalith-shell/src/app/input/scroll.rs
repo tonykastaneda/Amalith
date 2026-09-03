@@ -33,7 +33,7 @@ impl App {
         // height, so a one-frame overshoot self-corrects (no freeze).
         if let Some(p) = &mut self.prefs {
             if matches!(p.category, 1 | 2) {
-                p.page_scroll = (p.page_scroll - dy).max(0.0);
+                p.page_scroll.wheel(dy);
                 self.request_main_redraw();
             }
             return;

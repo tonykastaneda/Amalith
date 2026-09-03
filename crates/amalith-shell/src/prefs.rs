@@ -275,7 +275,7 @@ pub struct Prefs {
     /// The binding currently capturing a keypress, if any.
     pub recording: Option<BindTarget>,
     /// Scroll offset of the Keyboard / Scripts binding list, in px.
-    pub page_scroll: f64,
+    pub page_scroll: crate::scroll_view::ScrollView,
     /// Working copy of the shortcut presets.
     pub working_keymaps: crate::keymap::Keymaps,
     /// Keyboard page: the preset dropdown is expanded.
@@ -354,7 +354,7 @@ impl Prefs {
             accent_swatches: Vec::new(),
             bind_rows: Vec::new(),
             recording: None,
-            page_scroll: 0.0,
+            page_scroll: crate::scroll_view::ScrollView::new(),
             reset_keys: Rect::ZERO,
             scripts_choose: Rect::ZERO,
             scripts_clear: Rect::ZERO,
@@ -696,7 +696,7 @@ impl Prefs {
         let n_acts = PrefAction::ALL.len();
         let content_h = n_tools as f64 * 27.0 + 26.0 + n_acts as f64 * 27.0 + 6.0;
         let view = Rect::new(px - 6.0, oy + 128.0, px + row_w + 14.0, oy + H - 52.0);
-        let sc = self.begin_scroll_list(scene, view, content_h);
+        let sc = self.begin_scroll_list(scene, theme, view, content_h);
 
         let mut y = view.y0 + 2.0 - sc;
         for i in 0..n_tools {
@@ -749,25 +749,14 @@ impl Prefs {
     /// Clip to `view`, draw a scrollbar for `content_h`, and return the
     /// clamped scroll offset. The caller must `scene.pop_layer()` when done
     /// drawing the list. Shared by the Keyboard and Scripts pages.
-    fn begin_scroll_list(&mut self, scene: &mut Scene, view: Rect, content_h: f64) -> f64 {
-        let view_h = view.height();
-        let max = (content_h - view_h).max(0.0);
-        self.page_scroll = self.page_scroll.clamp(0.0, max);
-        let sc = self.page_scroll;
-        if max > 0.0 {
-            let frac = (view_h / content_h).min(1.0);
-            let th = (view_h * frac).max(24.0);
-            let ty = view.y0 + (view_h - th) * (sc / max);
-            scene.fill(
-                Fill::NonZero,
-                Affine::IDENTITY,
-                Color::from_rgba8(0x9a, 0x9a, 0x9a, 0x88),
-                None,
-                &Rect::new(view.x1 - 4.0, ty, view.x1 - 1.0, ty + th).to_rounded_rect(1.5),
-            );
-        }
-        scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &view);
-        sc
+    fn begin_scroll_list(
+        &mut self,
+        scene: &mut Scene,
+        theme: &Theme,
+        view: Rect,
+        content_h: f64,
+    ) -> f64 {
+        self.page_scroll.begin(scene, theme, view, content_h)
     }
 
     /// The Scripts page — pick the user's script folder and bind keys to
@@ -845,7 +834,7 @@ impl Prefs {
             .collect();
         let content_h = names.len() as f64 * 27.0 + 4.0;
         let view = Rect::new(px - 6.0, list_top, px + row_w + 14.0, oy + H - 52.0);
-        let sc = self.begin_scroll_list(scene, view, content_h);
+        let sc = self.begin_scroll_list(scene, theme, view, content_h);
 
         let mut y = view.y0 + 2.0 - sc;
         for (i, name) in names.iter().enumerate() {

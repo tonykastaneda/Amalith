@@ -146,7 +146,7 @@ impl App {
                 prefs::Hit::Category(i) => {
                     if let Some(p) = &mut self.prefs {
                         p.category = i;
-                        p.page_scroll = 0.0;
+                        p.page_scroll.set_offset(0.0);
                     }
                 }
                 prefs::Hit::IncStep(v) => {

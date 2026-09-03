@@ -52,6 +52,7 @@ pub mod recent;
 pub mod rulers;
 pub mod sample;
 pub mod scripts;
+pub mod scroll_view;
 pub mod select;
 pub mod settings;
 pub mod stroke_panel;
