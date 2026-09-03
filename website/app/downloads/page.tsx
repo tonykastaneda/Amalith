@@ -100,6 +100,7 @@ export default function Downloads() {
           <img src={`${basePath}/brand/amalith-a.svg`} alt="" />
         </a>
         <p>Free · open source · cross-platform</p>
+        <a href={`${basePath}/docs/`}>Docs</a>
         <a href={`${basePath}/`}>Back to Amalith <span aria-hidden="true">→</span></a>
       </footer>
     </>

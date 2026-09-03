@@ -26,6 +26,7 @@ export default function WhyAmalith() {
             <a href={`${basePath}/why/`}>Why Amalith</a>
             <a href={`${basePath}/#why`}>Features</a>
             <a href={`${basePath}/#status`}>News</a>
+            <a href={`${basePath}/docs/`}>Docs</a>
           </div>
           <div>
             <p>Community</p>
