@@ -10,24 +10,15 @@ export const metadata: Metadata = {
 
 const platforms = [
   {
-    number: "01",
     name: "macOS",
-    detail: "Native desktop app",
-    note: "Built to feel at home on Mac, with a fast native canvas and familiar creative workflows.",
     icon: `${basePath}/brand/platform/mac.svg`,
   },
   {
-    number: "02",
-    name: "Windows 10/11",
-    detail: "64-bit desktop app",
-    note: "A self-contained Windows build designed to get you from download to canvas quickly.",
+    name: "Windows",
     icon: `${basePath}/brand/platform/win.svg`,
   },
   {
-    number: "03",
     name: "Linux",
-    detail: "Multiple package formats",
-    note: "AppImage, Debian, RPM, Arch Linux, and Flatpak options are planned for launch.",
     icon: `${basePath}/brand/platform/linux.svg`,
   },
 ] as const;
@@ -38,45 +29,22 @@ export default function Downloads() {
       <Header basePath={basePath} />
 
       <main id="top" className="downloads-page">
-        <section className="downloads-hero section-shell" aria-labelledby="downloads-title">
-          <p className="kicker"><span /> Download Amalith</p>
-          <div className="downloads-hero__copy">
-            <h1 id="downloads-title">Choose your canvas.<br /><em>Coming soon.</em></h1>
-            <p>Native builds for the three desktops we call home. Amalith is still taking shape in public; downloads will appear here when they’re ready.</p>
-          </div>
-        </section>
+        <section className="downloads-hero" aria-labelledby="downloads-title">
+          <div className="downloads-hero__inner">
+            <p className="kicker"><span /> Download Amalith</p>
+            <h1 id="downloads-title">
+              Finally, the design tool that lets<br />
+              creatives <em>create.</em>
+            </h1>
 
-        <section className="download-grid section-shell" aria-label="Available platforms">
-          {platforms.map((platform) => (
-            <article className="download-card" key={platform.name}>
-              <div className="download-card__topline">
-                <p>{platform.number} / Desktop</p>
-                <span>In development</span>
-              </div>
-              <div className="platform-icon" aria-hidden="true">
-                <img src={platform.icon} alt="" />
-              </div>
-              <div className="download-card__copy">
-                <p>{platform.detail}</p>
-                <h2>{platform.name}</h2>
-                <p>{platform.note}</p>
-              </div>
-              <button className="download-button" type="button" disabled>
-                <span>Download</span>
-                <strong>Coming soon</strong>
-              </button>
-            </article>
-          ))}
-        </section>
-
-        <section className="downloads-note section-shell">
-          <p className="section-number">Built in public</p>
-          <div>
-            <h2>Want to watch it come together?</h2>
-            <p>Follow development, report issues, or contribute directly on GitHub.</p>
-            <a className="text-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">
-              Explore the repository <span aria-hidden="true">→</span>
-            </a>
+            <div className="download-actions" aria-label="Desktop downloads coming soon">
+              {platforms.map((platform) => (
+                <button className="platform-download" type="button" disabled key={platform.name}>
+                  <img src={platform.icon} alt="" aria-hidden="true" />
+                  <span>Coming soon for {platform.name}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </section>
       </main>
