@@ -83,33 +83,34 @@ impl App {
             }
             // Typing a name for a new shortcut preset.
             if self.prefs.as_ref().is_some_and(|p| p.naming.is_some()) {
-                match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Escape) => {
+                let mods = textedit::Mods {
+                    shift: self.shift_down,
+                    alt: self.alt_down,
+                    meta: self.cmd_down,
+                };
+                let logical = event.logical_key.clone();
+                let typed = event.text.clone();
+                if self.clipboard.is_none() {
+                    self.clipboard = arboard::Clipboard::new().ok();
+                }
+                let clip = self.clipboard.as_mut();
+                let resp = self
+                    .prefs
+                    .as_mut()
+                    .and_then(|p| p.naming.as_mut())
+                    .map(|f| f.key(&logical, mods, typed.as_deref(), clip, &mut self.text));
+                match resp {
+                    Some(crate::text_field::Resp::Cancel) => {
                         if let Some(p) = self.prefs.as_mut() {
                             p.naming = None;
                         }
                     }
-                    PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                    Some(crate::text_field::Resp::Submit | crate::text_field::Resp::Tab(_)) => {
                         if let Some(p) = self.prefs.as_mut() {
                             p.commit_naming();
                         }
                     }
-                    PhysicalKey::Code(KeyCode::Backspace) => {
-                        if let Some(b) = self.prefs.as_mut().and_then(|p| p.naming.as_mut()) {
-                            b.pop();
-                        }
-                    }
-                    _ => {
-                        if let Some(txt) = event.text.clone() {
-                            if let Some(b) =
-                                self.prefs.as_mut().and_then(|p| p.naming.as_mut())
-                            {
-                                for ch in txt.chars().filter(|c| !c.is_control()) {
-                                    b.push(ch);
-                                }
-                            }
-                        }
-                    }
+                    _ => {}
                 }
                 self.request_main_redraw();
                 return;

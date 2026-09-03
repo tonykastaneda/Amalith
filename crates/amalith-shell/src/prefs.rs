@@ -281,7 +281,7 @@ pub struct Prefs {
     /// Keyboard page: the preset dropdown is expanded.
     pub preset_menu_open: bool,
     /// Keyboard page: typing a name for a preset about to be saved.
-    pub naming: Option<String>,
+    pub naming: Option<crate::text_field::TextField>,
     preset_trigger: Rect,
     preset_add: Rect,
     preset_items: Vec<Rect>,
@@ -366,8 +366,8 @@ impl Prefs {
     /// Save the current shortcut edits as a preset named by `self.naming`
     /// and make it active. A blank / built-in name just cancels.
     pub fn commit_naming(&mut self) {
-        if let Some(buf) = self.naming.take() {
-            let name = buf.trim().to_string();
+        if let Some(field) = self.naming.take() {
+            let name = field.text().trim().to_string();
             if !name.is_empty() && name != crate::keymap::BUILTIN {
                 self.working_keymaps.upsert(
                     name,
@@ -655,12 +655,17 @@ impl Prefs {
             None,
             &chip.to_rounded_rect(4.0),
         );
-        let label = match &self.naming {
-            Some(buf) => format!("{buf}|"),
-            None => self.working_keymaps.active.clone(),
-        };
-        tcx.draw(scene, &label, 12.0, theme.text, chip.x0 + 10.0, chip.y0 + 16.0);
-        if !naming {
+        if let Some(field) = &mut self.naming {
+            field.paint(scene, tcx, theme, chip, "name preset", true);
+        } else {
+            tcx.draw(
+                scene,
+                &self.working_keymaps.active,
+                12.0,
+                theme.text,
+                chip.x0 + 10.0,
+                chip.y0 + 16.0,
+            );
             tri(scene, Point::new(chip.x1 - 14.0, chip.center().y), false, theme.text_dim);
             self.preset_trigger = chip;
         }

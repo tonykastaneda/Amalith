@@ -102,7 +102,7 @@ impl App {
                         if p.naming.is_some() {
                             p.commit_naming();
                         } else {
-                            p.naming = Some(String::new());
+                            p.naming = Some(crate::text_field::TextField::new(""));
                             p.preset_menu_open = false;
                         }
                     }
