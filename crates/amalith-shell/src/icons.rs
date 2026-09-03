@@ -285,23 +285,23 @@ fn draw_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
 pub fn draw_magnifier(scene: &mut Scene, center: Point, plus: bool) {
     let body = Color::from_rgb8(0xe4, 0xe3, 0xe3);
     let key = Color::from_rgb8(0x12, 0x12, 0x12);
-    let (cx, cy, r) = (center.x, center.y, 7.0);
+    let (cx, cy, r) = (center.x, center.y, 6.0);
 
     // Handle (behind the lens).
     let h0 = Point::new(cx + r * 0.72, cy + r * 0.72);
-    let h1 = Point::new(cx + r * 1.9, cy + r * 1.9);
-    scene.stroke(&Stroke::new(4.5), ID, key, None, &Line::new(h0, h1));
-    scene.stroke(&Stroke::new(2.5), ID, body, None, &Line::new(h0, h1));
+    let h1 = Point::new(cx + r * 1.7, cy + r * 1.7);
+    scene.stroke(&Stroke::new(3.5), ID, key, None, &Line::new(h0, h1));
+    scene.stroke(&Stroke::new(2.0), ID, body, None, &Line::new(h0, h1));
 
     // Lens.
     let lens = Circle::new((cx, cy), r);
     scene.fill(Fill::NonZero, ID, body, None, &lens);
-    scene.stroke(&Stroke::new(2.0), ID, key, None, &lens);
+    scene.stroke(&Stroke::new(1.6), ID, key, None, &lens);
 
     // Sign.
     let s = r * 0.55;
     scene.stroke(
-        &Stroke::new(1.8),
+        &Stroke::new(1.5),
         ID,
         key,
         None,
@@ -309,7 +309,7 @@ pub fn draw_magnifier(scene: &mut Scene, center: Point, plus: bool) {
     );
     if plus {
         scene.stroke(
-            &Stroke::new(1.8),
+            &Stroke::new(1.5),
             ID,
             key,
             None,
@@ -413,13 +413,38 @@ pub fn draw_cursor(scene: &mut Scene, src: &str, box_: Rect) {
 /// Illustrator-style scale cursor: a double-headed arrow along `angle`
 /// (radians; 0 = horizontal), centred on `center`. Painted white-halo
 /// then dark body.
+/// "Fit to text" cursor: an up-arrow standing on a short bar (⤒). Shown
+/// when hovering an area-text box's auto-fit tab. Sized to match the
+/// scale / rotate cursors.
+pub fn draw_fit_up_cursor(scene: &mut Scene, center: Point) {
+    let p = |x: f64, y: f64| Point::new(center.x + x, center.y + y);
+    let mut arrow = BezPath::new();
+    arrow.move_to(p(0.0, -8.0));
+    arrow.line_to(p(6.0, -1.0));
+    arrow.line_to(p(2.5, -1.0));
+    arrow.line_to(p(2.5, 5.0));
+    arrow.line_to(p(-2.5, 5.0));
+    arrow.line_to(p(-2.5, -1.0));
+    arrow.line_to(p(-6.0, -1.0));
+    arrow.close_path();
+    let bar = Rect::new(center.x - 6.0, center.y + 7.0, center.x + 6.0, center.y + 10.0);
+    let mut pass = |col: Color, sw: f64| {
+        scene.stroke(&Stroke::new(sw), ID, col, None, &arrow);
+        scene.fill(Fill::NonZero, ID, col, None, &arrow);
+        scene.stroke(&Stroke::new(sw), ID, col, None, &bar);
+        scene.fill(Fill::NonZero, ID, col, None, &bar);
+    };
+    pass(CURSOR_HALO, 3.0);
+    pass(CURSOR_BODY, 1.5);
+}
+
 pub fn draw_scale_cursor(scene: &mut Scene, center: Point, angle: f64) {
     let (s, c) = angle.sin_cos();
     let dir = Vec2::new(c, s);
     let perp = Vec2::new(-s, c);
-    let hl = 11.0; // half of the total arrow length
-    let ah = 6.0; // arrowhead length
-    let aw = 4.0; // arrowhead half-width
+    let hl = 8.5; // half of the total arrow length
+    let ah = 4.5; // arrowhead length
+    let aw = 3.0; // arrowhead half-width
     let base_p = center + dir * (hl - ah);
     let base_m = center - dir * (hl - ah);
     let head = |tip: Point, base: Point| {
@@ -440,20 +465,20 @@ pub fn draw_scale_cursor(scene: &mut Scene, center: Point, angle: f64) {
             scene.stroke(&Stroke::new(sw), ID, col, None, h);
         }
     };
-    pass(CURSOR_HALO, 5.0);
-    pass(CURSOR_BODY, 2.0);
+    pass(CURSOR_HALO, 3.0);
+    pass(CURSOR_BODY, 1.5);
 }
 
 /// Illustrator-style rotate cursor: a ~115° arc with a tangent arrowhead
 /// at each end, centred on `center`. The arc is centred on `angle`
 /// (radians) so it can be rotated to face the corner being hovered.
 pub fn draw_rotate_cursor(scene: &mut Scene, center: Point, angle: f64) {
-    let r = 8.5;
+    let r = 7.0;
     let sweep = 2.0;
     let a0 = angle - sweep * 0.5;
     let arc = Arc::new(center, (r, r), a0, sweep, 0.0);
-    let ah = 5.0;
-    let aw = 3.5;
+    let ah = 4.0;
+    let aw = 2.8;
     let head = |ang: f64, along: f64| {
         let (s, c) = ang.sin_cos();
         let p = center + Vec2::new(c, s) * r;
@@ -475,8 +500,8 @@ pub fn draw_rotate_cursor(scene: &mut Scene, center: Point, angle: f64) {
             scene.stroke(&Stroke::new(sw), ID, col, None, h);
         }
     };
-    pass(CURSOR_HALO, 5.0);
-    pass(CURSOR_BODY, 2.0);
+    pass(CURSOR_HALO, 3.0);
+    pass(CURSOR_BODY, 1.5);
 }
 
 #[derive(Clone, Copy, Default)]

@@ -540,19 +540,36 @@ pub fn paint(
                     &sq,
                 );
             }
-            let center = Rect::from_center_size(handles::quad_center(q), (6.0, 6.0));
-            scene.fill(
-                Fill::NonZero,
-                Affine::IDENTITY,
-                theme.accent,
-                None,
-                &center,
-            );
-
-            // Text-thread ports on a single selected area-text frame.
+            // Text-thread ports + the auto-fit tab on a single selected
+            // area-text frame.
             if selection.len() == 1 {
                 if let Some(ObjectKind::Text(td)) = doc.object(selection[0]).map(|o| &o.kind) {
                     if matches!(td.kind, amalith_core::TextKind::Area { .. }) {
+                        // Auto-fit tab: bottom-edge centre, on a short
+                        // stem below the box. Double-click snaps the box
+                        // height to the text. A filled accent square so it
+                        // reads distinct from the hollow scale handles.
+                        let edge = Point::new(
+                            (q[2].x + q[3].x) * 0.5,
+                            (q[2].y + q[3].y) * 0.5,
+                        );
+                        let bmid = Point::new(edge.x, edge.y + 22.0);
+                        scene.stroke(
+                            &Stroke::new(1.25),
+                            Affine::IDENTITY,
+                            theme.accent,
+                            None,
+                            &Line::new(edge, bmid),
+                        );
+                        let tab = Rect::from_center_size(bmid, (9.0, 9.0));
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &tab);
+                        scene.stroke(
+                            &Stroke::new(1.25),
+                            Affine::IDENTITY,
+                            Color::from_rgb8(0xff, 0xff, 0xff),
+                            None,
+                            &tab,
+                        );
                         let white = Color::from_rgb8(0xff, 0xff, 0xff);
                         let red = Color::from_rgb8(0xd0, 0x30, 0x30);
                         let port = |scene: &mut Scene, c: Point, fill: Color, border: Color| {

@@ -432,6 +432,7 @@ pub(in crate::app) fn paint_main(
     {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
         match cursor_mode {
+            CanvasCursor::FitUp => icons::draw_fit_up_cursor(scene, pointer),
             CanvasCursor::ScaleNS => icons::draw_scale_cursor(scene, pointer, FRAC_PI_2),
             CanvasCursor::ScaleEW => icons::draw_scale_cursor(scene, pointer, 0.0),
             CanvasCursor::ScaleNWSE => icons::draw_scale_cursor(scene, pointer, FRAC_PI_4),

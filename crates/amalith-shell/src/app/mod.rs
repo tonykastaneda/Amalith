@@ -550,6 +550,9 @@ enum CanvasCursor {
     /// Loaded-text cursor — an out-port was clicked and the next press
     /// drops the linked frame.
     LoadedText,
+    /// "Fit to text" — hovering an area-text box's auto-fit tab (an
+    /// up-arrow-to-bar glyph).
+    FitUp,
 }
 
 impl CanvasCursor {
@@ -566,6 +569,7 @@ impl CanvasCursor {
                 | CanvasCursor::Rotate(_)
                 | CanvasCursor::ThreadPort
                 | CanvasCursor::LoadedText
+                | CanvasCursor::FitUp
         )
     }
 }
@@ -3528,6 +3532,61 @@ impl App {
 
     /// The selected area-text frame whose out-port the pointer is over —
     /// only its tail frame (no `thread_next`) offers a clickable port.
+    /// A single selected area-text frame whose bottom-centre auto-fit tab
+    /// the pointer is over. Matches the tab drawn in `canvas.rs`.
+    fn text_autofit_hit(&self) -> Option<ObjectId> {
+        if self.active_tool != Tool::Select || self.doc.selection.len() != 1 {
+            return None;
+        }
+        let id = self.doc.selection[0];
+        let obj = self.doc.editor.document().object(id)?;
+        let amalith_core::ObjectKind::Text(t) = &obj.kind else {
+            return None;
+        };
+        if !matches!(t.kind, amalith_core::TextKind::Area { .. }) {
+            return None;
+        }
+        let q = select::selection_quad(self.doc.editor.document(), &[id])?;
+        let bmid = Point::new((q[2].x + q[3].x) * 0.5, (q[2].y + q[3].y) * 0.5);
+        let scr = self.doc.view.to_screen() * bmid + Vec2::new(0.0, 22.0);
+        (scr.distance(self.pointer) <= 8.0).then_some(id)
+    }
+
+    /// Snap a fixed-height area-text box's height down (or up) to exactly
+    /// fit its text — the auto-fit tab's double-click.
+    fn fit_text_box_height(&mut self, id: ObjectId) {
+        let Some(mut td) = self
+            .doc
+            .editor
+            .document()
+            .object(id)
+            .and_then(|o| match &o.kind {
+                amalith_core::ObjectKind::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let amalith_core::TextKind::Area { width, .. } = td.kind else {
+            return;
+        };
+        // Measure at the box width with no height constraint.
+        let mut probe = td.clone();
+        probe.kind = amalith_core::TextKind::Area { width, height: None };
+        let content_h = (textedit::td_layout(&mut self.text, &probe).height() as f64)
+            .max(TEXTBOX_MIN);
+        td.kind = amalith_core::TextKind::Area {
+            width,
+            height: Some(content_h),
+        };
+        td.local_bounds = textedit::measure_text_data(&td, &mut self.text);
+        let _ = self.doc.editor.execute(Command::SetText {
+            object: id,
+            data: td,
+        });
+        self.request_main_redraw();
+    }
+
     fn text_out_port_hit(&self) -> Option<ObjectId> {
         if self.active_tool != Tool::Select || self.doc.selection.len() != 1 {
             return None;
@@ -4593,9 +4652,16 @@ impl App {
             }
         };
         // Hovering a transform grip / rotation halo wins over the tool's
-        // default cursor.
-        let mode = if over && matches!(self.drag, Drag::None) && !self.space_down {
+        // default cursor — unless the pointer is over an area-text
+        // auto-fit tab, which sits in the rotation-halo zone below the box.
+        let mode = if over
+            && matches!(self.drag, Drag::None)
+            && !self.space_down
+            && self.text_autofit_hit().is_none()
+        {
             self.handle_hover_cursor().unwrap_or(mode)
+        } else if self.text_autofit_hit().is_some() {
+            CanvasCursor::FitUp
         } else {
             mode
         };

@@ -945,6 +945,30 @@ impl App {
                     return;
                 }
 
+                // Bottom-centre auto-fit tab of an area-text frame:
+                // double-click snaps the height to the text; a plain press
+                // drags the height like the S scale handle.
+                if let Some(id) = self.text_autofit_hit() {
+                    if double {
+                        self.fit_text_box_height(id);
+                    } else if let Some(start_bounds) =
+                        select::union_bounds(self.doc.editor.document(), &self.doc.selection)
+                    {
+                        let boxes = self.area_text_boxes();
+                        if !boxes.is_empty() {
+                            self.drag = Drag::ResizeTextBox {
+                                handle: handles::Handle::S,
+                                start_bounds,
+                                frames: boxes,
+                                start_doc: dp,
+                                cur_doc: dp,
+                            };
+                        }
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // Transform handles / rotation halo win over object hits.
                 if !self.doc.selection.is_empty() {
                     if let Some(quad) =
