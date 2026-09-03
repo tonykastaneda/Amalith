@@ -53,6 +53,7 @@ pub enum Icon {
     Hand,
     Zoom,
     Eyedropper,
+    Rotate,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -67,7 +68,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
-        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper => "",
+        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Rotate => "",
     }
 }
 
@@ -93,7 +94,42 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
         draw_eyedropper_glyph(scene, box_, color);
         return;
     }
+    if icon == Icon::Rotate {
+        draw_rotate_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// A circular arrow — the Rotate tool.
+fn draw_rotate_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let c = box_.center();
+    let r = box_.width().min(box_.height()) * 0.30;
+    let sw = (box_.width() * 0.10).max(1.6);
+    // ~270° sweep, gap toward the top-right.
+    let a0 = -2.1;
+    let sweep = 4.7;
+    scene.stroke(
+        &Stroke::new(sw),
+        ID,
+        color,
+        None,
+        &Arc::new(c, (r, r), a0, sweep, 0.0),
+    );
+    // A tangent arrowhead at the arc's leading end.
+    let a1 = a0 + sweep;
+    let (s, cs) = a1.sin_cos();
+    let p = c + Vec2::new(cs, s) * r;
+    let tan = Vec2::new(-s, cs); // CCW travel direction
+    let perp = Vec2::new(-tan.y, tan.x);
+    let ah = r * 0.95;
+    let aw = r * 0.6;
+    let mut head = BezPath::new();
+    head.move_to(p + tan * ah);
+    head.line_to(p + perp * aw);
+    head.line_to(p - perp * aw);
+    head.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &head);
 }
 
 /// A pipette — bulb top-right, tip bottom-left — the Eyedropper tool.

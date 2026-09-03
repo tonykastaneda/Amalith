@@ -106,6 +106,9 @@ pub struct AnchorView<'a> {
     /// A read-only "hold Space to see the nodes" peek from the Selection
     /// tool — keep the bounding box drawn underneath.
     pub peek: bool,
+    /// The anchor the pointer is over, drawn enlarged as a "you'll edit
+    /// this one" affordance.
+    pub hover: Option<(ObjectId, usize)>,
 }
 
 /// One placed anchor of an in-progress Pen path, in document space.
@@ -833,7 +836,10 @@ pub fn paint(
                 let sel = av.selected.contains(&(id, idx));
                 let moved = sel && hdrag.is_none_or(|(o, ..)| o != id);
                 let doc_pos = if moved { pos + dv } else { pos };
-                let sq = Rect::from_center_size(vt * doc_pos, (7.0, 7.0));
+                // The hovered node swells so it's clear which one a click
+                // (or a rotation) will act on.
+                let s = if av.hover == Some((id, idx)) { 10.0 } else { 7.0 };
+                let sq = Rect::from_center_size(vt * doc_pos, (s, s));
                 if sel || !any_sel {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &sq);
                 } else {

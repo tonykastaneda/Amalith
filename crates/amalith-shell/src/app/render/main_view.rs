@@ -74,6 +74,8 @@ pub(in crate::app) fn paint_main(
     cull_inset: f64,
     show_cull: bool,
     rulers: bool,
+    // Rotate tool: the reference point (document space) to mark, if any.
+    rotate_pivot: Option<Point>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -129,6 +131,31 @@ pub(in crate::app) fn paint_main(
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
+    }
+
+    // Rotate tool: a registration-mark reference point (circle + crosshair)
+    // at the pivot the next drag turns around.
+    if let Some(pv) = rotate_pivot {
+        let c = view.to_screen() * pv;
+        if viewport.contains(c) {
+            let r = 5.0;
+            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            let halo = vello::peniko::Color::WHITE;
+            let ring = vello::kurbo::Circle::new(c, r);
+            let h = vello::kurbo::Line::new(
+                Point::new(c.x - r - 3.0, c.y),
+                Point::new(c.x + r + 3.0, c.y),
+            );
+            let v = vello::kurbo::Line::new(
+                Point::new(c.x, c.y - r - 3.0),
+                Point::new(c.x, c.y + r + 3.0),
+            );
+            for (col, w) in [(halo, 3.5), (ink, 1.5)] {
+                scene.stroke(&Stroke::new(w), ID, col, None, &ring);
+                scene.stroke(&Stroke::new(w), ID, col, None, &h);
+                scene.stroke(&Stroke::new(w), ID, col, None, &v);
+            }
+        }
     }
 
     // Rulers (when on) are drawn by `App::paint_rulers` after this fn

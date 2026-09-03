@@ -483,6 +483,35 @@ impl App {
                 }
                 let dp = self.doc_point(self.pointer);
 
+                // Rotate tool: a drag turns the selection about the
+                // reference point; a plain click (no drag) re-places it.
+                if self.active_tool == Tool::Rotate {
+                    let start_xf: HashMap<ObjectId, Affine> = self
+                        .doc
+                        .selection
+                        .iter()
+                        .filter_map(|id| {
+                            self.doc
+                                .editor
+                                .document()
+                                .object(*id)
+                                .map(|o| (*id, convert::affine(o.transform)))
+                        })
+                        .collect();
+                    if let Some(pivot) = self.rotate_pivot().filter(|_| !start_xf.is_empty()) {
+                        self.drag = Drag::RotateTool {
+                            pivot,
+                            start_angle: handles::angle_to(pivot, dp),
+                            preview: start_xf.clone(),
+                            start_xf,
+                            copy: self.alt_down,
+                            moved: false,
+                        };
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
+
                 // "Loaded text" cursor: a prior out-port click armed a
                 // thread. This press drops its target — an existing frame
                 // clicked, or a new one rubber-banded.

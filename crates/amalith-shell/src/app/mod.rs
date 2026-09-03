@@ -174,6 +174,18 @@ enum Drag {
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
     },
+    /// Rotate tool: turning the selection about `pivot` (document space).
+    /// A release with `moved == false` was a click and re-places the
+    /// reference point instead. `copy` (Alt held at press) rotates a
+    /// duplicate and leaves the originals put.
+    RotateTool {
+        pivot: Point,
+        start_angle: f64,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+        copy: bool,
+        moved: bool,
+    },
     /// Loaded-text cursor: rubber-banding the frame that will receive
     /// `from`'s overflow. Release creates it and threads the two.
     ThreadNewBox {
@@ -540,6 +552,10 @@ struct App {
     /// "Loaded text" cursor: the user clicked this frame's out-port and the
     /// next press threads its overflow into a new / clicked frame.
     text_load: Option<ObjectId>,
+    /// Rotate tool: a custom reference point (document space). `None` falls
+    /// back to the selection's bounding-box centre. A plain click with the
+    /// Rotate tool re-places it; switching selection clears it.
+    transform_pivot: Option<Point>,
     /// Caret blink phase origin.
     text_blink: Instant,
     /// Installed font family names, sorted — built once, for the Character
@@ -715,6 +731,7 @@ impl App {
             text_align_default: amalith_core::TextAlign::Start,
             para_defaults: amalith_core::Paragraph::default(),
             text_load: None,
+            transform_pivot: None,
             text_blink: Instant::now(),
             font_families: Vec::new(),
             font_menu: None,
@@ -2761,6 +2778,10 @@ impl App {
         if t.is_shape() {
             self.last_shape_tool = t;
         }
+        if t != Tool::Rotate {
+            // The Rotate tool's custom reference point is per-session.
+            self.transform_pivot = None;
+        }
         self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
@@ -4076,6 +4097,12 @@ impl App {
         } else {
             mode
         };
+        // Mid-rotation with the Rotate tool: the curved-arrow cursor.
+        let mode = if matches!(self.drag, Drag::RotateTool { moved: true, .. }) {
+            CanvasCursor::Rotate(2)
+        } else {
+            mode
+        };
         if mode != self.cursor_mode {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
@@ -4092,6 +4119,14 @@ impl App {
             }
             self.request_main_redraw();
         }
+    }
+
+    /// The Rotate tool's reference point (document space): the custom
+    /// `transform_pivot` if placed, else the selection's bbox centre.
+    /// `None` when nothing is selected.
+    fn rotate_pivot(&self) -> Option<Point> {
+        let c = select::union_bounds(self.doc.editor.document(), &self.doc.selection)?.center();
+        Some(self.transform_pivot.unwrap_or(c))
     }
 
     /// If the pointer is over a transform grip (Selection or Artboard

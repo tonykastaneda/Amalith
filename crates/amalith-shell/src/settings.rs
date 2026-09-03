@@ -151,6 +151,7 @@ fn tool_name(tool: Tool) -> &'static str {
         Tool::Hand => "Hand",
         Tool::Zoom => "Zoom",
         Tool::Eyedropper => "Eyedropper",
+        Tool::Rotate => "Rotate",
     }
 }
 

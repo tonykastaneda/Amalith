@@ -18,7 +18,13 @@ impl App {
         self.refresh_tooltip();
         // Redraw so any painted cursor glyph tracks the pointer — this
         // covers the scale / rotate / loaded-text glyphs, not just Glyph.
-        if self.cursor_mode.is_drawn() {
+        // The Rotate tool shows path nodes but keeps the OS crosshair, so
+        // it also needs a per-move repaint for the node hover-swell.
+        if self.cursor_mode.is_drawn()
+            || (self.active_tool == Tool::Rotate
+                && !self.doc.selection.is_empty()
+                && matches!(self.drag, Drag::None))
+        {
             self.request_main_redraw();
         }
         match &self.drag {
@@ -332,6 +338,33 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::RotateTool {
+                pivot,
+                start_angle,
+                start_xf,
+                copy,
+                moved,
+                ..
+            } => {
+                let (pivot, start_angle, copy, was_moved) =
+                    (*pivot, *start_angle, *copy, *moved);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                let m = handles::rotate_transform(pivot, start_angle, dp, self.shift_down);
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                let moved =
+                    was_moved || (handles::angle_to(pivot, dp) - start_angle).abs() > 1e-3;
+                self.drag = Drag::RotateTool {
+                    pivot,
+                    start_angle,
+                    start_xf,
+                    preview,
+                    copy,
+                    moved,
+                };
+                self.update_canvas_cursor();
+                self.request_main_redraw();
+            }
             Drag::PendingTearoff { panel, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (panel, press) = (*panel, *press);
@@ -546,7 +579,8 @@ impl App {
                         | Tool::Artboard
                         | Tool::Hand
                         | Tool::Zoom
-                        | Tool::Eyedropper => return,
+                        | Tool::Eyedropper
+                        | Tool::Rotate => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -660,6 +694,45 @@ impl App {
                     let _ = self.doc.editor.execute(Command::SetTransforms { items });
                     self.request_main_redraw();
                 }
+            }
+            Drag::RotateTool {
+                start_xf,
+                preview,
+                copy,
+                moved,
+                ..
+            } => {
+                if !moved {
+                    // A click, not a drag: re-place the reference point.
+                    self.transform_pivot = Some(self.doc_point(self.pointer));
+                } else if preview != start_xf {
+                    if copy {
+                        let ids: Vec<ObjectId> = self.doc.selection.clone();
+                        if let Ok(new_ids) = self
+                            .doc
+                            .editor
+                            .duplicate_objects(&ids, convert::vec2_to_core(Vec2::ZERO))
+                        {
+                            let items: Vec<_> = ids
+                                .iter()
+                                .zip(&new_ids)
+                                .filter_map(|(src, dst)| {
+                                    preview.get(src).map(|a| (*dst, convert::affine_to_core(*a)))
+                                })
+                                .collect();
+                            let _ =
+                                self.doc.editor.execute(Command::SetTransforms { items });
+                            self.doc.selection = new_ids;
+                        }
+                    } else {
+                        let items = preview
+                            .into_iter()
+                            .map(|(id, a)| (id, convert::affine_to_core(a)))
+                            .collect();
+                        let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    }
+                }
+                self.request_main_redraw();
             }
             Drag::Scale {
                 start_xf, preview, ..

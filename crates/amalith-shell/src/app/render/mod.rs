@@ -91,7 +91,11 @@ impl App {
                 handle: None,
                 text_boxes: &[],
             }),
-            Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
+            Drag::Scale { preview, .. }
+            | Drag::Rotate { preview, .. }
+            | Drag::RotateTool {
+                preview, moved: true, ..
+            } => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: Vec2::ZERO,
                 dup: false,
@@ -291,7 +295,10 @@ impl App {
             self.effective_tool() == Tool::DirectSelect || !self.doc.anchor_sel.is_empty();
         // The Pen tool also shows a selected path's nodes (Illustrator:
         // switch V -> P with an object selected and its anchors appear).
-        let pen_nodes = self.active_tool == Tool::Pen && !self.doc.selection.is_empty();
+        // The Rotate tool does the same — you turn about a reference
+        // point, so the 8 scale handles would be misleading; show nodes.
+        let pen_nodes = matches!(self.active_tool, Tool::Pen | Tool::Rotate)
+            && !self.doc.selection.is_empty();
         // Hold Space with the Selection tool to peek at every node (read-only;
         // the bounding box stays). Direct Selection proper takes precedence.
         let peek = !direct && !pen_nodes && self.space_peek();
@@ -302,10 +309,24 @@ impl App {
         } else {
             Vec::new()
         };
+        // Which on-screen node the pointer is over — matches the Direct
+        // Selection press hit radius (6 screen px) so the swelling node is
+        // exactly the one a click would grab.
+        let anchor_hover = if (direct || peek || pen_nodes) && matches!(self.drag, Drag::None) {
+            crate::anchors::topmost_anchor_among(
+                self.doc.editor.document(),
+                &anchor_paths,
+                self.doc_point(self.pointer),
+                6.0 / self.doc.view.zoom,
+            )
+        } else {
+            None
+        };
         let anchor_view = (direct || peek || pen_nodes).then_some(AnchorView {
             selected: &self.doc.anchor_sel,
             paths: &anchor_paths,
             peek,
+            hover: anchor_hover,
         });
 
         self.content.reset();
@@ -359,6 +380,9 @@ impl App {
         let panel_text_align = self.active_text_align();
         let panel_text_paragraph = self.active_text_paragraph();
         let panel_text_editing = self.text_edit.is_some();
+        let rotate_pivot = (self.active_tool == Tool::Rotate)
+            .then(|| self.rotate_pivot())
+            .flatten();
         match role {
             Role::Main => main_view::paint_main(
                 &mut self.content,
@@ -432,6 +456,7 @@ impl App {
                 self.settings.cull_inset,
                 self.settings.show_cull_outline,
                 self.rulers,
+                rotate_pivot,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
