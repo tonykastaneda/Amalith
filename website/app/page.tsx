@@ -1,5 +1,6 @@
 import { Header } from "./Header";
 import { ArrowUpRight } from "./ArrowUpRight";
+import { Footer } from "./Footer";
 
 const features = [
   {
@@ -114,16 +115,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer>
-        <a className="footer-brand" href="#top" aria-label="Amalith"><img src={`${basePath}/brand/amalith-a.svg`} alt="" /></a>
-        <div className="footer-links">
-          <div><p>Project</p><a href={`${basePath}/why/`}>Why Amalith</a><a href="#why">Features</a><a href="#status">News</a><a href={`${basePath}/docs/`}>Docs</a></div>
-          <div><p>Community</p><a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a><a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues <ArrowUpRight /></a></div>
-        </div>
-        <p className="footer-note">
-          Built in public. Made for designers. <span className="footer-heart" aria-label="love">♥</span> from Bell, California.
-        </p>
-      </footer>
+      <Footer basePath={basePath} />
     </>
   );
 }

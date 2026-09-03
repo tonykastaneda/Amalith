@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Footer } from "../Footer";
 import { Header } from "../Header";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -31,15 +32,15 @@ export default function Downloads() {
       <main id="top" className="downloads-page">
         <section className="downloads-hero" aria-labelledby="downloads-title">
           <div className="downloads-hero__inner">
-            <p className="kicker"><span /> Download Amalith</p>
+            <p className="kicker"><span /> Finally</p>
             <h1 id="downloads-title">
-              Finally, the design tool that lets<br />
-              creatives <em>create.</em>
+              <span>The design tool that lets</span>
+              <span>creatives <em>create.</em></span>
             </h1>
 
             <div className="download-actions" aria-label="Desktop downloads coming soon">
               {platforms.map((platform) => (
-                <button className="platform-download" type="button" disabled key={platform.name}>
+                <button className="platform-download" type="button" key={platform.name}>
                   <img src={platform.icon} alt="" aria-hidden="true" />
                   <span>Coming soon for {platform.name}</span>
                 </button>
@@ -49,14 +50,7 @@ export default function Downloads() {
         </section>
       </main>
 
-      <footer className="downloads-footer">
-        <a className="footer-brand" href={`${basePath}/`} aria-label="Amalith home">
-          <img src={`${basePath}/brand/amalith-a.svg`} alt="" />
-        </a>
-        <p>Free · open source · cross-platform</p>
-        <a href={`${basePath}/docs/`}>Docs</a>
-        <a href={`${basePath}/`}>Back to Amalith <span aria-hidden="true">→</span></a>
-      </footer>
+      <Footer basePath={basePath} />
     </>
   );
 }
