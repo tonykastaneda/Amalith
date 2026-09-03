@@ -545,7 +545,8 @@ impl App {
                         | Tool::Text
                         | Tool::Artboard
                         | Tool::Hand
-                        | Tool::Zoom => return,
+                        | Tool::Zoom
+                        | Tool::Eyedropper => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -648,10 +649,7 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::Scale {
-                start_xf, preview, ..
-            }
-            | Drag::Rotate {
+            Drag::Rotate {
                 start_xf, preview, ..
             } => {
                 if preview != start_xf {
@@ -660,6 +658,17 @@ impl App {
                         .map(|(id, a)| (id, convert::affine_to_core(a)))
                         .collect();
                     let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    self.request_main_redraw();
+                }
+            }
+            Drag::Scale {
+                start_xf, preview, ..
+            } => {
+                if preview != start_xf {
+                    // Text objects bake a uniform scale into their font
+                    // size / box, so the point size actually changes (the
+                    // rest just take the new transform).
+                    self.commit_scaled(preview);
                     self.request_main_redraw();
                 }
             }

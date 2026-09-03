@@ -17,10 +17,11 @@ pub enum Tool {
     Artboard,
     Hand,
     Zoom,
+    Eyedropper,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 13] = [
+    pub const ALL: [Tool; 14] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -34,6 +35,7 @@ impl Tool {
         Tool::Artboard,
         Tool::Hand,
         Tool::Zoom,
+        Tool::Eyedropper,
     ];
 
     /// A drag-a-box shape tool.
@@ -59,6 +61,7 @@ impl Tool {
             Tool::Artboard => "Artboard",
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
+            Tool::Eyedropper => "Eyedropper",
         }
     }
 
@@ -75,6 +78,7 @@ impl Tool {
             Tool::Artboard => "⇧O",
             Tool::Hand => "H",
             Tool::Zoom => "Z",
+            Tool::Eyedropper => "I",
             _ => "",
         }
     }
@@ -94,6 +98,7 @@ impl Tool {
             Tool::Artboard => Icon::Artboard,
             Tool::Hand => Icon::Hand,
             Tool::Zoom => Icon::Zoom,
+            Tool::Eyedropper => Icon::Eyedropper,
         }
     }
 }

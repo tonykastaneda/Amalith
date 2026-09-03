@@ -2876,6 +2876,117 @@ impl App {
         true
     }
 
+    /// Commit a Selection-tool scale (`preview` = new world transforms).
+    /// A text object with a (near-)uniform scale folds it into its font
+    /// size (and area-box dimensions) and keeps an unscaled transform, so
+    /// the point size in the Character panel is real. Everything else —
+    /// and any non-uniform text scale — just takes the new transform.
+    fn commit_scaled(&mut self, preview: HashMap<ObjectId, Affine>) {
+        let mut xforms: Vec<(ObjectId, amalith_core::Affine)> = Vec::new();
+        let mut texts: Vec<(ObjectId, amalith_core::TextData)> = Vec::new();
+
+        for (id, xf) in preview {
+            let td = match self.doc.editor.document().object(id).map(|o| &o.kind) {
+                Some(amalith_core::ObjectKind::Text(t)) => Some(t.clone()),
+                _ => None,
+            };
+            let [a, b, c, d, e, f] = xf.as_coeffs();
+            let sx = (a * a + b * b).sqrt();
+            let sy = (c * c + d * d).sqrt();
+            let uniform = sx > 1e-6 && (sx - sy).abs() / sx.max(sy) < 0.02;
+            // Rotation / shear present → not a plain scale, leave it alone.
+            let plain = (a * c + b * d).abs() < 1e-3 * sx * sy;
+
+            match td {
+                Some(mut data) if uniform && plain && (sx - 1.0).abs() > 1e-4 => {
+                    data.style.size *= sx;
+                    if let amalith_core::TextKind::Area { width, height } = &mut data.kind {
+                        *width *= sx;
+                        if let Some(h) = height {
+                            *h *= sy;
+                        }
+                    }
+                    data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
+                    texts.push((id, data));
+                    // Keep the position, drop the scale.
+                    xforms.push((id, amalith_core::Affine::translate((e, f))));
+                }
+                _ => xforms.push((id, convert::affine_to_core(xf))),
+            }
+        }
+
+        if !texts.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetTexts { items: texts });
+        }
+        if !xforms.is_empty() {
+            let _ = self
+                .doc.editor
+                .execute(Command::SetTransforms { items: xforms });
+        }
+    }
+
+    /// Eyedropper: copy the appearance of the topmost object under `screen`
+    /// (fill, stroke, stroke width) onto the current selection, and adopt
+    /// it as the new-object defaults. Nothing under the cursor = no-op.
+    fn eyedrop_at(&mut self, screen: Point) {
+        let dp = self.doc_point(screen);
+        let visible = self.visible_doc_rect();
+        let Some(src) =
+            select::topmost_selectable_at(self.doc.editor.document(), dp, visible)
+        else {
+            return;
+        };
+        let src_obj = self.doc.editor.document().object(src);
+        let Some(app) = src_obj.map(|o| o.appearance) else {
+            return;
+        };
+        // A sampled text object also carries its type styling.
+        let src_type = src_obj.and_then(|o| match &o.kind {
+            amalith_core::ObjectKind::Text(t) => {
+                Some((t.style.clone(), t.align, t.paragraph))
+            }
+            _ => None,
+        });
+        // Adopt as the tool-palette defaults.
+        self.doc.fill = app.fill;
+        self.doc.stroke = app.stroke;
+        self.doc.stroke_w = app.stroke_width;
+        if let Some((style, align, para)) = &src_type {
+            self.text_defaults = style.clone();
+            self.text_align_default = *align;
+            self.para_defaults = *para;
+        }
+        // Paint it onto everything selected (except the sampled object).
+        let targets: Vec<ObjectId> = self
+            .doc.selection
+            .iter()
+            .copied()
+            .filter(|id| *id != src)
+            .collect();
+        if !targets.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetPaints {
+                objects: targets.clone(),
+                fill: Some(app.fill),
+                stroke: Some(app.stroke),
+            });
+            let _ = self.doc.editor.execute(Command::SetStrokeWidth {
+                objects: targets,
+                width: app.stroke_width,
+            });
+        }
+        // Selected text objects inherit the sampled type styling:
+        // character style (family, size, weight, tracking, leading, …),
+        // alignment, and paragraph attributes.
+        if let Some((style, align, para)) = src_type {
+            self.edit_selected_text_data(move |d| {
+                d.style = style.clone();
+                d.align = align;
+                d.paragraph = para;
+            });
+        }
+        self.request_main_redraw();
+    }
+
     /// The head frame of `id`'s text thread (`id` itself if unthreaded or
     /// already the head); `None` if `id` isn't a text object.
     fn thread_head(&self, id: ObjectId) -> Option<ObjectId> {

@@ -52,6 +52,7 @@ pub enum Icon {
     Artboard,
     Hand,
     Zoom,
+    Eyedropper,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -66,7 +67,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
-        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom => "",
+        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper => "",
     }
 }
 
@@ -88,7 +89,44 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
         draw_zoom_glyph(scene, box_, color);
         return;
     }
+    if icon == Icon::Eyedropper {
+        draw_eyedropper_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
+}
+
+/// A pipette — bulb top-right, tip bottom-left — the Eyedropper tool.
+fn draw_eyedropper_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let tip = Point::new(box_.x0 + w * 0.16, box_.y1 - h * 0.16);
+    let neck = Point::new(box_.x0 + w * 0.60, box_.y0 + h * 0.40);
+    // Barrel.
+    scene.stroke(
+        &Stroke::new((w * 0.13).max(2.0)),
+        ID,
+        color,
+        None,
+        &Line::new(tip, neck),
+    );
+    // Bulb.
+    scene.stroke(
+        &Stroke::new((w * 0.10).max(1.6)),
+        ID,
+        color,
+        None,
+        &Line::new(neck, Point::new(box_.x1 - w * 0.16, box_.y0 + h * 0.16)),
+    );
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Circle::new(Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.20), w * 0.13),
+    );
+    // A drop at the tip.
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(tip, w * 0.055));
 }
 
 /// A four-finger mitt + thumb — the Hand tool.

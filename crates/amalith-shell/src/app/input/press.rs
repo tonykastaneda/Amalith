@@ -476,6 +476,11 @@ impl App {
                     self.update_canvas_cursor();
                     return;
                 }
+                // Eyedropper: sample the object under the cursor.
+                if self.active_tool == Tool::Eyedropper {
+                    self.eyedrop_at(self.pointer);
+                    return;
+                }
                 let dp = self.doc_point(self.pointer);
 
                 // "Loaded text" cursor: a prior out-port click armed a
