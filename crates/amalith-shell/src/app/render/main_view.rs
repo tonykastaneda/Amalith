@@ -313,9 +313,10 @@ pub(in crate::app) fn paint_main(
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
-        // A small filled square off the arrow's tail — "this is selectable".
+        // A small filled square below-right of the arrow's tip — "this is
+        // selectable". Kept clear of the arrow body.
         if tool == Tool::Select && over_selectable {
-            let c = vello::kurbo::Point::new(x0 + sz * 0.66, y0 + sz * 0.64);
+            let c = vello::kurbo::Point::new(x0 + sz * 0.88, y0 + sz * 0.9);
             let a = 3.2;
             let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
             let halo = vello::peniko::Color::WHITE;
