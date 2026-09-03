@@ -325,6 +325,8 @@ enum MenuAction {
     ZoomOut,
     FitArtboard,
     FitAll,
+    /// View ▸ Outline (⌘Y).
+    ToggleOutline,
     /// View ▸ Guides.
     ToggleGuides,
     ToggleGuideLock,
@@ -717,6 +719,8 @@ struct App {
     /// Ruler guides currently selected (clicked or marquee'd with a
     /// selection tool); Delete / Backspace removes them.
     selected_guides: Vec<amalith_core::GuideId>,
+    /// Outline (wireframe) view — View ▸ Outline, ⌘Y.
+    outline_mode: bool,
     /// Cached static ruler layer — rebuilt only when the view, canvas
     /// region, ruler origin, or display unit changes.
     ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
@@ -840,6 +844,7 @@ impl App {
             guides_hidden,
             guides_locked,
             selected_guides: Vec::new(),
+            outline_mode: false,
             ruler_cache: None,
             ruler_menu: None,
             last_frame: None,
@@ -887,6 +892,7 @@ impl App {
             &self.scripts,
             self.guides_hidden,
             self.guides_locked,
+            self.outline_mode,
         );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
@@ -1469,6 +1475,15 @@ impl App {
             m.sync_guides(self.guides_hidden, self.guides_locked);
         }
     }
+    fn toggle_outline_mode(&mut self) {
+        self.outline_mode = !self.outline_mode;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_outline(self.outline_mode);
+        }
+        self.request_main_redraw();
+    }
+
     fn clear_guides(&mut self) {
         if !self.doc.editor.document().guides().is_empty() {
             let _ = self.doc.editor.execute(Command::ClearGuides);
@@ -2328,6 +2343,7 @@ impl App {
             MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
             MenuAction::FitArtboard => self.zoom_fit(),
             MenuAction::FitAll => self.fit_view(),
+            MenuAction::ToggleOutline => self.toggle_outline_mode(),
             MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
             MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
             MenuAction::ClearGuides => self.clear_guides(),
@@ -4745,6 +4761,7 @@ impl ApplicationHandler for App {
                 &self.scripts,
                 self.guides_hidden,
                 self.guides_locked,
+                self.outline_mode,
             );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);
@@ -5280,6 +5297,8 @@ struct NativeMenu {
     window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
     /// View ▸ Guides checkmarks — (show-guides, lock-guides).
     guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
+    /// View ▸ Outline checkmark.
+    outline_check: muda::CheckMenuItem,
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
@@ -5291,6 +5310,7 @@ impl NativeMenu {
         scripts: &crate::scripts::ScriptsConfig,
         guides_hidden: bool,
         guides_locked: bool,
+        outline: bool,
     ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
@@ -5329,6 +5349,12 @@ impl NativeMenu {
         let zoom_out_i = mk("Zoom Out", sup, Code::Minus);
         let fit_artboard_i = mk("Fit Artboard in Window", sup, Code::Digit0);
         let fit_all_i = mk("Fit All in Window", sup_alt, Code::Digit0);
+        let outline_i = CheckMenuItem::new(
+            "Outline",
+            true,
+            outline,
+            Some(Accelerator::new(sup, Code::KeyY)),
+        );
         let guides_show_i = CheckMenuItem::new(
             "Show Guides",
             true,
@@ -5422,6 +5448,8 @@ impl NativeMenu {
                 &fit_artboard_i,
                 &fit_all_i,
                 &sep(),
+                &outline_i,
+                &sep(),
                 &guides_show_i,
                 &guides_lock_i,
                 &clear_guides_i,
@@ -5491,6 +5519,7 @@ impl NativeMenu {
             (zoom_out_i.id().clone(), MenuAction::ZoomOut),
             (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
             (fit_all_i.id().clone(), MenuAction::FitAll),
+            (outline_i.id().clone(), MenuAction::ToggleOutline),
             (guides_show_i.id().clone(), MenuAction::ToggleGuides),
             (guides_lock_i.id().clone(), MenuAction::ToggleGuideLock),
             (clear_guides_i.id().clone(), MenuAction::ClearGuides),
@@ -5510,8 +5539,14 @@ impl NativeMenu {
             items,
             window_checks,
             guide_checks: (guides_show_i, guides_lock_i),
+            outline_check: outline_i,
             _menu: menu,
         }
+    }
+
+    /// Match the View ▸ Outline checkmark to the live toggle.
+    fn sync_outline(&self, on: bool) {
+        self.outline_check.set_checked(on);
     }
 
     /// Tick / untick each Window-menu entry to match the live dock.

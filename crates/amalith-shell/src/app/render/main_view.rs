@@ -89,6 +89,8 @@ pub(in crate::app) fn paint_main(
     rotate_pivot: Option<Point>,
     // Ruler guides to draw: (orientation, doc coord, how to mark it).
     guide_lines: &[(amalith_core::GuideOrient, f64, GuideMark)],
+    // Outline (wireframe) view active.
+    outline_mode: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -139,6 +141,7 @@ pub(in crate::app) fn paint_main(
         cull_inset,
         show_cull,
         active_artboard,
+        outline_mode,
     );
 
     if let Some(m) = marquee {

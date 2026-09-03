@@ -29,6 +29,10 @@ pub struct CanvasView {
 pub const ZOOM_MIN: f64 = 0.001;
 pub const ZOOM_MAX: f64 = 256.0;
 
+/// Hairline colour for Outline (wireframe) view — near-black, reads on the
+/// white artboard.
+const OUTLINE_INK: Color = Color::from_rgb8(0x20, 0x20, 0x20);
+
 impl Default for CanvasView {
     fn default() -> Self {
         Self {
@@ -200,6 +204,8 @@ pub fn paint(
     cull_inset: f64,
     show_cull: bool,
     active_artboard: Option<ArtboardId>,
+    // Outline (wireframe) view — objects render as hairline contours only.
+    outline: bool,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -270,6 +276,7 @@ pub fn paint(
                 text,
                 editing_text,
                 images,
+                outline,
             );
         }
     }
@@ -289,6 +296,7 @@ pub fn paint(
                 text,
                 editing_text,
                 images,
+                outline,
             );
         }
     }
@@ -1030,6 +1038,7 @@ fn paint_object(
     text: &mut TextContext,
     editing_text: Option<ObjectId>,
     images: &HashMap<AssetId, ImageLods>,
+    outline: bool,
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -1059,6 +1068,17 @@ fn paint_object(
     let sw = obj.appearance.stroke_width;
     let style = obj.appearance.stroke_style;
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
+        // Outline (wireframe) view: hairline contour only, no fill/stroke.
+        if outline {
+            scene.stroke(
+                &Stroke::new(1.0),
+                Affine::IDENTITY,
+                OUTLINE_INK,
+                None,
+                &(m * bp.clone()),
+            );
+            return;
+        }
         let closed = bp
             .elements()
             .iter()
@@ -1121,10 +1141,13 @@ fn paint_object(
                     text,
                     editing_text,
                     images,
+                    outline,
                 );
             }
         }
         ObjectKind::Text(td) => {
+            // Live text stays solid in Outline view — only text that's been
+            // expanded to paths (now a Path / CompoundPath) wireframes.
             // The object open in the Type tool is drawn live by the shell.
             if Some(id) != editing_text {
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
@@ -1163,6 +1186,31 @@ fn paint_object(
             }
         }
         ObjectKind::Image(img) => {
+            if outline {
+                // Wireframe: a crossed box, like Illustrator.
+                if let Some(b) = obj.kind.own_local_bounds() {
+                    let r = convert::rect(b);
+                    let quad = [
+                        Point::new(r.x0, r.y0),
+                        Point::new(r.x1, r.y0),
+                        Point::new(r.x1, r.y1),
+                        Point::new(r.x0, r.y1),
+                    ]
+                    .map(|p| m * p);
+                    let mut bp = BezPath::new();
+                    bp.move_to(quad[0]);
+                    for p in &quad[1..] {
+                        bp.line_to(*p);
+                    }
+                    bp.close_path();
+                    bp.move_to(quad[0]);
+                    bp.line_to(quad[2]);
+                    bp.move_to(quad[1]);
+                    bp.line_to(quad[3]);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, OUTLINE_INK, None, &bp);
+                }
+                return;
+            }
             // Screen-space long side of the object (zoom × native size).
             // Native bounds stay full-res; only the GPU copy is swapped.
             let cover = {

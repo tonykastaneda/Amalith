@@ -493,6 +493,7 @@ impl App {
                 self.rulers,
                 rotate_pivot,
                 &guide_lines,
+                self.outline_mode,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

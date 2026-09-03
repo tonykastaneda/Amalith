@@ -411,6 +411,10 @@ impl App {
                     KeyCode::Semicolon => {
                         self.set_guides_hidden(!self.guides_hidden);
                     }
+                    // ⌘Y — toggle Outline (wireframe) view.
+                    KeyCode::KeyY if !self.shift_down => {
+                        self.toggle_outline_mode();
+                    }
                     // View zoom: ⌘+ / ⌘− step, ⌘0 fit, ⌘1 actual size.
                     // `Equal` is the `=`/`+` key; on most layouts ⌘+ needs
                     // Shift, so accept it with or without.
