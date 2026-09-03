@@ -32,7 +32,7 @@ export default function Downloads() {
       <main id="top" className="downloads-page">
         <section className="downloads-hero" aria-labelledby="downloads-title">
           <div className="downloads-hero__inner">
-            <p className="kicker"><span /> Finally</p>
+            <p className="kicker">Finally</p>
             <h1 id="downloads-title">
               <span>The design tool that lets</span>
               <span>creatives <em>create.</em></span>
