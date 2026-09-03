@@ -606,14 +606,20 @@ impl App {
                 if self.active_tool == Tool::Text {
                     if self.text_edit.is_some() {
                         // A press inside the open editor places the caret /
-                        // starts a selection drag.
+                        // starts a selection drag. A triple-click selects
+                        // the whole text and must NOT arm the drag — the
+                        // next cursor move would collapse it to the pointer.
+                        let clicks = self.click_streak.min(3);
                         if let Some(p) = self.text_editor_point(self.pointer) {
                             if let Some(te) = &mut self.text_edit {
-                                let clicks = if double { 2 } else { 1 };
                                 te.pointer_down(p, clicks, &mut self.text);
                             }
                         }
-                        self.drag = Drag::TextSelect;
+                        self.drag = if clicks >= 3 {
+                            Drag::None
+                        } else {
+                            Drag::TextSelect
+                        };
                         self.request_main_redraw();
                         return;
                     }

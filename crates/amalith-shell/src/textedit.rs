@@ -374,14 +374,14 @@ impl TextEdit {
     // --- pointer -----------------------------------------------------------
 
     /// `p` is in editor space (already offset by the text block origin and
-    /// un-zoomed). `clicks` = 1 caret, 2 word, 3 line.
+    /// un-zoomed). `clicks` = 1 caret, 2 word, 3+ the whole text.
     pub fn pointer_down(&mut self, p: (f32, f32), clicks: u32, tcx: &mut TextContext) {
         let (fc, lc) = tcx.parts();
         let mut drv = self.editor.driver(fc, lc);
         match clicks {
             0 | 1 => drv.move_to_point(p.0, p.1),
             2 => drv.select_word_at_point(p.0, p.1),
-            _ => drv.select_line_at_point(p.0, p.1),
+            _ => drv.select_all(),
         }
     }
 

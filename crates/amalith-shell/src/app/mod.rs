@@ -643,6 +643,9 @@ struct App {
     lod_inflight: std::collections::HashSet<AssetId>,
     /// Time + position of the last left press, for double-click detection.
     last_click: Option<(Instant, Point)>,
+    /// Consecutive left presses in the same spot (1 = single, 2 = double,
+    /// 3 = triple). Drives word- vs whole-text selection in the editor.
+    click_streak: u32,
     /// In-progress Pen path — placed anchors (with bezier handles) in
     /// document space. Empty when not drawing.
     pen: Vec<PenAnchor>,
@@ -782,6 +785,7 @@ impl App {
             lod: crate::lod::LodHub::new(),
             lod_inflight: std::collections::HashSet::new(),
             last_click: None,
+            click_streak: 0,
             pen: Vec::new(),
             pen_redo: Vec::new(),
             last_pen: None,
@@ -4720,11 +4724,12 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 let now = Instant::now();
-                let double = self.last_click.is_some_and(|(t, p)| {
+                let near = self.last_click.is_some_and(|(t, p)| {
                     now.duration_since(t).as_millis() < 400 && (self.pointer - p).hypot() < 5.0
                 });
+                self.click_streak = if near { self.click_streak + 1 } else { 1 };
                 self.last_click = Some((now, self.pointer));
-                self.on_press(event_loop, id, double);
+                self.on_press(event_loop, id, self.click_streak >= 2);
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
