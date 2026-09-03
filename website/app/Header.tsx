@@ -7,6 +7,7 @@ import wordmark from "../public/brand/amalith-wordmark.png";
 export function Header({ basePath }: { basePath: string }) {
   const headerRef = useRef<HTMLElement>(null);
   const homeHref = `${basePath}/`;
+  const whyHref = `${basePath}/why/`;
   const downloadsHref = `${basePath}/downloads/`;
 
   useEffect(() => {
@@ -49,9 +50,9 @@ export function Header({ basePath }: { basePath: string }) {
         <img src={wordmark.src} alt="Amalith" width={669} height={160} />
       </a>
       <nav className="desktop-nav" aria-label="Primary navigation">
-        <a href={`${homeHref}#why`}>Why Amalith</a>
-        <a href={`${homeHref}#features`}>Features</a>
-        <a href={`${homeHref}#status`}>Status</a>
+        <a href={whyHref}>Why Amalith</a>
+        <a href={`${homeHref}#why`}>Features</a>
+        <a href={`${homeHref}#status`}>News</a>
         <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
       <a className="get-link" href={downloadsHref}>
@@ -60,9 +61,9 @@ export function Header({ basePath }: { basePath: string }) {
       <details className="mobile-nav">
         <summary>Menu</summary>
         <div>
-          <a href={`${homeHref}#why`}>Why Amalith</a>
-          <a href={`${homeHref}#features`}>Features</a>
-          <a href={`${homeHref}#status`}>Status</a>
+          <a href={whyHref}>Why Amalith</a>
+          <a href={`${homeHref}#why`}>Features</a>
+          <a href={`${homeHref}#status`}>News</a>
           <a href={downloadsHref}>Get Amalith <ArrowUpRight /></a>
           <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a>
         </div>

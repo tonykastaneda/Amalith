@@ -97,6 +97,7 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 .footer-links p { color: #8f8e87; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 12px; }
 .footer-note { grid-column: 1 / -1; border-top: 1px solid #343430; margin: 50px 0 0; padding-top: 26px; color: #8f8e87; font-size: 12px; }
 .footer-heart { color: var(--yellow); font-size: 1.15em; }
+.why-page { min-height: max(620px, calc(100vh - 124px)); background: #050505; border-bottom: 1px solid var(--line); }
 
 .downloads-page { padding-bottom: 24px; }
 .downloads-hero { min-height: 570px; padding: 88px 4vw 76px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; justify-content: space-between; }
@@ -164,6 +165,7 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
   .cta > a { justify-self: start; }
   .cta__mark { width: 80vw; }
   footer { grid-template-columns: 1fr; gap: 60px; }
+  .why-page { min-height: max(540px, calc(100vh - 76px)); }
   .downloads-hero { min-height: 520px; }
   .downloads-hero__copy { grid-template-columns: 1fr; gap: 42px; }
   .download-grid { grid-template-columns: 1fr; }
