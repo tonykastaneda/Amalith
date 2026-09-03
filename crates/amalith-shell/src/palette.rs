@@ -7,7 +7,7 @@
 //! the command list (display text here, the real action kept parallel in
 //! `App`) and runs whatever row the palette reports as chosen.
 
-use vello::kurbo::{Affine, Line, Point, Rect, Stroke};
+use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
@@ -42,7 +42,7 @@ pub enum Hit {
 }
 
 pub struct Palette {
-    pub query: String,
+    pub field: crate::text_field::TextField,
     entries: Vec<Entry>,
     /// Original indices that match `query`, best score first.
     filtered: Vec<usize>,
@@ -59,7 +59,7 @@ impl Palette {
     pub fn new(entries: Vec<Entry>) -> Self {
         let filtered = (0..entries.len()).collect();
         Self {
-            query: String::new(),
+            field: crate::text_field::TextField::new(""),
             entries,
             filtered,
             sel: 0,
@@ -69,20 +69,9 @@ impl Palette {
         }
     }
 
-    pub fn push_char(&mut self, ch: char) {
-        if !ch.is_control() {
-            self.query.push(ch);
-            self.refilter();
-        }
-    }
-
-    pub fn backspace(&mut self) {
-        self.query.pop();
-        self.refilter();
-    }
-
-    fn refilter(&mut self) {
-        let q = self.query.trim().to_lowercase();
+    /// Recompute the match list from the field's current text.
+    pub fn refilter(&mut self) {
+        let q = self.field.text().trim().to_lowercase();
         let mut scored: Vec<(i64, usize)> = self
             .entries
             .iter()
@@ -174,23 +163,10 @@ impl Palette {
             &self.panel.to_rounded_rect(10.0),
         );
 
-        // Search field.
+        // Search field — a real editable text field.
         let field = Rect::new(x0 + PAD, y0 + PAD, x0 + PW - PAD, y0 + FIELD_H - PAD * 0.5);
         scene.fill(Fill::NonZero, ID, theme.bg, None, &field.to_rounded_rect(6.0));
-        let baseline = field.y0 + field.height() * 0.5 + 5.0;
-        if self.query.is_empty() {
-            text.draw(scene, "Search commands…", 14.0, theme.text_dim, field.x0 + 12.0, baseline);
-        } else {
-            text.draw(scene, &self.query, 14.0, theme.text, field.x0 + 12.0, baseline);
-            let cx = field.x0 + 12.0 + text.measure(&self.query, 14.0) + 1.0;
-            scene.stroke(
-                &Stroke::new(1.0),
-                ID,
-                theme.text,
-                None,
-                &Line::new((cx, field.y0 + 8.0), (cx, field.y1 - 8.0)),
-            );
-        }
+        self.field.paint(scene, text, theme, field, "Search commands…", true);
         scene.fill(
             Fill::NonZero,
             ID,

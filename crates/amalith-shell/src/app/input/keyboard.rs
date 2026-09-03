@@ -21,42 +21,55 @@ impl App {
             if !event.state.is_pressed() {
                 return;
             }
-            match event.physical_key {
-                PhysicalKey::Code(KeyCode::Escape) => {
-                    self.palette = None;
-                }
-                PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
-                    let sel = self.palette.as_ref().and_then(|p| p.selected());
-                    if let Some(i) = sel {
-                        self.run_palette_cmd(i);
-                    } else {
-                        self.palette = None;
-                    }
-                }
-                PhysicalKey::Code(KeyCode::ArrowDown) => {
+            use winit::keyboard::{Key, NamedKey};
+            // Vertical nav — the single-line search field doesn't use these.
+            match &event.logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
                     if let Some(p) = &mut self.palette {
                         p.move_sel(1);
                     }
+                    self.request_main_redraw();
+                    return;
                 }
-                PhysicalKey::Code(KeyCode::ArrowUp) => {
+                Key::Named(NamedKey::ArrowUp) => {
                     if let Some(p) = &mut self.palette {
                         p.move_sel(-1);
                     }
+                    self.request_main_redraw();
+                    return;
                 }
-                PhysicalKey::Code(KeyCode::Backspace) => {
+                _ => {}
+            }
+            let mods = textedit::Mods {
+                shift: self.shift_down,
+                alt: self.alt_down,
+                meta: self.cmd_down,
+            };
+            let logical = event.logical_key.clone();
+            let typed = event.text.clone();
+            if self.clipboard.is_none() {
+                self.clipboard = arboard::Clipboard::new().ok();
+            }
+            let clip = self.clipboard.as_mut();
+            let resp = self
+                .palette
+                .as_mut()
+                .map(|p| p.field.key(&logical, mods, typed.as_deref(), clip, &mut self.text));
+            match resp {
+                Some(crate::text_field::Resp::Cancel) => self.palette = None,
+                Some(crate::text_field::Resp::Submit) => {
+                    let sel = self.palette.as_ref().and_then(|p| p.selected());
+                    match sel {
+                        Some(i) => self.run_palette_cmd(i),
+                        None => self.palette = None,
+                    }
+                }
+                Some(crate::text_field::Resp::Changed) => {
                     if let Some(p) = &mut self.palette {
-                        p.backspace();
+                        p.refilter();
                     }
                 }
-                _ => {
-                    if let Some(txt) = event.text.clone() {
-                        if let Some(p) = &mut self.palette {
-                            for ch in txt.chars() {
-                                p.push_char(ch);
-                            }
-                        }
-                    }
-                }
+                _ => {}
             }
             self.request_main_redraw();
             return;

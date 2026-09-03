@@ -56,6 +56,7 @@ pub mod select;
 pub mod settings;
 pub mod stroke_panel;
 pub mod text;
+pub mod text_field;
 pub mod textedit;
 pub mod thread;
 pub mod theme;
