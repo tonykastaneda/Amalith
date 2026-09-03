@@ -14,6 +14,13 @@ impl App {
             self.request_main_redraw();
             return;
         }
+        // Command palette: hovering a row selects it.
+        if let Some(p) = &mut self.palette {
+            if p.hover(self.pointer) {
+                self.request_main_redraw();
+            }
+            return;
+        }
         self.update_canvas_cursor();
         self.refresh_tooltip();
         // Redraw so any painted cursor glyph tracks the pointer — this
@@ -21,6 +28,7 @@ impl App {
         // The Rotate tool shows path nodes but keeps the OS crosshair, so
         // it also needs a per-move repaint for the node hover-swell.
         if self.cursor_mode.is_drawn()
+            || self.ctx_menu.is_some()
             || (self.active_tool == Tool::Rotate
                 && !self.doc.selection.is_empty()
                 && matches!(self.drag, Drag::None))

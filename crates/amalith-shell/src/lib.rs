@@ -44,6 +44,7 @@ pub mod lod;
 #[cfg(target_os = "macos")]
 pub mod macdrop;
 pub mod newdoc;
+pub mod palette;
 pub mod panels;
 pub mod picker;
 pub mod prefs;

@@ -138,6 +138,71 @@ impl App {
         }
     }
 
+    pub(in crate::app) fn paint_ctx_menu(&mut self) {
+        let Some(menu) = &self.ctx_menu else {
+            return;
+        };
+        let fly = Self::ctx_menu_rect(menu.origin, &menu.items);
+        let th = &self.theme;
+        self.content
+            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(5.0));
+        self.content.stroke(
+            &Stroke::new(1.0),
+            ID,
+            th.border,
+            None,
+            &fly.to_rounded_rect(5.0),
+        );
+        let mut y = fly.y0 + Self::CM_PAD;
+        // `menu` is borrowed from `self`; collect what we need to draw so
+        // the draw calls can borrow `self` mutably.
+        let rows: Vec<(f64, Option<(String, bool)>)> = menu
+            .items
+            .iter()
+            .map(|it| match it {
+                CtxItem::Sep => (Self::CM_SEP, None),
+                CtxItem::Action { label, enabled, .. } => {
+                    (Self::CM_ROW, Some((label.clone(), *enabled)))
+                }
+            })
+            .collect();
+        for (h, row) in rows {
+            match row {
+                None => {
+                    let sy = y + Self::CM_SEP * 0.5;
+                    self.content.stroke(
+                        &Stroke::new(1.0),
+                        ID,
+                        self.theme.border,
+                        None,
+                        &vello::kurbo::Line::new((fly.x0 + 8.0, sy), (fly.x1 - 8.0, sy)),
+                    );
+                }
+                Some((label, enabled)) => {
+                    let r = Rect::new(fly.x0, y, fly.x1, y + Self::CM_ROW);
+                    if enabled && r.contains(self.pointer) {
+                        self.content
+                            .fill(Fill::NonZero, ID, self.theme.strip_bg, None, &r);
+                    }
+                    let col = if enabled {
+                        self.theme.text
+                    } else {
+                        self.theme.text_dim
+                    };
+                    self.text.draw(
+                        &mut self.content,
+                        &label,
+                        12.5,
+                        col,
+                        r.x0 + 14.0,
+                        r.center().y + 4.5,
+                    );
+                }
+            }
+            y += h;
+        }
+    }
+
     pub(in crate::app) fn paint_align_to_menu(&mut self) {
         let Some(anchor) = self.align_to_menu else {
             return;

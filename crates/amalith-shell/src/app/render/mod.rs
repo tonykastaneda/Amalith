@@ -604,6 +604,7 @@ impl App {
             self.paint_font_menu();
             self.paint_align_to_menu();
             self.paint_ruler_menu();
+            self.paint_ctx_menu();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that.
             if let Some(hm) = &mut self.home {
@@ -623,6 +624,9 @@ impl App {
             }
             if let Some(pr) = &mut self.prefs {
                 pr.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
+            }
+            if let Some(pal) = &mut self.palette {
+                pal.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
             }
         }
         if self.panel_menu.as_ref().is_some_and(|m| m.win == id) {

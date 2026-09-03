@@ -14,6 +14,21 @@ impl App {
         let Some(role) = self.hosts.get(&id).map(|h| h.role) else {
             return;
         };
+        // The command palette (⌘K) is topmost while open.
+        if self.palette.is_some() {
+            let hit = self
+                .palette
+                .as_ref()
+                .map(|p| p.hit(self.pointer))
+                .unwrap_or(crate::palette::Hit::Outside);
+            match hit {
+                crate::palette::Hit::Row(i) => self.run_palette_cmd(i),
+                crate::palette::Hit::Outside => self.palette = None,
+                crate::palette::Hit::Panel => {}
+            }
+            self.request_main_redraw();
+            return;
+        }
         // Any press ends the "⌘Z re-opens the last pen path" window.
         self.last_pen = None;
         self.tooltip = None;
@@ -37,6 +52,9 @@ impl App {
         }
         if self.ruler_menu.is_some() {
             self.ruler_menu_click(self.pointer);
+            return;
+        }
+        if self.ctx_menu.is_some() && self.ctx_menu_click(self.pointer) {
             return;
         }
         // An open panel hamburger flyout: clicks inside it are consumed;

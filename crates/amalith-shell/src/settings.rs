@@ -161,6 +161,7 @@ pub fn action_name(a: PrefAction) -> &'static str {
         PrefAction::SwapPaints => "SwapPaints",
         PrefAction::DefaultPaints => "DefaultPaints",
         PrefAction::Place => "Place",
+        PrefAction::CommandPalette => "CommandPalette",
     }
 }
 

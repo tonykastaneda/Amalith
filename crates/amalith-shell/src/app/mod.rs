@@ -341,6 +341,41 @@ enum MenuAction {
     TogglePanel(&'static str),
 }
 
+/// The canvas right-click menu: a hand-drawn popover anchored at `origin`
+/// (screen px). Rows are plain actions or separators — the vocabulary
+/// grows as more of the canvas gets contextual commands.
+struct CtxMenu {
+    origin: Point,
+    items: Vec<CtxItem>,
+}
+
+enum CtxItem {
+    /// Divider between groups of actions — used once the menu grows.
+    #[allow(dead_code)]
+    Sep,
+    Action {
+        label: String,
+        action: CtxAction,
+        enabled: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CtxAction {
+    ToggleGuides,
+    ToggleGuideLock,
+    ReleaseGuides,
+}
+
+/// What a command-palette row does when chosen.
+#[derive(Clone)]
+enum PaletteKind {
+    Menu(MenuAction),
+    Tool(Tool),
+    /// Open Preferences to this category index.
+    Prefs(usize),
+}
+
 /// Where a paste drops. `Plain` recentres on the view; the other two keep
 /// exact coordinates and only change stacking.
 #[derive(Clone, Copy)]
@@ -726,6 +761,12 @@ struct App {
     ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
     /// Right-click unit menu on the rulers, anchored at the click (screen).
     ruler_menu: Option<Point>,
+    /// Right-click context menu in the canvas area.
+    ctx_menu: Option<CtxMenu>,
+    /// Command palette (⌘K), and the action behind each of its rows
+    /// (parallel to the palette's display entries).
+    palette: Option<crate::palette::Palette>,
+    palette_kinds: Vec<PaletteKind>,
     /// Wall-clock instant of the previous `redraw`, and a smoothed
     /// frames-per-second estimate for the debug counter.
     last_frame: Option<Instant>,
@@ -847,6 +888,9 @@ impl App {
             outline_mode: false,
             ruler_cache: None,
             ruler_menu: None,
+            ctx_menu: None,
+            palette: None,
+            palette_kinds: Vec::new(),
             last_frame: None,
             fps: 0.0,
             first_frame_done: false,
@@ -1492,22 +1536,164 @@ impl App {
         }
     }
 
-    /// Right mouse press: opens the ruler unit menu when over a ruler
-    /// strip, else dismisses any menu already open.
+    const CM_W: f64 = 200.0;
+    const CM_ROW: f64 = 26.0;
+    const CM_SEP: f64 = 9.0;
+    const CM_PAD: f64 = 6.0;
+
+    fn ctx_menu_height(items: &[CtxItem]) -> f64 {
+        Self::CM_PAD * 2.0
+            + items
+                .iter()
+                .map(|it| match it {
+                    CtxItem::Sep => Self::CM_SEP,
+                    CtxItem::Action { .. } => Self::CM_ROW,
+                })
+                .sum::<f64>()
+    }
+
+    fn ctx_menu_rect(origin: Point, items: &[CtxItem]) -> Rect {
+        Rect::new(
+            origin.x,
+            origin.y,
+            origin.x + Self::CM_W,
+            origin.y + Self::ctx_menu_height(items),
+        )
+    }
+
+    /// Build and show the canvas context menu at `at` (screen px).
+    fn open_ctx_menu(&mut self, at: Point) {
+        let has_guides = !self.doc.editor.document().guides().is_empty();
+        let items = vec![
+            CtxItem::Action {
+                label: if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.into(),
+                action: CtxAction::ToggleGuides,
+                enabled: true,
+            },
+            CtxItem::Action {
+                label: if self.guides_locked { "Unlock Guides" } else { "Lock Guides" }.into(),
+                action: CtxAction::ToggleGuideLock,
+                enabled: true,
+            },
+            CtxItem::Action {
+                label: "Release Guides".into(),
+                action: CtxAction::ReleaseGuides,
+                enabled: has_guides,
+            },
+        ];
+        let h = Self::ctx_menu_height(&items);
+        let (w, wh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let origin = Point::new(
+            at.x.min(w - Self::CM_W - 4.0).max(4.0),
+            at.y.min(wh - h - 4.0).max(4.0),
+        );
+        self.ruler_menu = None;
+        self.panel_menu = None;
+        self.ctx_menu = Some(CtxMenu { origin, items });
+        self.request_main_redraw();
+    }
+
+    /// A left press while the context menu is open: run the row under `p`
+    /// (if any) and close. Returns whether the press was consumed.
+    fn ctx_menu_click(&mut self, p: Point) -> bool {
+        let Some(menu) = self.ctx_menu.take() else {
+            return false;
+        };
+        self.request_main_redraw();
+        let rect = Self::ctx_menu_rect(menu.origin, &menu.items);
+        if !rect.contains(p) {
+            return true;
+        }
+        let mut y = rect.y0 + Self::CM_PAD;
+        let mut hit = None;
+        for it in &menu.items {
+            match it {
+                CtxItem::Sep => y += Self::CM_SEP,
+                CtxItem::Action { action, enabled, .. } => {
+                    if *enabled && Rect::new(rect.x0, y, rect.x1, y + Self::CM_ROW).contains(p) {
+                        hit = Some(*action);
+                    }
+                    y += Self::CM_ROW;
+                }
+            }
+        }
+        if let Some(a) = hit {
+            match a {
+                CtxAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
+                CtxAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
+                CtxAction::ReleaseGuides => self.release_guides(),
+            }
+        }
+        true
+    }
+
+    /// Convert every ruler guide into an open line path spanning the
+    /// current artboard, then drop the guides (Illustrator's Release
+    /// Guides, for ruler guides).
+    fn release_guides(&mut self) {
+        use amalith_core::{Anchor, GuideOrient, HandleMode, PathData, Point as CPoint, Subpath};
+        let guides = self.doc.editor.document().guides().to_vec();
+        if guides.is_empty() {
+            return;
+        }
+        let span = self
+            .current_artboard()
+            .and_then(|id| self.doc.editor.document().artboard(id).map(|a| a.rect))
+            .unwrap_or_else(|| amalith_core::Rect::new(-10_000.0, -10_000.0, 10_000.0, 10_000.0));
+        let layer = self.ensure_layer();
+        let corner = |p: CPoint| Anchor {
+            point: p,
+            handle_in: None,
+            handle_out: None,
+            mode: HandleMode::Corner,
+        };
+        for g in &guides {
+            let (a, b) = match g.orient {
+                GuideOrient::Horizontal => (
+                    CPoint::new(span.x0, g.pos),
+                    CPoint::new(span.x1, g.pos),
+                ),
+                GuideOrient::Vertical => (
+                    CPoint::new(g.pos, span.y0),
+                    CPoint::new(g.pos, span.y1),
+                ),
+            };
+            let path = PathData::from_subpaths(vec![Subpath {
+                anchors: vec![corner(a), corner(b)],
+                closed: false,
+            }]);
+            let _ = self.doc.editor.execute(Command::CreatePath {
+                layer,
+                path,
+                name: Some("Guide".into()),
+            });
+        }
+        let _ = self.doc.editor.execute(Command::ClearGuides);
+        self.selected_guides.clear();
+        self.request_main_redraw();
+    }
+
+    /// Right mouse press: the ruler unit menu over a ruler strip, else the
+    /// canvas context menu (or dismisses whatever menu is open).
     fn on_right_press(&mut self) {
-        if self.ruler_menu.take().is_some() {
+        if self.ruler_menu.take().is_some() || self.ctx_menu.take().is_some() {
             self.request_main_redraw();
             return;
         }
-        if self.rulers && self.pointer_win == self.main_id {
-            let r = self.canvas_region();
-            let over = r.contains(self.pointer)
-                && (self.pointer.y < r.y0 + rulers::THICK
-                    || self.pointer.x < r.x0 + rulers::THICK);
-            if over {
-                self.ruler_menu = Some(self.pointer);
-                self.request_main_redraw();
-            }
+        if self.pointer_win != self.main_id {
+            return;
+        }
+        let r = self.canvas_region();
+        if self.rulers
+            && r.contains(self.pointer)
+            && (self.pointer.y < r.y0 + rulers::THICK || self.pointer.x < r.x0 + rulers::THICK)
+        {
+            self.ruler_menu = Some(self.pointer);
+            self.request_main_redraw();
+            return;
+        }
+        if self.canvas_viewport().contains(self.pointer) {
+            self.open_ctx_menu(self.pointer);
         }
     }
 
@@ -2369,6 +2555,125 @@ impl App {
             }
             MenuAction::RunScript(path) => crate::scripts::run(&path),
         }
+    }
+
+    // --- Command palette (⌘K) ----------------------------------------
+
+    /// Open the command palette, rebuilding its command list from the
+    /// current state so toggle labels ("Hide/Show Guides") are right.
+    fn open_palette(&mut self) {
+        if self.palette.is_some() {
+            self.palette = None;
+            self.request_main_redraw();
+            return;
+        }
+        self.ctx_menu = None;
+        self.ruler_menu = None;
+        self.panel_menu = None;
+        let (entries, kinds) = self.build_palette_commands();
+        self.palette_kinds = kinds;
+        self.palette = Some(crate::palette::Palette::new(entries));
+        self.request_main_redraw();
+    }
+
+    /// `(display entries, parallel actions)` for the palette.
+    fn build_palette_commands(&self) -> (Vec<crate::palette::Entry>, Vec<PaletteKind>) {
+        use crate::palette::Entry;
+        let mut e: Vec<Entry> = Vec::new();
+        let mut k: Vec<PaletteKind> = Vec::new();
+        let mut add = |title: String, hint: &str, kind: PaletteKind| {
+            e.push(Entry { title, hint: hint.to_string() });
+            k.push(kind);
+        };
+
+        for &t in &Tool::ALL {
+            add(format!("{} Tool", t.label()), "Tool", PaletteKind::Tool(t));
+        }
+
+        let menu: &[(&str, &str, MenuAction)] = &[
+            ("New", "File", MenuAction::New),
+            ("Open…", "File", MenuAction::Open),
+            ("Save", "File", MenuAction::Save),
+            ("Save As…", "File", MenuAction::SaveAs),
+            ("Import SVG…", "File", MenuAction::ImportSvg),
+            ("Place…", "File", MenuAction::Place),
+            ("Add Scripts Folder…", "File", MenuAction::AddScriptsFolder),
+            ("Undo", "Edit", MenuAction::Undo),
+            ("Redo", "Edit", MenuAction::Redo),
+            ("Cut", "Edit", MenuAction::Cut),
+            ("Copy", "Edit", MenuAction::Copy),
+            ("Paste", "Edit", MenuAction::Paste),
+            ("Duplicate", "Edit", MenuAction::Duplicate),
+            ("Select All", "Edit", MenuAction::SelectAll),
+            ("Bring Forward", "Arrange", MenuAction::BringForward),
+            ("Bring to Front", "Arrange", MenuAction::BringToFront),
+            ("Send Backward", "Arrange", MenuAction::SendBackward),
+            ("Send to Back", "Arrange", MenuAction::SendToBack),
+            ("Zoom In", "View", MenuAction::ZoomIn),
+            ("Zoom Out", "View", MenuAction::ZoomOut),
+            ("Fit Artboard in Window", "View", MenuAction::FitArtboard),
+            ("Fit All in Window", "View", MenuAction::FitAll),
+            ("Clear Guides", "View", MenuAction::ClearGuides),
+            ("Preferences…", "App", MenuAction::Preferences),
+            ("About Amalith", "App", MenuAction::About),
+        ];
+        for (title, hint, a) in menu {
+            add(title.to_string(), hint, PaletteKind::Menu(a.clone()));
+        }
+
+        // Stateful toggles — label reflects what the command will do.
+        add(
+            if self.outline_mode { "Exit Outline View" } else { "Outline View" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleOutline),
+        );
+        add(
+            if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleGuides),
+        );
+        add(
+            if self.guides_locked { "Unlock Guides" } else { "Lock Guides" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleGuideLock),
+        );
+
+        for (id, label) in WINDOW_PANELS {
+            let on = self.dock.contains(PanelId(id));
+            add(
+                format!("{} {} Panel", if on { "Hide" } else { "Show" }, label),
+                "Panel",
+                PaletteKind::Menu(MenuAction::TogglePanel(id)),
+            );
+        }
+
+        for (i, name) in prefs::CATEGORIES.iter().enumerate() {
+            add(format!("Preferences: {name}"), "App", PaletteKind::Prefs(i));
+        }
+
+        (e, k)
+    }
+
+    /// Run the palette row at `idx` (its original entry index) and close.
+    fn run_palette_cmd(&mut self, idx: usize) {
+        let kind = self.palette_kinds.get(idx).cloned();
+        self.palette = None;
+        match kind {
+            Some(PaletteKind::Menu(a)) => self.run_menu_action(a),
+            Some(PaletteKind::Tool(t)) => self.set_tool(t),
+            Some(PaletteKind::Prefs(cat)) => {
+                self.prefs = Some(prefs::Prefs::new(
+                    self.settings,
+                    self.scripts.clone(),
+                    self.keymaps.clone(),
+                ));
+                if let Some(p) = &mut self.prefs {
+                    p.category = cat.min(prefs::CATEGORIES.len() - 1);
+                }
+            }
+            None => {}
+        }
+        self.request_main_redraw();
     }
 
     /// Options-bar Weight stepper. Reads the live selection value (or the
@@ -4068,7 +4373,9 @@ impl App {
             || self.font_menu.is_some()
             || self.align_to_menu.is_some()
             || self.ruler_menu.is_some()
+            || self.ctx_menu.is_some()
             || self.prefs.is_some()
+            || self.palette.is_some()
         {
             return None;
         }
@@ -4235,6 +4542,8 @@ impl App {
             && self.font_menu.is_none()
             && self.panel_menu.is_none()
             && self.ruler_menu.is_none()
+            && self.ctx_menu.is_none()
+            && self.palette.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {

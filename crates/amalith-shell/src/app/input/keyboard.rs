@@ -16,6 +16,51 @@ use super::super::{App, Drag, PastePlace};
 
 impl App {
     pub(in crate::app) fn on_key(&mut self, event: KeyEvent) {
+        // The command palette (⌘K) swallows every key while open.
+        if self.palette.is_some() {
+            if !event.state.is_pressed() {
+                return;
+            }
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::Escape) => {
+                    self.palette = None;
+                }
+                PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                    let sel = self.palette.as_ref().and_then(|p| p.selected());
+                    if let Some(i) = sel {
+                        self.run_palette_cmd(i);
+                    } else {
+                        self.palette = None;
+                    }
+                }
+                PhysicalKey::Code(KeyCode::ArrowDown) => {
+                    if let Some(p) = &mut self.palette {
+                        p.move_sel(1);
+                    }
+                }
+                PhysicalKey::Code(KeyCode::ArrowUp) => {
+                    if let Some(p) = &mut self.palette {
+                        p.move_sel(-1);
+                    }
+                }
+                PhysicalKey::Code(KeyCode::Backspace) => {
+                    if let Some(p) = &mut self.palette {
+                        p.backspace();
+                    }
+                }
+                _ => {
+                    if let Some(txt) = event.text.clone() {
+                        if let Some(p) = &mut self.palette {
+                            for ch in txt.chars() {
+                                p.push_char(ch);
+                            }
+                        }
+                    }
+                }
+            }
+            self.request_main_redraw();
+            return;
+        }
         // The Preferences modal swallows every key. While a shortcut row
         // is "recording", the next key becomes that tool's binding;
         // otherwise Esc closes the modal.
@@ -181,6 +226,15 @@ impl App {
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
             {
                 self.ruler_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
+        if self.ctx_menu.is_some() {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.ctx_menu = None;
                 self.request_main_redraw();
             }
             return;
@@ -528,6 +582,7 @@ impl App {
                 self.apply_panel_action(crate::panels::Action::DefaultPaints, false);
             }
             prefs::PrefAction::Place => self.place_image_dialog(),
+            prefs::PrefAction::CommandPalette => self.open_palette(),
         }
     }
 }

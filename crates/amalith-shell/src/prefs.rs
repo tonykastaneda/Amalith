@@ -140,13 +140,15 @@ pub enum PrefAction {
     SwapPaints,
     DefaultPaints,
     Place,
+    CommandPalette,
 }
 
 impl PrefAction {
-    pub const ALL: [PrefAction; 3] = [
+    pub const ALL: [PrefAction; 4] = [
         PrefAction::SwapPaints,
         PrefAction::DefaultPaints,
         PrefAction::Place,
+        PrefAction::CommandPalette,
     ];
 
     pub fn label(self) -> &'static str {
@@ -154,6 +156,7 @@ impl PrefAction {
             PrefAction::SwapPaints => "Swap Fill / Stroke",
             PrefAction::DefaultPaints => "Default Fill / Stroke",
             PrefAction::Place => "Place…",
+            PrefAction::CommandPalette => "Command Palette",
         }
     }
 
@@ -162,6 +165,11 @@ impl PrefAction {
             PrefAction::SwapPaints => KeyChord::plain(KeyCode::KeyX),
             PrefAction::DefaultPaints => KeyChord::plain(KeyCode::KeyD),
             PrefAction::Place => KeyChord::with_cmd_shift(KeyCode::KeyP),
+            PrefAction::CommandPalette => KeyChord {
+                code: KeyCode::KeyK,
+                shift: false,
+                cmd: true,
+            },
         })
     }
 }

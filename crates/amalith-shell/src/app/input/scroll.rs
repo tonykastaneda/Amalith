@@ -22,6 +22,12 @@ impl App {
             // Pixel-based (trackpad): physical px → logical.
             MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
         };
+        // The command palette's result list.
+        if let Some(p) = &mut self.palette {
+            p.scroll(dy);
+            self.request_main_redraw();
+            return;
+        }
         // The Preferences modal's Keyboard / Scripts binding list. The
         // upper bound is re-clamped in `paint` from the real content
         // height, so a one-frame overshoot self-corrects (no freeze).
