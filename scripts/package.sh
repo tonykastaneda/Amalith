@@ -2,10 +2,9 @@
 #
 # Build every shippable artifact into dist/:
 #
-#   dist/Amalith.dmg      — macOS, signed + notarised when the env vars below
-#                           are set (otherwise an unsigned .app + .dmg)
-#   dist/Windows/         — Amalith.exe (self-contained, double-click to run)
-#                           + the icon + a README, ready to zip and hand over
+#   dist/mac/             — Amalith.app + Amalith.dmg
+#   dist/windows/         — Amalith.exe + its icon and README
+#   dist/linux/           — AppImage, tar.gz, deb, rpm, Arch and Flatpak files
 #
 # Run from anywhere:  ./scripts/package.sh
 #
@@ -29,11 +28,19 @@ VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
 VERSION="${VERSION:-0.1.0}"
 WIN_TARGET="x86_64-pc-windows-msvc"
 dist="$root/dist"
-mkdir -p "$dist"
+mkdir -p "$dist/mac" "$dist/windows" "$dist/linux"
+
+# Remove artifacts produced by the previous, flat dist layout.
+rm -rf "$dist/$APP.app"
+rm -f "$dist/$APP.dmg"
 
 # ---------------------------------------------------------------- macOS -------
 echo "########## macOS ##########"
-"$root/scripts/package-macos.sh"   # writes dist/Amalith.dmg
+if [ "$(uname -s)" = "Darwin" ]; then
+  "$root/scripts/package-macos.sh"
+else
+  echo "!! macOS packaging requires macOS — skipping."
+fi
 
 # -------------------------------------------------------------- Windows -------
 echo
@@ -55,7 +62,7 @@ else
   echo "==> cargo xwin build --release --target $WIN_TARGET"
   cargo xwin build --release --target "$WIN_TARGET" -p amalith-shell
 
-  win="$dist/Windows"
+  win="$dist/windows"
   rm -rf "$win"
   mkdir -p "$win"
   cp "$root/target/$WIN_TARGET/release/$APP.exe" "$win/$APP.exe"
@@ -75,7 +82,19 @@ EOF
   echo "==> $win/$APP.exe  ($(du -h "$win/$APP.exe" | cut -f1))"
 fi
 
+# ---------------------------------------------------------------- Linux -------
+echo
+echo "########## Linux ##########"
+if [ "$(uname -s)" = "Linux" ]; then
+  "$root/scripts/package-linux.sh"
+else
+  echo "!! Linux packaging requires an x86_64 Linux host — skipping."
+  echo "   Run ./scripts/package-linux.sh on Linux to populate dist/linux/."
+fi
+
 echo
 echo "done:"
-[ -f "$dist/$APP.dmg" ]        && echo "  $dist/$APP.dmg"
-[ -f "$dist/Windows/$APP.exe" ] && echo "  $dist/Windows/$APP.exe"
+[ -d "$dist/mac/$APP.app" ]         && echo "  $dist/mac/$APP.app"
+[ -f "$dist/mac/$APP.dmg" ]         && echo "  $dist/mac/$APP.dmg"
+[ -f "$dist/windows/$APP.exe" ]     && echo "  $dist/windows/$APP.exe"
+[ -d "$dist/linux" ]                && find "$dist/linux" -type f -print | sort | sed 's/^/  /'

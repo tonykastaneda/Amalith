@@ -14,7 +14,8 @@ through `Editor::execute`.** See `README.md` for the crate breakdown and
 | **"run it" / "open the app" / dev loop** | `cargo run -p amalith-shell` |
 | tests | `cargo test --workspace` |
 | **"build" / "package" / "cut a build"** | `./scripts/package.sh` |
-| just a local signed macOS `.app` | `./scripts/package-macos.sh` |
+| just the macOS `.app` and `.dmg` | `./scripts/package-macos.sh` |
+| Linux release artifacts (on x86_64 Linux) | `./scripts/package-linux.sh` |
 
 "run" and "build" mean different things here — **"run" is `cargo run`**, **"build"
 is the packaging script.**
@@ -23,10 +24,12 @@ is the packaging script.**
 
 Produces, in `dist/`:
 
-- `dist/Amalith.dmg` — macOS. Signed with Developer ID + hardened runtime when
-  the env vars below are set; otherwise an unsigned `.app` + `.dmg`.
-- `dist/Windows/` — `Amalith.exe` (self-contained, static CRT — nothing to
+- `dist/mac/` — `Amalith.app` and `Amalith.dmg`. Signed with Developer ID +
+  hardened runtime when the env vars below are set; otherwise unsigned.
+- `dist/windows/` — `Amalith.exe` (self-contained, static CRT — nothing to
   install), its `.ico`, and a `README.txt`. Cross-compiled from macOS.
+- `dist/linux/` — AppImage, tarball, Debian and RPM packages, plus Arch Linux
+  and Flatpak packaging manifests. Built on an x86_64 Linux host.
 
 Default run = fast (signs the `.app`, skips Apple notarization). For a real
 public release, notarize:

@@ -2,7 +2,7 @@
 #
 # Build Amalith.app for macOS.
 #
-#   ./scripts/package-macos.sh                 # unsigned bundle in dist/
+#   ./scripts/package-macos.sh                 # unsigned bundle in dist/mac/
 #   SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" \
 #       ./scripts/package-macos.sh             # + codesign (hardened runtime)
 #   SIGN_IDENTITY=...  NOTARY_PROFILE=amalith \
@@ -30,9 +30,11 @@ VERSION="${VERSION:-0.1.0}"
 MIN_MACOS="${MIN_MACOS:-11.0}"
 ICON_SRC="$root/branding/app-icon.png"
 
-out="$root/dist"
+out="$root/dist/mac"
 app="$out/$APP_NAME.app"
 contents="$app/Contents"
+
+mkdir -p "$out"
 
 echo "==> cargo build --release"
 cargo build --release -p amalith-shell
@@ -52,7 +54,34 @@ for s in 16 32 128 256 512; do
   sips -z "$s"   "$s"   "$ICON_SRC" --out "$iconset/icon_${s}x${s}.png"        >/dev/null
   sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$contents/Resources/$APP_NAME.icns"
+icns="$contents/Resources/$APP_NAME.icns"
+if ! iconutil -c icns "$iconset" -o "$icns"; then
+  # Some macOS releases reject otherwise valid iconsets. Build the modern ICNS
+  # container directly from its PNG chunks as a compatible fallback.
+  echo "==> iconutil rejected the iconset; using ICNS fallback"
+  LC_ALL=C perl -e '
+    use strict;
+    my ($out, @pairs) = @ARGV;
+    my $body = q{};
+    while (@pairs) {
+      my $type = shift @pairs;
+      my $file = shift @pairs;
+      open my $in, q{<:raw}, $file or die qq{$file: $!\n};
+      local $/;
+      my $png = <$in>;
+      $body .= $type . pack(q{N}, length($png) + 8) . $png;
+    }
+    open my $out_file, q{>:raw}, $out or die qq{$out: $!\n};
+    print {$out_file} q{icns}, pack(q{N}, length($body) + 8), $body;
+  ' "$icns" \
+    icp4 "$iconset/icon_16x16.png" \
+    icp5 "$iconset/icon_32x32.png" \
+    icp6 "$iconset/icon_32x32@2x.png" \
+    ic07 "$iconset/icon_128x128.png" \
+    ic08 "$iconset/icon_128x128@2x.png" \
+    ic09 "$iconset/icon_256x256@2x.png" \
+    ic10 "$iconset/icon_512x512@2x.png"
+fi
 rm -rf "$(dirname "$iconset")"
 
 echo "==> Info.plist"
@@ -96,7 +125,7 @@ else
   echo "==> (unsigned — set SIGN_IDENTITY to codesign)"
 fi
 
-# --- optional: notarize app + staple, then dmg + notarize + staple ---------
+# --- optional: notarize app + staple ----------------------------------------
 dmg="$out/$APP_NAME.dmg"
 if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
   zip="$(mktemp -d)/$APP_NAME.zip"
@@ -106,13 +135,19 @@ if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
   xcrun stapler staple "$app"
   rm -rf "$(dirname "$zip")"
 
-  echo "==> build + notarize $dmg"
-  rm -f "$dmg"
-  stage="$(mktemp -d)"
-  cp -R "$app" "$stage/"          # already stapled
-  ln -s /Applications "$stage/Applications"
-  hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
-  rm -rf "$stage"
+fi
+
+# --- dmg --------------------------------------------------------------------
+echo "==> build $dmg"
+rm -f "$dmg"
+stage="$(mktemp -d)"
+cp -R "$app" "$stage/"
+ln -s /Applications "$stage/Applications"
+hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
+rm -rf "$stage"
+
+if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
+  echo "==> notarize $dmg"
   # The dmg needs its own notarization ticket to pass Gatekeeper offline.
   xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$dmg"
