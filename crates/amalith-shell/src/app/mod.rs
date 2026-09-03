@@ -316,6 +316,12 @@ enum MenuAction {
     Paste,
     Duplicate,
     SelectAll,
+    /// Select menu.
+    SelectAllArtboard,
+    Deselect,
+    SelectNextAbove,
+    SelectNextBelow,
+    SelectSame(SameKind),
     BringForward,
     BringToFront,
     SendBackward,
@@ -325,6 +331,10 @@ enum MenuAction {
     ZoomOut,
     FitArtboard,
     FitAll,
+    /// Type ▸ Convert to Area / Point Type (toggles by selection state).
+    ConvertTextKind,
+    /// Help ▸ Amalith Help — opens the docs site.
+    HelpDocs,
     /// View ▸ Outline (⌘Y).
     ToggleOutline,
     /// View ▸ Guides.
@@ -358,6 +368,19 @@ enum CtxItem {
         action: CtxAction,
         enabled: bool,
     },
+}
+
+/// Select ▸ Same ▸ … — which attribute to match against the first
+/// selected object.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SameKind {
+    FillColor,
+    StrokeColor,
+    StrokeWeight,
+    Opacity,
+    FillStroke,
+    FontFamily,
+    FontSize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1537,6 +1560,35 @@ impl App {
             m.sync_guides(self.guides_hidden, self.guides_locked);
         }
     }
+
+    /// `Some(true)` if a lone area-text object is selected, `Some(false)`
+    /// for point text, `None` otherwise — drives the Type ▸ Convert item.
+    fn text_convert_menu_state(&self) -> Option<bool> {
+        if self.doc.selection.len() != 1 {
+            return None;
+        }
+        match self
+            .doc
+            .editor
+            .document()
+            .object(self.doc.selection[0])
+            .map(|o| &o.kind)
+        {
+            Some(amalith_core::ObjectKind::Text(t)) => {
+                Some(matches!(t.kind, amalith_core::TextKind::Area { .. }))
+            }
+            _ => None,
+        }
+    }
+
+    /// Refresh selection-dependent native-menu items (currently just the
+    /// Type ▸ Convert label).
+    fn sync_type_menu(&self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_type(self.text_convert_menu_state());
+        }
+    }
     fn toggle_outline_mode(&mut self) {
         self.outline_mode = !self.outline_mode;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -2538,6 +2590,11 @@ impl App {
                 }
             }
             MenuAction::SelectAll => self.select_all(),
+            MenuAction::SelectAllArtboard => self.select_all_artboard(),
+            MenuAction::Deselect => self.deselect(),
+            MenuAction::SelectNextAbove => self.select_next_z(1),
+            MenuAction::SelectNextBelow => self.select_next_z(-1),
+            MenuAction::SelectSame(kind) => self.select_same(kind),
             MenuAction::TogglePanel(id) => self.toggle_panel(id),
             MenuAction::BringForward => self.restack(1),
             MenuAction::BringToFront => self.restack_extreme(true),
@@ -2547,6 +2604,19 @@ impl App {
             MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
             MenuAction::FitArtboard => self.zoom_fit(),
             MenuAction::FitAll => self.fit_view(),
+            MenuAction::HelpDocs => crate::about::open_url("https://amalith.app/docs"),
+            MenuAction::ConvertTextKind => {
+                if let Some(&id) = self.doc.selection.first() {
+                    if self.doc.selection.len() == 1
+                        && matches!(
+                            self.doc.editor.document().object(id).map(|o| &o.kind),
+                            Some(amalith_core::ObjectKind::Text(_))
+                        )
+                    {
+                        self.toggle_text_kind(id);
+                    }
+                }
+            }
             MenuAction::ToggleOutline => self.toggle_outline_mode(),
             MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
             MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
@@ -4210,6 +4280,125 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Every selectable top-level object, in stacking order (back → front).
+    fn selectable_objects(&self) -> Vec<ObjectId> {
+        let doc = self.doc.editor.document();
+        doc.layers()
+            .iter()
+            .filter(|l| l.visible)
+            .flat_map(|l| l.children.iter().copied())
+            .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
+            .collect()
+    }
+
+    /// Select ▸ Deselect.
+    fn deselect(&mut self) {
+        self.doc.selection.clear();
+        self.doc.anchor_sel.clear();
+        self.selected_guides.clear();
+        self.key_object = None;
+        self.sync_align_mode();
+        self.request_main_redraw();
+    }
+
+    /// Select ▸ All on Active Artboard.
+    fn select_all_artboard(&mut self) {
+        if self.text_edit.is_some() {
+            self.select_all();
+            return;
+        }
+        let Some(rect) = self
+            .current_artboard()
+            .and_then(|id| self.doc.editor.document().artboard(id).map(|a| a.rect))
+        else {
+            self.select_all();
+            return;
+        };
+        let overlap = |a: amalith_core::Rect, b: amalith_core::Rect| {
+            a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
+        };
+        let doc = self.doc.editor.document();
+        let sel: Vec<ObjectId> = self
+            .selectable_objects()
+            .into_iter()
+            .filter(|id| doc.bounds_of(*id).is_some_and(|b| overlap(b, rect)))
+            .collect();
+        self.doc.selection = sel;
+        self.sync_align_mode();
+        self.request_main_redraw();
+    }
+
+    /// Select ▸ Next Object Above / Below — step the selection one place
+    /// through the stacking order (`dir` +1 = above, −1 = below).
+    fn select_next_z(&mut self, dir: i32) {
+        let flat = self.selectable_objects();
+        if flat.is_empty() {
+            return;
+        }
+        let n = flat.len() as i32;
+        let cur = self
+            .doc
+            .selection
+            .first()
+            .and_then(|s| flat.iter().position(|x| x == s));
+        let next = match cur {
+            Some(i) => (i as i32 + dir).rem_euclid(n) as usize,
+            None if dir > 0 => 0,
+            None => flat.len() - 1,
+        };
+        self.doc.selection = vec![flat[next]];
+        self.sync_align_mode();
+        self.request_main_redraw();
+    }
+
+    /// Select ▸ Same ▸ … — select every object sharing the given
+    /// attribute with the first currently-selected object.
+    fn select_same(&mut self, kind: SameKind) {
+        let Some(&r0) = self.doc.selection.first() else {
+            return;
+        };
+        let doc = self.doc.editor.document();
+        let Some(ref_obj) = doc.object(r0) else { return };
+        let a0 = ref_obj.appearance;
+        let t0 = match &ref_obj.kind {
+            amalith_core::ObjectKind::Text(t) => Some(t.style.clone()),
+            _ => None,
+        };
+        let hit = |o: &amalith_core::Object| -> bool {
+            let same_text_style = |f: &dyn Fn(&amalith_core::TextStyle, &amalith_core::TextStyle) -> bool| {
+                match (&o.kind, &t0) {
+                    (amalith_core::ObjectKind::Text(t), Some(s0)) => f(&t.style, s0),
+                    _ => false,
+                }
+            };
+            match kind {
+                SameKind::FillColor => o.appearance.fill == a0.fill,
+                SameKind::StrokeColor => o.appearance.stroke == a0.stroke,
+                SameKind::StrokeWeight => {
+                    (o.appearance.stroke_width - a0.stroke_width).abs() < 1e-6
+                }
+                SameKind::Opacity => (o.appearance.opacity - a0.opacity).abs() < 1e-4,
+                SameKind::FillStroke => {
+                    o.appearance.fill == a0.fill && o.appearance.stroke == a0.stroke
+                }
+                SameKind::FontFamily => same_text_style(&|a, b| a.family == b.family),
+                SameKind::FontSize => {
+                    same_text_style(&|a, b| (a.size - b.size).abs() < 1e-6)
+                }
+            }
+        };
+        let sel: Vec<ObjectId> = self
+            .selectable_objects()
+            .into_iter()
+            .filter(|id| doc.object(*id).is_some_and(hit))
+            .collect();
+        if !sel.is_empty() {
+            self.doc.selection = sel;
+            self.sync_align_mode();
+            self.request_main_redraw();
+        }
+    }
+
     /// `(fill_mixed, stroke_mixed)` — true when the object selection holds
     /// more than one distinct value for that paint. The Fill / Stroke
     /// proxies show a grey "?" swatch instead of a colour when so.
@@ -5068,6 +5257,9 @@ impl ApplicationHandler for App {
                 }
                 self.run_menu_action(action);
             }
+            // Refresh selection-dependent menu items before the loop
+            // parks — the user's next click on the menu bar sees them.
+            self.sync_type_menu();
         }
         #[cfg(target_os = "macos")]
         self.drain_mac_drops();
@@ -5754,6 +5946,9 @@ struct NativeMenu {
     guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     /// View ▸ Outline checkmark.
     outline_check: muda::CheckMenuItem,
+    /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
+    /// selection.
+    convert_text_i: muda::MenuItem,
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
@@ -5795,7 +5990,18 @@ impl NativeMenu {
         let copy_i = mk("Copy", sup, Code::KeyC);
         let paste_i = mk("Paste", sup, Code::KeyV);
         let dup_i = mk("Duplicate", sup, Code::KeyD);
-        let all_i = mk("Select All", sup, Code::KeyA);
+        let all_i = mk("All", sup, Code::KeyA);
+        let sel_artboard_i = mk("All on Active Artboard", sup_alt, Code::KeyA);
+        let deselect_i = mk("Deselect", sup_shift, Code::KeyA);
+        let next_above_i = mk("Next Object Above", sup_alt, Code::BracketRight);
+        let next_below_i = mk("Next Object Below", sup_alt, Code::BracketLeft);
+        let same_fillstroke_i = MenuItem::new("Fill & Stroke", true, None);
+        let same_fill_i = MenuItem::new("Fill Color", true, None);
+        let same_opacity_i = MenuItem::new("Opacity", true, None);
+        let same_stroke_i = MenuItem::new("Stroke Color", true, None);
+        let same_weight_i = MenuItem::new("Stroke Weight", true, None);
+        let same_font_i = MenuItem::new("Font Family", true, None);
+        let same_size_i = MenuItem::new("Font Size", true, None);
         let forward_i = mk("Bring Forward", sup, Code::BracketRight);
         let front_i = mk("Bring to Front", sup_shift, Code::BracketRight);
         let backward_i = mk("Send Backward", sup, Code::BracketLeft);
@@ -5888,11 +6094,45 @@ impl NativeMenu {
             "Edit",
             true,
             &[
-                &undo_i, &redo_i, &sep(), &cut_i, &copy_i, &paste_i, &dup_i, &sep(), &all_i,
+                &undo_i, &redo_i, &sep(), &cut_i, &copy_i, &paste_i, &dup_i,
                 &sep(), &forward_i, &front_i, &backward_i, &back_i,
             ],
         )
         .expect("edit menu");
+        let same_menu = Submenu::with_items(
+            "Same",
+            true,
+            &[
+                &same_fillstroke_i,
+                &same_fill_i,
+                &same_opacity_i,
+                &same_stroke_i,
+                &same_weight_i,
+                &sep(),
+                &same_font_i,
+                &same_size_i,
+            ],
+        )
+        .expect("same menu");
+        let select_menu = Submenu::with_items(
+            "Select",
+            true,
+            &[
+                &all_i,
+                &sel_artboard_i,
+                &deselect_i,
+                &sep(),
+                &next_above_i,
+                &next_below_i,
+                &sep(),
+                &same_menu,
+            ],
+        )
+        .expect("select menu");
+        // Type menu — the convert item's label + enabled state track the
+        // selection (see `NativeMenu::sync_type`).
+        let convert_text_i = MenuItem::new("Convert to Area Type", false, None);
+        let type_menu = Submenu::with_items("Type", true, &[&convert_text_i]).expect("type menu");
         let view = Submenu::with_items(
             "View",
             true,
@@ -5924,12 +6164,20 @@ impl NativeMenu {
         // call ours "Panels".
         let panels_menu = Submenu::with_items("Panels", true, &window_refs).expect("panels menu");
 
+        // A menu literally titled "Help" gets AppKit's search field for
+        // free on macOS; on Windows it's just the one link.
+        let help_docs_i = MenuItem::new("Amalith Help", true, None);
+        let help_menu = Submenu::with_items("Help", true, &[&help_docs_i]).expect("help menu");
+
         let menu = Menu::new();
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
+        menu.append(&select_menu).expect("append select menu");
+        menu.append(&type_menu).expect("append type menu");
         menu.append(&view).expect("append view menu");
         menu.append(&panels_menu).expect("append panels menu");
+        menu.append(&help_menu).expect("append help menu");
         #[cfg(target_os = "macos")]
         menu.init_for_nsapp();
         #[cfg(target_os = "windows")]
@@ -5966,6 +6214,17 @@ impl NativeMenu {
             (paste_i.id().clone(), MenuAction::Paste),
             (dup_i.id().clone(), MenuAction::Duplicate),
             (all_i.id().clone(), MenuAction::SelectAll),
+            (sel_artboard_i.id().clone(), MenuAction::SelectAllArtboard),
+            (deselect_i.id().clone(), MenuAction::Deselect),
+            (next_above_i.id().clone(), MenuAction::SelectNextAbove),
+            (next_below_i.id().clone(), MenuAction::SelectNextBelow),
+            (same_fillstroke_i.id().clone(), MenuAction::SelectSame(SameKind::FillStroke)),
+            (same_fill_i.id().clone(), MenuAction::SelectSame(SameKind::FillColor)),
+            (same_opacity_i.id().clone(), MenuAction::SelectSame(SameKind::Opacity)),
+            (same_stroke_i.id().clone(), MenuAction::SelectSame(SameKind::StrokeColor)),
+            (same_weight_i.id().clone(), MenuAction::SelectSame(SameKind::StrokeWeight)),
+            (same_font_i.id().clone(), MenuAction::SelectSame(SameKind::FontFamily)),
+            (same_size_i.id().clone(), MenuAction::SelectSame(SameKind::FontSize)),
             (forward_i.id().clone(), MenuAction::BringForward),
             (front_i.id().clone(), MenuAction::BringToFront),
             (backward_i.id().clone(), MenuAction::SendBackward),
@@ -5975,6 +6234,8 @@ impl NativeMenu {
             (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
             (fit_all_i.id().clone(), MenuAction::FitAll),
             (outline_i.id().clone(), MenuAction::ToggleOutline),
+            (convert_text_i.id().clone(), MenuAction::ConvertTextKind),
+            (help_docs_i.id().clone(), MenuAction::HelpDocs),
             (guides_show_i.id().clone(), MenuAction::ToggleGuides),
             (guides_lock_i.id().clone(), MenuAction::ToggleGuideLock),
             (clear_guides_i.id().clone(), MenuAction::ClearGuides),
@@ -5995,6 +6256,7 @@ impl NativeMenu {
             window_checks,
             guide_checks: (guides_show_i, guides_lock_i),
             outline_check: outline_i,
+            convert_text_i,
             _menu: menu,
         }
     }
@@ -6002,6 +6264,26 @@ impl NativeMenu {
     /// Match the View ▸ Outline checkmark to the live toggle.
     fn sync_outline(&self, on: bool) {
         self.outline_check.set_checked(on);
+    }
+
+    /// Point/area convert item: `Some(true)` = an area-text object is
+    /// selected (offer "Convert to Point Type"), `Some(false)` = point
+    /// text (offer "Convert to Area Type"), `None` = nothing convertible.
+    fn sync_type(&self, area_selected: Option<bool>) {
+        match area_selected {
+            Some(true) => {
+                self.convert_text_i.set_text("Convert to Point Type");
+                self.convert_text_i.set_enabled(true);
+            }
+            Some(false) => {
+                self.convert_text_i.set_text("Convert to Area Type");
+                self.convert_text_i.set_enabled(true);
+            }
+            None => {
+                self.convert_text_i.set_text("Convert to Area Type");
+                self.convert_text_i.set_enabled(false);
+            }
+        }
     }
 
     /// Tick / untick each Window-menu entry to match the live dock.

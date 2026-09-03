@@ -458,6 +458,9 @@ impl App {
                         }
                         self.request_main_redraw();
                     }
+                    // Select: ⌘A all, ⌥⌘A active artboard, ⇧⌘A deselect.
+                    KeyCode::KeyA if self.shift_down => self.deselect(),
+                    KeyCode::KeyA if self.alt_down => self.select_all_artboard(),
                     KeyCode::KeyA => self.select_all(),
                     // File I/O: open, save, save-as, import SVG.
                     KeyCode::KeyN => self.open_new_doc(),
@@ -491,17 +494,22 @@ impl App {
                     KeyCode::Digit0 if self.alt_down => self.fit_view(),
                     KeyCode::Digit0 => self.zoom_fit(),
                     KeyCode::Digit1 if !self.shift_down => self.zoom_actual(),
-                    // Z-order: ⌘] / ⌘[ step one, ⌘⌥] / ⌘⌥[ to the ends.
+                    // Z-order: ⌘] / ⌘[ step one, ⌘⇧] / ⌘⇧[ to the ends.
+                    // ⌘⌥] / ⌘⌥[ step the selection through the stack.
                     KeyCode::BracketRight => {
-                        if self.alt_down {
+                        if self.shift_down {
                             self.restack_extreme(true);
+                        } else if self.alt_down {
+                            self.select_next_z(1);
                         } else {
                             self.restack(1);
                         }
                     }
                     KeyCode::BracketLeft => {
-                        if self.alt_down {
+                        if self.shift_down {
                             self.restack_extreme(false);
+                        } else if self.alt_down {
+                            self.select_next_z(-1);
                         } else {
                             self.restack(-1);
                         }
