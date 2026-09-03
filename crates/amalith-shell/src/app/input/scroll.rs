@@ -22,6 +22,16 @@ impl App {
             // Pixel-based (trackpad): physical px → logical.
             MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
         };
+        // The Preferences modal's Keyboard / Scripts binding list. The
+        // upper bound is re-clamped in `paint` from the real content
+        // height, so a one-frame overshoot self-corrects (no freeze).
+        if let Some(p) = &mut self.prefs {
+            if matches!(p.category, 1 | 2) {
+                p.page_scroll = (p.page_scroll - dy).max(0.0);
+                self.request_main_redraw();
+            }
+            return;
+        }
         // The New Document modal scrolls its content. Clamp against the
         // real range now — storing an unbounded value makes scrolling back
         // feel frozen while the excess unwinds.

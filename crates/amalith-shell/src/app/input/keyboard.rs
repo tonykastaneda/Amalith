@@ -23,6 +23,39 @@ impl App {
             if !event.state.is_pressed() {
                 return;
             }
+            // Typing a name for a new shortcut preset.
+            if self.prefs.as_ref().is_some_and(|p| p.naming.is_some()) {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        if let Some(p) = self.prefs.as_mut() {
+                            p.naming = None;
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                        if let Some(p) = self.prefs.as_mut() {
+                            p.commit_naming();
+                        }
+                    }
+                    PhysicalKey::Code(KeyCode::Backspace) => {
+                        if let Some(b) = self.prefs.as_mut().and_then(|p| p.naming.as_mut()) {
+                            b.pop();
+                        }
+                    }
+                    _ => {
+                        if let Some(txt) = event.text.clone() {
+                            if let Some(b) =
+                                self.prefs.as_mut().and_then(|p| p.naming.as_mut())
+                            {
+                                for ch in txt.chars().filter(|c| !c.is_control()) {
+                                    b.push(ch);
+                                }
+                            }
+                        }
+                    }
+                }
+                self.request_main_redraw();
+                return;
+            }
             let recording = self.prefs.as_ref().and_then(|p| p.recording);
             if let Some(target) = recording {
                 match event.physical_key {
@@ -49,10 +82,17 @@ impl App {
                                     *k = None;
                                 }
                             }
+                            p.working_scripts.clear_chord(chord);
                             match target {
                                 prefs::BindTarget::Tool(i) => p.working.tool_keys[i] = Some(chord),
                                 prefs::BindTarget::Action(i) => {
                                     p.working.action_keys[i] = Some(chord)
+                                }
+                                prefs::BindTarget::Script(i) => {
+                                    if let Some(path) = p.script_paths.get(i) {
+                                        let name = crate::scripts::label(path);
+                                        p.working_scripts.set_chord(&name, Some(chord));
+                                    }
                                 }
                             }
                             p.recording = None;
@@ -206,6 +246,22 @@ impl App {
         // Any key other than ⌘Z ends the pen re-open window.
         if pressed && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::KeyZ)) {
             self.last_pen = None;
+        }
+        // A user script bound to this chord runs and consumes the key.
+        if pressed {
+            if let PhysicalKey::Code(code) = event.physical_key {
+                if prefs::key_char(code).is_some() {
+                    let chord = KeyChord {
+                        code,
+                        shift: self.shift_down,
+                        cmd: self.cmd_down,
+                    };
+                    if let Some(path) = self.scripts.script_for_chord(chord) {
+                        crate::scripts::run(&path);
+                        return;
+                    }
+                }
+            }
         }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Space) => {

@@ -171,6 +171,8 @@ impl PrefAction {
 pub enum BindTarget {
     Tool(usize),
     Action(usize),
+    /// A user script, by index into `Prefs::script_paths`.
+    Script(usize),
 }
 
 /// The settings the app actually reads. Cheap to copy; the modal edits a
@@ -233,7 +235,7 @@ pub const ACCENTS: [(&str, [u8; 3]); 6] = [
     ("Graphite", [0x9a, 0x9a, 0x9a]),
 ];
 
-pub const CATEGORIES: [&str; 3] = ["General", "Keyboard", "Debug"];
+pub const CATEGORIES: [&str; 4] = ["General", "Keyboard", "Scripts", "Debug"];
 
 const W: f64 = 660.0;
 const H: f64 = 440.0;
@@ -242,6 +244,11 @@ const PAD: f64 = 22.0;
 
 pub struct Prefs {
     pub working: Settings,
+    /// Working copy of the scripts config (folder + key bindings).
+    pub working_scripts: crate::scripts::ScriptsConfig,
+    /// Scripts discovered in the working folder — index space for
+    /// [`BindTarget::Script`].
+    pub script_paths: Vec<std::path::PathBuf>,
     pub category: usize,
     // Hit rects, window coords, refreshed each paint.
     origin: Point,
@@ -259,7 +266,20 @@ pub struct Prefs {
     bind_rows: Vec<(Rect, BindTarget)>,
     /// The binding currently capturing a keypress, if any.
     pub recording: Option<BindTarget>,
+    /// Scroll offset of the Keyboard / Scripts binding list, in px.
+    pub page_scroll: f64,
+    /// Working copy of the shortcut presets.
+    pub working_keymaps: crate::keymap::Keymaps,
+    /// Keyboard page: the preset dropdown is expanded.
+    pub preset_menu_open: bool,
+    /// Keyboard page: typing a name for a preset about to be saved.
+    pub naming: Option<String>,
+    preset_trigger: Rect,
+    preset_add: Rect,
+    preset_items: Vec<Rect>,
     reset_keys: Rect,
+    scripts_choose: Rect,
+    scripts_clear: Rect,
     cancel: Rect,
     ok: Rect,
 }
@@ -279,14 +299,39 @@ pub enum Hit {
     StartRecording(BindTarget),
     /// Keyboard page: restore the factory shortcuts.
     ResetKeys,
+    /// Keyboard page: preset dropdown — open/close, pick one, or start a
+    /// new one from the current edits.
+    TogglePresetMenu,
+    PickPreset(usize),
+    AddPreset,
+    /// Scripts page: open a folder picker / clear the chosen folder.
+    ChooseScriptsFolder,
+    ClearScriptsFolder,
     Cancel,
     Ok,
 }
 
 impl Prefs {
-    pub fn new(current: Settings) -> Self {
+    pub fn new(
+        current: Settings,
+        scripts: crate::scripts::ScriptsConfig,
+        keymaps: crate::keymap::Keymaps,
+    ) -> Self {
+        let script_paths = scripts
+            .dir
+            .as_deref()
+            .map(crate::scripts::list)
+            .unwrap_or_default();
         Self {
             working: current,
+            working_scripts: scripts,
+            script_paths,
+            working_keymaps: keymaps,
+            preset_menu_open: false,
+            naming: None,
+            preset_trigger: Rect::ZERO,
+            preset_add: Rect::ZERO,
+            preset_items: Vec::new(),
             category: 0,
             origin: Point::ZERO,
             cat_rows: Vec::new(),
@@ -301,10 +346,39 @@ impl Prefs {
             accent_swatches: Vec::new(),
             bind_rows: Vec::new(),
             recording: None,
+            page_scroll: 0.0,
             reset_keys: Rect::ZERO,
+            scripts_choose: Rect::ZERO,
+            scripts_clear: Rect::ZERO,
             cancel: Rect::ZERO,
             ok: Rect::ZERO,
         }
+    }
+
+    /// Save the current shortcut edits as a preset named by `self.naming`
+    /// and make it active. A blank / built-in name just cancels.
+    pub fn commit_naming(&mut self) {
+        if let Some(buf) = self.naming.take() {
+            let name = buf.trim().to_string();
+            if !name.is_empty() && name != crate::keymap::BUILTIN {
+                self.working_keymaps.upsert(
+                    name,
+                    self.working.tool_keys,
+                    self.working.action_keys,
+                );
+            }
+        }
+    }
+
+    /// Re-scan the working folder after it changes.
+    pub fn refresh_scripts(&mut self) {
+        self.script_paths = self
+            .working_scripts
+            .dir
+            .as_deref()
+            .map(crate::scripts::list)
+            .unwrap_or_default();
+        self.recording = None;
     }
 
     fn card(&self) -> Rect {
@@ -315,10 +389,22 @@ impl Prefs {
         if !self.card().contains(p) {
             return Hit::Backdrop;
         }
+        // Open preset dropdown: its items sit over everything else.
+        for (i, r) in self.preset_items.iter().enumerate() {
+            if r.contains(p) {
+                return Hit::PickPreset(i);
+            }
+        }
         for (i, r) in self.cat_rows.iter().enumerate() {
             if r.contains(p) {
                 return Hit::Category(i);
             }
+        }
+        if self.preset_trigger.contains(p) {
+            return Hit::TogglePresetMenu;
+        }
+        if self.preset_add.contains(p) {
+            return Hit::AddPreset;
         }
         if self.inc_up.contains(p) {
             return Hit::IncStep((self.working.nudge_step + 0.5).min(100.0));
@@ -356,6 +442,12 @@ impl Prefs {
         }
         if self.reset_keys.contains(p) {
             return Hit::ResetKeys;
+        }
+        if self.scripts_choose.contains(p) {
+            return Hit::ChooseScriptsFolder;
+        }
+        if self.scripts_clear.contains(p) {
+            return Hit::ClearScriptsFolder;
         }
         if self.cancel.contains(p) {
             return Hit::Cancel;
@@ -434,20 +526,33 @@ impl Prefs {
         self.cull_up = Rect::ZERO;
         self.cull_down = Rect::ZERO;
         self.reset_keys = Rect::ZERO;
+        self.scripts_choose = Rect::ZERO;
+        self.scripts_clear = Rect::ZERO;
+        self.preset_trigger = Rect::ZERO;
+        self.preset_add = Rect::ZERO;
+        self.preset_items.clear();
+
+        let footer = |s: &mut Self, scene: &mut Scene, tcx: &mut TextContext| {
+            let by = oy + H - 40.0;
+            s.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
+            s.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+        };
 
         if self.category == 1 {
             self.paint_keyboard(scene, tcx, theme, px, oy);
-            let by = oy + H - 40.0;
-            self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
-            self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+            footer(self, scene, tcx);
             return;
         }
 
         if self.category == 2 {
+            self.paint_scripts(scene, tcx, theme, px, oy);
+            footer(self, scene, tcx);
+            return;
+        }
+
+        if self.category == 3 {
             self.paint_debug(scene, tcx, theme, px, oy);
-            let by = oy + H - 40.0;
-            self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
-            self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+            footer(self, scene, tcx);
             return;
         }
 
@@ -528,60 +633,220 @@ impl Prefs {
         px: f64,
         oy: f64,
     ) {
-        let mut cy = oy + 60.0;
-        tcx.draw(scene, "Tool Shortcuts", 13.0, theme.text, px, cy);
-        cy += 12.0;
+        let row_w = W - SIDEBAR_W - PAD * 2.0;
+
+        // Preset row.
+        tcx.draw(scene, "Preset", 12.0, theme.text_dim, px, oy + 62.0);
+        let chip = Rect::new(px + 52.0, oy + 46.0, px + 52.0 + 210.0, oy + 70.0);
+        let naming = self.naming.is_some();
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(4.0));
+        scene.stroke(
+            &Stroke::new(1.0),
+            Affine::IDENTITY,
+            if naming { theme.accent } else { theme.border },
+            None,
+            &chip.to_rounded_rect(4.0),
+        );
+        let label = match &self.naming {
+            Some(buf) => format!("{buf}|"),
+            None => self.working_keymaps.active.clone(),
+        };
+        tcx.draw(scene, &label, 12.0, theme.text, chip.x0 + 10.0, chip.y0 + 16.0);
+        if !naming {
+            tri(scene, Point::new(chip.x1 - 14.0, chip.center().y), false, theme.text_dim);
+            self.preset_trigger = chip;
+        }
+        // "+" — save the current edits as a new preset.
+        let add = Rect::new(chip.x1 + 8.0, chip.y0, chip.x1 + 8.0 + 26.0, chip.y1);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &add.to_rounded_rect(4.0));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &add.to_rounded_rect(4.0));
+        let plus = if naming { "OK" } else { "+" };
+        let pw = tcx.measure(plus, 13.0);
+        tcx.draw(scene, plus, 13.0, theme.text, add.center().x - pw / 2.0, add.center().y + 4.5);
+        self.preset_add = add;
+
+        tcx.draw(scene, "Tool Shortcuts", 13.0, theme.text, px, oy + 96.0);
         tcx.draw(
             scene,
             "Click a shortcut, then press a key. Shift is allowed.",
             11.0,
             theme.text_dim,
             px,
-            cy + 12.0,
+            oy + 116.0,
         );
-        cy += 26.0;
 
-        let row_w = W - SIDEBAR_W - PAD * 2.0;
         let recording = self.recording;
-        for i in 0..Tool::ALL.len() {
+        // Reset sits in the fixed footer row so the list never hides it.
+        self.reset_keys = button(scene, tcx, theme, px, oy + H - 40.0, "Reset", false);
+
+        let n_tools = Tool::ALL.len();
+        let n_acts = PrefAction::ALL.len();
+        let content_h = n_tools as f64 * 27.0 + 26.0 + n_acts as f64 * 27.0 + 6.0;
+        let view = Rect::new(px - 6.0, oy + 128.0, px + row_w + 14.0, oy + H - 52.0);
+        let sc = self.begin_scroll_list(scene, view, content_h);
+
+        let mut y = view.y0 + 2.0 - sc;
+        for i in 0..n_tools {
             kb_row(
-                scene,
-                tcx,
-                theme,
-                px,
-                row_w,
-                cy,
+                scene, tcx, theme, px, row_w, y,
                 Tool::ALL[i].label(),
                 self.working.tool_keys[i],
                 recording,
                 BindTarget::Tool(i),
+                view,
                 &mut self.bind_rows,
             );
-            cy += 27.0;
+            y += 27.0;
         }
-
-        cy += 10.0;
-        tcx.draw(scene, "Colours", 13.0, theme.text, px, cy + 4.0);
-        cy += 16.0;
-        for i in 0..PrefAction::ALL.len() {
+        y += 6.0;
+        tcx.draw(scene, "Colours", 13.0, theme.text, px, y + 4.0);
+        y += 20.0;
+        for i in 0..n_acts {
             kb_row(
-                scene,
-                tcx,
-                theme,
-                px,
-                row_w,
-                cy,
+                scene, tcx, theme, px, row_w, y,
                 PrefAction::ALL[i].label(),
                 self.working.action_keys[i],
                 recording,
                 BindTarget::Action(i),
+                view,
                 &mut self.bind_rows,
             );
-            cy += 27.0;
+            y += 27.0;
+        }
+        scene.pop_layer();
+
+        // Preset dropdown, painted last so it sits over the list.
+        if self.preset_menu_open && self.naming.is_none() {
+            let names = self.working_keymaps.names();
+            let t = self.preset_trigger;
+            let box_ = Rect::new(t.x0, t.y1 + 2.0, t.x1, t.y1 + 2.0 + names.len() as f64 * 24.0);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_bg, None, &box_.to_rounded_rect(4.0));
+            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.accent, None, &box_.to_rounded_rect(4.0));
+            for (i, name) in names.iter().enumerate() {
+                let r = Rect::new(box_.x0, box_.y0 + i as f64 * 24.0, box_.x1, box_.y0 + (i as f64 + 1.0) * 24.0);
+                if name == &self.working_keymaps.active {
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent.with_alpha(0.18), None, &r);
+                }
+                tcx.draw(scene, name, 12.0, theme.text, r.x0 + 10.0, r.y0 + 16.0);
+                self.preset_items.push(r);
+            }
+        }
+    }
+
+    /// Clip to `view`, draw a scrollbar for `content_h`, and return the
+    /// clamped scroll offset. The caller must `scene.pop_layer()` when done
+    /// drawing the list. Shared by the Keyboard and Scripts pages.
+    fn begin_scroll_list(&mut self, scene: &mut Scene, view: Rect, content_h: f64) -> f64 {
+        let view_h = view.height();
+        let max = (content_h - view_h).max(0.0);
+        self.page_scroll = self.page_scroll.clamp(0.0, max);
+        let sc = self.page_scroll;
+        if max > 0.0 {
+            let frac = (view_h / content_h).min(1.0);
+            let th = (view_h * frac).max(24.0);
+            let ty = view.y0 + (view_h - th) * (sc / max);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::from_rgba8(0x9a, 0x9a, 0x9a, 0x88),
+                None,
+                &Rect::new(view.x1 - 4.0, ty, view.x1 - 1.0, ty + th).to_rounded_rect(1.5),
+            );
+        }
+        scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &view);
+        sc
+    }
+
+    /// The Scripts page — pick the user's script folder and bind keys to
+    /// the scripts in it.
+    fn paint_scripts(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        theme: &Theme,
+        px: f64,
+        oy: f64,
+    ) {
+        let mut cy = oy + 60.0;
+        tcx.draw(scene, "Scripts", 13.0, theme.text, px, cy);
+        cy += 12.0;
+        tcx.draw(
+            scene,
+            "Point Amalith at a folder of scripts you keep yourself — updates can't touch it.",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 12.0,
+        );
+        cy += 30.0;
+
+        tcx.draw(scene, "Folder", 12.0, theme.text_dim, px, cy + 14.0);
+        let path_str = self
+            .working_scripts
+            .dir
+            .as_ref()
+            .map(|d| elide_left(&d.display().to_string(), 52))
+            .unwrap_or_else(|| "None chosen".to_string());
+        tcx.draw(scene, &path_str, 11.5, theme.text, px + 58.0, cy + 14.0);
+        cy += 26.0;
+        self.scripts_choose = button(scene, tcx, theme, px, cy, "Choose…", true);
+        self.scripts_clear = if self.working_scripts.dir.is_some() {
+            button(scene, tcx, theme, px + 100.0, cy, "Clear", false)
+        } else {
+            Rect::ZERO
+        };
+        cy += 42.0;
+
+        if self.working_scripts.dir.is_none() {
+            return;
+        }
+        if self.script_paths.is_empty() {
+            tcx.draw(
+                scene,
+                "No scripts (.sh, .py, .js, …) found in that folder.",
+                11.5,
+                theme.text_dim,
+                px,
+                cy + 4.0,
+            );
+            return;
         }
 
-        cy += 8.0;
-        self.reset_keys = button(scene, tcx, theme, px, cy, "Reset", false);
+        tcx.draw(scene, "Shortcuts", 13.0, theme.text, px, cy + 4.0);
+        tcx.draw(
+            scene,
+            "Click a shortcut, then press a key (Cmd / Shift allowed).",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + 22.0,
+        );
+        let list_top = cy + 34.0;
+
+        let row_w = W - SIDEBAR_W - PAD * 2.0;
+        let recording = self.recording;
+        let names: Vec<String> = self
+            .script_paths
+            .iter()
+            .map(|p| crate::scripts::label(p))
+            .collect();
+        let content_h = names.len() as f64 * 27.0 + 4.0;
+        let view = Rect::new(px - 6.0, list_top, px + row_w + 14.0, oy + H - 52.0);
+        let sc = self.begin_scroll_list(scene, view, content_h);
+
+        let mut y = view.y0 + 2.0 - sc;
+        for (i, name) in names.iter().enumerate() {
+            let chord = self.working_scripts.chord_for(name);
+            kb_row(
+                scene, tcx, theme, px, row_w, y,
+                name, chord, recording,
+                BindTarget::Script(i),
+                view,
+                &mut self.bind_rows,
+            );
+            y += 27.0;
+        }
+        scene.pop_layer();
     }
 
     /// The Debug page — cull-outline visibility and distance.
@@ -679,6 +944,7 @@ fn kb_row(
     chord: Option<KeyChord>,
     recording: Option<BindTarget>,
     target: BindTarget,
+    viewport: Rect,
     bind_rows: &mut Vec<(Rect, BindTarget)>,
 ) {
     let row = Rect::new(px, cy, px + row_w, cy + 24.0);
@@ -722,7 +988,11 @@ fn kb_row(
         chip.center().x - lw / 2.0,
         cy + 16.0,
     );
-    bind_rows.push((row, target));
+    // Only rows fully inside the scroll viewport are clickable, so a row
+    // peeking under the header / footer can't be hit.
+    if row.y0 >= viewport.y0 - 0.5 && row.y1 <= viewport.y1 + 0.5 {
+        bind_rows.push((row, target));
+    }
 }
 
 fn trim(v: f64) -> String {
@@ -731,6 +1001,17 @@ fn trim(v: f64) -> String {
     } else {
         format!("{v:.1}")
     }
+}
+
+/// Keep the last `max` characters of `s`, prefixing `…` when clipped — so
+/// a long path shows its most-specific tail.
+fn elide_left(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        return s.to_string();
+    }
+    let tail: String = s.chars().skip(n - max).collect();
+    format!("…{tail}")
 }
 
 fn tri(scene: &mut Scene, c: Point, up: bool, color: Color) {

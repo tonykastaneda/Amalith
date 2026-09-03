@@ -38,6 +38,7 @@ pub mod home;
 pub mod icons;
 #[cfg(target_os = "macos")]
 pub mod imageio;
+pub mod keymap;
 pub mod layout;
 pub mod lod;
 #[cfg(target_os = "macos")]
@@ -49,6 +50,7 @@ pub mod prefs;
 pub mod recent;
 pub mod rulers;
 pub mod sample;
+pub mod scripts;
 pub mod select;
 pub mod settings;
 pub mod stroke_panel;

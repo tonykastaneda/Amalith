@@ -51,9 +51,61 @@ impl App {
             match hit {
                 prefs::Hit::Backdrop | prefs::Hit::Cancel => self.prefs = None,
                 prefs::Hit::Ok => {
-                    self.settings = self.prefs.take().unwrap().working;
+                    let mut p = self.prefs.take().unwrap();
+                    p.commit_naming();
+                    self.settings = p.working;
+                    self.scripts = p.working_scripts;
+                    self.keymaps = p.working_keymaps;
                     self.apply_theme_accent();
                     settings::save(&self.settings);
+                    crate::scripts::save(&self.scripts);
+                    crate::keymap::save(&self.keymaps);
+                    self.rebuild_native_menu();
+                }
+                prefs::Hit::TogglePresetMenu => {
+                    if let Some(p) = &mut self.prefs {
+                        p.preset_menu_open = !p.preset_menu_open;
+                    }
+                }
+                prefs::Hit::PickPreset(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        let names = p.working_keymaps.names();
+                        if let Some(name) = names.get(i).cloned() {
+                            let (tk, ak) = p.working_keymaps.keys_of(&name);
+                            p.working.tool_keys = tk;
+                            p.working.action_keys = ak;
+                            p.working_keymaps.active = name;
+                        }
+                        p.preset_menu_open = false;
+                    }
+                }
+                prefs::Hit::AddPreset => {
+                    if let Some(p) = &mut self.prefs {
+                        if p.naming.is_some() {
+                            p.commit_naming();
+                        } else {
+                            p.naming = Some(String::new());
+                            p.preset_menu_open = false;
+                        }
+                    }
+                }
+                prefs::Hit::ChooseScriptsFolder => {
+                    if let Some(dir) = rfd::FileDialog::new()
+                        .set_title("Choose Scripts Folder")
+                        .pick_folder()
+                    {
+                        if let Some(p) = &mut self.prefs {
+                            p.working_scripts.dir = Some(dir);
+                            p.refresh_scripts();
+                        }
+                    }
+                }
+                prefs::Hit::ClearScriptsFolder => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working_scripts.dir = None;
+                        p.working_scripts.keys.clear();
+                        p.refresh_scripts();
+                    }
                 }
                 prefs::Hit::SetAccent(rgb) => {
                     if let Some(p) = &mut self.prefs {
@@ -76,6 +128,7 @@ impl App {
                 prefs::Hit::Category(i) => {
                     if let Some(p) = &mut self.prefs {
                         p.category = i;
+                        p.page_scroll = 0.0;
                     }
                 }
                 prefs::Hit::IncStep(v) => {
@@ -108,7 +161,11 @@ impl App {
                         p.working.cull_inset = v;
                     }
                 }
-                prefs::Hit::None => {}
+                prefs::Hit::None => {
+                    if let Some(p) = &mut self.prefs {
+                        p.preset_menu_open = false;
+                    }
+                }
             }
             self.request_main_redraw();
             return;

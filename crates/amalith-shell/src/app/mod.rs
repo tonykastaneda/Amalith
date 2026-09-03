@@ -279,7 +279,7 @@ enum Drag {
 /// A command reachable from the menu bar (native NSMenu on macOS, native
 /// HMENU on Windows). Keyboard shortcuts still handle these directly; this
 /// is the same set routed through one dispatcher.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum MenuAction {
     About,
     Preferences,
@@ -310,6 +310,12 @@ enum MenuAction {
     ZoomOut,
     FitArtboard,
     FitAll,
+    /// File ▸ Scripts.
+    AddScriptsFolder,
+    RevealScriptsFolder,
+    RemoveScriptsFolder,
+    /// Run the user script at this path.
+    RunScript(std::path::PathBuf),
     /// Window menu: show/hide the panel with this id.
     TogglePanel(&'static str),
 }
@@ -578,6 +584,11 @@ struct App {
     main_resizable: bool,
     /// Application settings (Amalith ▸ Preferences).
     settings: prefs::Settings,
+    /// User scripts folder + per-script key bindings (File ▸ Scripts,
+    /// Preferences ▸ Scripts). Persisted outside the app bundle.
+    scripts: crate::scripts::ScriptsConfig,
+    /// Named keyboard-shortcut presets (Preferences ▸ Keyboard ▸ Preset).
+    keymaps: crate::keymap::Keymaps,
     /// The Preferences modal, when open.
     prefs: Option<prefs::Prefs>,
     active_tool: Tool,
@@ -742,6 +753,8 @@ impl App {
             layer_search_focused: false,
             main_resizable: true,
             settings: settings::load(),
+            scripts: crate::scripts::load(),
+            keymaps: crate::keymap::load(),
             prefs: None,
             active_tool: Tool::Select,
             pre_artboard_tool: Tool::Select,
@@ -822,6 +835,21 @@ impl App {
             host.window.request_redraw();
         }
     }
+
+    /// Rebuild the native menu bar — used when the Scripts submenu's
+    /// contents change (folder added / removed).
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn rebuild_native_menu(&mut self) {
+        let Some(wid) = self.main_id else { return };
+        let Some(host) = self.hosts.get(&wid) else {
+            return;
+        };
+        let m = NativeMenu::build(&host.window, &self.scripts);
+        m.sync_window(&self.dock);
+        self.native_menu = Some(m);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    fn rebuild_native_menu(&mut self) {}
 
     /// Persist the current dock arrangement + view toggles to `layout.json`.
     fn save_layout(&self) {
@@ -2108,7 +2136,11 @@ impl App {
                 self.request_main_redraw();
             }
             MenuAction::Preferences => {
-                self.prefs = Some(prefs::Prefs::new(self.settings));
+                self.prefs = Some(prefs::Prefs::new(
+                    self.settings,
+                    self.scripts.clone(),
+                    self.keymaps.clone(),
+                ));
                 self.request_main_redraw();
             }
             MenuAction::New => self.open_new_doc(),
@@ -2175,6 +2207,27 @@ impl App {
             MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
             MenuAction::FitArtboard => self.zoom_fit(),
             MenuAction::FitAll => self.fit_view(),
+            MenuAction::AddScriptsFolder => {
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Choose Scripts Folder")
+                    .pick_folder()
+                {
+                    self.scripts.dir = Some(dir);
+                    crate::scripts::save(&self.scripts);
+                    self.rebuild_native_menu();
+                }
+            }
+            MenuAction::RevealScriptsFolder => {
+                if let Some(dir) = self.scripts.dir.clone() {
+                    crate::scripts::reveal(&dir);
+                }
+            }
+            MenuAction::RemoveScriptsFolder => {
+                self.scripts.dir = None;
+                crate::scripts::save(&self.scripts);
+                self.rebuild_native_menu();
+            }
+            MenuAction::RunScript(path) => crate::scripts::run(&path),
         }
     }
 
@@ -4563,7 +4616,7 @@ impl ApplicationHandler for App {
         crate::macdrop::install(&self.hosts[&wid].window);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let m = NativeMenu::build(&self.hosts[&wid].window);
+            let m = NativeMenu::build(&self.hosts[&wid].window, &self.scripts);
             m.sync_window(&self.dock);
             self.native_menu = Some(m);
         }
@@ -5101,7 +5154,7 @@ struct NativeMenu {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl NativeMenu {
-    fn build(window: &Window) -> Self {
+    fn build(window: &Window, scripts: &crate::scripts::ScriptsConfig) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
             CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
@@ -5163,11 +5216,40 @@ impl NativeMenu {
             &[&about_i, &sep(), &prefs_i, &sep(), &quit_i],
         )
         .expect("app menu");
+        // File ▸ Scripts — a user-pointed folder, its scripts listed here.
+        let add_scripts_i = MenuItem::new("Add Scripts Folder…", true, None);
+        let reveal_scripts_i = MenuItem::new("Reveal Scripts Folder", true, None);
+        let remove_scripts_i = MenuItem::new("Remove Scripts Folder", true, None);
+        let script_items: Vec<(MenuItem, std::path::PathBuf)> = scripts
+            .dir
+            .as_deref()
+            .map(crate::scripts::list)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| (MenuItem::new(crate::scripts::label(&p), true, None), p))
+            .collect();
+        let scripts_sep = sep();
+        let scripts_menu = {
+            let mut refs: Vec<&dyn muda::IsMenuItem> = vec![&add_scripts_i];
+            if scripts.dir.is_some() {
+                refs.push(&reveal_scripts_i);
+                refs.push(&remove_scripts_i);
+                if !script_items.is_empty() {
+                    refs.push(&scripts_sep);
+                }
+                for (item, _) in &script_items {
+                    refs.push(item);
+                }
+            }
+            Submenu::with_items("Scripts", true, &refs).expect("scripts menu")
+        };
+
         let file = Submenu::with_items(
             "File",
             true,
             &[
-                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i,
+                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i, &sep(),
+                &scripts_menu,
             ],
         )
         .expect("file menu");
@@ -5255,8 +5337,14 @@ impl NativeMenu {
             (zoom_out_i.id().clone(), MenuAction::ZoomOut),
             (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
             (fit_all_i.id().clone(), MenuAction::FitAll),
+            (add_scripts_i.id().clone(), MenuAction::AddScriptsFolder),
+            (reveal_scripts_i.id().clone(), MenuAction::RevealScriptsFolder),
+            (remove_scripts_i.id().clone(), MenuAction::RemoveScriptsFolder),
         ];
         let mut items = items;
+        for (item, path) in &script_items {
+            items.push((item.id().clone(), MenuAction::RunScript(path.clone())));
+        }
         for (id, item) in &window_checks {
             items.push((item.id().clone(), MenuAction::TogglePanel(id)));
         }
@@ -5280,7 +5368,7 @@ impl NativeMenu {
         let mut out = Vec::new();
         while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
             if let Some((_, action)) = self.items.iter().find(|(id, _)| *id == event.id) {
-                out.push(*action);
+                out.push(action.clone());
             }
         }
         out

@@ -135,7 +135,7 @@ pub fn save(s: &Settings) {
 }
 
 /// A stable file key for a tool (independent of its display label).
-fn tool_name(tool: Tool) -> &'static str {
+pub fn tool_name(tool: Tool) -> &'static str {
     match tool {
         Tool::Select => "Select",
         Tool::DirectSelect => "DirectSelect",
@@ -156,7 +156,7 @@ fn tool_name(tool: Tool) -> &'static str {
 }
 
 /// A stable file key for a bindable command.
-fn action_name(a: PrefAction) -> &'static str {
+pub fn action_name(a: PrefAction) -> &'static str {
     match a {
         PrefAction::SwapPaints => "SwapPaints",
         PrefAction::DefaultPaints => "DefaultPaints",
