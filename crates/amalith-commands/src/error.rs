@@ -1,4 +1,4 @@
-use amalith_core::{ArtboardId, DocumentError, LayerId, ObjectId};
+use amalith_core::{ArtboardId, DocumentError, GuideId, LayerId, ObjectId};
 use thiserror::Error;
 
 /// Errors from executing a [`crate::Command`] or from `undo`/`redo`.
@@ -10,6 +10,8 @@ pub enum CommandError {
     LayerNotFound(LayerId),
     #[error("no object with id {0}")]
     ObjectNotFound(ObjectId),
+    #[error("no guide with id {0}")]
+    GuideNotFound(GuideId),
     #[error("object {0} is not a path")]
     NotAPath(ObjectId),
     #[error("object {0} is not text")]

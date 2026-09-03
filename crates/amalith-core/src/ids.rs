@@ -70,6 +70,7 @@ define_id!(
     AssetId,
     "Identifies an [`crate::Asset`] (linked or embedded resource)."
 );
+define_id!(GuideId, "Identifies a [`crate::Guide`] (ruler guide line).");
 
 #[cfg(test)]
 mod tests {

@@ -362,6 +362,19 @@ impl Editor {
                 vec![Edit::InsertArtboard { artboard, index }]
             }
             Command::DeleteArtboard { id } => vec![Edit::RemoveArtboard { id }],
+            Command::AddGuide { orient, pos } => {
+                let guide = amalith_core::Guide::new(orient, pos);
+                let index = self.document.guides().len();
+                vec![Edit::InsertGuide { guide, index }]
+            }
+            Command::MoveGuide { id, pos } => vec![Edit::SetGuidePos { id, pos }],
+            Command::DeleteGuide { id } => vec![Edit::RemoveGuide { id }],
+            Command::ClearGuides => self
+                .document
+                .guides()
+                .iter()
+                .map(|g| Edit::RemoveGuide { id: g.id })
+                .collect(),
             Command::DeleteObject { id } => vec![Edit::RemoveObject { id }],
             Command::DeleteObjects { ids } => ids
                 .into_iter()
@@ -1566,6 +1579,7 @@ fn outcome_of(new_id: Option<NewId>) -> CommandOutcome {
         Some(NewId::Artboard(id)) => CommandOutcome::Artboard(id),
         Some(NewId::Layer(id)) => CommandOutcome::Layer(id),
         Some(NewId::Object(id)) => CommandOutcome::Object(id),
+        Some(NewId::Guide(id)) => CommandOutcome::Guide(id),
         None => CommandOutcome::None,
     }
 }

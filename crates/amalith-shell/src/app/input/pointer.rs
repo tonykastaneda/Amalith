@@ -338,6 +338,35 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::NewGuide { orient, .. } => {
+                use amalith_core::GuideOrient;
+                let orient = *orient;
+                let dp = self.doc_point(self.pointer);
+                let pos = match orient {
+                    GuideOrient::Horizontal => dp.y,
+                    GuideOrient::Vertical => dp.x,
+                };
+                self.drag = Drag::NewGuide { orient, pos };
+                self.request_main_redraw();
+            }
+            Drag::MoveGuide {
+                id, orient, orig, ..
+            } => {
+                use amalith_core::GuideOrient;
+                let (id, orient, orig) = (*id, *orient, *orig);
+                let dp = self.doc_point(self.pointer);
+                let pos = match orient {
+                    GuideOrient::Horizontal => dp.y,
+                    GuideOrient::Vertical => dp.x,
+                };
+                self.drag = Drag::MoveGuide {
+                    id,
+                    orient,
+                    pos,
+                    orig,
+                };
+                self.request_main_redraw();
+            }
             Drag::RotateTool {
                 pivot,
                 start_angle,
@@ -695,6 +724,32 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            Drag::NewGuide { orient, pos } => {
+                // Released on the canvas → commit; on a ruler / off-canvas
+                // → discard.
+                if self.ruler_strip_at(self.pointer).is_none()
+                    && self.canvas_viewport().contains(self.pointer)
+                {
+                    let _ = self
+                        .doc
+                        .editor
+                        .execute(Command::AddGuide { orient, pos });
+                }
+                self.request_main_redraw();
+            }
+            Drag::MoveGuide {
+                id, pos, orig, ..
+            } => {
+                if self.ruler_strip_at(self.pointer).is_some()
+                    || !self.canvas_viewport().contains(self.pointer)
+                {
+                    let _ = self.doc.editor.execute(Command::DeleteGuide { id });
+                    self.selected_guides.retain(|g| *g != id);
+                } else if pos != orig {
+                    let _ = self.doc.editor.execute(Command::MoveGuide { id, pos });
+                }
+                self.request_main_redraw();
+            }
             Drag::RotateTool {
                 start_xf,
                 preview,
@@ -779,6 +834,30 @@ impl App {
                     }
                 } else {
                     self.doc.selection = hits;
+                }
+                // Guides the band crosses join the selection too.
+                if !self.guides_hidden && !self.guides_locked {
+                    use amalith_core::GuideOrient;
+                    let guide_hits: Vec<_> = self
+                        .doc
+                        .editor
+                        .document()
+                        .guides()
+                        .iter()
+                        .filter(|g| match g.orient {
+                            GuideOrient::Horizontal => r_doc.y0 <= g.pos && g.pos <= r_doc.y1,
+                            GuideOrient::Vertical => r_doc.x0 <= g.pos && g.pos <= r_doc.x1,
+                        })
+                        .map(|g| g.id)
+                        .collect();
+                    if !self.shift_down {
+                        self.selected_guides.clear();
+                    }
+                    for id in guide_hits {
+                        if !self.selected_guides.contains(&id) {
+                            self.selected_guides.push(id);
+                        }
+                    }
                 }
                 self.sync_align_mode();
                 self.marquee = None;

@@ -26,15 +26,23 @@ pub struct Layout {
     /// Canvas rulers (⌘R).
     #[serde(default)]
     pub rulers: bool,
+    /// Guides hidden (View ▸ Hide Guides, ⌘;).
+    #[serde(default)]
+    pub guides_hidden: bool,
+    /// Guides locked (View ▸ Lock Guides, ⌘⌥;).
+    #[serde(default)]
+    pub guides_locked: bool,
 }
 
 impl Layout {
     /// Capture the current shell layout.
-    pub fn capture(dock: &DockModel, rulers: bool) -> Self {
+    pub fn capture(dock: &DockModel, rulers: bool, guides_hidden: bool, guides_locked: bool) -> Self {
         Self {
             left: dock.left.clone(),
             right: dock.right.clone(),
             rulers,
+            guides_hidden,
+            guides_locked,
         }
     }
 

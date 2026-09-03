@@ -174,6 +174,21 @@ enum Drag {
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
     },
+    /// Dragging a new ruler guide out of a ruler strip. `pos` is the live
+    /// document coordinate; released over the canvas it commits, released
+    /// back over a ruler it's discarded.
+    NewGuide {
+        orient: amalith_core::GuideOrient,
+        pos: f64,
+    },
+    /// Moving an existing ruler guide. `orig` is its coordinate at press;
+    /// released over a ruler strip it's deleted instead.
+    MoveGuide {
+        id: amalith_core::GuideId,
+        orient: amalith_core::GuideOrient,
+        pos: f64,
+        orig: f64,
+    },
     /// Rotate tool: turning the selection about `pivot` (document space).
     /// A release with `moved == false` was a click and re-places the
     /// reference point instead. `copy` (Alt held at press) rotates a
@@ -310,6 +325,10 @@ enum MenuAction {
     ZoomOut,
     FitArtboard,
     FitAll,
+    /// View ▸ Guides.
+    ToggleGuides,
+    ToggleGuideLock,
+    ClearGuides,
     /// File ▸ Scripts.
     AddScriptsFolder,
     RevealScriptsFolder,
@@ -690,6 +709,14 @@ struct App {
     /// Canvas rulers along the top / left edges (⌘R). Origin is the
     /// document origin; when on, `canvas_viewport` insets by `rulers::THICK`.
     rulers: bool,
+    /// Ruler guides hidden (View ▸ Hide Guides, ⌘;).
+    guides_hidden: bool,
+    /// Ruler guides locked — can't be grabbed or moved (View ▸ Lock
+    /// Guides, ⌘⌥;).
+    guides_locked: bool,
+    /// Ruler guides currently selected (clicked or marquee'd with a
+    /// selection tool); Delete / Backspace removes them.
+    selected_guides: Vec<amalith_core::GuideId>,
     /// Cached static ruler layer — rebuilt only when the view, canvas
     /// region, ruler origin, or display unit changes.
     ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
@@ -722,9 +749,13 @@ impl App {
         dock.left = Rail::with(demo_left_dock());
         dock.left.width = 80.0; // two tool columns
         let mut rulers = false;
+        let mut guides_hidden = false;
+        let mut guides_locked = false;
         if let Some(saved) = workspace::load() {
             saved.apply_to(&mut dock);
             rulers = saved.rulers;
+            guides_hidden = saved.guides_hidden;
+            guides_locked = saved.guides_locked;
         }
         Self {
             context: RenderContext::new(),
@@ -806,6 +837,9 @@ impl App {
             focused: std::collections::HashSet::new(),
             panel_scroll: std::collections::HashMap::new(),
             rulers,
+            guides_hidden,
+            guides_locked,
+            selected_guides: Vec::new(),
             ruler_cache: None,
             ruler_menu: None,
             last_frame: None,
@@ -848,7 +882,12 @@ impl App {
         let Some(host) = self.hosts.get(&wid) else {
             return;
         };
-        let m = NativeMenu::build(&host.window, &self.scripts);
+        let m = NativeMenu::build(
+            &host.window,
+            &self.scripts,
+            self.guides_hidden,
+            self.guides_locked,
+        );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
     }
@@ -857,7 +896,12 @@ impl App {
 
     /// Persist the current dock arrangement + view toggles to `layout.json`.
     fn save_layout(&self) {
-        workspace::save(&workspace::Layout::capture(&self.dock, self.rulers));
+        workspace::save(&workspace::Layout::capture(
+            &self.dock,
+            self.rulers,
+            self.guides_hidden,
+            self.guides_locked,
+        ));
     }
 
     /// Stored scroll offset for a panel (0 if none). Clamped to the live
@@ -1358,6 +1402,79 @@ impl App {
             }
         }
         self.request_main_redraw();
+    }
+
+    /// Which guide axis a press over a ruler strip would create: the top
+    /// strip drags out horizontal guides, the left strip vertical ones.
+    fn ruler_strip_at(&self, p: Point) -> Option<amalith_core::GuideOrient> {
+        use amalith_core::GuideOrient;
+        if !self.rulers || self.pointer_win != self.main_id {
+            return None;
+        }
+        let r = self.canvas_region();
+        if !r.contains(p) {
+            return None;
+        }
+        if p.y < r.y0 + rulers::THICK {
+            Some(GuideOrient::Horizontal)
+        } else if p.x < r.x0 + rulers::THICK {
+            Some(GuideOrient::Vertical)
+        } else {
+            None
+        }
+    }
+
+    /// The topmost ruler guide within grab tolerance of `screen`, if guides
+    /// are visible, unlocked, and the point is on the canvas.
+    fn guide_at(&self, screen: Point) -> Option<amalith_core::GuideId> {
+        use amalith_core::GuideOrient;
+        if self.guides_hidden || self.guides_locked || !self.canvas_viewport().contains(screen) {
+            return None;
+        }
+        let vt = self.doc.view.to_screen();
+        self.doc
+            .editor
+            .document()
+            .guides()
+            .iter()
+            .rev()
+            .find(|g| match g.orient {
+                GuideOrient::Horizontal => {
+                    ((vt * Point::new(0.0, g.pos)).y - screen.y).abs() <= 4.0
+                }
+                GuideOrient::Vertical => ((vt * Point::new(g.pos, 0.0)).x - screen.x).abs() <= 4.0,
+            })
+            .map(|g| g.id)
+    }
+
+    /// Flip a guide toggle and persist it.
+    fn set_guides_hidden(&mut self, hidden: bool) {
+        self.guides_hidden = hidden;
+        if hidden {
+            self.selected_guides.clear();
+        }
+        self.sync_guide_menu();
+        self.save_layout();
+        self.request_main_redraw();
+    }
+    fn set_guides_locked(&mut self, locked: bool) {
+        self.guides_locked = locked;
+        self.sync_guide_menu();
+        self.save_layout();
+        self.request_main_redraw();
+    }
+    fn sync_guide_menu(&self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_guides(self.guides_hidden, self.guides_locked);
+        }
+    }
+    fn clear_guides(&mut self) {
+        if !self.doc.editor.document().guides().is_empty() {
+            let _ = self.doc.editor.execute(Command::ClearGuides);
+            self.selected_guides.clear();
+            self.request_main_redraw();
+        }
     }
 
     /// Right mouse press: opens the ruler unit menu when over a ruler
@@ -2211,6 +2328,9 @@ impl App {
             MenuAction::ZoomOut => self.zoom_step(1.0 / 1.6),
             MenuAction::FitArtboard => self.zoom_fit(),
             MenuAction::FitAll => self.fit_view(),
+            MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
+            MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
+            MenuAction::ClearGuides => self.clear_guides(),
             MenuAction::AddScriptsFolder => {
                 if let Some(dir) = rfd::FileDialog::new()
                     .set_title("Choose Scripts Folder")
@@ -4620,7 +4740,12 @@ impl ApplicationHandler for App {
         crate::macdrop::install(&self.hosts[&wid].window);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
-            let m = NativeMenu::build(&self.hosts[&wid].window, &self.scripts);
+            let m = NativeMenu::build(
+                &self.hosts[&wid].window,
+                &self.scripts,
+                self.guides_hidden,
+                self.guides_locked,
+            );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);
         }
@@ -5153,13 +5278,20 @@ struct NativeMenu {
     /// Panels-menu checkmarks, keyed by panel id, updated as panels
     /// open/close.
     window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
+    /// View ▸ Guides checkmarks — (show-guides, lock-guides).
+    guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     // Kept alive for the process; dropping it tears the menu down.
     _menu: muda::Menu,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl NativeMenu {
-    fn build(window: &Window, scripts: &crate::scripts::ScriptsConfig) -> Self {
+    fn build(
+        window: &Window,
+        scripts: &crate::scripts::ScriptsConfig,
+        guides_hidden: bool,
+        guides_locked: bool,
+    ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
             CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu,
@@ -5197,6 +5329,19 @@ impl NativeMenu {
         let zoom_out_i = mk("Zoom Out", sup, Code::Minus);
         let fit_artboard_i = mk("Fit Artboard in Window", sup, Code::Digit0);
         let fit_all_i = mk("Fit All in Window", sup_alt, Code::Digit0);
+        let guides_show_i = CheckMenuItem::new(
+            "Show Guides",
+            true,
+            !guides_hidden,
+            Some(Accelerator::new(sup, Code::Semicolon)),
+        );
+        let guides_lock_i = CheckMenuItem::new(
+            "Lock Guides",
+            true,
+            guides_locked,
+            Some(Accelerator::new(sup_alt, Code::Semicolon)),
+        );
+        let clear_guides_i = MenuItem::new("Clear Guides", true, None);
 
         let sep = PredefinedMenuItem::separator;
         let about_i = MenuItem::new("About Amalith", true, None);
@@ -5276,6 +5421,10 @@ impl NativeMenu {
                 &sep(),
                 &fit_artboard_i,
                 &fit_all_i,
+                &sep(),
+                &guides_show_i,
+                &guides_lock_i,
+                &clear_guides_i,
             ],
         )
         .expect("view menu");
@@ -5342,6 +5491,9 @@ impl NativeMenu {
             (zoom_out_i.id().clone(), MenuAction::ZoomOut),
             (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
             (fit_all_i.id().clone(), MenuAction::FitAll),
+            (guides_show_i.id().clone(), MenuAction::ToggleGuides),
+            (guides_lock_i.id().clone(), MenuAction::ToggleGuideLock),
+            (clear_guides_i.id().clone(), MenuAction::ClearGuides),
             (add_scripts_i.id().clone(), MenuAction::AddScriptsFolder),
             (reveal_scripts_i.id().clone(), MenuAction::RevealScriptsFolder),
             (remove_scripts_i.id().clone(), MenuAction::RemoveScriptsFolder),
@@ -5357,6 +5509,7 @@ impl NativeMenu {
         Self {
             items,
             window_checks,
+            guide_checks: (guides_show_i, guides_lock_i),
             _menu: menu,
         }
     }
@@ -5366,6 +5519,12 @@ impl NativeMenu {
         for (id, item) in &self.window_checks {
             item.set_checked(dock.contains(PanelId(id)));
         }
+    }
+
+    /// Match the View ▸ Guides checkmarks to the live toggles.
+    fn sync_guides(&self, hidden: bool, locked: bool) {
+        self.guide_checks.0.set_checked(!hidden);
+        self.guide_checks.1.set_checked(locked);
     }
 
     /// Every menu click queued since the last call.

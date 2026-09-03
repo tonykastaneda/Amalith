@@ -312,6 +312,14 @@ impl App {
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                if pressed && !self.selected_guides.is_empty() =>
+            {
+                for id in std::mem::take(&mut self.selected_guides) {
+                    let _ = self.doc.editor.execute(Command::DeleteGuide { id });
+                }
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                 if pressed && !self.doc.selection.is_empty() =>
             {
                 let ids = std::mem::take(&mut self.doc.selection);
@@ -396,6 +404,13 @@ impl App {
                         self.rulers = !self.rulers;
                         self.request_main_redraw();
                     }
+                    // ⌘; hide/show guides, ⌘⌥; lock/unlock them.
+                    KeyCode::Semicolon if self.alt_down => {
+                        self.set_guides_locked(!self.guides_locked);
+                    }
+                    KeyCode::Semicolon => {
+                        self.set_guides_hidden(!self.guides_hidden);
+                    }
                     // View zoom: ⌘+ / ⌘− step, ⌘0 fit, ⌘1 actual size.
                     // `Equal` is the `=`/`+` key; on most layouts ⌘+ needs
                     // Shift, so accept it with or without.
@@ -464,6 +479,7 @@ impl App {
                             self.pen_redo.clear();
                             self.doc.anchor_sel.clear();
                             self.doc.selection.clear();
+                            self.selected_guides.clear();
                         }
                         self.request_main_redraw();
                     }

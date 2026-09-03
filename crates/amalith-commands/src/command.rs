@@ -6,8 +6,8 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle, TextData, Unit,
-    Vec2,
+    Affine, ArtboardId, GuideId, GuideOrient, LayerId, ObjectId, Paint, PathData, Rect, StrokeStyle,
+    TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -24,6 +24,22 @@ pub enum Command {
     DeleteArtboard {
         id: ArtboardId,
     },
+    /// Adds a ruler guide. Yields [`CommandOutcome::Guide`].
+    AddGuide {
+        orient: GuideOrient,
+        /// Canonical px: `y` for a horizontal guide, `x` for a vertical.
+        pos: f64,
+    },
+    /// Slides an existing guide to a new coordinate.
+    MoveGuide {
+        id: GuideId,
+        pos: f64,
+    },
+    DeleteGuide {
+        id: GuideId,
+    },
+    /// Removes every guide in the document.
+    ClearGuides,
     DeleteObject {
         id: ObjectId,
     },
@@ -355,4 +371,6 @@ pub enum CommandOutcome {
     /// copied roots, the first root — same relative order as the
     /// clipboard) created by the command.
     Object(ObjectId),
+    /// The new guide created by [`Command::AddGuide`].
+    Guide(GuideId),
 }

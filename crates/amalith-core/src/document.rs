@@ -39,7 +39,8 @@ use crate::artboard::Artboard;
 use crate::asset::Asset;
 use crate::error::DocumentError;
 use crate::geom::{Affine, Rect};
-use crate::ids::{ArtboardId, AssetId, LayerId, ObjectId};
+use crate::guide::Guide;
+use crate::ids::{ArtboardId, AssetId, GuideId, LayerId, ObjectId};
 use crate::layer::Layer;
 use crate::metadata::{Metadata, Settings};
 use crate::object::{Object, ObjectKind, ObjectParent};
@@ -68,6 +69,8 @@ pub struct Document {
     objects: HashMap<ObjectId, Object>,
     assets: Vec<Asset>,
     swatches: Vec<Swatch>,
+    #[serde(default)]
+    guides: Vec<Guide>,
 }
 
 impl Document {
@@ -85,6 +88,7 @@ impl Document {
             objects: HashMap::new(),
             assets: Vec::new(),
             swatches: Vec::new(),
+            guides: Vec::new(),
         }
     }
 
@@ -275,6 +279,34 @@ impl Document {
 
     pub fn add_swatch(&mut self, swatch: Swatch) {
         self.swatches.push(swatch);
+    }
+
+    // ---- Guides -------------------------------------------------------
+
+    pub fn guides(&self) -> &[Guide] {
+        &self.guides
+    }
+
+    pub fn guide(&self, id: GuideId) -> Option<&Guide> {
+        self.guides.iter().find(|g| g.id == id)
+    }
+
+    pub fn guide_mut(&mut self, id: GuideId) -> Option<&mut Guide> {
+        self.guides.iter_mut().find(|g| g.id == id)
+    }
+
+    /// Raw: inserts a guide at `index` (clamped). Building block for
+    /// `amalith-commands::Command::AddGuide`.
+    pub fn insert_guide(&mut self, guide: Guide, index: usize) {
+        let i = index.min(self.guides.len());
+        self.guides.insert(i, guide);
+    }
+
+    /// Raw: removes a guide, returning it and its former index so an undo
+    /// can reinsert at the same spot.
+    pub fn remove_guide(&mut self, id: GuideId) -> Option<(Guide, usize)> {
+        let i = self.guides.iter().position(|g| g.id == id)?;
+        Some((self.guides.remove(i), i))
     }
 
     // ---- Transforms / bounds --------------------------------------------

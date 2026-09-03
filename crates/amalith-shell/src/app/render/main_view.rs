@@ -3,6 +3,17 @@
 
 use super::super::*;
 
+/// How a ruler guide line should be drawn this frame.
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::app) enum GuideMark {
+    /// A committed, unselected guide.
+    Idle,
+    /// The guide currently being dragged out / repositioned.
+    Active,
+    /// A selected guide (click or marquee).
+    Selected,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in crate::app) fn paint_main(
     scene: &mut Scene,
@@ -76,6 +87,8 @@ pub(in crate::app) fn paint_main(
     rulers: bool,
     // Rotate tool: the reference point (document space) to mark, if any.
     rotate_pivot: Option<Point>,
+    // Ruler guides to draw: (orientation, doc coord, how to mark it).
+    guide_lines: &[(amalith_core::GuideOrient, f64, GuideMark)],
 ) {
     scene.fill(
         Fill::NonZero,
@@ -131,6 +144,36 @@ pub(in crate::app) fn paint_main(
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
+    }
+
+    // Ruler guides — full-canvas lines, clipped to the viewport.
+    if !guide_lines.is_empty() {
+        use amalith_core::GuideOrient;
+        scene.push_clip_layer(Fill::NonZero, ID, &viewport);
+        let vt = view.to_screen();
+        // Idle / active: neon cyan (matches the Rotate reference point).
+        // Selected: blue.
+        let cyan = vello::peniko::Color::from_rgb8(0x00, 0xff, 0xff);
+        let blue = vello::peniko::Color::from_rgb8(0x4f, 0x80, 0xff);
+        for &(orient, pos, mark) in guide_lines {
+            let (col, wt) = match mark {
+                GuideMark::Idle => (cyan.with_alpha(0.8), 1.0),
+                GuideMark::Active => (cyan, 1.4),
+                GuideMark::Selected => (blue, 1.6),
+            };
+            let line = match orient {
+                GuideOrient::Horizontal => {
+                    let y = (vt * Point::new(0.0, pos)).y.round() + 0.5;
+                    vello::kurbo::Line::new((viewport.x0, y), (viewport.x1, y))
+                }
+                GuideOrient::Vertical => {
+                    let x = (vt * Point::new(pos, 0.0)).x.round() + 0.5;
+                    vello::kurbo::Line::new((x, viewport.y0), (x, viewport.y1))
+                }
+            };
+            scene.stroke(&Stroke::new(wt), ID, col, None, &line);
+        }
+        scene.pop_layer();
     }
 
     // Rotate tool: a registration-mark reference point (circle + crosshair)

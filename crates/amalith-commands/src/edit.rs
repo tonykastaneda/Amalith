@@ -16,8 +16,9 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Asset, AssetId, Document, DocumentError, Layer, LayerId, Object,
-    ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
+    Affine, Artboard, ArtboardId, Asset, AssetId, Document, DocumentError, Guide, GuideId, Layer,
+    LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData,
+    Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +113,17 @@ pub(crate) enum Edit {
     },
     RemoveAsset {
         id: AssetId,
+    },
+    InsertGuide {
+        guide: Guide,
+        index: usize,
+    },
+    RemoveGuide {
+        id: GuideId,
+    },
+    SetGuidePos {
+        id: GuideId,
+        pos: f64,
     },
 }
 
@@ -298,6 +310,22 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or(DocumentError::AssetNotFound(id))?;
             Ok((Edit::InsertAsset { asset, index }, None))
         }
+        Edit::InsertGuide { guide, index } => {
+            let id = guide.id;
+            doc.insert_guide(guide, index);
+            Ok((Edit::RemoveGuide { id }, Some(NewId::Guide(id))))
+        }
+        Edit::RemoveGuide { id } => {
+            let (guide, index) = doc
+                .remove_guide(id)
+                .ok_or(CommandError::GuideNotFound(id))?;
+            Ok((Edit::InsertGuide { guide, index }, None))
+        }
+        Edit::SetGuidePos { id, pos } => {
+            let guide = doc.guide_mut(id).ok_or(CommandError::GuideNotFound(id))?;
+            let old = std::mem::replace(&mut guide.pos, pos);
+            Ok((Edit::SetGuidePos { id, pos: old }, None))
+        }
     }
 }
 
@@ -306,4 +334,5 @@ pub(crate) enum NewId {
     Artboard(ArtboardId),
     Layer(LayerId),
     Object(ObjectId),
+    Guide(GuideId),
 }

@@ -383,6 +383,41 @@ impl App {
         let rotate_pivot = (self.active_tool == Tool::Rotate)
             .then(|| self.rotate_pivot())
             .flatten();
+        // Ruler guides: committed ones (minus any being dragged) plus the
+        // live preview line for a create / move drag.
+        use main_view::GuideMark;
+        let guide_lines: Vec<(amalith_core::GuideOrient, f64, GuideMark)> = if self.guides_hidden {
+            Vec::new()
+        } else {
+            let moving = match &self.drag {
+                Drag::MoveGuide { id, .. } => Some(*id),
+                _ => None,
+            };
+            let sel = &self.selected_guides;
+            let mut v: Vec<_> = self
+                .doc
+                .editor
+                .document()
+                .guides()
+                .iter()
+                .filter(|g| moving != Some(g.id))
+                .map(|g| {
+                    let mark = if sel.contains(&g.id) {
+                        GuideMark::Selected
+                    } else {
+                        GuideMark::Idle
+                    };
+                    (g.orient, g.pos, mark)
+                })
+                .collect();
+            match &self.drag {
+                Drag::NewGuide { orient, pos } | Drag::MoveGuide { orient, pos, .. } => {
+                    v.push((*orient, *pos, GuideMark::Active));
+                }
+                _ => {}
+            }
+            v
+        };
         match role {
             Role::Main => main_view::paint_main(
                 &mut self.content,
@@ -457,6 +492,7 @@ impl App {
                 self.settings.show_cull_outline,
                 self.rulers,
                 rotate_pivot,
+                &guide_lines,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

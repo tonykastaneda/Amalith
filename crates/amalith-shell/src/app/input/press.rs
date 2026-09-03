@@ -540,6 +540,48 @@ impl App {
                 }
                 let dp = self.doc_point(self.pointer);
 
+                // Ruler strip → drag out a new guide.
+                if let Some(orient) = self.ruler_strip_at(self.pointer) {
+                    if !self.guides_locked {
+                        use amalith_core::GuideOrient;
+                        let pos = match orient {
+                            GuideOrient::Horizontal => dp.y,
+                            GuideOrient::Vertical => dp.x,
+                        };
+                        self.drag = Drag::NewGuide { orient, pos };
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
+                // Grab / select an existing guide (selection tools only).
+                if matches!(self.active_tool, Tool::Select | Tool::DirectSelect) {
+                    if let Some(id) = self.guide_at(self.pointer) {
+                        if self.shift_down {
+                            if let Some(i) = self.selected_guides.iter().position(|g| *g == id) {
+                                self.selected_guides.remove(i);
+                            } else {
+                                self.selected_guides.push(id);
+                            }
+                        } else if !self.selected_guides.contains(&id) {
+                            self.selected_guides = vec![id];
+                        }
+                        if let Some(g) = self.doc.editor.document().guide(id).copied() {
+                            self.drag = Drag::MoveGuide {
+                                id,
+                                orient: g.orient,
+                                pos: g.pos,
+                                orig: g.pos,
+                            };
+                        }
+                        self.request_main_redraw();
+                        return;
+                    }
+                    if !self.shift_down && !self.selected_guides.is_empty() {
+                        self.selected_guides.clear();
+                        self.request_main_redraw();
+                    }
+                }
+
                 // Rotate tool: a drag turns the selection about the
                 // reference point; a plain click (no drag) re-places it.
                 if self.active_tool == Tool::Rotate {
