@@ -139,7 +139,8 @@ pub(in crate::app) fn paint_main(
         let c = view.to_screen() * pv;
         if viewport.contains(c) {
             let r = 5.0;
-            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            // Neon cyan, over a white halo so it reads on any background.
+            let ink = vello::peniko::Color::from_rgb8(0x00, 0xff, 0xff);
             let halo = vello::peniko::Color::WHITE;
             let ring = vello::kurbo::Circle::new(c, r);
             let h = vello::kurbo::Line::new(
