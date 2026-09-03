@@ -106,8 +106,8 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 .downloads-hero h1 { margin: 0; font-size: clamp(46px, 4.6vw, 74px); font-weight: 800; letter-spacing: -.06em; line-height: .94; }
 .downloads-hero h1 em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; color: var(--yellow); }
 .download-actions { margin-top: 68px; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
-.platform-download { min-height: 46px; padding: 12px 17px; border: 0; border-radius: 4px; background: var(--paper); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 9px; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: -.02em; opacity: 1; cursor: not-allowed; }
-.platform-download img { width: 19px; height: 19px; object-fit: contain; }
+.platform-download { min-height: 36px; padding: 8px 12px; border: 0; border-radius: 6px; background: #f4f4f4; color: #151515; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-size: 14px; font-weight: 500; line-height: 16px; letter-spacing: .2px; opacity: 1; cursor: not-allowed; box-shadow: 0 0 0 2px rgba(0,0,0,.5), 0 0 14px rgba(255,255,255,.19), inset 0 -1px .4px rgba(0,0,0,.2), inset 0 1px .4px #fff; }
+.platform-download img { width: 16px; height: 16px; object-fit: contain; }
 .downloads-footer { min-height: 190px; grid-template-columns: 1fr auto auto auto; align-items: center; gap: clamp(30px, 6vw, 100px); }
 .downloads-footer > p { margin: 0; color: #8f8e87; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; }
 .downloads-footer > a:not(.footer-brand) { padding-bottom: 6px; border-bottom: 1px solid currentColor; font-weight: 800; }
