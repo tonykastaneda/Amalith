@@ -101,9 +101,9 @@ footer { background: var(--ink); color: var(--paper); padding: 70px 5vw 36px; di
 
 .downloads-page { background: #050505; }
 .downloads-hero { min-height: max(620px, calc(100vh - 124px)); padding: 80px 5vw 96px; border-bottom: 1px solid var(--line); display: grid; place-items: center; }
-.downloads-hero__inner { width: min(1180px, 100%); text-align: center; }
+.downloads-hero__inner { width: min(1280px, 100%); text-align: center; }
 .downloads-hero .kicker { justify-content: center; margin: 0 0 46px; }
-.downloads-hero h1 { margin: 0; font-size: clamp(50px, 6.5vw, 96px); font-weight: 800; letter-spacing: -.065em; line-height: .91; }
+.downloads-hero h1 { margin: 0; font-size: clamp(46px, 4.6vw, 74px); font-weight: 800; letter-spacing: -.06em; line-height: .94; }
 .downloads-hero h1 em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; color: var(--yellow); }
 .download-actions { margin-top: 68px; display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
 .platform-download { min-height: 46px; padding: 12px 17px; border: 0; border-radius: 4px; background: var(--paper); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 9px; font: inherit; font-size: 13px; font-weight: 700; letter-spacing: -.02em; opacity: 1; cursor: not-allowed; }
