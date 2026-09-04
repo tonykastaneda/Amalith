@@ -691,7 +691,7 @@ impl App {
                         return Vec::new();
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
@@ -736,7 +736,7 @@ impl App {
                         return Vec::new();
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
@@ -1085,7 +1085,7 @@ impl App {
                         return Vec::new();
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()

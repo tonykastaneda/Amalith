@@ -119,12 +119,12 @@ pub(in crate::app) fn paint_main(
     let left_x = if dock.left.is_empty() {
         0.0
     } else {
-        rail_rect_for(RailSide::Left, dock.left.width as f64, width, height).x1
+        rail_rect_for(RailSide::Left, &dock.left, width, height).x1
     };
     let right_x = if dock.right.is_empty() {
         width
     } else {
-        rail_rect_for(RailSide::Right, dock.right.width as f64, width, height).x0
+        rail_rect_for(RailSide::Right, &dock.right, width, height).x0
     };
     // Full canvas region between the rails; the rulers (when on) sit in a
     // strip along its top / left, and content is inset to match
@@ -517,7 +517,7 @@ pub(in crate::app) fn paint_main(
         if rail.is_empty() && !is_preview_target {
             continue;
         }
-        let rect = rail_rect_for(side, rail.width as f64, width, height);
+        let rect = rail_rect_for(side, rail, width, height);
         let laid = build_rail_layout_with_flyout(rail, side, rect, flyout_icon, theme, text);
         if !rail.is_empty() {
             if let Some(col) = laid.icon_col {

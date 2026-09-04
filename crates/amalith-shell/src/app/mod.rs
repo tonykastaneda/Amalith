@@ -1185,7 +1185,7 @@ impl App {
                         return Vec::new();
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
@@ -4638,12 +4638,12 @@ impl App {
         let left = if self.dock.left.is_empty() {
             0.0
         } else {
-            rail_rect_for(RailSide::Left, self.dock.left.width as f64, w, h).x1
+            rail_rect_for(RailSide::Left, &self.dock.left, w, h).x1
         };
         let right = if self.dock.right.is_empty() {
             w
         } else {
-            rail_rect_for(RailSide::Right, self.dock.right.width as f64, w, h).x0
+            rail_rect_for(RailSide::Right, &self.dock.right, w, h).x0
         };
         (left, right.max(left))
     }
@@ -4810,7 +4810,7 @@ impl App {
                         return Vec::new();
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
@@ -5176,7 +5176,7 @@ impl App {
         }
         for side in [RailSide::Left, RailSide::Right] {
             let rail = self.dock.rail(side);
-            let rect = rail_rect_for(side, rail.width as f64, w, h);
+            let rect = rail_rect_for(side, rail, w, h);
             if rail.is_empty() {
                 let in_zone = match side {
                     RailSide::Left => local.x <= EMPTY_ZONE,
@@ -5238,7 +5238,7 @@ impl App {
             if rail.is_empty() {
                 continue;
             }
-            let rect = rail_rect_for(side, rail.width as f64, w, h);
+            let rect = rail_rect_for(side, rail, w, h);
             let laid = build_rail_layout(rail, side, &self.theme, &mut self.text, rect);
             if let Some(area) = laid
                 .areas
@@ -6022,8 +6022,23 @@ fn tab_label(panel: PanelId) -> String {
     .to_string()
 }
 
-fn rail_rect_for(side: RailSide, rail_w: f64, width: f64, height: f64) -> Rect {
-    let rw = rail_w.clamp(RAIL_MIN_W, (width * 0.7).max(RAIL_MIN_W));
+/// A fully collapsed rail (every column iconized, `tree: None`) has no
+/// docked content left to size for — it should shrink to just the icon
+/// strip's width rather than keep reserving whatever width the user had
+/// it dragged to, which would otherwise leave a dead, empty gap between
+/// the icon strip and the canvas (not how Illustrator's dock behaves:
+/// the whole rail visually collapses down to the icon column).
+fn rail_effective_width(rail: &Rail) -> f64 {
+    if rail.tree.is_none() && !rail.icons.is_empty() {
+        layout::ICON_COL_W
+    } else {
+        rail.width as f64
+    }
+}
+
+fn rail_rect_for(side: RailSide, rail: &Rail, width: f64, height: f64) -> Rect {
+    let rail_w = rail_effective_width(rail);
+    let rw = rail_w.clamp(RAIL_MIN_W.min(rail_w), (width * 0.7).max(RAIL_MIN_W));
     // Rails sit below the full-width app bar + options bar.
     let top = APP_BAR_H + OPT_BAR_H;
     match side {
@@ -6209,4 +6224,49 @@ const WINDOW_PANELS: [(&str, &str); 11] = [
 pub fn run() {
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.run_app(&mut App::new()).expect("run app");
+}
+
+#[cfg(test)]
+mod rail_geometry_tests {
+    use super::*;
+    use crate::dock::IconColumn;
+
+    fn tabs(panel: &'static str) -> Node {
+        Node::Tabs { panels: vec![PanelId(panel)], active: 0 }
+    }
+
+    #[test]
+    fn a_docked_rail_keeps_its_configured_width() {
+        let mut rail = Rail::with(tabs("color"));
+        rail.width = 240.0;
+        assert_eq!(rail_effective_width(&rail), 240.0);
+        assert_eq!(rail_rect_for(RailSide::Right, &rail, 1000.0, 800.0).width(), 240.0);
+    }
+
+    #[test]
+    fn a_fully_collapsed_rail_shrinks_to_the_icon_strip_not_its_old_width() {
+        // Every column iconized: `tree` is empty but the rail is not — it
+        // must not keep reserving its pre-collapse width, or the canvas
+        // leaves a dead empty gap between the icon strip and the drawing
+        // area instead of the whole rail visually shrinking down, which is
+        // how Illustrator's dock actually behaves.
+        let mut rail = Rail::default();
+        rail.width = 240.0;
+        rail.icons = vec![IconColumn { node: tabs("color") }];
+        assert_eq!(rail.tree, None);
+        assert_eq!(rail_effective_width(&rail), layout::ICON_COL_W);
+        let rect = rail_rect_for(RailSide::Right, &rail, 1000.0, 800.0);
+        assert_eq!(rect.width(), layout::ICON_COL_W);
+    }
+
+    #[test]
+    fn a_partially_collapsed_rail_keeps_its_full_width() {
+        // Only some columns are iconized (side-by-side columns, one
+        // collapsed); the tree still holds the survivors, so the rail
+        // keeps its normal width — the icon strip just adds onto it.
+        let mut rail = Rail::with(tabs("layers"));
+        rail.width = 240.0;
+        rail.icons = vec![IconColumn { node: tabs("color") }];
+        assert_eq!(rail_effective_width(&rail), 240.0);
+    }
 }

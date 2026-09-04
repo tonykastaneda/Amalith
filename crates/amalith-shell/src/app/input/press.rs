@@ -420,12 +420,21 @@ impl App {
                     if rail.is_empty() {
                         continue;
                     }
-                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    let rect = rail_rect_for(side, rail, w, h);
                     // The rail's inner edge widens the whole rail — check it
                     // first, since its grab zone spills onto the canvas.
-                    if rail_edge_bar(side, rect)
-                        .inflate(GRAB_SLOP + 1.0, 0.0)
-                        .contains(self.pointer)
+                    // Skipped when every column is iconized: the rail is
+                    // pinned to the icon strip's width in that state (see
+                    // `rail_effective_width`), so there is no docked tree
+                    // to resize — dragging here would silently stash a new
+                    // `rail.width` with no visible effect, only to snap the
+                    // rail to some size the user never saw while expanding
+                    // a column later. Widening a fully-collapsed dock back
+                    // out is the separate, not-yet-built icon+label mode.
+                    if rail.tree.is_some()
+                        && rail_edge_bar(side, rect)
+                            .inflate(GRAB_SLOP + 1.0, 0.0)
+                            .contains(self.pointer)
                     {
                         self.drag = Drag::RailWidth { side };
                         return;
