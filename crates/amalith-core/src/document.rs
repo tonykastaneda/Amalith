@@ -39,8 +39,9 @@ use crate::artboard::Artboard;
 use crate::asset::Asset;
 use crate::error::DocumentError;
 use crate::geom::{Affine, Rect};
+use crate::gradient::Gradient;
 use crate::guide::Guide;
-use crate::ids::{ArtboardId, AssetId, GuideId, LayerId, ObjectId};
+use crate::ids::{ArtboardId, AssetId, GradientId, GuideId, LayerId, ObjectId};
 use crate::layer::Layer;
 use crate::metadata::{Metadata, Settings};
 use crate::object::{Object, ObjectKind, ObjectParent};
@@ -71,6 +72,10 @@ pub struct Document {
     swatches: Vec<Swatch>,
     #[serde(default)]
     guides: Vec<Guide>,
+    /// Pooled gradient definitions, referenced from object paint by
+    /// [`crate::Paint::Gradient`]. Order is the Swatches-panel order.
+    #[serde(default)]
+    gradients: Vec<Gradient>,
 }
 
 impl Document {
@@ -89,6 +94,7 @@ impl Document {
             assets: Vec::new(),
             swatches: Vec::new(),
             guides: Vec::new(),
+            gradients: Vec::new(),
         }
     }
 
@@ -279,6 +285,41 @@ impl Document {
 
     pub fn add_swatch(&mut self, swatch: Swatch) {
         self.swatches.push(swatch);
+    }
+
+    // ---- Gradients ---------------------------------------------------
+
+    pub fn gradients(&self) -> &[Gradient] {
+        &self.gradients
+    }
+
+    pub fn gradient(&self, id: GradientId) -> Option<&Gradient> {
+        self.gradients.iter().find(|g| g.id == id)
+    }
+
+    pub fn gradient_mut(&mut self, id: GradientId) -> Option<&mut Gradient> {
+        self.gradients.iter_mut().find(|g| g.id == id)
+    }
+
+    /// Raw: appends a gradient to the pool. Building block for
+    /// `amalith-commands::Command::AddGradient`.
+    pub fn add_gradient(&mut self, gradient: Gradient) {
+        self.gradients.push(gradient);
+    }
+
+    /// Raw: inserts a gradient at `index` (clamped), so an undo can put a
+    /// removed one back where it was.
+    pub fn insert_gradient(&mut self, gradient: Gradient, index: usize) {
+        let i = index.min(self.gradients.len());
+        self.gradients.insert(i, gradient);
+    }
+
+    /// Raw: removes a gradient from the pool, returning it and its former
+    /// index. Does not touch objects that still reference the id — a stale
+    /// `Paint::Gradient` simply renders as nothing (see the renderer).
+    pub fn remove_gradient(&mut self, id: GradientId) -> Option<(Gradient, usize)> {
+        let i = self.gradients.iter().position(|g| g.id == id)?;
+        Some((self.gradients.remove(i), i))
     }
 
     // ---- Guides -------------------------------------------------------

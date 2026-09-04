@@ -146,6 +146,7 @@ impl App {
                     self.push_recent(c);
                 }
             }
+            panels::Action::ApplyGradientPaint => self.apply_gradient_paint(),
             panels::Action::SwapPaints => {
                 std::mem::swap(&mut self.doc.fill, &mut self.doc.stroke);
                 if !self.doc.selection.is_empty() {

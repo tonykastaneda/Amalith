@@ -45,3 +45,33 @@ pub fn bez_path(src: &core::BezPath) -> vk::BezPath {
 pub fn color(c: amalith_core::Color) -> vello::peniko::Color {
     vello::peniko::Color::new([c.r, c.g, c.b, c.a])
 }
+
+/// Build a vello gradient from a pooled [`amalith_core::Gradient`], in
+/// **bounding-box unit space** (`0..1`). The caller pairs it with a
+/// `brush_transform` that maps the unit square onto the object's local
+/// bounds (`translate(x0,y0) * scale(w,h)`), matching SVG's
+/// `objectBoundingBox` gradient units. Per-stop opacity is folded into
+/// each stop's alpha.
+pub fn peniko_gradient(g: &amalith_core::Gradient) -> vello::peniko::Gradient {
+    use vello::peniko::{Color, ColorStop, Extend, Gradient};
+
+    let stops: Vec<ColorStop> = g
+        .stops
+        .iter()
+        .map(|s| {
+            let c = s.color;
+            let a = (c.a * s.opacity).clamp(0.0, 1.0);
+            ColorStop::from((s.offset.clamp(0.0, 1.0), Color::new([c.r, c.g, c.b, a])))
+        })
+        .collect();
+
+    let base = match g.kind {
+        amalith_core::GradientKind::Linear => {
+            Gradient::new_linear((g.start[0], g.start[1]), (g.end[0], g.end[1]))
+        }
+        amalith_core::GradientKind::Radial => {
+            Gradient::new_radial((g.start[0], g.start[1]), g.radius() as f32)
+        }
+    };
+    base.with_extend(Extend::Pad).with_stops(stops.as_slice())
+}

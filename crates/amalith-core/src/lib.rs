@@ -14,6 +14,7 @@ pub mod asset;
 pub mod document;
 pub mod error;
 pub mod geom;
+pub mod gradient;
 pub mod guide;
 pub mod ids;
 pub mod layer;
@@ -29,8 +30,9 @@ pub use asset::{Asset, AssetKind, AssetSource};
 pub use document::Document;
 pub use error::DocumentError;
 pub use geom::{Affine, Bounds, Point, Rect, Size, Vec2};
+pub use gradient::{Gradient, GradientKind, GradientStop};
 pub use guide::{Guide, GuideId, GuideOrient};
-pub use ids::{ArtboardId, AssetId, LayerId, ObjectId};
+pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId};
 pub use layer::Layer;
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use object::{

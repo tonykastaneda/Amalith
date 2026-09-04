@@ -71,6 +71,10 @@ define_id!(
     "Identifies an [`crate::Asset`] (linked or embedded resource)."
 );
 define_id!(GuideId, "Identifies a [`crate::Guide`] (ruler guide line).");
+define_id!(
+    GradientId,
+    "Identifies a [`crate::Gradient`] in the document's gradient pool."
+);
 
 #[cfg(test)]
 mod tests {

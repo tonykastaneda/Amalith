@@ -16,9 +16,9 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Asset, AssetId, Color, Document, DocumentError, Guide, GuideId,
-    ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle,
-    TextData, Unit,
+    Affine, Artboard, ArtboardId, Asset, AssetId, Color, Document, DocumentError, Gradient,
+    GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind,
+    ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +135,17 @@ pub(crate) enum Edit {
     SetGuidePos {
         id: GuideId,
         pos: f64,
+    },
+    InsertGradient {
+        gradient: Gradient,
+        index: usize,
+    },
+    RemoveGradient {
+        id: GradientId,
+    },
+    SetGradient {
+        id: GradientId,
+        gradient: Gradient,
     },
 }
 
@@ -358,6 +369,27 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let old = std::mem::replace(&mut guide.pos, pos);
             Ok((Edit::SetGuidePos { id, pos: old }, None))
         }
+        Edit::InsertGradient { gradient, index } => {
+            let id = gradient.id;
+            doc.insert_gradient(gradient, index);
+            Ok((
+                Edit::RemoveGradient { id },
+                Some(NewId::Gradient(id)),
+            ))
+        }
+        Edit::RemoveGradient { id } => {
+            let (gradient, index) = doc
+                .remove_gradient(id)
+                .ok_or(CommandError::GradientNotFound(id))?;
+            Ok((Edit::InsertGradient { gradient, index }, None))
+        }
+        Edit::SetGradient { id, gradient } => {
+            let slot = doc
+                .gradient_mut(id)
+                .ok_or(CommandError::GradientNotFound(id))?;
+            let old = std::mem::replace(slot, gradient);
+            Ok((Edit::SetGradient { id, gradient: old }, None))
+        }
     }
 }
 
@@ -367,4 +399,5 @@ pub(crate) enum NewId {
     Layer(LayerId),
     Object(ObjectId),
     Guide(GuideId),
+    Gradient(GradientId),
 }

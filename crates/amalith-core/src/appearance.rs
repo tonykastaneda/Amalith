@@ -1,21 +1,43 @@
 //! An object's fill and stroke paint.
+use crate::ids::GradientId;
 use crate::swatch::Color;
 use serde::{Deserialize, Serialize};
 
-/// What paints a fill or a stroke: nothing, or a flat color. Gradients and
-/// patterns aren't modeled yet — every real paint today is `Solid`.
+/// What paints a fill or a stroke: nothing, a flat color, or a gradient.
+///
+/// [`Paint::Gradient`] carries only a [`GradientId`] into the document's
+/// gradient pool — the stops and geometry live there, so `Paint` stays
+/// `Copy` and a gradient can be shared between objects (and "saved as a
+/// swatch", Illustrator-style).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Paint {
     None,
     Solid(Color),
+    Gradient(GradientId),
 }
 
 impl Paint {
+    /// The flat color, if this paint is a solid one. `None` for `None` and
+    /// for gradients (a gradient has no single color — resolve it against
+    /// the pool if you need a representative one).
     pub fn color(self) -> Option<Color> {
         match self {
-            Paint::None => None,
             Paint::Solid(color) => Some(color),
+            Paint::None | Paint::Gradient(_) => None,
         }
+    }
+
+    /// The pooled gradient id, if this paint is a gradient.
+    pub fn gradient_id(self) -> Option<GradientId> {
+        match self {
+            Paint::Gradient(id) => Some(id),
+            Paint::None | Paint::Solid(_) => None,
+        }
+    }
+
+    /// `true` for anything that puts pixels down (solid or gradient).
+    pub fn is_visible(self) -> bool {
+        !matches!(self, Paint::None)
     }
 }
 

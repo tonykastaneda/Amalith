@@ -16,8 +16,8 @@
 //! so pasting a complex real-world SVG still recovers whatever Amalith
 //! *can* represent instead of failing outright.
 use amalith_core::{
-    Affine, Appearance, Color, Document, GroupData, LayerId, LineCap, LineJoin, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
+    Affine, Appearance, Color, Document, GradientKind, GroupData, LayerId, LineCap, LineJoin, Object,
+    ObjectId, ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
 };
 use kurbo::BezPath;
 use std::collections::HashMap;
@@ -65,20 +65,33 @@ pub fn export_svg(document: &Document, ids: &[ObjectId]) -> Option<String> {
         .filter_map(|&id| document.bounds_of(id))
         .reduce(|a, b| a.union(b))?;
     let mut body = String::new();
+    let mut defs = Defs::default();
     for &id in ids {
-        export_node(document, id, &mut body);
+        export_node(document, id, &mut body, &mut defs);
     }
+    let defs_block = if defs.xml.is_empty() {
+        String::new()
+    } else {
+        format!("<defs>{}</defs>", defs.xml)
+    };
     Some(format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{} {} {} {}\">{}</svg>",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{} {} {} {}\">{defs_block}{body}</svg>",
         bounds.x0,
         bounds.y0,
         bounds.width(),
         bounds.height(),
-        body
     ))
 }
 
-fn export_node(document: &Document, id: ObjectId, out: &mut String) {
+/// Accumulates `<defs>` content (currently just gradients) while walking
+/// the object tree, so each referenced gradient is emitted exactly once.
+#[derive(Default)]
+struct Defs {
+    xml: String,
+    seen: std::collections::HashSet<String>,
+}
+
+fn export_node(document: &Document, id: ObjectId, out: &mut String, defs: &mut Defs) {
     let Some(object) = document.object(id) else {
         return;
     };
@@ -88,19 +101,19 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String) {
         ObjectKind::Group(group) => {
             out.push_str(&format!("<g{transform_attr}>"));
             for &child in &group.children {
-                export_node(document, child, out);
+                export_node(document, child, out, defs);
             }
             out.push_str("</g>");
         }
         ObjectKind::Path(path) => {
-            let paint_attrs = paint_attrs(&object.appearance);
+            let paint_attrs = paint_attrs(&object.appearance, document, defs);
             out.push_str(&format!(
                 "<path d=\"{}\"{transform_attr}{paint_attrs} />",
                 path.geometry.to_svg()
             ));
         }
         ObjectKind::CompoundPath(compound) => {
-            let paint_attrs = paint_attrs(&object.appearance);
+            let paint_attrs = paint_attrs(&object.appearance, document, defs);
             out.push_str(&format!("<g{transform_attr}>"));
             for subpath in &compound.subpaths {
                 out.push_str(&format!("<path d=\"{}\"{paint_attrs} />", subpath.to_svg()));
@@ -112,6 +125,49 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String) {
     }
 }
 
+/// SVG element id for a pooled gradient (`grad-<uuid>`).
+fn gradient_svg_id(id: amalith_core::GradientId) -> String {
+    format!("grad-{}", id.as_uuid())
+}
+
+/// Emits `gradient` into `defs` once, returning its `url(#...)` reference.
+/// Coordinates are `objectBoundingBox` fractions, matching how Amalith
+/// stores gradient geometry (see `amalith-core`'s `gradient` module).
+fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
+    let svg_id = gradient_svg_id(gradient.id);
+    if defs.seen.insert(svg_id.clone()) {
+        let stops: String = gradient
+            .stops
+            .iter()
+            .map(|s| {
+                let c = s.color;
+                format!(
+                    "<stop offset=\"{}\" stop-color=\"{}\" stop-opacity=\"{}\"/>",
+                    s.offset.clamp(0.0, 1.0),
+                    hex_color(c),
+                    (c.a * s.opacity).clamp(0.0, 1.0),
+                )
+            })
+            .collect();
+        let [sx, sy] = gradient.start;
+        let [ex, ey] = gradient.end;
+        match gradient.kind {
+            GradientKind::Linear => defs.xml.push_str(&format!(
+                "<linearGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
+                 x1=\"{sx}\" y1=\"{sy}\" x2=\"{ex}\" y2=\"{ey}\">{stops}</linearGradient>"
+            )),
+            GradientKind::Radial => {
+                let r = gradient.radius();
+                defs.xml.push_str(&format!(
+                    "<radialGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
+                     cx=\"{sx}\" cy=\"{sy}\" r=\"{r}\" fx=\"{sx}\" fy=\"{sy}\">{stops}</radialGradient>"
+                ));
+            }
+        }
+    }
+    format!("url(#{svg_id})")
+}
+
 /// The `fill`/`stroke`/`stroke-width`/`opacity` attribute string for `appearance`,
 /// e.g. ` fill="#e0e0e0" stroke="#2e2e2e" stroke-width="10"`. Without this,
 /// an exported `<path>` carries no paint attributes at all, and SVG's own
@@ -119,10 +175,10 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String) {
 /// color the object actually had in Amalith — pasting *any* Amalith shape
 /// into another app renders it as a plain black square regardless of its
 /// real appearance. This is the fix for exactly that.
-fn paint_attrs(appearance: &Appearance) -> String {
-    let mut attrs = paint_attr("fill", appearance.fill);
-    attrs.push_str(&paint_attr("stroke", appearance.stroke));
-    if appearance.stroke.color().is_some() {
+fn paint_attrs(appearance: &Appearance, document: &Document, defs: &mut Defs) -> String {
+    let mut attrs = paint_attr("fill", appearance.fill, document, defs);
+    attrs.push_str(&paint_attr("stroke", appearance.stroke, document, defs));
+    if appearance.stroke.is_visible() {
         attrs.push_str(&format!(" stroke-width=\"{}\"", appearance.stroke_width));
         let style = &appearance.stroke_style;
         attrs.push_str(match style.cap {
@@ -159,7 +215,7 @@ fn paint_attrs(appearance: &Appearance) -> String {
     attrs
 }
 
-fn paint_attr(name: &str, paint: Paint) -> String {
+fn paint_attr(name: &str, paint: Paint, document: &Document, defs: &mut Defs) -> String {
     match paint {
         Paint::None => format!(" {name}=\"none\""),
         Paint::Solid(color) => {
@@ -169,6 +225,12 @@ fn paint_attr(name: &str, paint: Paint) -> String {
             }
             attr
         }
+        Paint::Gradient(id) => match document.gradient(id) {
+            Some(gradient) => format!(" {name}=\"{}\"", emit_gradient(gradient, defs)),
+            // Stale reference (gradient deleted from the pool): render as
+            // nothing rather than SVG's black default.
+            None => format!(" {name}=\"none\""),
+        },
     }
 }
 

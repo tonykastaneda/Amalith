@@ -271,6 +271,11 @@ pub enum Action {
     SwapPaints,
     /// Fill/Stroke proxy: reset to white fill / black stroke.
     DefaultPaints,
+    /// Fill/Stroke proxy "Gradient" mode cell: put a gradient on the active
+    /// slot — reuse the slot's current gradient if it already has one, else
+    /// mint a fresh linear one. The App resolves the target objects and
+    /// opens the Gradient panel.
+    ApplyGradientPaint,
     /// An item from a panel's hamburger flyout (`id` is panel-defined).
     PanelMenu {
         panel: PanelId,
@@ -727,6 +732,7 @@ pub fn draw_paint_swatch(
             Paint::Solid(c) => {
                 scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &r);
             }
+            Paint::Gradient(_) => gradient_ramp(scene, r),
         }
     }
     let (w, col) = if active {
@@ -735,6 +741,26 @@ pub fn draw_paint_swatch(
         (1.0, theme.border)
     };
     scene.stroke(&Stroke::new(w), ID, col, None, &r);
+}
+
+/// A generic left→right white→black ramp: the stand-in preview for a
+/// `Paint::Gradient` in the small proxy swatches, where the real gradient
+/// definition isn't threaded through. The Gradient panel draws the actual
+/// per-stop preview.
+pub(crate) fn gradient_ramp(scene: &mut Scene, r: Rect) {
+    let n = r.width().ceil().max(1.0) as i64;
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let g = 1.0 - t;
+        let x0 = r.x0 + i as f64;
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            Color::new([g, g, g, 1.0]),
+            None,
+            &Rect::new(x0, r.y0, x0 + 1.0, r.y1),
+        );
+    }
 }
 
 /// A grey "?" pattern for a swatch whose value isn't single-valued: one

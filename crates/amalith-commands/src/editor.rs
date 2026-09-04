@@ -8,15 +8,15 @@
 //! headless (e.g. a one-shot CLI conversion has no need for a history
 //! stack at all).
 use crate::align::{self, AlignKind, AlignTo};
-use crate::command::{Command, CommandOutcome, PasteStack, PathfinderOp};
+use crate::command::{Command, CommandOutcome, GradientRef, PasteStack, PathfinderOp};
 use crate::pathfinder::{self, PathInput};
 use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
     Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, Color, Document,
-    DocumentError, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData,
-    Rect, Vec2,
+    DocumentError, Gradient, GradientId, GradientKind, Layer, LayerId, Object, ObjectId, ObjectKind,
+    ObjectParent, Paint, PathData, Rect, Vec2,
 };
 use kurbo::BezPath;
 use std::collections::{HashMap, HashSet};
@@ -384,6 +384,50 @@ impl Editor {
             Command::SetArtboardFill { id, fill } => vec![Edit::SetArtboardFill { id, fill }],
             Command::SetDocumentUnit { unit } => vec![Edit::SetDocumentUnit { unit }],
             Command::SetColorMode { mode } => vec![Edit::SetColorMode { mode }],
+            Command::ApplyGradient {
+                objects,
+                stroke,
+                source,
+            } => {
+                let mut edits = Vec::with_capacity(objects.len() + 1);
+                let gid = match source {
+                    GradientRef::Existing(id) => {
+                        self.document
+                            .gradient(id)
+                            .ok_or(CommandError::GradientNotFound(id))?;
+                        id
+                    }
+                    GradientRef::New(kind) => {
+                        let id = GradientId::new();
+                        let gradient = match kind {
+                            GradientKind::Linear => Gradient::linear(id),
+                            GradientKind::Radial => Gradient::radial(id),
+                        };
+                        // Must be first so `execute` reports the new id.
+                        edits.push(Edit::InsertGradient {
+                            gradient,
+                            index: self.document.gradients().len(),
+                        });
+                        id
+                    }
+                };
+                let paint = Paint::Gradient(gid);
+                for id in objects {
+                    edits.push(if stroke {
+                        Edit::SetStroke { id, paint }
+                    } else {
+                        Edit::SetFill { id, paint }
+                    });
+                }
+                edits
+            }
+            Command::EditGradient { id, gradient } => {
+                self.document
+                    .gradient(id)
+                    .ok_or(CommandError::GradientNotFound(id))?;
+                vec![Edit::SetGradient { id, gradient }]
+            }
+            Command::DeleteGradient { id } => vec![Edit::RemoveGradient { id }],
             Command::RenameLayer { id, name } => vec![Edit::RenameLayer { id, name }],
             Command::RenameObject { id, name } => vec![Edit::RenameObject { id, name }],
             Command::ResizeArtboard { id, rect } => vec![Edit::ResizeArtboard { id, rect }],
@@ -1782,6 +1826,7 @@ fn outcome_of(new_id: Option<NewId>) -> CommandOutcome {
         Some(NewId::Layer(id)) => CommandOutcome::Layer(id),
         Some(NewId::Object(id)) => CommandOutcome::Object(id),
         Some(NewId::Guide(id)) => CommandOutcome::Guide(id),
+        Some(NewId::Gradient(id)) => CommandOutcome::Gradient(id),
         None => CommandOutcome::None,
     }
 }

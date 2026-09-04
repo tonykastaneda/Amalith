@@ -34,7 +34,7 @@ mod history;
 mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
-pub use command::{Command, CommandOutcome, PasteStack, PathfinderOp};
+pub use command::{Command, CommandOutcome, GradientRef, PasteStack, PathfinderOp};
 pub use pathfinder::has_visible_stroke;
 pub use editor::Editor;
 pub use error::CommandError;

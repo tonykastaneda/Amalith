@@ -1093,10 +1093,15 @@ fn stroke_spec(width: f64, style: &StrokeStyle, px: f64) -> Stroke {
 /// document-space `width`. The path is baked into screen space and
 /// stroked with `Affine::IDENTITY` so object scale cannot fatten or
 /// squash the envelope. `zoom` is the view's uniform scale.
+#[allow(clippy::too_many_arguments)]
 fn stroke_path(
     scene: &mut Scene,
     m: Affine,
-    color: Color,
+    brush: vello::peniko::BrushRef<'_>,
+    // Brush transform for a gradient stroke, already composed with `m`
+    // (strokes are baked to world space here, so the brush must be too).
+    // `None` for a solid colour.
+    brush_xf: Option<Affine>,
     bp: &BezPath,
     width: f64,
     style: &StrokeStyle,
@@ -1109,8 +1114,8 @@ fn stroke_path(
         scene.stroke(
             &stroke_spec(width, style, px),
             Affine::IDENTITY,
-            color,
-            None,
+            brush,
+            brush_xf,
             &baked,
         );
         return;
@@ -1119,7 +1124,7 @@ fn stroke_path(
     match style.align {
         StrokeAlign::Inside => {
             scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &baked);
-            scene.stroke(&wide, Affine::IDENTITY, color, None, &baked);
+            scene.stroke(&wide, Affine::IDENTITY, brush, brush_xf, &baked);
             scene.pop_layer();
         }
         StrokeAlign::Outside => {
@@ -1129,7 +1134,7 @@ fn stroke_path(
             ring.extend(outer.path_elements(0.1));
             ring.extend(baked.elements().iter().copied());
             scene.push_clip_layer(Fill::EvenOdd, Affine::IDENTITY, &ring);
-            scene.stroke(&wide, Affine::IDENTITY, color, None, &baked);
+            scene.stroke(&wide, Affine::IDENTITY, brush, brush_xf, &baked);
             scene.pop_layer();
         }
         StrokeAlign::Center => unreachable!(),
@@ -1177,6 +1182,25 @@ fn paint_object(
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
     let style = obj.appearance.stroke_style;
+    // Gradient paints (fill / stroke) resolved against the document pool.
+    // The gradient is defined in bounding-box unit space; `grad_xf` maps
+    // that unit square onto this object's own local bounds so the gradient
+    // rides with the object (SVG `objectBoundingBox`).
+    let grad_xf = obj.kind.own_local_bounds().map(|b| {
+        let r = convert::rect(b);
+        Affine::translate((r.x0, r.y0))
+            * Affine::scale_non_uniform(r.width().max(1e-6), r.height().max(1e-6))
+    });
+    let resolve_grad = |paint: amalith_core::Paint| -> Option<vello::peniko::Gradient> {
+        match paint {
+            amalith_core::Paint::Gradient(gid) => grad_xf
+                .and(doc.gradient(gid))
+                .map(convert::peniko_gradient),
+            _ => None,
+        }
+    };
+    let fill_grad = resolve_grad(obj.appearance.fill);
+    let stroke_grad = resolve_grad(obj.appearance.stroke);
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
         // Outline (wireframe) view: hairline contour only, no fill/stroke.
         if outline {
@@ -1195,11 +1219,18 @@ fn paint_object(
             .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
         // An open path still fills — the fill closes the contour
         // implicitly (Illustrator / SVG), while the stroke stays open.
-        if let Some(c) = fill {
+        if let Some(g) = &fill_grad {
+            scene.fill(Fill::NonZero, m, g, grad_xf, bp);
+        } else if let Some(c) = fill {
             scene.fill(Fill::NonZero, m, c, None, bp);
         }
-        if let Some(c) = stroke {
-            stroke_path(scene, m, c, bp, sw, &style, closed, zoom);
+        if let Some(g) = &stroke_grad {
+            // Strokes bake to world space here (transform = IDENTITY), so
+            // the brush transform must be composed with `m` too.
+            let bx = grad_xf.map(|x| m * x);
+            stroke_path(scene, m, g.into(), bx, bp, sw, &style, closed, zoom);
+        } else if let Some(c) = stroke {
+            stroke_path(scene, m, c.into(), None, bp, sw, &style, closed, zoom);
         }
     };
 

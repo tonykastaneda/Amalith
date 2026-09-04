@@ -18,6 +18,7 @@
 mod action;
 mod command_palette;
 mod export;
+mod gradient;
 mod guides;
 mod input;
 mod isolation;
@@ -768,6 +769,14 @@ struct App {
     artboard_link: bool,
     artboard_fill_menu: bool,
     picker_artboard: bool,
+    /// The pooled gradient the Gradient panel / gradient tool currently
+    /// edits. Set when a gradient is applied or a gradient-filled object is
+    /// selected; `None` when the selection has no gradient paint.
+    gradient_target: Option<amalith_core::GradientId>,
+    /// Which slot (fill / stroke) `gradient_target` lives on.
+    gradient_slot: panels::PaintSlot,
+    /// The colour picker is retargeted to a gradient stop: `Some(stop index)`.
+    picker_gradient_stop: Option<usize>,
     /// Align panel: what to align to, and the key object (thicker outline).
     align_to: amalith_commands::AlignTo,
     key_object: Option<ObjectId>,
@@ -961,6 +970,9 @@ impl App {
             artboard_link: false,
             artboard_fill_menu: false,
             picker_artboard: false,
+            gradient_target: None,
+            gradient_slot: panels::PaintSlot::Fill,
+            picker_gradient_stop: None,
             align_to: amalith_commands::AlignTo::Selection,
             key_object: None,
             align_spacing: Some(0.0),

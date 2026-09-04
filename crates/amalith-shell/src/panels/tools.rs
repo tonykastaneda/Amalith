@@ -163,6 +163,15 @@ fn swatch(
                 scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &inset);
             }
         }
+        Paint::Gradient(_) => {
+            if hollow {
+                super::gradient_ramp(scene, r);
+            } else {
+                scene.fill(Fill::NonZero, ID, Color::WHITE, None, &r);
+                let inset = Rect::new(r.x0 + 2.0, r.y0 + 2.0, r.x1 - 2.0, r.y1 - 2.0);
+                super::gradient_ramp(scene, inset);
+            }
+        }
     }
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
     if hollow {
@@ -244,7 +253,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
     let color_icon = icon_inner(mode_cell(scene, p.color));
     let color = match active_paint {
         Paint::Solid(c) => crate::convert::color(c),
-        Paint::None => Color::BLACK,
+        Paint::None | Paint::Gradient(_) => Color::BLACK,
     };
     scene.fill(Fill::NonZero, ID, color, None, &color_icon);
 
@@ -333,11 +342,11 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         };
         return Action::SetPaint(match active {
             Paint::Solid(c) => Paint::Solid(c),
-            Paint::None => Paint::Solid(CoreColor::rgb(0.0, 0.0, 0.0)),
+            Paint::None | Paint::Gradient(_) => Paint::Solid(CoreColor::rgb(0.0, 0.0, 0.0)),
         });
     }
     if p.gradient.contains(local) {
-        return Action::None;
+        return Action::ApplyGradientPaint;
     }
     if p.none.contains(local) {
         return Action::SetPaint(Paint::None);

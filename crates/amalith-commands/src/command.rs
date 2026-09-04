@@ -6,8 +6,8 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, GuideId, Color, GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData,
-    ColorMode, Rect, StrokeStyle, TextData, Unit, Vec2,
+    Affine, ArtboardId, GuideId, Color, Gradient, GradientId, GradientKind, GuideOrient, LayerId,
+    ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect, StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -317,6 +317,28 @@ pub enum Command {
         fill: Option<Paint>,
         stroke: Option<Paint>,
     },
+    /// Points every listed object's fill (or stroke, if `stroke`) at a
+    /// gradient. With [`GradientRef::New`] a fresh default gradient of the
+    /// given kind is minted into the pool first; with
+    /// [`GradientRef::Existing`] the pooled gradient is reused. One undo
+    /// group. Yields [`CommandOutcome::Gradient`] with the applied id.
+    ApplyGradient {
+        objects: Vec<ObjectId>,
+        stroke: bool,
+        source: GradientRef,
+    },
+    /// Replaces a pooled gradient's whole definition (kind, stops,
+    /// geometry). The workhorse for the Gradient panel and the on-canvas
+    /// gradient tool: one command per edit commit / drag.
+    EditGradient {
+        id: GradientId,
+        gradient: Gradient,
+    },
+    /// Removes a gradient from the document pool. Objects still pointing at
+    /// the id keep an inert `Paint::Gradient` that renders as nothing.
+    DeleteGradient {
+        id: GradientId,
+    },
     /// Sets every listed object's stroke width, one undo group.
     SetStrokeWidth {
         objects: Vec<ObjectId>,
@@ -400,10 +422,21 @@ pub enum PasteStack {
 /// caller (e.g. the newly created entity's ID). Commands that only modify
 /// an existing entity (rename, resize, move, set transform, delete) yield
 /// `None`.
+/// Where the paint for [`Command::ApplyGradient`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GradientRef {
+    /// Reuse a gradient already in the document pool.
+    Existing(GradientId),
+    /// Mint a fresh default gradient of this kind into the pool.
+    New(GradientKind),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOutcome {
     None,
     Artboard(ArtboardId),
+    /// The gradient applied / created by [`Command::ApplyGradient`].
+    Gradient(GradientId),
     Layer(LayerId),
     /// The single new object (or, for [`Command::Paste`] with several
     /// copied roots, the first root â same relative order as the
