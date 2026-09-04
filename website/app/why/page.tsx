@@ -67,8 +67,28 @@ export default function WhyAmalith() {
           </div>
         </section>
 
+        <section className="why-cost-allies section-shell" aria-labelledby="why-cost-allies-title">
+          <div className="why-cost-allies__heading">
+            <p className="section-number">07 / Good company</p>
+            <h2 id="why-cost-allies-title">More open tools make a <em>stronger</em> space.</h2>
+          </div>
+          <div className="why-cost-allies__copy">
+            <p>Amalith is not the only project pushing creative software forward. Inkscape and Graphite Editor are doing important, ambitious work—and both deserve your attention and support.</p>
+            <div className="why-cost-allies__links">
+              <a href="https://inkscape.org/" target="_blank" rel="noreferrer">
+                <span><strong>Inkscape</strong><small>Free and open-source vector graphics</small></span>
+                <ArrowUpRight />
+              </a>
+              <a href="https://graphite.art/" target="_blank" rel="noreferrer">
+                <span><strong>Graphite Editor</strong><small>Open-source 2D and procedural graphics</small></span>
+                <ArrowUpRight />
+              </a>
+            </div>
+          </div>
+        </section>
+
         <section className="why-cost-research section-shell">
-          <p className="section-number">07 / Follow the incentives</p>
+          <p className="section-number">08 / Follow the incentives</p>
           <div>
             <h2>The pattern is bigger than one app.</h2>
             <p>The accompanying research tracks documented SEC and regulatory findings, civil allegations, dismissals, and open research involving investors and institutional holders connected to Canva and Adobe. It is a record of different kinds of matters—not a claim that every party listed acted unlawfully.</p>
