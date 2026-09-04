@@ -6,7 +6,7 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, GuideId, GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData,
+    Affine, ArtboardId, GuideId, Color, GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData,
     Rect, StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
@@ -49,6 +49,11 @@ pub enum Command {
     RenameArtboard {
         id: ArtboardId,
         name: String,
+    },
+    /// Sets an artboard's background fill (`None` = transparent).
+    SetArtboardFill {
+        id: ArtboardId,
+        fill: Option<Color>,
     },
     /// Sets the document's default measurement unit (rulers, dialogs).
     /// Geometry stays in canonical px — this is a display-only setting.

@@ -9,6 +9,7 @@
 //! rect), not a stored edge, so it can never go stale as objects move.
 use crate::geom::Rect;
 use crate::ids::ArtboardId;
+use crate::swatch::Color;
 use serde::{Deserialize, Serialize};
 
 /// A named rectangular region of document space (canonical px).
@@ -18,6 +19,10 @@ pub struct Artboard {
     pub name: String,
     /// Position and size in document space, canonical px.
     pub rect: Rect,
+    /// Background fill drawn behind the artboard's content and used as the
+    /// export background. `None` = transparent (the default).
+    #[serde(default)]
+    pub fill: Option<Color>,
 }
 
 impl Artboard {
@@ -26,6 +31,7 @@ impl Artboard {
             id,
             name: name.into(),
             rect,
+            fill: None,
         }
     }
 

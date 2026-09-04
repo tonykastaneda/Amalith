@@ -16,9 +16,9 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Asset, AssetId, Document, DocumentError, Guide, GuideId, Layer,
-    LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData,
-    Unit,
+    Affine, Artboard, ArtboardId, Asset, AssetId, Color, Document, DocumentError, Guide, GuideId,
+    Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle,
+    TextData, Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +33,10 @@ pub(crate) enum Edit {
     RenameArtboard {
         id: ArtboardId,
         name: String,
+    },
+    SetArtboardFill {
+        id: ArtboardId,
+        fill: Option<Color>,
     },
     SetDocumentUnit {
         unit: Unit,
@@ -152,6 +156,13 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or(CommandError::ArtboardNotFound(id))?;
             let old_name = std::mem::replace(&mut artboard.name, name);
             Ok((Edit::RenameArtboard { id, name: old_name }, None))
+        }
+        Edit::SetArtboardFill { id, fill } => {
+            let artboard = doc
+                .artboard_mut(id)
+                .ok_or(CommandError::ArtboardNotFound(id))?;
+            let old = std::mem::replace(&mut artboard.fill, fill);
+            Ok((Edit::SetArtboardFill { id, fill: old }, None))
         }
         Edit::SetDocumentUnit { unit } => {
             let old = std::mem::replace(&mut doc.settings.default_unit, unit);
