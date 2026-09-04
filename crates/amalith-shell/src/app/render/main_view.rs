@@ -162,11 +162,10 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
 
-    // Gradient tool annotator (Illustrator anatomy): a round handle at the
-    // origin (t=0), a square handle at the far end (t=1), a colour-filled
-    // circle per stop along the line, and a diamond in each gap. Every
-    // handle is white-filled with a dark outline so it reads on any
-    // background.
+    // Gradient tool annotator: the axis line, a round endpoint frame at
+    // t=0 and a square endpoint frame at t=1 (drag to reshape the axis),
+    // a colour-filled circle for every stop sitting inside/along it (drag
+    // to move that colour), and a diamond in each gap (blend balance).
     if let Some(annot) = &gradient_annot {
         let vt = view.to_screen();
         let a = vt * annot.start;
@@ -190,6 +189,18 @@ pub(in crate::app) fn paint_main(
             scene.stroke(&Stroke::new(0.75), ID, white, None, &ring);
         }
 
+        // Endpoint frames (drawn under the stop circles): a ring at the
+        // origin, a square at the far end.
+        {
+            let fr = 10.0;
+            let ring = vello::kurbo::Circle::new(a, fr);
+            scene.stroke(&Stroke::new(3.0), ID, dark, None, &ring);
+            scene.stroke(&Stroke::new(1.5), ID, white, None, &ring);
+            let sq = Rect::new(b.x - fr, b.y - fr, b.x + fr, b.y + fr);
+            scene.stroke(&Stroke::new(3.0), ID, dark, None, &sq);
+            scene.stroke(&Stroke::new(1.5), ID, white, None, &sq);
+        }
+
         // Midpoint diamonds.
         for frac in &annot.mids {
             let p = at(*frac as f64);
@@ -204,38 +215,17 @@ pub(in crate::app) fn paint_main(
             scene.stroke(&Stroke::new(1.25), ID, dark, None, &dia);
         }
 
-        // A colour swatch on any handle: white keyline, colour fill, dark
-        // ring, accent ring when it's the panel-selected stop.
-        let stop_circle = |scene: &mut Scene, p: Point, c: &amalith_core::Color, sel: bool| {
-            let r = if sel { 7.0 } else { 6.0 };
+        // A stop circle: white keyline, colour fill, dark ring, accent
+        // ring when it's the panel-selected stop.
+        for (off, c, selected) in &annot.stops {
+            let p = at(*off as f64);
+            let r = if *selected { 7.0 } else { 6.0 };
             let circ = vello::kurbo::Circle::new(p, r);
             scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(p, r + 1.0));
             scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &circ);
             scene.stroke(&Stroke::new(2.0), ID, dark, None, &circ);
-            if sel {
+            if *selected {
                 scene.stroke(&Stroke::new(1.5), ID, theme.accent, None, &circ);
-            }
-        };
-
-        // Interior stop circles (stops at t=0 / t=1 are the handles below).
-        for (off, c, selected, _) in &annot.stops {
-            stop_circle(scene, at(*off as f64), c, *selected);
-        }
-
-        // Origin handle (t=0) — the round first-stop handle.
-        stop_circle(scene, a, &annot.start_color, annot.start_sel);
-
-        // End handle (t=1) — a square around the last-stop swatch.
-        {
-            let c = &annot.end_color;
-            let r = if annot.end_sel { 7.0 } else { 6.0 };
-            let outer = Rect::new(b.x - r - 1.0, b.y - r - 1.0, b.x + r + 1.0, b.y + r + 1.0);
-            let sq = Rect::new(b.x - r, b.y - r, b.x + r, b.y + r);
-            scene.fill(Fill::NonZero, ID, white, None, &outer);
-            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &sq);
-            scene.stroke(&Stroke::new(2.0), ID, dark, None, &sq);
-            if annot.end_sel {
-                scene.stroke(&Stroke::new(1.5), ID, theme.accent, None, &sq);
             }
         }
     }
