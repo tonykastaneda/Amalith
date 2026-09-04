@@ -6069,11 +6069,21 @@ fn build_rail_layout(
 /// column (canvas side), its tab strip aligned with the icon row that
 /// opened it, sized like the rail itself and clamped to the rail's own
 /// vertical extent so it never spills past the window.
+/// Comfortable minimum width for a flyout, regardless of how narrow its
+/// rail happens to be configured — a rail can be dragged down close to
+/// `RAIL_MIN_W`, and reusing that tiny width verbatim for the flyout
+/// silently clips its tabs (a multi-panel group's second-and-later tabs
+/// just disappear off the narrow strip) while the body still paints
+/// whichever tab was actually active — a real bug this constant fixes,
+/// not just a cosmetic one.
+const FLYOUT_MIN_W: f64 = 260.0;
+
 fn flyout_rect_for(side: RailSide, icon_col: Rect, icon_row: Rect, rail_rect: Rect, rail_w: f64) -> Rect {
+    let w = rail_w.max(FLYOUT_MIN_W);
     let h = 360.0_f64.min((rail_rect.y1 - icon_row.y0).max(120.0));
     match side {
-        RailSide::Right => Rect::new(icon_col.x0 - rail_w, icon_row.y0, icon_col.x0, icon_row.y0 + h),
-        RailSide::Left => Rect::new(icon_col.x1, icon_row.y0, icon_col.x1 + rail_w, icon_row.y0 + h),
+        RailSide::Right => Rect::new(icon_col.x0 - w, icon_row.y0, icon_col.x0, icon_row.y0 + h),
+        RailSide::Left => Rect::new(icon_col.x1, icon_row.y0, icon_col.x1 + w, icon_row.y0 + h),
     }
 }
 

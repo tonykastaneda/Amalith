@@ -248,10 +248,15 @@ pub fn paint_icon_col(
         if is_open {
             scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
         }
-        if let Some(&first) = group.panels.first() {
+        // Label by the group's *active* tab, not just its first — a
+        // collapsed "Character/Paragraph" group with Paragraph active
+        // should say "Paragraph" on the icon, matching what the flyout
+        // actually opens to.
+        let shown = group.panels.get(group.active).or_else(|| group.panels.first());
+        if let Some(&shown) = shown {
             let color = if is_open { theme.text } else { theme.text_dim };
             let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-            text.draw(scene, &label(first), TAB_TEXT_PX, color, ir.rect.x0 + 8.0, baseline);
+            text.draw(scene, &label(shown), TAB_TEXT_PX, color, ir.rect.x0 + 8.0, baseline);
         }
         let sep = Rect::new(ir.rect.x0, ir.rect.y1 - 0.5, ir.rect.x1, ir.rect.y1 + 0.5);
         scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
