@@ -333,28 +333,26 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         }
     }
 
-    // --- Angle / Aspect field --------------------------------------------
-    let gfield = if kind == Some(GradientKind::Radial) {
-        GradField::Aspect
+    // --- Angle (read-only) / Aspect (editable) --------------------------
+    // The linear angle is set only by dragging the gradient tool on the
+    // canvas — it's shown here but not editable. The radial aspect ratio
+    // *is* an editable field.
+    if kind == Some(GradientKind::Radial) {
+        text.draw(scene, "Aspect Ratio", 11.0, th.text_dim, l.geom_label.x, l.geom_label.y);
+        let gval = live(GradField::Aspect)
+            .map(str::to_string)
+            .or_else(|| grad.map(|(g, s)| value_of(g, GradField::Aspect, *s)))
+            .unwrap_or_default();
+        field_box(scene, text, th, l.geom_val, &gval, live(GradField::Aspect).is_some());
+        chevron(scene, l.geom_dn, false, true, th);
+        chevron(scene, l.geom_up, true, true, th);
     } else {
-        GradField::Angle
-    };
-    text.draw(
-        scene,
-        if gfield == GradField::Aspect { "Aspect Ratio" } else { "Angle" },
-        11.0,
-        th.text_dim,
-        l.geom_label.x,
-        l.geom_label.y,
-    );
-    let gval = live(gfield)
-        .map(str::to_string)
-        .or_else(|| grad.map(|(g, s)| value_of(g, gfield, *s)))
-        .unwrap_or_default();
-    field_box(scene, text, th, l.geom_val, &gval, live(gfield).is_some());
-    let hot = grad.is_some();
-    chevron(scene, l.geom_dn, false, hot, th);
-    chevron(scene, l.geom_up, true, hot, th);
+        text.draw(scene, "Angle", 11.0, th.text_dim, l.geom_label.x, l.geom_label.y);
+        let gval = grad.map(|(g, _)| format!("{:.0}°", g.angle_deg())).unwrap_or_default();
+        // Plain read-out, right-aligned where the field would sit.
+        let w = text.measure(&gval, 11.0);
+        text.draw(scene, &gval, 11.0, th.text_dim, l.geom_up.x1 - w, l.geom_label.y);
+    }
 
     // --- Ramp + stops ------------------------------------------------
     match grad {
@@ -470,20 +468,21 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
     }
 
     let has = ctx.gradient.is_some();
-    let gfield = match ctx.gradient.as_ref().map(|(g, _)| g.kind) {
-        Some(GradientKind::Radial) => GradField::Aspect,
-        _ => GradField::Angle,
-    };
-    // Geometry field is live only with a gradient.
+    let radial = ctx.gradient.as_ref().map(|(g, _)| g.kind) == Some(GradientKind::Radial);
     if has {
-        if l.geom_dn.contains(p) {
-            return Action::GradientStep(gfield, -step_of(gfield));
-        }
-        if l.geom_up.contains(p) {
-            return Action::GradientStep(gfield, step_of(gfield));
-        }
-        if l.geom_val.contains(p) {
-            return Action::GradientBeginEdit(gfield);
+        // Only the radial Aspect field is editable here. The linear angle
+        // is set by dragging the gradient tool on the canvas — the panel
+        // just displays it.
+        if radial {
+            if l.geom_dn.contains(p) {
+                return Action::GradientStep(GradField::Aspect, -step_of(GradField::Aspect));
+            }
+            if l.geom_up.contains(p) {
+                return Action::GradientStep(GradField::Aspect, step_of(GradField::Aspect));
+            }
+            if l.geom_val.contains(p) {
+                return Action::GradientBeginEdit(GradField::Aspect);
+            }
         }
 
         if l.loc_dn.contains(p) {
@@ -561,15 +560,12 @@ pub fn parse_field(field: GradField, buf: &str) -> Option<f64> {
     })
 }
 
-/// The numeric field under `p`, for scroll-to-nudge / click-to-edit.
+/// The numeric field under `p`, for scroll-to-nudge / click-to-edit. The
+/// linear Angle is deliberately excluded — it isn't editable from here.
 pub fn field_at(body: Rect, p: Point, kind: Option<GradientKind>) -> Option<GradField> {
     let l = layout(body);
-    let geom = match kind {
-        Some(GradientKind::Radial) => GradField::Aspect,
-        _ => GradField::Angle,
-    };
-    if l.geom_val.inflate(CHEV_W, 3.0).contains(p) {
-        return Some(geom);
+    if kind == Some(GradientKind::Radial) && l.geom_val.inflate(CHEV_W, 3.0).contains(p) {
+        return Some(GradField::Aspect);
     }
     if l.loc_val.inflate(CHEV_W, 3.0).contains(p) {
         return Some(GradField::Location);

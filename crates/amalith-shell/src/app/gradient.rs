@@ -671,10 +671,29 @@ impl App {
         Some(((dp - a).dot(ab) / len2).clamp(0.0, 1.0))
     }
 
-    /// Move one axis endpoint (start or end) to `dp` (document space),
-    /// keeping the other fixed.
+    /// Slide one axis endpoint along the **current** axis direction (the
+    /// angle is fixed — only the gradient's extent changes). The other
+    /// endpoint stays put. Changing the angle is done by dragging in empty
+    /// space, not by grabbing a handle.
     pub(in crate::app) fn gradient_set_endpoint(&mut self, id: ObjectId, start: bool, dp: Point) {
-        let Some(u) = self.gradient_unit_of(id, dp) else {
+        let Some((_, a, b)) = self.gradient_axis_doc() else {
+            return;
+        };
+        let dir = b - a;
+        let len2 = dir.hypot2();
+        // Project the pointer onto the axis line and keep the moving end on
+        // its own side of the fixed end (never let the axis collapse).
+        let new_doc = if len2 < 1e-9 {
+            dp
+        } else if start {
+            // Anchor at `b`; the original start sits at t = -1 (a = b - dir).
+            let t = ((dp - b).dot(dir) / len2).min(-0.02);
+            b + dir * t
+        } else {
+            let t = ((dp - a).dot(dir) / len2).max(0.02);
+            a + dir * t
+        };
+        let Some(u) = self.gradient_unit_of(id, new_doc) else {
             return;
         };
         let Some((gid, mut g)) = self.target_gradient() else {
