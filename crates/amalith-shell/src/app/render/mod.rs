@@ -497,7 +497,7 @@ impl App {
                 iso_root,
                 self.layer_drop.map(|(_, _, row, into)| (row, into)),
                 ab_bar,
-                ab_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
+                ab_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                 ab_link,
                 ab_fill_menu,
             ),

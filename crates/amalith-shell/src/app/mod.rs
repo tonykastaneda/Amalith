@@ -760,7 +760,7 @@ struct App {
     /// Artboard options-bar segment: live field edit, W/H link, fill menu,
     /// and whether the colour picker is currently retargeted to the
     /// selected artboard's fill.
-    artboard_edit: Option<(panels::transform::ABField, String)>,
+    artboard_edit: Option<(panels::transform::ABField, String, bool)>,
     artboard_link: bool,
     artboard_fill_menu: bool,
     picker_artboard: bool,
@@ -3818,7 +3818,7 @@ impl App {
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
             artboard: self.artboard_bar(),
-            artboard_edit: self.artboard_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
+            artboard_edit: self.artboard_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
         }

@@ -786,15 +786,21 @@ impl App {
         } else {
             self.artboard_current(field).map(trim_num).unwrap_or_default()
         };
-        self.artboard_edit = Some((field, seed));
+        self.artboard_edit = Some((field, seed, true));
         self.request_main_redraw();
     }
 
     pub(in crate::app) fn commit_artboard_edit(&mut self) {
         use panels::transform::ABField as F;
-        let Some((field, buf)) = self.artboard_edit.take() else {
+        let Some((field, buf, fresh)) = self.artboard_edit.take() else {
             return;
         };
+        // `fresh` = the user never typed; a scroll-nudge is already in the
+        // document, so re-applying the seed would just churn.
+        if fresh {
+            self.request_main_redraw();
+            return;
+        }
         let Some(id) = self.doc.selected_artboard else {
             return;
         };
@@ -855,7 +861,7 @@ impl App {
         let step = if self.shift_down { 10.0 } else { 1.0 };
         self.apply_artboard_value(field, cur + step * dir);
         let new = self.artboard_current(field);
-        if let (Some((f, buf)), Some(v)) = (self.artboard_edit.as_mut(), new) {
+        if let (Some((f, buf, _)), Some(v)) = (self.artboard_edit.as_mut(), new) {
             if *f == field {
                 *buf = trim_num(v);
             }
@@ -923,7 +929,7 @@ impl App {
     pub(in crate::app) fn artboard_key(&mut self, event: &winit::event::KeyEvent) -> bool {
         use panels::transform::ABField as F;
         use winit::keyboard::{KeyCode, PhysicalKey};
-        let Some((field, _)) = self.artboard_edit else {
+        let Some((field, _, _)) = self.artboard_edit else {
             return false;
         };
         if !event.state.is_pressed() {
@@ -940,7 +946,11 @@ impl App {
                 true
             }
             PhysicalKey::Code(KeyCode::Backspace) => {
-                if let Some((_, buf)) = &mut self.artboard_edit {
+                if let Some((_, buf, fresh)) = &mut self.artboard_edit {
+                    if *fresh {
+                        buf.clear();
+                    }
+                    *fresh = false;
                     buf.pop();
                 }
                 self.request_main_redraw();
@@ -957,8 +967,12 @@ impl App {
                 if !ok {
                     return true;
                 }
-                if let Some((_, buf)) = &mut self.artboard_edit {
+                if let Some((_, buf, fresh)) = &mut self.artboard_edit {
                     for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if *fresh {
+                            buf.clear();
+                            *fresh = false;
+                        }
                         buf.push(ch);
                     }
                 }
