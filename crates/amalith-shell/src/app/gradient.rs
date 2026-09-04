@@ -25,6 +25,31 @@ pub(in crate::app) struct GradientAnnot {
     /// Absolute slider position (`0..1` along the axis) of the midpoint
     /// diamond in each gap between consecutive stops (`stops.len() - 1`).
     pub mids: Vec<f32>,
+    /// Radial only: the rotate handle (turns the ellipse) and the aspect
+    /// handle (squishes it), in document space.
+    pub rotate_handle: Option<Point>,
+    pub aspect_handle: Option<Point>,
+}
+
+/// Radial-only: the (rotate handle, aspect handle) positions in **unit
+/// space**, derived from the gradient's current geometry. The rotate
+/// handle sits 90° around the (rotated) unsquished axis; the aspect
+/// handle sits at the fixed, un-rotated axis's opposite point, at
+/// `radius * aspect` from the centre (so it slides with the squish).
+fn radial_handle_units(g: &Gradient) -> ([f64; 2], [f64; 2]) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
+    let axis = g.radial_axis_rad();
+    let r = g.radius();
+    let rotate = [
+        g.start[0] + r * (axis + FRAC_PI_2).cos(),
+        g.start[1] + r * (axis + FRAC_PI_2).sin(),
+    ];
+    let aspect = [
+        g.start[0] + r * g.aspect * (base + PI).cos(),
+        g.start[1] + r * g.aspect * (base + PI).sin(),
+    ];
+    (rotate, aspect)
 }
 
 /// Clicking the axis line within this fraction of an end won't drop a new
@@ -44,6 +69,12 @@ pub(in crate::app) enum AnnotHit {
     Start(ObjectId),
     /// The square end handle (t=1) — drag to move that end of the axis.
     End(ObjectId),
+    /// Radial only: the rotate handle — drag around the centre to turn
+    /// the ellipse.
+    Rotate(ObjectId),
+    /// Radial only: the aspect handle — drag toward/away from the centre
+    /// to squish the ellipse.
+    Aspect(ObjectId),
 }
 
 impl App {
@@ -542,6 +573,17 @@ impl App {
         ])
     }
 
+    /// The inverse of [`Self::gradient_unit_of`]: map a bounding-box unit
+    /// point back into document space for object `id`.
+    fn gradient_doc_of(&self, id: ObjectId, u: [f64; 2]) -> Option<Point> {
+        let doc = self.doc.editor.document();
+        let b = doc.object(id)?.kind.own_local_bounds()?;
+        let wt = doc.world_transform(id);
+        let lp = amalith_core::Point::new(b.x0 + u[0] * b.width(), b.y0 + u[1] * b.height());
+        let wp = wt * lp;
+        Some(Point::new(wp.x, wp.y))
+    }
+
     /// Gradient tool press: pick the object (selection first, else topmost
     /// under the cursor), make sure it carries a gradient on the active
     /// slot, and arm the axis drag.
@@ -632,6 +674,12 @@ impl App {
                         orig_start,
                         orig_end,
                     };
+                }
+                AnnotHit::Rotate(obj) => {
+                    self.drag = Drag::GradientRotate { object: obj };
+                }
+                AnnotHit::Aspect(obj) => {
+                    self.drag = Drag::GradientAspect { object: obj };
                 }
             }
             self.ensure_panel("gradient");
@@ -746,6 +794,20 @@ impl App {
                 return Some(AnnotHit::Mid(id, i));
             }
         }
+        // Radial only: the rotate / aspect handles on the ellipse ring.
+        if g.kind == GradientKind::Radial {
+            let (rot_u, asp_u) = radial_handle_units(&g);
+            if let Some(p) = self.gradient_doc_of(id, rot_u) {
+                if dp.distance(p) <= stop_r {
+                    return Some(AnnotHit::Rotate(id));
+                }
+            }
+            if let Some(p) = self.gradient_doc_of(id, asp_u) {
+                if dp.distance(p) <= stop_r {
+                    return Some(AnnotHit::Aspect(id));
+                }
+            }
+        }
         // Endpoint handles: the annulus around a / b.
         if dp.distance(a) <= ring_r {
             return Some(AnnotHit::Start(id));
@@ -754,6 +816,59 @@ impl App {
             return Some(AnnotHit::End(id));
         }
         None
+    }
+
+    /// Radial only: rotate the ellipse so its unsquished axis points at
+    /// `dp` (absolute — the handle tracks the pointer directly, like a
+    /// standard rotate-around-centre control).
+    pub(in crate::app) fn gradient_set_rotation(&mut self, id: ObjectId, dp: Point) {
+        let Some(u) = self.gradient_unit_of(id, dp) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if g.kind != GradientKind::Radial {
+            return;
+        }
+        let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
+        let pointer = (u[1] - g.start[1]).atan2(u[0] - g.start[0]);
+        let mut rot = (pointer - base).to_degrees() - 90.0;
+        rot = ((rot + 180.0).rem_euclid(360.0)) - 180.0;
+        g.rotation = rot;
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
+    }
+
+    /// Radial only: set the ellipse's aspect from how far `dp` sits toward
+    /// or away from the centre, along the fixed (un-rotated) axis.
+    pub(in crate::app) fn gradient_set_aspect(&mut self, id: ObjectId, dp: Point) {
+        use std::f64::consts::PI;
+        let Some(u) = self.gradient_unit_of(id, dp) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if g.kind != GradientKind::Radial {
+            return;
+        }
+        let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
+        let dir = base + PI;
+        let (ux, uy) = (u[0] - g.start[0], u[1] - g.start[1]);
+        let proj = ux * dir.cos() + uy * dir.sin();
+        let radius = g.radius().max(1e-6);
+        g.aspect = (proj / radius).clamp(0.05, 4.0);
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
     }
 
     /// Project `dp` onto the target gradient's axis → parameter `t`, for
@@ -890,6 +1005,12 @@ impl App {
                 o0 + (o1 - o0) * g.stops[i].midpoint
             })
             .collect();
+        let (rotate_handle, aspect_handle) = if g.kind == GradientKind::Radial {
+            let (rot_u, asp_u) = radial_handle_units(g);
+            (Some(map(rot_u)), Some(map(asp_u)))
+        } else {
+            (None, None)
+        };
         Some(GradientAnnot {
             start: as_,
             end: bs,
@@ -901,6 +1022,8 @@ impl App {
                 .map(|(i, s)| (shown(s.offset), s.color, i == sel))
                 .collect(),
             mids,
+            rotate_handle,
+            aspect_handle,
         })
     }
 }

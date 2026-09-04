@@ -75,3 +75,23 @@ pub fn peniko_gradient(g: &amalith_core::Gradient) -> vello::peniko::Gradient {
     };
     base.with_extend(Extend::Pad).with_stops(stops.as_slice())
 }
+
+/// Radial-only: the extra **unit-space** transform that turns
+/// [`peniko_gradient`]'s plain circle into the ellipse `aspect` / `rotation`
+/// describe — squish perpendicular to the (rotated) `start`→`end` axis by
+/// `aspect`, pivoting on `start`. Identity for a linear gradient, or for a
+/// circle (`aspect == 1.0`). The caller composes it with the object's
+/// unit→local bbox transform *before* that one, i.e.
+/// `bbox_transform * radial_squish(g)`.
+pub fn radial_squish(g: &amalith_core::Gradient) -> vk::Affine {
+    if g.kind != amalith_core::GradientKind::Radial || (g.aspect - 1.0).abs() < 1e-9 {
+        return vk::Affine::IDENTITY;
+    }
+    let center = vk::Point::new(g.start[0], g.start[1]);
+    let angle = g.radial_axis_rad();
+    vk::Affine::translate(center.to_vec2())
+        * vk::Affine::rotate(angle)
+        * vk::Affine::scale_non_uniform(1.0, g.aspect)
+        * vk::Affine::rotate(-angle)
+        * vk::Affine::translate(-center.to_vec2())
+}

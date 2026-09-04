@@ -212,11 +212,23 @@ pub(in crate::app) fn paint_main(
             }
         }
 
-        // Radial: a hairline ring at the current radius.
+        // Radial: a dashed ring at the current radius.
         if annot.kind == amalith_core::GradientKind::Radial && len > 1.0 {
             let ring = vello::kurbo::Circle::new(a, len);
-            scene.stroke(&Stroke::new(1.5), ID, dark, None, &ring);
-            scene.stroke(&Stroke::new(0.75), ID, white, None, &ring);
+            scene.stroke(
+                &Stroke::new(1.5).with_dashes(0.0, [6.0, 4.0]),
+                ID,
+                dark,
+                None,
+                &ring,
+            );
+            scene.stroke(
+                &Stroke::new(0.75).with_dashes(0.0, [6.0, 4.0]),
+                ID,
+                white,
+                None,
+                &ring,
+            );
         }
 
         // Midpoint markers: a small white square.
@@ -264,6 +276,21 @@ pub(in crate::app) fn paint_main(
         let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
         scene.stroke(&Stroke::new(3.5), ID, white, None, &sq);
         scene.stroke(&Stroke::new(1.75), ID, dark, None, &sq);
+
+        // Radial only: the rotate handle (solid dot, on the ring) and the
+        // aspect handle (a ring with a centre dot) — drag either to turn
+        // or squish the ellipse.
+        if let Some(p) = annot.rotate_handle {
+            let hp = vt * p;
+            scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(hp, 6.0));
+            scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(hp, 4.75));
+        }
+        if let Some(p) = annot.aspect_handle {
+            let hp = vt * p;
+            scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(hp, 6.5));
+            scene.stroke(&Stroke::new(1.75), ID, dark, None, &vello::kurbo::Circle::new(hp, 5.0));
+            scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(hp, 1.6));
+        }
     }
 
     // Clip masks are otherwise invisible — outline them in the accent

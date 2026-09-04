@@ -112,6 +112,14 @@ pub struct Gradient {
     /// height / width). `1.0` = circle. Ignored for linear gradients.
     #[serde(default = "default_aspect")]
     pub aspect: f64,
+    /// Radial only: extra rotation (degrees) of the ellipse's unsquished
+    /// axis away from the `start`→`end` direction. `0.0` (the default)
+    /// keeps that axis aligned with the axis line, so `end` always marks
+    /// a real point on the ellipse; a non-zero rotation turns the ellipse
+    /// independently of `end`, matching Illustrator's separate rotate
+    /// handle. Ignored for linear gradients.
+    #[serde(default)]
+    pub rotation: f64,
 }
 
 impl Gradient {
@@ -132,6 +140,7 @@ impl Gradient {
             start: default_start(),
             end: default_end(),
             aspect: 1.0,
+            rotation: 0.0,
         }
     }
 
@@ -144,7 +153,17 @@ impl Gradient {
             start: [0.5, 0.5],
             end: [1.0, 0.5],
             aspect: 1.0,
+            rotation: 0.0,
         }
+    }
+
+    /// The ellipse's unsquished-axis angle in **unit space**, radians:
+    /// the `start`→`end` direction plus [`Self::rotation`]. Meaningful for
+    /// radial gradients.
+    pub fn radial_axis_rad(&self) -> f64 {
+        let dx = self.end[0] - self.start[0];
+        let dy = self.end[1] - self.start[1];
+        dy.atan2(dx) + self.rotation.to_radians()
     }
 
     /// Linear-axis angle in degrees, measured like Illustrator's Gradient
@@ -267,6 +286,7 @@ mod tests {
             start: default_start(),
             end: default_end(),
             aspect: 1.0,
+            rotation: 0.0,
         };
         g.normalize();
         assert_eq!(g.stops.len(), 2);

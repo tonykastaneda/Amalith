@@ -1183,21 +1183,22 @@ fn paint_object(
     let sw = obj.appearance.stroke_width;
     let style = obj.appearance.stroke_style;
     // Gradient paints (fill / stroke) resolved against the document pool.
-    // The gradient is defined in bounding-box unit space; `grad_xf` maps
+    // The gradient is defined in bounding-box unit space; `bbox_xf` maps
     // that unit square onto this object's own local bounds so the gradient
-    // rides with the object (SVG `objectBoundingBox`).
-    let grad_xf = obj.kind.own_local_bounds().map(|b| {
+    // rides with the object (SVG `objectBoundingBox`). A radial gradient's
+    // `aspect`/`rotation` are an *additional* unit-space squish applied
+    // before that mapping (see `convert::radial_squish`), so each paint
+    // gets its own brush transform rather than a single shared one.
+    let bbox_xf = obj.kind.own_local_bounds().map(|b| {
         let r = convert::rect(b);
         Affine::translate((r.x0, r.y0))
             * Affine::scale_non_uniform(r.width().max(1e-6), r.height().max(1e-6))
     });
-    let resolve_grad = |paint: amalith_core::Paint| -> Option<vello::peniko::Gradient> {
-        match paint {
-            amalith_core::Paint::Gradient(gid) => grad_xf
-                .and(doc.gradient(gid))
-                .map(convert::peniko_gradient),
-            _ => None,
-        }
+    let resolve_grad = |paint: amalith_core::Paint| -> Option<(vello::peniko::Gradient, Affine)> {
+        let gid = paint.gradient_id()?;
+        let g = doc.gradient(gid)?;
+        let bbox = bbox_xf?;
+        Some((convert::peniko_gradient(g), bbox * convert::radial_squish(g)))
     };
     let fill_grad = resolve_grad(obj.appearance.fill);
     let stroke_grad = resolve_grad(obj.appearance.stroke);
@@ -1219,16 +1220,15 @@ fn paint_object(
             .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
         // An open path still fills — the fill closes the contour
         // implicitly (Illustrator / SVG), while the stroke stays open.
-        if let Some(g) = &fill_grad {
-            scene.fill(Fill::NonZero, m, g, grad_xf, bp);
+        if let Some((g, xf)) = &fill_grad {
+            scene.fill(Fill::NonZero, m, g, Some(*xf), bp);
         } else if let Some(c) = fill {
             scene.fill(Fill::NonZero, m, c, None, bp);
         }
-        if let Some(g) = &stroke_grad {
+        if let Some((g, xf)) = &stroke_grad {
             // Strokes bake to world space here (transform = IDENTITY), so
             // the brush transform must be composed with `m` too.
-            let bx = grad_xf.map(|x| m * x);
-            stroke_path(scene, m, g.into(), bx, bp, sw, &style, closed, zoom);
+            stroke_path(scene, m, g.into(), Some(m * *xf), bp, sw, &style, closed, zoom);
         } else if let Some(c) = stroke {
             stroke_path(scene, m, c.into(), None, bp, sw, &style, closed, zoom);
         }

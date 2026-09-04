@@ -299,6 +299,12 @@ enum Drag {
     /// Gradient tool: dragging the midpoint diamond in gap `index` of the
     /// on-canvas axis of `object`.
     GradientMidOnCanvas { object: ObjectId, index: usize },
+    /// Gradient tool (radial only): dragging the rotate handle around the
+    /// ellipse.
+    GradientRotate { object: ObjectId },
+    /// Gradient tool (radial only): dragging the aspect handle toward or
+    /// away from the centre.
+    GradientAspect { object: ObjectId },
     /// Gradient panel: dragging the midpoint diamond between stop `index`
     /// and `index + 1` along the ramp `bar` (screen px).
     GradientMid { index: usize, bar: Rect },
