@@ -123,16 +123,41 @@ pub const RAIL_DEFAULT_W: f32 = 320.0;
 const SPLIT_GAP: f32 = 6.0;
 
 /// One tab group collapsed to an icon-strip entry (Illustrator's
-/// "Collapse to Icons") — the same shape as [`Node::Tabs`] minus its
-/// place in the tree. Collapsing pulls a group out of `tree` entirely
-/// (see [`Rail::collapse`]) rather than flagging it in place, so a
-/// collapsed group never competes with the rest of the rail's split
-/// weights for space: the icon strip is a fixed-width column of its own,
-/// separate from the tree's normal layout.
+/// "Collapse to Icons") — collapsing applies to a whole dock *column* at
+/// once, matching Illustrator (a "column" being either the rail's entire
+/// tree, or — when the rail holds several docked side by side — one
+/// top-level horizontal-split child of it). The column's original
+/// sub-tree is kept verbatim, weights and internal groups included, so
+/// expanding restores it exactly; it's just not part of `tree` while
+/// collapsed, so it never competes with the rest of the rail's split
+/// weights for space — the icon strip is a fixed-width column of its own.
+/// Each `Tabs` group nested inside still gets its own icon row (see
+/// [`Self::rows`]) even though the whole column collapses/expands as one
+/// unit — clicking one row only ever *previews* that group in a flyout,
+/// it doesn't pull it back into the tree by itself.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct IconGroup {
-    pub panels: Vec<PanelId>,
-    pub active: usize,
+pub struct IconColumn {
+    pub node: Node,
+}
+
+impl IconColumn {
+    /// Every `Tabs` group nested in this column, top-to-bottom — one icon
+    /// row each.
+    pub fn rows(&self) -> Vec<(Vec<PanelId>, usize)> {
+        let mut out = Vec::new();
+        fn walk(n: &Node, out: &mut Vec<(Vec<PanelId>, usize)>) {
+            match n {
+                Node::Tabs { panels, active } => out.push((panels.clone(), *active)),
+                Node::Split { children, .. } => {
+                    for c in children {
+                        walk(&c.node, out);
+                    }
+                }
+            }
+        }
+        walk(&self.node, &mut out);
+        out
+    }
 }
 
 /// One docked column: a single [`Node`] tree (or empty) plus how wide the
@@ -147,7 +172,7 @@ pub struct Rail {
     /// Groups collapsed to icons, in the order they stack in the icon
     /// strip. Old saved layouts have no such field, hence the default.
     #[serde(default)]
-    pub icons: Vec<IconGroup>,
+    pub icons: Vec<IconColumn>,
 }
 
 impl Default for Rail {
@@ -183,8 +208,8 @@ impl Rail {
         if let Some(t) = &self.tree {
             collect(t, &mut out);
         }
-        for g in &self.icons {
-            out.extend(g.panels.iter().copied());
+        for c in &self.icons {
+            collect(&c.node, &mut out);
         }
         out
     }
@@ -198,18 +223,16 @@ impl Rail {
     /// `panels()`/`remove` agree on that) would otherwise leave a stale
     /// duplicate behind in `icons`.
     pub fn remove(&mut self, panel: PanelId) -> bool {
-        if let Some(gi) = self.icons.iter().position(|g| g.panels.contains(&panel)) {
-            let g = &mut self.icons[gi];
-            if let Some(pi) = g.panels.iter().position(|&p| p == panel) {
-                g.panels.remove(pi);
-                if g.active >= g.panels.len() {
-                    g.active = g.panels.len().saturating_sub(1);
-                }
+        if let Some(ci) = self.icons.iter().position(|c| {
+            let mut v = Vec::new();
+            collect(&c.node, &mut v);
+            v.contains(&panel)
+        }) {
+            let hit = remove_in(&mut self.icons[ci].node, panel);
+            if node_is_empty(&self.icons[ci].node) {
+                self.icons.remove(ci);
             }
-            if g.panels.is_empty() {
-                self.icons.remove(gi);
-            }
-            return true;
+            return hit;
         }
         let Some(t) = &mut self.tree else {
             return false;
@@ -422,37 +445,63 @@ impl Rail {
         })
     }
 
-    /// Collapses the whole tab group at `path` to an icon-strip entry:
-    /// pulls it out of the tree (pruning empty splits behind it, the same
-    /// bookkeeping `remove` already does for each panel) and appends it
-    /// to `icons`. `false` if `path` doesn't point at a tab group.
+    /// Collapses a whole dock *column* to an icon strip — Illustrator's
+    /// granularity: `path` addresses any node within the column (usually
+    /// the tab group whose own « was clicked), and this walks up to that
+    /// column's top-level boundary before collapsing. A "column" is one
+    /// top-level child of the tree when the tree is a horizontal split of
+    /// several docked side by side (`path`'s first index picks which);
+    /// otherwise (a single column, or one already-vertical stack of
+    /// groups) it's the whole tree. The column's sub-tree is pulled out
+    /// verbatim (pruning empty splits behind it, the same bookkeeping
+    /// `remove` already does for each panel) and appended to `icons`, so
+    /// expanding can restore its internal groups and weights exactly.
+    /// `false` if `path` doesn't resolve to anything, or the column turns
+    /// out to hold no panels at all.
     pub fn collapse(&mut self, path: &NodePath) -> bool {
-        let Some(Node::Tabs { panels, active }) = self.node_at(path) else {
+        let Some(root) = &self.tree else {
             return false;
         };
-        let group = IconGroup {
-            panels: panels.clone(),
-            active: *active,
+        let node = match root {
+            Node::Split {
+                axis: Axis::Horizontal,
+                children,
+            } => match path.0.first().and_then(|&i| children.get(i)) {
+                Some(child) => child.node.clone(),
+                None => return false,
+            },
+            other => other.clone(),
         };
-        for &p in &group.panels {
+        let mut panels = Vec::new();
+        collect(&node, &mut panels);
+        if panels.is_empty() {
+            return false;
+        }
+        for p in panels {
             self.remove(p);
         }
-        self.icons.push(group);
+        self.icons.push(IconColumn { node });
         true
     }
 
-    /// Expands icon-strip entry `index` back into the tree, as a new
-    /// bottom split of the rail — its own group, not merged into an
-    /// existing tab group, matching how it looked before collapsing.
-    /// `false` if `index` is out of range.
+    /// Expands icon-strip column `index` back into the tree, as a new
+    /// bottom split of the rail — its own column, with its original
+    /// internal groups and vertical-split weights intact, not merged into
+    /// an existing tab group. `false` if `index` is out of range.
     pub fn expand(&mut self, index: usize) -> bool {
         if index >= self.icons.len() {
             return false;
         }
-        let group = self.icons.remove(index);
-        let Some((&first, rest)) = group.panels.split_first() else {
-            return true; // an empty group: nothing to put back.
+        let column = self.icons.remove(index);
+        let mut panels = Vec::new();
+        collect(&column.node, &mut panels);
+        let Some(&first) = panels.first() else {
+            return true; // an empty column: nothing to put back.
         };
+        // Dock `first` alone to get a fresh bottom split (reusing `dock`'s
+        // existing split/graft logic), then graft the column's real,
+        // possibly multi-group sub-tree in over that single-tab
+        // placeholder once we know exactly where it landed.
         self.dock(
             first,
             DropTarget::Split {
@@ -461,16 +510,11 @@ impl Rail {
             },
         );
         if let Some(path) = self.path_of(first) {
-            for &p in rest {
-                self.dock(
-                    p,
-                    DropTarget::Tab {
-                        path: path.clone(),
-                        index: usize::MAX,
-                    },
-                );
+            if let Some(t) = &mut self.tree {
+                if let Some(slot) = node_at_mut(t, &path) {
+                    *slot = column.node;
+                }
             }
-            self.activate_tab(&path, group.active);
         }
         true
     }
@@ -1192,58 +1236,73 @@ mod tests {
     }
 
     #[test]
-    fn collapse_pulls_a_group_out_of_the_tree_and_into_icons() {
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B, C]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        assert!(r.collapse(&NodePath(vec![1])));
-        // The split collapsed to its one remaining child, same as `remove`.
-        assert_eq!(r.tree, Some(tabs(&[A])));
-        assert_eq!(r.icons, vec![IconGroup { panels: vec![B, C], active: 0 }]);
-        // Collapsing is not just closing — the panels still count as
-        // "in this rail" (the Window menu's toggle logic depends on this).
-        assert!(r.panels().contains(&B));
-        assert!(r.panels().contains(&C));
-    }
-
-    #[test]
-    fn collapse_of_an_only_group_empties_the_tree_but_not_the_rail() {
-        let mut r = Rail::with(tabs(&[A]));
-        assert!(r.collapse(&NodePath(vec![])));
-        assert_eq!(r.tree, None);
-        assert_eq!(r.icons.len(), 1);
-        // The rail itself is not empty — it still holds a collapsed group,
-        // and must keep claiming its share of the window (an `is_empty`
-        // that only looked at `tree` would let the canvas paint over the
-        // icon strip).
-        assert!(!r.is_empty());
-    }
-
-    #[test]
-    fn collapse_rejects_a_path_that_is_not_a_tab_group() {
+    fn collapse_takes_the_whole_column_not_just_one_stacked_group() {
+        // A vertical stack of two groups is *one* column (nothing splits
+        // it horizontally into side-by-side columns) — collapsing from
+        // either group's path takes both, matching Illustrator's "collapse
+        // or expand all panel icons in a column" at once.
         let mut r = Rail::with(Node::Split {
             axis: Axis::Vertical,
             children: vec![
                 Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B]), weight: 1.0 },
+                Child { node: tabs(&[B, C]), weight: 2.0 },
             ],
         });
+        let whole_column = r.tree.clone().unwrap();
+        assert!(r.collapse(&NodePath(vec![1])));
+        assert_eq!(r.tree, None, "the column was the rail's entire tree");
+        assert_eq!(r.icons, vec![IconColumn { node: whole_column }]);
+        // Collapsing is not just closing — every panel still counts as
+        // "in this rail" (the Window menu's toggle logic depends on this).
+        assert!(r.panels().contains(&A));
+        assert!(r.panels().contains(&B));
+        assert!(r.panels().contains(&C));
+        // Each originally-stacked group still gets its own icon row.
+        assert_eq!(
+            r.icons[0].rows(),
+            vec![(vec![A], 0), (vec![B, C], 0)]
+        );
+    }
+
+    #[test]
+    fn collapse_takes_only_the_clicked_column_when_columns_sit_side_by_side() {
+        // A horizontal split *is* multiple side-by-side columns — only the
+        // one `path` falls under collapses; the other stays fully docked.
+        let mut r = Rail::with(Node::Split {
+            axis: Axis::Horizontal,
+            children: vec![
+                Child { node: tabs(&[A]), weight: 1.0 },
+                Child { node: tabs(&[B, C]), weight: 1.0 },
+            ],
+        });
+        assert!(r.collapse(&NodePath(vec![1])));
+        // The split collapsed to its one remaining column, same as `remove`.
+        assert_eq!(r.tree, Some(tabs(&[A])));
+        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[B, C]) }]);
+    }
+
+    #[test]
+    fn collapse_of_an_only_column_empties_the_tree_but_not_the_rail() {
+        let mut r = Rail::with(tabs(&[A]));
+        assert!(r.collapse(&NodePath(vec![])));
+        assert_eq!(r.tree, None);
+        assert_eq!(r.icons.len(), 1);
+        // The rail itself is not empty — it still holds a collapsed
+        // column, and must keep claiming its share of the window (an
+        // `is_empty` that only looked at `tree` would let the canvas
+        // paint over the icon strip).
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn collapse_rejects_an_empty_rail() {
+        let mut r = Rail::default();
         assert!(!r.collapse(&NodePath(vec![])));
         assert!(r.icons.is_empty());
     }
 
     #[test]
-    fn expand_restores_a_collapsed_group_as_its_own_bottom_split() {
+    fn expand_restores_a_collapsed_column_as_its_own_bottom_split() {
         let mut r = Rail::with(tabs(&[A]));
         assert!(r.collapse(&NodePath(vec![])));
         assert!(r.expand(0));
@@ -1252,28 +1311,38 @@ mod tests {
     }
 
     #[test]
-    fn expand_keeps_a_multi_panel_group_together_with_its_active_tab() {
+    fn expand_restores_a_multi_group_column_with_its_internal_structure_intact() {
         let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
+            axis: Axis::Horizontal,
             children: vec![
                 Child { node: tabs(&[A]), weight: 1.0 },
                 Child {
-                    node: Node::Tabs { panels: vec![B, C], active: 1 },
+                    node: Node::Split {
+                        axis: Axis::Vertical,
+                        children: vec![
+                            Child { node: tabs(&[B]), weight: 1.0 },
+                            Child {
+                                node: Node::Tabs { panels: vec![C], active: 0 },
+                                weight: 3.0,
+                            },
+                        ],
+                    },
                     weight: 1.0,
                 },
             ],
         });
         assert!(r.collapse(&NodePath(vec![1])));
         assert!(r.expand(0));
-        let path = r.path_of(B).expect("B is back in the tree");
-        assert_eq!(r.path_of(C), Some(path.clone()));
-        match r.node_at(&path).unwrap() {
-            Node::Tabs { panels, active } => {
-                assert_eq!(panels, &vec![B, C]);
-                assert_eq!(*active, 1, "the group's active tab survives the round trip");
-            }
-            other => panic!("expected a tab group, got {other:?}"),
-        }
+        // B and C are back as two separate stacked groups (not merged into
+        // one tab group), with their original 1:3 weight intact.
+        let path_b = r.path_of(B).expect("B is back in the tree");
+        let path_c = r.path_of(C).expect("C is back in the tree");
+        assert_ne!(path_b, path_c, "B and C stay separate groups");
+        let Some(Node::Split { children, .. }) = r.node_at(&NodePath(vec![path_b.0[0]])) else {
+            panic!("expected the restored column to still be a vertical split");
+        };
+        assert_eq!(children[0].weight, 1.0);
+        assert_eq!(children[1].weight, 3.0);
     }
 
     #[test]
@@ -1285,7 +1354,7 @@ mod tests {
     #[test]
     fn remove_finds_a_panel_collapsed_to_an_icon() {
         let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
+            axis: Axis::Horizontal,
             children: vec![
                 Child { node: tabs(&[A]), weight: 1.0 },
                 Child { node: tabs(&[B, C]), weight: 1.0 },
@@ -1293,9 +1362,9 @@ mod tests {
         });
         r.collapse(&NodePath(vec![1]));
         assert!(r.remove(B));
-        assert_eq!(r.icons, vec![IconGroup { panels: vec![C], active: 0 }]);
+        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[C]) }]);
         assert!(r.remove(C));
-        assert!(r.icons.is_empty(), "the emptied icon group is dropped");
+        assert!(r.icons.is_empty(), "the emptied icon column is dropped");
         assert!(!r.remove(C), "second remove is a no-op");
     }
 }

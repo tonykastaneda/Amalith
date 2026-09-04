@@ -5,7 +5,7 @@ use vello::kurbo::{Affine, Line, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use crate::dock::{DropTarget, IconGroup, NodePath, PanelId, Side};
+use crate::dock::{DropTarget, IconColumn, NodePath, PanelId, Side};
 use crate::layout::{IconRect, Layout};
 use crate::text::TextContext;
 use crate::theme::Theme;
@@ -226,33 +226,36 @@ fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, point
     }
 }
 
-/// Paints a rail's icon strip: one row per collapsed group, its first
-/// panel's label, and a highlight when that row's flyout is open.
-/// `label` is the same tab-caption function [`paint`] takes.
+/// Paints a rail's icon strip: one row per group nested in a collapsed
+/// column, that group's active tab's label, and a highlight when that
+/// row's flyout is open. `label` is the same tab-caption function
+/// [`paint`] takes.
 pub fn paint_icon_col(
     scene: &mut Scene,
     col: Rect,
-    icons: &[IconGroup],
+    icons: &[IconColumn],
     icon_rects: &[IconRect],
-    open: Option<usize>,
+    open: Option<(usize, usize)>,
     theme: &Theme,
     text: &mut TextContext,
     label: &dyn Fn(PanelId) -> String,
 ) {
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &col);
     for ir in icon_rects {
-        let Some(group) = icons.get(ir.index) else {
+        let Some(rows) = icons.get(ir.column).map(IconColumn::rows) else {
             continue;
         };
-        let is_open = open == Some(ir.index);
+        let Some((panels, active)) = rows.get(ir.row) else {
+            continue;
+        };
+        let is_open = open == Some((ir.column, ir.row));
         if is_open {
             scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
         }
         // Label by the group's *active* tab, not just its first — a
-        // collapsed "Character/Paragraph" group with Paragraph active
-        // should say "Paragraph" on the icon, matching what the flyout
-        // actually opens to.
-        let shown = group.panels.get(group.active).or_else(|| group.panels.first());
+        // "Character/Paragraph" group with Paragraph active should say
+        // "Paragraph" on the icon, matching what the flyout opens to.
+        let shown = panels.get(*active).or_else(|| panels.first());
         if let Some(&shown) = shown {
             let color = if is_open { theme.text } else { theme.text_dim };
             let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;

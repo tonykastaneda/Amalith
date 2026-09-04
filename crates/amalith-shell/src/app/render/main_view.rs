@@ -105,7 +105,7 @@ pub(in crate::app) fn paint_main(
     // Gradient tool: the on-canvas axis annotator (document space).
     gradient_annot: Option<crate::app::gradient::GradientAnnot>,
     // Which rail icon-strip row (if any) has its flyout open.
-    flyout_icon: Option<(RailSide, usize)>,
+    flyout_icon: Option<(RailSide, usize, usize)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -526,7 +526,7 @@ pub(in crate::app) fn paint_main(
                     col,
                     &rail.icons,
                     &laid.icon_rects,
-                    flyout_icon.filter(|(s, _)| *s == side).map(|(_, i)| i),
+                    flyout_icon.filter(|(s, ..)| *s == side).map(|(_, c, r)| (c, r)),
                     theme,
                     text,
                     &tab_label,

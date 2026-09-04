@@ -6,20 +6,25 @@
 
 use vello::kurbo::{Point, Rect};
 
-use crate::dock::{Axis, DropTarget, IconGroup, Node, NodePath, PanelId, RailSide, Side};
+use crate::dock::{Axis, DropTarget, IconColumn, Node, NodePath, PanelId, RailSide, Side};
 use crate::theme::Theme;
 
 /// Width of a rail's icon strip (Illustrator's "Collapse to Icons"),
-/// when it has any collapsed groups.
+/// when it has any collapsed columns.
 pub const ICON_COL_W: f64 = 112.0;
 /// Height of one collapsed group's row in the icon strip.
 pub const ICON_ROW_H: f64 = 30.0;
 
-/// One entry in a rail's icon strip: the `Rail::icons` index (what
-/// `Rail::expand` takes) and where it's drawn/hit-tested.
+/// One row in a rail's icon strip: one `Tabs` group nested inside
+/// collapsed column `column` (a `Rail::icons` index — what `Rail::expand`
+/// takes to restore the *whole* column), specifically the `row`'th group
+/// within it (top-to-bottom, per `IconColumn::rows`) — a whole column
+/// collapses/expands as one unit, but each of its original groups still
+/// gets its own row here for an individual flyout preview.
 #[derive(Clone, Debug)]
 pub struct IconRect {
-    pub index: usize,
+    pub column: usize,
+    pub row: usize,
     pub rect: Rect,
 }
 
@@ -48,19 +53,26 @@ pub fn split_icon_col(rail_rect: Rect, side: RailSide, has_icons: bool) -> (Rect
     }
 }
 
-/// Stacks `icons` top-down in `col`, one [`ICON_ROW_H`]-tall row each.
-pub fn layout_icons(icons: &[IconGroup], col: Rect) -> Vec<IconRect> {
-    icons
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            let y0 = col.y0 + index as f64 * ICON_ROW_H;
-            IconRect {
-                index,
-                rect: Rect::new(col.x0, y0, col.x1, (y0 + ICON_ROW_H).min(col.y1)),
-            }
-        })
-        .collect()
+/// Stacks every row of every collapsed column top-down in `col`, one
+/// [`ICON_ROW_H`]-tall row each — a multi-group column's rows stack
+/// consecutively, with no visual gap between columns (Illustrator shows
+/// one continuous strip; which rows share a column only matters for
+/// which single `Rail::expand` call a given row's own «/» button makes).
+pub fn layout_icons(icons: &[IconColumn], col: Rect) -> Vec<IconRect> {
+    let mut out = Vec::new();
+    let mut y = col.y0;
+    for (ci, column) in icons.iter().enumerate() {
+        for ri in 0..column.rows().len() {
+            let y1 = (y + ICON_ROW_H).min(col.y1);
+            out.push(IconRect {
+                column: ci,
+                row: ri,
+                rect: Rect::new(col.x0, y, col.x1, y1),
+            });
+            y = y1;
+        }
+    }
+    out
 }
 
 /// One rendered tab group: its outer bounds, the strip, the body, and the
@@ -537,19 +549,31 @@ mod tests {
 
     #[test]
     fn layout_icons_stacks_rows_top_down_at_a_fixed_height() {
-        use crate::dock::IconGroup;
+        use crate::dock::IconColumn;
         let col = Rect::new(200.0, 0.0, 312.0, 600.0);
+        // One single-group column, one two-group column — four rows total,
+        // stacked continuously regardless of which column each belongs to.
         let icons = vec![
-            IconGroup { panels: vec![L], active: 0 },
-            IconGroup { panels: vec![A, S], active: 1 },
+            IconColumn { node: Node::Tabs { panels: vec![L], active: 0 } },
+            IconColumn {
+                node: Node::Split {
+                    axis: Axis::Vertical,
+                    children: vec![
+                        crate::dock::Child { node: Node::Tabs { panels: vec![A], active: 0 }, weight: 1.0 },
+                        crate::dock::Child { node: Node::Tabs { panels: vec![S], active: 0 }, weight: 1.0 },
+                    ],
+                },
+            },
         ];
         let rects = layout_icons(&icons, col);
-        assert_eq!(rects.len(), 2);
-        assert_eq!(rects[0].index, 0);
-        assert_eq!(rects[1].index, 1);
+        assert_eq!(rects.len(), 3);
+        assert_eq!((rects[0].column, rects[0].row), (0, 0));
+        assert_eq!((rects[1].column, rects[1].row), (1, 0));
+        assert_eq!((rects[2].column, rects[2].row), (1, 1));
         assert_eq!(rects[0].rect.y0, 0.0);
         assert_eq!(rects[0].rect.y1, ICON_ROW_H);
         assert_eq!(rects[1].rect.y0, ICON_ROW_H);
+        assert_eq!(rects[2].rect.y0, ICON_ROW_H * 2.0);
         // Full column width, not just a sliver.
         assert_eq!(rects[0].rect.x0, col.x0);
         assert_eq!(rects[0].rect.x1, col.x1);

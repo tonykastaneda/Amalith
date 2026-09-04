@@ -435,7 +435,7 @@ impl App {
                     // and the canvas, not squeezed inside the rail width),
                     // so a pointer outside `rect` still needs this side's
                     // (flyout-aware) layout built before being ruled out.
-                    let has_open_flyout = self.flyout_icon.is_some_and(|(s, _)| s == side);
+                    let has_open_flyout = self.flyout_icon.is_some_and(|(s, ..)| s == side);
                     if !rect.contains(self.pointer) && !has_open_flyout {
                         continue;
                     }
@@ -448,7 +448,7 @@ impl App {
                         &mut self.text,
                     );
                     if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
-                        self.toggle_flyout(side, ir.index);
+                        self.toggle_flyout(side, ir.column, ir.row);
                         return;
                     }
                     if let Some(sp) = laid
@@ -468,11 +468,11 @@ impl App {
                             let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
                             if collapse.contains(self.pointer) {
                                 if area.is_flyout {
-                                    if let Some((_, idx)) = self.flyout_icon {
-                                        self.expand_icon(side, idx);
+                                    if let Some((_, column, _)) = self.flyout_icon {
+                                        self.expand_column(side, column);
                                     }
                                 } else {
-                                    self.collapse_group(side, &area.path);
+                                    self.collapse_column(side, &area.path);
                                 }
                                 return;
                             }
