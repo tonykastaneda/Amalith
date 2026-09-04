@@ -66,6 +66,22 @@ impl App {
                 );
                 self.request_main_redraw();
             }
+            Drag::IconColWidth { side } => {
+                let side = *side;
+                let Some((w, _)) = self.main_logical_size() else {
+                    return;
+                };
+                // The icon strip always hugs the outer window edge (see
+                // `layout::split_icon_col`), so its width is measured from
+                // that edge, not from the rail's own inner boundary.
+                let raw = match side {
+                    RailSide::Left => self.pointer.x,
+                    RailSide::Right => w - self.pointer.x,
+                };
+                let clamped = raw.clamp(layout::ICON_COL_MIN_W, layout::ICON_COL_MAX_W);
+                self.dock.rail_mut(side).icon_col_w = clamped as f32;
+                self.request_main_redraw();
+            }
             Drag::Splitter { side, path, gap } => {
                 let (side, path, gap) = (*side, path.clone(), *gap);
                 let Some((w, h)) = self.main_logical_size() else {
@@ -618,6 +634,7 @@ impl App {
             Drag::None
             | Drag::Splitter { .. }
             | Drag::RailWidth { .. }
+            | Drag::IconColWidth { .. }
             | Drag::Pan { .. } => {}
             // A scrubby-zoom that never moved = a click: step-zoom at the
             // point (Alt / left-drag direction = out).

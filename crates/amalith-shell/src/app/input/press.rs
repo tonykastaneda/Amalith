@@ -456,6 +456,15 @@ impl App {
                         &self.theme,
                         &mut self.text,
                     );
+                    if let Some(col) = laid.icon_col {
+                        if icon_col_edge_bar(side, col)
+                            .inflate(GRAB_SLOP, 0.0)
+                            .contains(self.pointer)
+                        {
+                            self.drag = Drag::IconColWidth { side };
+                            return;
+                        }
+                    }
                     if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
                         self.toggle_flyout(side, ir.column, ir.row);
                         return;

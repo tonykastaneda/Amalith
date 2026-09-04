@@ -9,9 +9,20 @@ use vello::kurbo::{Point, Rect};
 use crate::dock::{Axis, DropTarget, IconColumn, Node, NodePath, PanelId, RailSide, Side};
 use crate::theme::Theme;
 
-/// Width of a rail's icon strip (Illustrator's "Collapse to Icons"),
-/// when it has any collapsed columns.
+/// Default (labeled) width of a rail's icon strip (Illustrator's
+/// "Collapse to Icons"), when it has any collapsed columns. A rail's own
+/// `icon_col_w` starts here and the user can drag it narrower or wider.
 pub const ICON_COL_W: f64 = 112.0;
+/// How narrow the icon strip can be dragged — just enough for the glyph
+/// itself, no label.
+pub const ICON_COL_MIN_W: f64 = 40.0;
+/// How wide the icon strip can be dragged.
+pub const ICON_COL_MAX_W: f64 = 176.0;
+/// Below this width the icon strip drops labels and shows icons only —
+/// Illustrator has no separate toggle for this, dragging the dock's own
+/// width past a point just hides the text (see the Adobe help docs on
+/// "Collapse to Icons").
+pub const ICON_LABEL_THRESHOLD: f64 = 74.0;
 /// Height of one collapsed group's row in the icon strip.
 pub const ICON_ROW_H: f64 = 30.0;
 
@@ -33,20 +44,23 @@ pub struct IconRect {
 /// *outer* edge — away from the canvas, at the window edge — matching
 /// Illustrator: the right rail's strip hugs the window's right edge, the
 /// left rail's hugs the left edge, and ordinary docked panels sit between
-/// the strip and the canvas either way. `None` when `has_icons` is false;
-/// the tree then gets the whole rect.
-pub fn split_icon_col(rail_rect: Rect, side: RailSide, has_icons: bool) -> (Rect, Option<Rect>) {
-    if !has_icons {
+/// the strip and the canvas either way. `icon_col_w` is `None` when there
+/// are no collapsed columns (the tree then gets the whole rect), or
+/// `Some(w)` — the rail's own, user-draggable icon-strip width — clamped
+/// so a tree that's still present never gets squeezed to nothing.
+pub fn split_icon_col(rail_rect: Rect, side: RailSide, icon_col_w: Option<f64>) -> (Rect, Option<Rect>) {
+    let Some(w) = icon_col_w else {
         return (rail_rect, None);
-    }
+    };
+    let w = w.clamp(0.0, rail_rect.width());
     match side {
         RailSide::Right => {
-            let col = Rect::new(rail_rect.x1 - ICON_COL_W, rail_rect.y0, rail_rect.x1, rail_rect.y1);
+            let col = Rect::new(rail_rect.x1 - w, rail_rect.y0, rail_rect.x1, rail_rect.y1);
             let tree = Rect::new(rail_rect.x0, rail_rect.y0, col.x0, rail_rect.y1);
             (tree, Some(col))
         }
         RailSide::Left => {
-            let col = Rect::new(rail_rect.x0, rail_rect.y0, rail_rect.x0 + ICON_COL_W, rail_rect.y1);
+            let col = Rect::new(rail_rect.x0, rail_rect.y0, rail_rect.x0 + w, rail_rect.y1);
             let tree = Rect::new(col.x1, rail_rect.y0, rail_rect.x1, rail_rect.y1);
             (tree, Some(col))
         }
@@ -522,7 +536,7 @@ mod tests {
     #[test]
     fn icon_col_sits_at_the_outer_edge_for_each_side() {
         let rail = Rect::new(0.0, 0.0, 320.0, 600.0);
-        let (tree, col) = split_icon_col(rail, RailSide::Right, true);
+        let (tree, col) = split_icon_col(rail, RailSide::Right, Some(ICON_COL_W));
         let col = col.expect("right rail with icons carves a column");
         // Outer edge = the window edge = this rail's own x1 for the right rail.
         assert_eq!(col.x1, rail.x1);
@@ -531,7 +545,7 @@ mod tests {
         assert_eq!(tree.x1, col.x0);
         assert_eq!(tree.x0, rail.x0);
 
-        let (tree, col) = split_icon_col(rail, RailSide::Left, true);
+        let (tree, col) = split_icon_col(rail, RailSide::Left, Some(ICON_COL_W));
         let col = col.expect("left rail with icons carves a column");
         assert_eq!(col.x0, rail.x0);
         assert_eq!(col.x1, rail.x0 + ICON_COL_W);
@@ -542,7 +556,7 @@ mod tests {
     #[test]
     fn icon_col_is_none_without_any_collapsed_groups() {
         let rail = Rect::new(0.0, 0.0, 320.0, 600.0);
-        let (tree, col) = split_icon_col(rail, RailSide::Right, false);
+        let (tree, col) = split_icon_col(rail, RailSide::Right, None);
         assert!(col.is_none());
         assert_eq!(tree, rail, "the tree gets the whole rail when nothing is collapsed");
     }

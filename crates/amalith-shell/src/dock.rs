@@ -173,6 +173,20 @@ pub struct Rail {
     /// strip. Old saved layouts have no such field, hence the default.
     #[serde(default)]
     pub icons: Vec<IconColumn>,
+    /// Width of the icon strip itself, when `icons` is non-empty — the
+    /// user drags its own inner edge to change it, independent of `width`.
+    /// Matches Illustrator: an icon column has no separate on/off toggle
+    /// for showing labels, dragging it below a threshold just hides them
+    /// (see `layout::ICON_LABEL_THRESHOLD`). Old saved layouts have no
+    /// such field, hence the default (kept in sync with
+    /// `layout::ICON_COL_W`, the labeled width every icon strip starts
+    /// at).
+    #[serde(default = "default_icon_col_w")]
+    pub icon_col_w: f32,
+}
+
+fn default_icon_col_w() -> f32 {
+    112.0
 }
 
 impl Default for Rail {
@@ -181,6 +195,7 @@ impl Default for Rail {
             tree: None,
             width: RAIL_DEFAULT_W,
             icons: Vec::new(),
+            icon_col_w: default_icon_col_w(),
         }
     }
 }
@@ -190,6 +205,7 @@ impl Rail {
         Self {
             tree: Some(node),
             width: RAIL_DEFAULT_W,
+            icon_col_w: default_icon_col_w(),
             icons: Vec::new(),
         }
     }

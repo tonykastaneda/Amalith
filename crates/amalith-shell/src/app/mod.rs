@@ -154,6 +154,10 @@ enum Drag {
     MovingFloating { id: u64, grab: Vec2, pos: Point },
     /// Dragging a rail's inner edge to widen / narrow the whole rail.
     RailWidth { side: RailSide },
+    /// Dragging an icon strip's own inner edge — narrower drops labels
+    /// (icon-only), wider brings them back. Independent of `RailWidth`,
+    /// which resizes the docked tree next to it, not the strip itself.
+    IconColWidth { side: RailSide },
     /// Dragging a Layers-panel row to restack / reparent the current
     /// selection. `body` is the panel's scrolled body rect (screen px) so
     /// the drop target can be recomputed as the pointer moves; the drag
@@ -6030,7 +6034,7 @@ fn tab_label(panel: PanelId) -> String {
 /// the whole rail visually collapses down to the icon column).
 fn rail_effective_width(rail: &Rail) -> f64 {
     if rail.tree.is_none() && !rail.icons.is_empty() {
-        layout::ICON_COL_W
+        rail.icon_col_w as f64
     } else {
         rail.width as f64
     }
@@ -6055,6 +6059,17 @@ fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
     }
 }
 
+/// The draggable bar on an icon strip's own inner edge — narrower drops
+/// labels, wider brings them back (see `layout::ICON_LABEL_THRESHOLD`).
+/// Sits fully inside the rail's rect (unlike `rail_edge_bar`, which spills
+/// onto the canvas), since the icon strip never touches the canvas edge.
+fn icon_col_edge_bar(side: RailSide, col: Rect) -> Rect {
+    match side {
+        RailSide::Left => Rect::new(col.x1 - RAIL_EDGE, col.y0, col.x1, col.y1),
+        RailSide::Right => Rect::new(col.x0, col.y0, col.x0 + RAIL_EDGE, col.y1),
+    }
+}
+
 fn build_rail_layout(
     rail: &Rail,
     side: RailSide,
@@ -6062,7 +6077,8 @@ fn build_rail_layout(
     text: &mut TextContext,
     rect: Rect,
 ) -> Layout {
-    let (tree_rect, icon_col) = layout::split_icon_col(rect, side, !rail.icons.is_empty());
+    let icon_w = (!rail.icons.is_empty()).then_some(rail.icon_col_w as f64);
+    let (tree_rect, icon_col) = layout::split_icon_col(rect, side, icon_w);
     let mut out = match &rail.tree {
         Some(tree) => layout::layout(
             tree,
@@ -6257,6 +6273,19 @@ mod rail_geometry_tests {
         assert_eq!(rail_effective_width(&rail), layout::ICON_COL_W);
         let rect = rail_rect_for(RailSide::Right, &rail, 1000.0, 800.0);
         assert_eq!(rect.width(), layout::ICON_COL_W);
+    }
+
+    #[test]
+    fn a_fully_collapsed_rail_tracks_its_own_dragged_icon_width() {
+        // The icon strip's width is user-draggable (icon+label vs.
+        // icon-only), independent of the docked-tree width it had before
+        // collapsing — a fully collapsed rail must reflect *that* value,
+        // not the fixed default.
+        let mut rail = Rail::default();
+        rail.icons = vec![IconColumn { node: tabs("color") }];
+        rail.icon_col_w = 48.0;
+        assert_eq!(rail_effective_width(&rail), 48.0);
+        assert_eq!(rail_rect_for(RailSide::Left, &rail, 1000.0, 800.0).width(), 48.0);
     }
 
     #[test]

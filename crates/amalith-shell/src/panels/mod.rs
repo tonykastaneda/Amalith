@@ -365,10 +365,13 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
     }
 }
 
-/// Whether the hamburger should show on `id`'s tab strip. Hidden when
-/// [`menu`] is empty so unused chrome stays out of the way.
-pub fn has_menu(id: PanelId) -> bool {
-    matches!(id.0, "color" | "transform" | "align")
+/// Whether the hamburger should show on `id`'s tab strip. Every panel
+/// shows one, matching Illustrator (every panel's tab strip carries the
+/// hamburger even when its flyout is trivial) — kept as a function rather
+/// than inlined `true` at each call site so a future panel that genuinely
+/// shouldn't have one can still opt out here.
+pub fn has_menu(_id: PanelId) -> bool {
+    true
 }
 
 pub use color::ColorSpace;
