@@ -30,6 +30,7 @@ pub mod app;
 pub mod appicon;
 pub mod canvas;
 pub mod chrome;
+pub mod colormanage;
 pub mod context_bar;
 pub mod convert;
 pub mod dock;

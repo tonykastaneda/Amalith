@@ -357,6 +357,8 @@ impl App {
                         "rgb" => self.color_mode = panels::ColorSpace::Rgb,
                         "hsb" => self.color_mode = panels::ColorSpace::Hsb,
                         "cmyk" => self.color_mode = panels::ColorSpace::Cmyk,
+                        "load-icc-profile" => self.load_cmyk_profile(),
+                        "clear-icc-profile" => self.clear_cmyk_profile(),
                         "invert" => {
                             let (r, g, b) = self
                                 .active_paint()

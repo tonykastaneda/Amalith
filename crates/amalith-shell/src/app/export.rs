@@ -364,6 +364,7 @@ impl App {
             src,
             bg,
             cmyk,
+            self.cmyk_profile.as_ref(),
             &mut self.text,
             &self.image_cache,
         );

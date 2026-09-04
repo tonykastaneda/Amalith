@@ -68,6 +68,7 @@ use kurbo::{BezPath, PathEl};
 use pdf_writer::types::{ColorSpaceOperand, FunctionShadingType, LineCapStyle, LineJoinStyle, MaskType};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect as PdfRect, Ref};
 
+use crate::colormanage::CmykProfile;
 use crate::lod::ImageLods;
 use crate::text::TextContext;
 
@@ -141,23 +142,47 @@ fn radial_squish(g: &Gradient) -> CoreAffine {
         * CoreAffine::translate(-center.to_vec2())
 }
 
+/// The exported PDF's own `ICCBased` CMYK color space, built once (from
+/// [`CmykProfile::icc_bytes`]) when a profile is active, and referenced
+/// from everywhere a plain `/DeviceCMYK` would otherwise go: `name` is
+/// the resource name of the `[/ICCBased stream_ref]` array object that
+/// content streams select by (`cs`/`CS` + `scn`/`SCN`, since only the
+/// bare `/DeviceCMYK` name has the `k`/`K` operator shorthand — a
+/// *named* space never does), and `stream_ref` is the raw profile stream
+/// itself, referenced directly (no name needed) from a shading
+/// dictionary's own inline `/ColorSpace`. Embedding the actual profile —
+/// not just converting numbers with it — is what makes the exported file
+/// self-describing: a RIP or viewer knows exactly what those CMYK values
+/// mean instead of interpreting them against its own default assumption.
+struct IccCmyk {
+    name: String,
+    stream_ref: Ref,
+}
+
 /// Accumulated PDF-writer state for the whole export: the object stream
 /// under construction, the id allocator, and every resource (image,
-/// pattern, ext-gstate) collected so far, written into the page's
-/// `/Resources` once the walk finishes.
-struct PdfCtx {
+/// pattern, ext-gstate, color space) collected so far, written into the
+/// page's `/Resources` once the walk finishes.
+struct PdfCtx<'a> {
     pdf: Pdf,
     alloc: Ref,
     content: Content,
     base: CoreAffine,
     cmyk: bool,
+    /// The real conversion for every CMYK color below, when loaded (see
+    /// `crate::colormanage`); `None` falls back to the naive formula on
+    /// `amalith_core::Color` (still fine for basic use, just not
+    /// press-profile-accurate).
+    profile: Option<&'a CmykProfile>,
+    icc: Option<IccCmyk>,
     x_objects: Vec<(String, Ref)>,
     patterns: Vec<(String, Ref)>,
     ext_gs: Vec<(String, Ref)>,
+    color_spaces: Vec<(String, Ref)>,
     counter: u32,
 }
 
-impl PdfCtx {
+impl PdfCtx<'_> {
     fn bump(&mut self) -> Ref {
         self.alloc.bump()
     }
@@ -167,9 +192,23 @@ impl PdfCtx {
         format!("{prefix}{}", self.counter)
     }
 
+    /// This color's CMYK components, via the loaded profile if there is
+    /// one, else the naive formula. Only meaningful when `self.cmyk`.
+    fn cmyk_of(&self, c: Color) -> [f32; 4] {
+        match self.profile {
+            Some(p) => p.rgb_to_cmyk(c),
+            None => c.to_cmyk(),
+        }
+    }
+
     fn set_fill_solid(&mut self, c: Color) {
-        if self.cmyk {
-            let [cy, m, y, k] = c.to_cmyk();
+        if let Some(icc) = &self.icc {
+            let cmyk = self.profile.expect("icc implies profile").rgb_to_cmyk(c);
+            let name = icc.name.clone();
+            self.content.set_fill_color_space(ColorSpaceOperand::Named(Name(name.as_bytes())));
+            self.content.set_fill_color(cmyk);
+        } else if self.cmyk {
+            let [cy, m, y, k] = self.cmyk_of(c);
             self.content.set_fill_cmyk(cy, m, y, k);
         } else {
             self.content.set_fill_rgb(c.r, c.g, c.b);
@@ -177,8 +216,13 @@ impl PdfCtx {
     }
 
     fn set_stroke_solid(&mut self, c: Color) {
-        if self.cmyk {
-            let [cy, m, y, k] = c.to_cmyk();
+        if let Some(icc) = &self.icc {
+            let cmyk = self.profile.expect("icc implies profile").rgb_to_cmyk(c);
+            let name = icc.name.clone();
+            self.content.set_stroke_color_space(ColorSpaceOperand::Named(Name(name.as_bytes())));
+            self.content.set_stroke_color(cmyk);
+        } else if self.cmyk {
+            let [cy, m, y, k] = self.cmyk_of(c);
             self.content.set_stroke_cmyk(cy, m, y, k);
         } else {
             self.content.set_stroke_rgb(c.r, c.g, c.b);
@@ -238,7 +282,7 @@ fn emit_geometry_into(content: &mut Content, bez: &BezPath, xf: CoreAffine) {
 /// already flattens a midpoint-skewed gradient into, so a skewed midpoint
 /// reproduces here the same way it does in the GPU renderer and SVG
 /// export. `stops` must have at least one entry.
-fn stitching_function(ctx: &mut PdfCtx, stops: &[GradientStop], sample: impl Fn(Color) -> Vec<f32>) -> Ref {
+fn stitching_function(ctx: &mut PdfCtx<'_>, stops: &[GradientStop], sample: impl Fn(Color) -> Vec<f32>) -> Ref {
     if stops.len() < 2 {
         // A single-stop "gradient" — reduce to one constant function.
         let dims = sample(stops[0].color).len();
@@ -291,18 +335,28 @@ fn stitching_function(ctx: &mut PdfCtx, stops: &[GradientStop], sample: impl Fn(
 /// the object's bbox→local, world, and doc→page transforms — see the
 /// module docs on why this must be absolute rather than relying on `cm`).
 /// `gray` swaps the color function for a luminosity (alpha-as-gray) one,
-/// for the soft-mask pass in `paint_shaded_layer`.
-fn shading_pattern(ctx: &mut PdfCtx, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, gray: bool, cmyk: bool) -> (String, Ref) {
+/// for the soft-mask pass in `paint_shaded_layer`. Reads `ctx.cmyk` /
+/// `ctx.profile` / `ctx.icc` directly rather than taking them as
+/// parameters — every caller wants the document's one active color mode,
+/// so there's nothing for a parameter to usefully vary here, only a
+/// chance for a caller to pass the wrong thing.
+fn shading_pattern(ctx: &mut PdfCtx<'_>, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, gray: bool) -> (String, Ref) {
+    let cmyk = !gray && ctx.cmyk;
+    let profile = ctx.profile;
     let stops = g.render_stops();
     let func = if gray {
         stitching_function(ctx, &stops, |c| vec![c.a])
     } else if cmyk {
-        stitching_function(ctx, &stops, |c| c.to_cmyk().to_vec())
+        stitching_function(ctx, &stops, |c| match profile {
+            Some(p) => p.rgb_to_cmyk(c).to_vec(),
+            None => c.to_cmyk().to_vec(),
+        })
     } else {
         stitching_function(ctx, &stops, |c| vec![c.r, c.g, c.b])
     };
     let id = ctx.bump();
     let matrix = coeffs(pattern_xf);
+    let icc_stream = ctx.icc.as_ref().map(|icc| icc.stream_ref);
     let mut pat = ctx.pdf.shading_pattern(id);
     pat.matrix(matrix);
     {
@@ -310,7 +364,10 @@ fn shading_pattern(ctx: &mut PdfCtx, g: &Gradient, coords: &[f32], pattern_xf: C
         if gray {
             sh.color_space().device_gray();
         } else if cmyk {
-            sh.color_space().device_cmyk();
+            match icc_stream {
+                Some(stream_ref) => sh.color_space().icc_based(stream_ref),
+                None => sh.color_space().device_cmyk(),
+            }
         } else {
             sh.color_space().device_rgb();
         }
@@ -352,11 +409,11 @@ fn gradient_coords_and_matrix(g: &Gradient, unit_to_page: CoreAffine) -> (Vec<f3
 /// silently becoming solid (PDF shadings have no alpha channel of their
 /// own; see the module docs).
 #[allow(clippy::too_many_arguments)]
-fn paint_shaded_layer(ctx: &mut PdfCtx, bez: &BezPath, xf: CoreAffine, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, page_w: f32, page_h: f32) {
+fn paint_shaded_layer(ctx: &mut PdfCtx<'_>, bez: &BezPath, xf: CoreAffine, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, page_w: f32, page_h: f32) {
     let needs_alpha = g.render_stops().iter().any(|s| s.color.a < 0.999);
     ctx.content.save_state();
     if needs_alpha {
-        let (mask_pat, mask_pat_id) = shading_pattern(ctx, g, coords, pattern_xf, true, false);
+        let (mask_pat, mask_pat_id) = shading_pattern(ctx, g, coords, pattern_xf, true);
         let mut mc = Content::new();
         mc.set_fill_color_space(ColorSpaceOperand::Pattern);
         mc.set_fill_pattern([], Name(mask_pat.as_bytes()));
@@ -385,7 +442,7 @@ fn paint_shaded_layer(ctx: &mut PdfCtx, bez: &BezPath, xf: CoreAffine, g: &Gradi
         ctx.ext_gs.push((gs_name.clone(), gs_id));
         ctx.content.set_parameters(Name(gs_name.as_bytes()));
     }
-    let (pat, _) = shading_pattern(ctx, g, coords, pattern_xf, false, ctx.cmyk);
+    let (pat, _) = shading_pattern(ctx, g, coords, pattern_xf, false);
     ctx.content.set_fill_color_space(ColorSpaceOperand::Pattern);
     ctx.content.set_fill_pattern([], Name(pat.as_bytes()));
     ctx.emit_geometry(bez, xf);
@@ -414,7 +471,7 @@ fn average_point_color(points: &[FreeformPoint]) -> Color {
 /// space → page space; `unit_to_page` is bbox-unit space → page space
 /// (only meaningful when the fill/stroke is a gradient).
 #[allow(clippy::too_many_arguments)]
-fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, unit_to_page: CoreAffine, appearance: &Appearance, page_w: f32, page_h: f32) {
+fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffine, unit_to_page: CoreAffine, appearance: &Appearance, page_w: f32, page_h: f32) {
     if appearance.opacity <= 0.0 {
         return;
     }
@@ -547,7 +604,7 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
                     // (unmasked) colour-only pattern reproduces it closely
                     // enough not to be worth a second geometry pass.
                     let (coords, pattern_xf) = gradient_coords_and_matrix(g, unit_to_page);
-                    let (name, _) = shading_pattern(ctx, g, &coords, pattern_xf, false, ctx.cmyk);
+                    let (name, _) = shading_pattern(ctx, g, &coords, pattern_xf, false);
                     ctx.content.set_stroke_color_space(ColorSpaceOperand::Pattern);
                     ctx.content.set_stroke_pattern([], Name(name.as_bytes()));
                 }
@@ -599,6 +656,7 @@ pub fn export_vector_pdf(
     src: CoreRect,
     bg: Option<Color>,
     cmyk: bool,
+    profile: Option<&CmykProfile>,
     text: &mut TextContext,
     images: &HashMap<AssetId, ImageLods>,
 ) -> Vec<u8> {
@@ -612,11 +670,31 @@ pub fn export_vector_pdf(
         content: Content::new(),
         base,
         cmyk,
+        profile,
+        icc: None,
         x_objects: Vec::new(),
         patterns: Vec::new(),
         ext_gs: Vec::new(),
+        color_spaces: Vec::new(),
         counter: 0,
     };
+    // Embed the profile itself once, up front, so every CMYK color below
+    // — solid or gradient — can reference the *same* ICCBased space
+    // rather than each rebuilding its own copy of the profile stream.
+    if cmyk {
+        if let Some(p) = profile {
+            let stream_ref = ctx.bump();
+            {
+                let mut icc_stream = ctx.pdf.icc_profile(stream_ref, p.icc_bytes());
+                icc_stream.n(4); // CMYK = 4 components
+            }
+            let cs_ref = ctx.bump();
+            ctx.pdf.color_space(cs_ref).icc_based(stream_ref);
+            let name = ctx.fresh_name("Cs");
+            ctx.color_spaces.push((name.clone(), cs_ref));
+            ctx.icc = Some(IccCmyk { name, stream_ref });
+        }
+    }
 
     if let Some(c) = bg {
         ctx.set_fill_solid(c);
@@ -661,6 +739,12 @@ pub fn export_vector_pdf(
                 gs.pair(Name(name.as_bytes()), *id);
             }
         }
+        {
+            let mut cs = res.color_spaces();
+            for (name, id) in &ctx.color_spaces {
+                cs.pair(Name(name.as_bytes()), *id);
+            }
+        }
     }
     page.finish();
     ctx.pdf.stream(content_id, &content_bytes);
@@ -668,7 +752,7 @@ pub fn export_vector_pdf(
     ctx.pdf.finish()
 }
 
-fn walk(ctx: &mut PdfCtx, doc: &Document, id: ObjectId, text: &mut TextContext, images: &HashMap<AssetId, ImageLods>, pw: f32, ph: f32) {
+fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextContext, images: &HashMap<AssetId, ImageLods>, pw: f32, ph: f32) {
     let Some(obj) = doc.object(id) else {
         return;
     };
@@ -710,7 +794,7 @@ fn walk(ctx: &mut PdfCtx, doc: &Document, id: ObjectId, text: &mut TextContext, 
 /// embeds it positioned at `doc_bounds` (document space) — a no-op if
 /// the asset isn't in `images` (not yet decoded) or is in a format this
 /// can't re-encode.
-fn embed_image_object(ctx: &mut PdfCtx, images: &HashMap<AssetId, ImageLods>, asset: AssetId, doc_bounds: CoreRect) {
+fn embed_image_object(ctx: &mut PdfCtx<'_>, images: &HashMap<AssetId, ImageLods>, asset: AssetId, doc_bounds: CoreRect) {
     let Some(lods) = images.get(&asset) else {
         return;
     };
@@ -776,7 +860,7 @@ fn transformed_bounds(xf: CoreAffine, b: CoreRect) -> CoreRect {
     CoreRect::new(x0, y0, x1, y1)
 }
 
-fn embed_image(ctx: &mut PdfCtx, jpeg: &[u8], iw: u32, ih: u32, doc_bounds: CoreRect) {
+fn embed_image(ctx: &mut PdfCtx<'_>, jpeg: &[u8], iw: u32, ih: u32, doc_bounds: CoreRect) {
     let id = ctx.bump();
     {
         let mut img = ctx.pdf.image_xobject(id, jpeg);
@@ -810,7 +894,7 @@ fn embed_image(ctx: &mut PdfCtx, jpeg: &[u8], iw: u32, ih: u32, doc_bounds: Core
     ctx.content.restore_state();
 }
 
-fn paint_one(ctx: &mut PdfCtx, doc: &Document, id: ObjectId, bez: &BezPath, appearance: &Appearance, pw: f32, ph: f32) {
+fn paint_one(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, bez: &BezPath, appearance: &Appearance, pw: f32, ph: f32) {
     let world = doc.world_transform(id);
     let xf = ctx.base * world;
     let unit_to_page = match doc.object(id).and_then(|o| o.kind.own_local_bounds()) {
@@ -916,6 +1000,7 @@ mod tests {
             CoreRect::new(-10.0, -10.0, 580.0, 70.0),
             Some(Color::rgb(1.0, 1.0, 1.0)),
             false,
+            None,
             &mut text,
             &images,
         );
@@ -972,6 +1057,7 @@ mod tests {
             CoreRect::new(0.0, 0.0, 100.0, 60.0),
             None,
             false,
+            None,
             &mut text,
             &images,
         );
@@ -997,11 +1083,44 @@ mod tests {
             CoreRect::new(-10.0, -10.0, 580.0, 70.0),
             None,
             true,
+            None,
             &mut text,
             &images,
         );
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("/DeviceCMYK"), "CMYK mode should emit at least one DeviceCMYK color space");
         assert!(!s.contains(" rg\n") && !s.contains(" rg "), "CMYK mode shouldn't fall back to any RGB fill operator");
+    }
+
+    /// With a real loaded profile, CMYK output should embed and reference
+    /// `/ICCBased` (the profile itself, self-describing the numbers)
+    /// rather than the bare `/DeviceCMYK` name a viewer would have to
+    /// guess the meaning of. Uses the same real macOS-shipped profile
+    /// `colormanage`'s own tests do; skips off macOS.
+    #[test]
+    fn export_vector_pdf_embeds_the_icc_profile_when_one_is_loaded() {
+        let path = std::path::Path::new("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc");
+        if !path.exists() {
+            eprintln!("skipping: no system CMYK profile at {path:?} (not on macOS?)");
+            return;
+        }
+        let profile = crate::colormanage::CmykProfile::from_path(path).expect("load the system CMYK profile");
+        let (doc, ids) = sample_document();
+        let mut text = TextContext::new();
+        let images = HashMap::new();
+        let bytes = export_vector_pdf(
+            &doc,
+            &ids,
+            CoreRect::new(-10.0, -10.0, 580.0, 70.0),
+            None,
+            true,
+            Some(&profile),
+            &mut text,
+            &images,
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.contains("/ICCBased"), "a loaded profile should embed an ICCBased color space");
+        assert!(s.contains("/N 4"), "the embedded ICC profile stream should declare 4 (CMYK) components");
+        assert!(!s.contains("/DeviceCMYK"), "a loaded profile should replace every DeviceCMYK use, not sit alongside it");
     }
 }

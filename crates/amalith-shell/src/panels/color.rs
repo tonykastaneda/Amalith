@@ -7,6 +7,7 @@ use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, ColorStop, Fill, Gradient};
 use vello::Scene;
 
+use crate::colormanage::CmykProfile;
 use crate::picker::{hsv_to_rgb, rgb_to_hsv};
 use crate::text::TextContext;
 
@@ -32,7 +33,7 @@ pub enum ColorSpace {
 
 pub(super) fn menu(ctx: &Ctx) -> Vec<MenuEntry> {
     let m = ctx.color_mode;
-    vec![
+    let mut items = vec![
         MenuEntry::Item {
             id: "rgb",
             label: "RGB",
@@ -48,18 +49,34 @@ pub(super) fn menu(ctx: &Ctx) -> Vec<MenuEntry> {
             label: "CMYK",
             checked: m == ColorSpace::Cmyk,
         },
-        MenuEntry::Separator,
-        MenuEntry::Item {
-            id: "invert",
-            label: "Invert",
-            checked: false,
-        },
-        MenuEntry::Item {
-            id: "complement",
-            label: "Complement",
-            checked: false,
-        },
-    ]
+    ];
+    if m == ColorSpace::Cmyk {
+        items.push(MenuEntry::Separator);
+        items.push(MenuEntry::Item {
+            id: "load-icc-profile",
+            label: "Load CMYK Profile\u{2026}",
+            checked: ctx.cmyk_profile.is_some(),
+        });
+        if ctx.cmyk_profile.is_some() {
+            items.push(MenuEntry::Item {
+                id: "clear-icc-profile",
+                label: "Remove CMYK Profile",
+                checked: false,
+            });
+        }
+    }
+    items.push(MenuEntry::Separator);
+    items.push(MenuEntry::Item {
+        id: "invert",
+        label: "Invert",
+        checked: false,
+    });
+    items.push(MenuEntry::Item {
+        id: "complement",
+        label: "Complement",
+        checked: false,
+    });
+    items
 }
 
 struct Lay {
@@ -151,20 +168,29 @@ fn rgb_of(paint: Paint) -> (f32, f32, f32) {
         .unwrap_or((0.0, 0.0, 0.0))
 }
 
-// RGB↔CMYK conversion lives on `amalith_core::Color` (`to_cmyk`/`from_cmyk`)
-// so the PDF exporter's `DeviceCMYK` output uses the exact same formula the
-// Color panel previews — one conversion, not two that could drift apart.
-fn rgb_to_cmyk(r: f32, g: f32, b: f32) -> [f32; 4] {
-    amalith_core::Color::rgb(r, g, b).to_cmyk()
+// RGB<->CMYK conversion prefers a loaded ICC profile (real, Little-CMS-
+// managed conversion — see `crate::colormanage`) and otherwise falls
+// back to `amalith_core::Color`'s naive formula — the same fallback the
+// PDF exporter uses, so the two conversions can never quietly drift
+// apart from each other.
+fn rgb_to_cmyk(r: f32, g: f32, b: f32, profile: Option<&CmykProfile>) -> [f32; 4] {
+    let c = amalith_core::Color::rgb(r, g, b);
+    match profile {
+        Some(p) => p.rgb_to_cmyk(c),
+        None => c.to_cmyk(),
+    }
 }
 
-fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32) -> (f32, f32, f32) {
-    let rgb = amalith_core::Color::from_cmyk(c, m, y, k);
+fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32, profile: Option<&CmykProfile>) -> (f32, f32, f32) {
+    let rgb = match profile {
+        Some(p) => p.cmyk_to_rgb([c, m, y, k]),
+        None => amalith_core::Color::from_cmyk(c, m, y, k),
+    };
     (rgb.r, rgb.g, rgb.b)
 }
 
 /// Channel values in 0..1 for the current mode, plus display strings.
-fn channels(mode: ColorSpace, r: f32, g: f32, b: f32) -> (Vec<f32>, Vec<String>) {
+fn channels(mode: ColorSpace, r: f32, g: f32, b: f32, profile: Option<&CmykProfile>) -> (Vec<f32>, Vec<String>) {
     match mode {
         ColorSpace::Rgb => (
             vec![r, g, b],
@@ -186,7 +212,7 @@ fn channels(mode: ColorSpace, r: f32, g: f32, b: f32) -> (Vec<f32>, Vec<String>)
             )
         }
         ColorSpace::Cmyk => {
-            let c = rgb_to_cmyk(r, g, b);
+            let c = rgb_to_cmyk(r, g, b, profile);
             (
                 c.to_vec(),
                 c.iter()
@@ -197,7 +223,15 @@ fn channels(mode: ColorSpace, r: f32, g: f32, b: f32) -> (Vec<f32>, Vec<String>)
     }
 }
 
-pub fn apply_channel(mode: ColorSpace, r: f32, g: f32, b: f32, channel: u8, t: f32) -> (f32, f32, f32) {
+pub fn apply_channel(
+    mode: ColorSpace,
+    r: f32,
+    g: f32,
+    b: f32,
+    channel: u8,
+    t: f32,
+    profile: Option<&CmykProfile>,
+) -> (f32, f32, f32) {
     let t = t.clamp(0.0, 1.0);
     match mode {
         ColorSpace::Rgb => {
@@ -215,9 +249,9 @@ pub fn apply_channel(mode: ColorSpace, r: f32, g: f32, b: f32, channel: u8, t: f
             hsv_to_rgb(h, s, v)
         }
         ColorSpace::Cmyk => {
-            let mut c = rgb_to_cmyk(r, g, b);
+            let mut c = rgb_to_cmyk(r, g, b, profile);
             c[(channel as usize).min(3)] = t;
-            cmyk_to_rgb(c[0], c[1], c[2], c[3])
+            cmyk_to_rgb(c[0], c[1], c[2], c[3], profile)
         }
     }
 }
@@ -238,7 +272,15 @@ pub fn complement_rgb(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     hsv_to_rgb((h + 0.5).rem_euclid(1.0), s, v)
 }
 
-fn track_gradient(mode: ColorSpace, channel: usize, r: f32, g: f32, b: f32, track: Rect) -> Gradient {
+fn track_gradient(
+    mode: ColorSpace,
+    channel: usize,
+    r: f32,
+    g: f32,
+    b: f32,
+    track: Rect,
+    profile: Option<&CmykProfile>,
+) -> Gradient {
     let a = track.x0;
     let y = track.y0 + track.height() * 0.5;
     let z = track.x1;
@@ -286,12 +328,12 @@ fn track_gradient(mode: ColorSpace, channel: usize, r: f32, g: f32, b: f32, trac
             }
         }
         ColorSpace::Cmyk => {
-            let mut c = rgb_to_cmyk(r, g, b);
+            let mut c = rgb_to_cmyk(r, g, b, profile);
             let i = channel.min(3);
             c[i] = 0.0;
-            let (r0, g0, b0) = cmyk_to_rgb(c[0], c[1], c[2], c[3]);
+            let (r0, g0, b0) = cmyk_to_rgb(c[0], c[1], c[2], c[3], profile);
             c[i] = 1.0;
-            let (r1, g1, b1) = cmyk_to_rgb(c[0], c[1], c[2], c[3]);
+            let (r1, g1, b1) = cmyk_to_rgb(c[0], c[1], c[2], c[3], profile);
             Gradient::new_linear((a, y), (z, y)).with_stops([
                 Color::new([r0, g0, b0, 1.0]),
                 Color::new([r1, g1, b1, 1.0]),
@@ -328,7 +370,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     };
     let paint = slot_paint(ctx);
     let (r, g, b) = rgb_of(paint);
-    let (vals, labels_v) = channels(ctx.color_mode, r, g, b);
+    let (vals, labels_v) = channels(ctx.color_mode, r, g, b, ctx.cmyk_profile);
 
     text.draw(
         scene,
@@ -428,7 +470,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             track.y0 + 8.0,
         );
         let t = vals.get(i).copied().unwrap_or(0.0);
-        let grad = track_gradient(ctx.color_mode, i, r, g, b, *track);
+        let grad = track_gradient(ctx.color_mode, i, r, g, b, *track, ctx.cmyk_profile);
         scene.fill(Fill::NonZero, ID, &grad, None, track);
         scene.stroke(&Stroke::new(1.0), ID, th.border, None, track);
         draw_thumb(scene, *track, t, th.text);
@@ -537,7 +579,7 @@ mod tests {
 
     #[test]
     fn rgb_channel_sets_only_that_component() {
-        let (r, g, b) = apply_channel(ColorSpace::Rgb, 0.2, 0.4, 0.6, 0, 1.0);
+        let (r, g, b) = apply_channel(ColorSpace::Rgb, 0.2, 0.4, 0.6, 0, 1.0, None);
         assert!((r - 1.0).abs() < 1e-5);
         assert!((g - 0.4).abs() < 1e-5);
         assert!((b - 0.6).abs() < 1e-5);
@@ -548,5 +590,29 @@ mod tests {
         let (r, g, b) = complement_rgb(1.0, 0.0, 0.0);
         // Complementary of red is cyan.
         assert!(g > 0.9 && b > 0.9 && r < 0.1);
+    }
+
+    /// Regression/wiring test: a loaded profile must actually be
+    /// consulted, not just accepted and ignored — `rgb_to_cmyk` (and so
+    /// `apply_channel`/`channels`/`track_gradient`, which all go through
+    /// it) should produce a *different* result with a real profile than
+    /// the naive formula for a color where the two are known to disagree.
+    /// Uses the same real macOS-shipped profile `colormanage`'s own tests
+    /// do; skips off macOS.
+    #[test]
+    fn cmyk_conversion_uses_the_loaded_profile_when_present() {
+        let path = std::path::Path::new("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc");
+        if !path.exists() {
+            eprintln!("skipping: no system CMYK profile at {path:?} (not on macOS?)");
+            return;
+        }
+        let profile = CmykProfile::from_path(path).expect("load the system CMYK profile");
+        let (r, g, b) = (0.8, 0.3, 0.1);
+        let naive = rgb_to_cmyk(r, g, b, None);
+        let profiled = rgb_to_cmyk(r, g, b, Some(&profile));
+        assert!(
+            naive.iter().zip(profiled.iter()).any(|(a, b)| (a - b).abs() > 0.01),
+            "profiled conversion should differ from the naive formula: naive={naive:?} profiled={profiled:?}"
+        );
     }
 }

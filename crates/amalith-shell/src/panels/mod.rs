@@ -128,6 +128,10 @@ pub struct Ctx<'a> {
     pub layer_drop: Option<(i64, bool)>,
     /// Color panel: RGB / HSB / CMYK slider set.
     pub color_mode: ColorSpace,
+    /// Color panel: the loaded ICC CMYK profile, if any — used for real
+    /// (Little CMS) RGB<->CMYK conversion in place of the naive formula.
+    /// `None` means CMYK conversion is the disclosed approximation.
+    pub cmyk_profile: Option<&'a crate::colormanage::CmykProfile>,
     /// Color panel: recently used solid colours, newest first.
     pub recent: &'a [CoreColor],
     /// Transform panel 9-point origin and W/H lock.

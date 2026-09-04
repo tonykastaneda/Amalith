@@ -50,8 +50,9 @@ pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
-    about, appicon, chrome, context_bar, convert, home, icons, layout, panels, picker, prefs,
-    recent, rulers, sample, select, settings, shapedialog, stroke_panel, textedit, workspace, Theme,
+    about, appicon, chrome, colormanage, context_bar, convert, home, icons, layout, panels,
+    picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel, textedit,
+    workspace, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -800,6 +801,13 @@ struct App {
     picker: Option<picker::Picker>,
     /// Color panel slider space (RGB / HSB / CMYK).
     color_mode: panels::ColorSpace,
+    /// A loaded ICC destination profile for real (Little CMS) RGB<->CMYK
+    /// conversion, used by the Color panel's CMYK sliders and the PDF
+    /// exporter's DeviceCMYK/ICCBased output in place of the naive
+    /// formula (`amalith_core::Color::to_cmyk`) whenever one's loaded.
+    /// `None` — the default — means every CMYK conversion in the app
+    /// stays the disclosed approximation.
+    cmyk_profile: Option<colormanage::CmykProfile>,
     /// Transform panel: 9-point origin, W/H lock, live numeric edit.
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
@@ -1014,6 +1022,7 @@ impl App {
             clipboard: None,
             picker: None,
             color_mode: panels::ColorSpace::Rgb,
+            cmyk_profile: None,
             xform_ref: amalith_core::RefPoint::CENTER,
             xform_constrain: true,
             xform_edit: None,
@@ -1368,7 +1377,15 @@ impl App {
             .color()
             .map(|c| (c.r, c.g, c.b))
             .unwrap_or((0.0, 0.0, 0.0));
-        let (r, g, b) = panels::color::apply_channel(self.color_mode, r, g, b, channel, t);
+        let (r, g, b) = panels::color::apply_channel(
+            self.color_mode,
+            r,
+            g,
+            b,
+            channel,
+            t,
+            self.cmyk_profile.as_ref(),
+        );
         self.apply_solid_rgb(r, g, b);
     }
 
@@ -2944,6 +2961,33 @@ impl App {
             .max()
             .unwrap_or(0);
         self.restack(if to_front { bound } else { -bound });
+    }
+
+    /// Color panel: "Load CMYK Profile…" — pick a `.icc`/`.icm` file and,
+    /// if it's a valid CMYK destination profile, use it for every CMYK
+    /// conversion from here on (the Color panel's sliders, and PDF
+    /// export's DeviceCMYK/ICCBased output) in place of the naive
+    /// approximation. Surfaces a rejected file's reason the same way any
+    /// other I/O failure in this app is reported.
+    pub(in crate::app) fn load_cmyk_profile(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("ICC Profile", &["icc", "icm"])
+            .pick_file()
+        else {
+            return;
+        };
+        match colormanage::CmykProfile::from_path(&path) {
+            Ok(profile) => self.cmyk_profile = Some(profile),
+            Err(e) => self.doc.io_error = Some(e),
+        }
+        self.request_main_redraw();
+    }
+
+    /// Color panel: "Remove CMYK Profile" — revert to the naive
+    /// approximation.
+    pub(in crate::app) fn clear_cmyk_profile(&mut self) {
+        self.cmyk_profile = None;
+        self.request_main_redraw();
     }
 
     /// ⌘O — pick a `.amalith` file and load it, replacing the document.
@@ -4706,6 +4750,7 @@ impl App {
             layer_scroll: self.panel_scroll_of(PanelId("layers")),
             layer_drop: None,
             color_mode: self.color_mode,
+            cmyk_profile: self.cmyk_profile.as_ref(),
             recent: &self.recent_colors,
             xform_ref: self.xform_ref,
             xform_constrain: self.xform_constrain,

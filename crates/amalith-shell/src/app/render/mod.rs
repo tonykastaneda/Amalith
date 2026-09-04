@@ -483,6 +483,7 @@ impl App {
                 &self.layer_query,
                 self.layer_search_focused,
                 self.color_mode,
+                self.cmyk_profile.as_ref(),
                 &self.recent_colors,
                 &self.image_cache,
                 self.xform_ref,
@@ -560,6 +561,7 @@ impl App {
                                 None
                             },
                             color_mode: self.color_mode,
+                            cmyk_profile: self.cmyk_profile.as_ref(),
                             recent: &self.recent_colors,
                             xform_ref: self.xform_ref,
                             xform_constrain: self.xform_constrain,
