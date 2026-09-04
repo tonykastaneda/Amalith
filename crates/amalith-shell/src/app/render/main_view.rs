@@ -532,7 +532,7 @@ pub(in crate::app) fn paint_main(
                     &tab_label,
                 );
             }
-            chrome::paint(scene, &laid, theme, text, &tab_label);
+            chrome::paint(scene, &laid, theme, text, true, &tab_label);
             let ctx = panels::Ctx {
                 theme,
                 doc,

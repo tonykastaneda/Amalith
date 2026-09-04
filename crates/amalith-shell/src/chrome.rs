@@ -6,7 +6,7 @@ use vello::peniko::Fill;
 use vello::Scene;
 
 use crate::dock::{DropTarget, IconColumn, NodePath, PanelId, Side};
-use crate::layout::{IconRect, Layout};
+use crate::layout::{IconRect, Layout, PanelArea};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
@@ -45,13 +45,32 @@ pub fn collapse_rect(tab_strip: Rect, has_menu: bool, theme: &Theme) -> Rect {
     Rect::new(x1 - theme.panel_collapse_w, tab_strip.y0, x1, tab_strip.y1)
 }
 
+/// Is `area` the topmost group in its column — the one whose strip should
+/// show the «/» button? Collapsing acts on a whole column at once (see
+/// `dock::Rail::collapse`), so only the column's top group needs the
+/// control at all; every group stacked below it shares that one button's
+/// effect instead of repeating it. "Same column" here means "some other
+/// area's horizontal span overlaps this one's and sits above it" — cheap
+/// to check directly off the already-laid-out rects, no tree walk needed.
+pub fn is_column_top(area: &PanelArea, all: &[PanelArea]) -> bool {
+    !all.iter().any(|other| {
+        other.bounds.y0 < area.bounds.y0 - 0.5
+            && other.bounds.x0 < area.bounds.x1
+            && other.bounds.x1 > area.bounds.x0
+    })
+}
+
 /// Paint every group and splitter in `layout`. `label(panel)` supplies the
-/// tab caption; `text` rasterizes it.
+/// tab caption; `text` rasterizes it. `show_collapse` gates the «/»
+/// button — on for a rail (which has an icon strip to collapse into),
+/// off for a floating window (which doesn't, and has no click handling
+/// wired up for it either).
 pub fn paint(
     scene: &mut Scene,
     layout: &Layout,
     theme: &Theme,
     text: &mut TextContext,
+    show_collapse: bool,
     label: &dyn Fn(PanelId) -> String,
 ) {
     for area in &layout.areas {
@@ -115,11 +134,15 @@ pub fn paint(
             paint_hamburger(scene, menu, theme.text_dim);
         }
 
-        // Collapse-to-icons («) on an ordinary group, or expand-from-icons
-        // (») on a flyout's own strip — same drawn-last-so-it-wins spot.
-        let collapse = collapse_rect(area.tab_strip, area.show_menu, theme);
-        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &collapse);
-        paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
+        // Collapse-to-icons («) on the top group of an ordinary column
+        // (every group below it shares that one button's effect, so only
+        // the top needs it — see `is_column_top`), or expand-from-icons
+        // (») on a flyout's own strip regardless of position.
+        if show_collapse && (area.is_flyout || is_column_top(area, &layout.areas)) {
+            let collapse = collapse_rect(area.tab_strip, area.show_menu, theme);
+            scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &collapse);
+            paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
+        }
 
         scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);
     }
@@ -291,5 +314,42 @@ mod tests {
         assert_eq!(m.y0, strip.y0);
         assert_eq!(m.y1, strip.y1);
         assert!((m.width() - theme.panel_menu_w).abs() < 1e-9);
+    }
+
+    fn area_at(bounds: Rect) -> PanelArea {
+        PanelArea {
+            path: NodePath(Vec::new()),
+            bounds,
+            tab_strip: bounds,
+            body: bounds,
+            tabs: Vec::new(),
+            active: 0,
+            show_menu: false,
+            is_flyout: false,
+        }
+    }
+
+    #[test]
+    fn only_the_top_of_a_stacked_column_shows_the_collapse_button() {
+        // Three groups stacked in one column (same x-range, increasing y) —
+        // matching Illustrator's own chrome, only the first should count.
+        let top = area_at(Rect::new(0.0, 0.0, 300.0, 100.0));
+        let middle = area_at(Rect::new(0.0, 100.0, 300.0, 200.0));
+        let bottom = area_at(Rect::new(0.0, 200.0, 300.0, 300.0));
+        let all = [top.clone(), middle.clone(), bottom.clone()];
+        assert!(is_column_top(&top, &all));
+        assert!(!is_column_top(&middle, &all));
+        assert!(!is_column_top(&bottom, &all));
+    }
+
+    #[test]
+    fn side_by_side_columns_each_get_their_own_top() {
+        // Two columns side by side (disjoint x-ranges) — each is its own
+        // column and each counts as its own top, independent of the other.
+        let left = area_at(Rect::new(0.0, 0.0, 150.0, 100.0));
+        let right = area_at(Rect::new(150.0, 0.0, 300.0, 100.0));
+        let all = [left.clone(), right.clone()];
+        assert!(is_column_top(&left, &all));
+        assert!(is_column_top(&right, &all));
     }
 }

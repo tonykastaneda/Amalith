@@ -466,7 +466,8 @@ impl App {
                     for area in &laid.areas {
                         if area.tab_strip.contains(self.pointer) {
                             let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
-                            if collapse.contains(self.pointer) {
+                            let collapse_shown = area.is_flyout || chrome::is_column_top(area, &laid.areas);
+                            if collapse_shown && collapse.contains(self.pointer) {
                                 if area.is_flyout {
                                     if let Some((_, column, _)) = self.flyout_icon {
                                         self.expand_column(side, column);

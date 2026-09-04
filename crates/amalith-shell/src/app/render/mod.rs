@@ -519,7 +519,7 @@ impl App {
                     // Same tab strip (with ×) and frame as a docked panel.
                     self.content
                         .fill(Fill::NonZero, ID, self.theme.panel_bg, None, &Rect::new(0.0, 0.0, wl, hl));
-                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, &tab_label);
+                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, false, &tab_label);
                     let area = laid.areas.first();
                     let pid = area.and_then(|a| a.tabs.get(a.active).map(|t| t.panel));
                     if let (Some(area), Some(pid)) = (area, pid) {
