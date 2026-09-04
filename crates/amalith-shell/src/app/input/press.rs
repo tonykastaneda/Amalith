@@ -613,10 +613,12 @@ impl App {
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
-                // Gradient tool: drag the gradient axis on the object under
-                // the cursor (applies a linear gradient first if it has none).
+                // Gradient tool: press near an annotator handle edits that
+                // handle (drag a stop along the line, or move an endpoint);
+                // anywhere else lays down a fresh axis on the object under
+                // the cursor.
                 if self.active_tool == Tool::Gradient {
-                    self.begin_gradient_drag(dp);
+                    self.gradient_tool_press(dp);
                     return;
                 }
 

@@ -279,6 +279,12 @@ enum Drag {
     /// is where the press landed (document space); the current pointer is
     /// the other end.
     GradientAxis { object: ObjectId, start_doc: Point },
+    /// Gradient tool: dragging stop `index` along the on-canvas axis of
+    /// `object` (re-locates the stop's offset).
+    GradientStopOnCanvas { object: ObjectId, index: usize },
+    /// Gradient tool: dragging one end of the on-canvas axis of `object`
+    /// (`start` = the origin handle, else the far handle).
+    GradientEndpoint { object: ObjectId, start: bool },
     /// Gradient panel: dragging the midpoint diamond between stop `index`
     /// and `index + 1` along the ramp `bar` (screen px).
     GradientMid { index: usize, bar: Rect },

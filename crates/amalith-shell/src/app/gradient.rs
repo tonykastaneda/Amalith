@@ -18,7 +18,18 @@ pub(in crate::app) struct GradientAnnot {
     pub start: Point,
     pub end: Point,
     pub kind: GradientKind,
-    pub stops: Vec<(f32, amalith_core::Color)>,
+    /// `(offset, colour, is the panel-selected stop)` for each stop.
+    pub stops: Vec<(f32, amalith_core::Color, bool)>,
+}
+
+/// What a Gradient-tool press landed on, if the annotator is showing.
+pub(in crate::app) enum AnnotHit {
+    /// A stop dot — drag it along the axis to re-locate that stop.
+    Stop(ObjectId, usize),
+    /// The start handle (hollow diamond).
+    Start(ObjectId),
+    /// The end handle (open square).
+    End(ObjectId),
 }
 
 impl App {
@@ -567,6 +578,125 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Gradient tool press router: a press near the annotator's handles
+    /// edits that handle; anything else lays down a fresh axis. Call this
+    /// from the press handler instead of `begin_gradient_drag` directly.
+    pub(in crate::app) fn gradient_tool_press(&mut self, dp: Point) {
+        if let Some(hit) = self.gradient_annot_hit(dp) {
+            match hit {
+                AnnotHit::Stop(obj, i) => {
+                    self.gradient_stop = i;
+                    self.drag = Drag::GradientStopOnCanvas {
+                        object: obj,
+                        index: i,
+                    };
+                }
+                AnnotHit::Start(obj) => {
+                    self.drag = Drag::GradientEndpoint {
+                        object: obj,
+                        start: true,
+                    };
+                }
+                AnnotHit::End(obj) => {
+                    self.drag = Drag::GradientEndpoint {
+                        object: obj,
+                        start: false,
+                    };
+                }
+            }
+            self.ensure_panel("gradient");
+            self.request_main_redraw();
+            return;
+        }
+        self.begin_gradient_drag(dp);
+    }
+
+    /// The target gradient's axis endpoints in **document space**
+    /// (`own_local_bounds` unit coords mapped through the object's world
+    /// transform), plus the object id.
+    fn gradient_axis_doc(&self) -> Option<(ObjectId, Point, Point)> {
+        let stroke = self.active_slot == panels::PaintSlot::Stroke;
+        let doc = self.doc.editor.document();
+        let id = self.doc.selection.iter().copied().find(|id| {
+            Self::obj_slot_paint(doc, *id, stroke)
+                .and_then(|p| p.gradient_id())
+                .is_some()
+        })?;
+        let obj = doc.object(id)?;
+        let gid = Self::obj_slot_paint(doc, id, stroke)?.gradient_id()?;
+        let g = doc.gradient(gid)?;
+        let b = obj.kind.own_local_bounds()?;
+        let wt = doc.world_transform(id);
+        let map = |u: [f64; 2]| {
+            let wp = wt * amalith_core::Point::new(b.x0 + u[0] * b.width(), b.y0 + u[1] * b.height());
+            Point::new(wp.x, wp.y)
+        };
+        Some((id, map(g.start), map(g.end)))
+    }
+
+    /// What the Gradient-tool press at `dp` (document space) landed on.
+    fn gradient_annot_hit(&self, dp: Point) -> Option<AnnotHit> {
+        if self.active_tool != Tool::Gradient {
+            return None;
+        }
+        let (id, a, b) = self.gradient_axis_doc()?;
+        let tol = 9.0 / self.doc.view.zoom.max(1e-6);
+        // Endpoints take priority (they sit under stop 0 / stop N).
+        if dp.distance(a) <= tol * 1.4 {
+            return Some(AnnotHit::Start(id));
+        }
+        if dp.distance(b) <= tol * 1.4 {
+            return Some(AnnotHit::End(id));
+        }
+        let (_, g) = self.target_gradient()?;
+        let ab = b - a;
+        for (i, stop) in g.stops.iter().enumerate() {
+            let p = a + ab * stop.offset as f64;
+            if dp.distance(p) <= tol {
+                return Some(AnnotHit::Stop(id, i));
+            }
+        }
+        None
+    }
+
+    /// Project `dp` onto the target gradient's axis → parameter `t` in
+    /// `0..1` (for dragging a stop along the on-canvas line).
+    pub(in crate::app) fn gradient_axis_param(&self, dp: Point) -> Option<f64> {
+        let (_, a, b) = self.gradient_axis_doc()?;
+        let ab = b - a;
+        let len2 = ab.hypot2();
+        if len2 < 1e-9 {
+            return Some(0.0);
+        }
+        Some(((dp - a).dot(ab) / len2).clamp(0.0, 1.0))
+    }
+
+    /// Move one axis endpoint (start or end) to `dp` (document space),
+    /// keeping the other fixed.
+    pub(in crate::app) fn gradient_set_endpoint(&mut self, id: ObjectId, start: bool, dp: Point) {
+        let Some(u) = self.gradient_unit_of(id, dp) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if start {
+            g.start = u;
+        } else {
+            g.end = u;
+        }
+        // Guard against a zero-length axis.
+        if (g.end[0] - g.start[0]).abs() < 1e-4 && (g.end[1] - g.start[1]).abs() < 1e-4 {
+            g.end[0] += 1e-3;
+        }
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
+    }
+
     /// Live axis drag: set the target gradient's `start` / `end` from the
     /// press point and the current pointer (both document space).
     pub(in crate::app) fn gradient_axis_to(&mut self, id: ObjectId, start: Point, cur: Point) {
@@ -618,11 +748,17 @@ impl App {
             let wp = wt * lp;
             Point::new(wp.x, wp.y)
         };
+        let sel = self.gradient_stop.min(g.stops.len().saturating_sub(1));
         Some(GradientAnnot {
             start: map(g.start),
             end: map(g.end),
             kind: g.kind,
-            stops: g.stops.iter().map(|s| (s.offset, s.color)).collect(),
+            stops: g
+                .stops
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.offset, s.color, i == sel))
+                .collect(),
         })
     }
 }

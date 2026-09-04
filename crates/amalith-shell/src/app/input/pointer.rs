@@ -229,6 +229,25 @@ impl App {
                 self.gradient_axis_to(object, start_doc, cur);
                 self.drag = Drag::GradientAxis { object, start_doc };
             }
+            Drag::GradientStopOnCanvas { object, index } => {
+                let (object, index) = (*object, *index);
+                let dp = self.doc_point(self.pointer);
+                if let Some(t) = self.gradient_axis_param(dp) {
+                    self.gradient_move_stop(index, t as f32);
+                }
+                // The stop may have been reordered mid-drag; keep the one
+                // that's now selected.
+                self.drag = Drag::GradientStopOnCanvas {
+                    object,
+                    index: self.gradient_stop,
+                };
+            }
+            Drag::GradientEndpoint { object, start } => {
+                let (object, start) = (*object, *start);
+                let dp = self.doc_point(self.pointer);
+                self.gradient_set_endpoint(object, start, dp);
+                self.drag = Drag::GradientEndpoint { object, start };
+            }
             Drag::GradientMid { index, bar } => {
                 let (index, bar) = (*index, *bar);
                 let pos = ((self.pointer.x - bar.x0) / bar.width()).clamp(0.0, 1.0) as f32;
@@ -584,8 +603,10 @@ impl App {
                 let cur = self.doc_point(self.pointer);
                 self.gradient_axis_to(object, start_doc, cur);
             }
-            // Midpoint drag committed live on every move; nothing to finalise.
-            Drag::GradientMid { .. } => {}
+            // These all committed live on every move; nothing to finalise.
+            Drag::GradientMid { .. }
+            | Drag::GradientStopOnCanvas { .. }
+            | Drag::GradientEndpoint { .. } => {}
             Drag::LayerDrag { body, moved, .. } => {
                 if moved {
                     let ids = crate::panels::layers::order_front_to_back(

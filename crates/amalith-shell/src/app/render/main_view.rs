@@ -162,14 +162,15 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
 
-    // Gradient tool annotator: the axis line with a hollow diamond at the
-    // start, an open square at the end, and a dot per stop along it.
+    // Gradient tool annotator: the axis line, a dot per stop (drag along
+    // the line to relocate it), a hollow diamond at the start and an open
+    // square at the end (drag to move the endpoints).
     if let Some(annot) = &gradient_annot {
         let vt = view.to_screen();
         let a = vt * annot.start;
         let b = vt * annot.end;
         let ink = Color::WHITE;
-        let halo = Color::from_rgb8(0x10, 0x10, 0x10).with_alpha(0.55);
+        let halo = Color::from_rgb8(0x10, 0x10, 0x10).with_alpha(0.6);
         scene.stroke(&Stroke::new(3.0), ID, halo, None, &vello::kurbo::Line::new(a, b));
         scene.stroke(&Stroke::new(1.25), ID, ink, None, &vello::kurbo::Line::new(a, b));
 
@@ -177,16 +178,41 @@ pub(in crate::app) fn paint_main(
         let len = dir.hypot().max(1e-6);
         let u = dir / len;
 
-        // Stop dots.
-        for (off, c) in &annot.stops {
+        // Radial: a faint ring at the current radius.
+        if annot.kind == amalith_core::GradientKind::Radial {
+            let ring = vello::kurbo::Circle::new(a, len);
+            scene.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.7), None, &ring);
+        }
+
+        // Stop dots — the selected one gets an accent ring.
+        for (off, c, selected) in &annot.stops {
             let p = a + u * (len * *off as f64);
-            let dot = vello::kurbo::Circle::new(p, 4.5);
-            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &dot);
-            scene.stroke(&Stroke::new(1.25), ID, ink, None, &dot);
+            let r = if *selected { 6.0 } else { 5.0 };
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                halo,
+                None,
+                &vello::kurbo::Circle::new(p, r + 1.5),
+            );
+            scene.fill(
+                Fill::NonZero,
+                ID,
+                Color::new([c.r, c.g, c.b, 1.0]),
+                None,
+                &vello::kurbo::Circle::new(p, r),
+            );
+            scene.stroke(
+                &Stroke::new(if *selected { 2.0 } else { 1.25 }),
+                ID,
+                if *selected { theme.accent } else { ink },
+                None,
+                &vello::kurbo::Circle::new(p, r),
+            );
         }
 
         // Start: hollow diamond.
-        let d = 6.0;
+        let d = 6.5;
         let mut dia = BezPath::new();
         dia.move_to((a.x, a.y - d));
         dia.line_to((a.x + d, a.y));
@@ -196,12 +222,8 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(3.0), ID, halo, None, &dia);
         scene.stroke(&Stroke::new(1.5), ID, ink, None, &dia);
 
-        // End: open square (radial gets a ring instead).
-        if annot.kind == amalith_core::GradientKind::Radial {
-            let ring = vello::kurbo::Circle::new(a, len);
-            scene.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.8), None, &ring);
-        }
-        let s = 5.0;
+        // End: open square.
+        let s = 5.5;
         let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
         scene.stroke(&Stroke::new(3.0), ID, halo, None, &sq);
         scene.stroke(&Stroke::new(1.5), ID, ink, None, &sq);
