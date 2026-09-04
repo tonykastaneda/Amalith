@@ -381,6 +381,10 @@ impl App {
         let ab_edit = self.artboard_edit.clone();
         let (ab_link, ab_fill_menu) = (self.artboard_link, self.artboard_fill_menu);
         let grad_ctx = self.gradient_ctx();
+        let grad_edit = self
+            .gradient_edit
+            .as_ref()
+            .map(|(f, s, _)| (*f, s.clone()));
         let grad_annot = self.gradient_annot();
         let stroke_style_shown = self.stroke_style_repr();
         let panel_text_style = self.active_text_style();
@@ -503,6 +507,7 @@ impl App {
                 ab_link,
                 ab_fill_menu,
                 grad_ctx.clone(),
+                grad_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
                 grad_annot.clone(),
             ),
             Role::Floating(fid) => {
@@ -575,6 +580,7 @@ impl App {
                                 .map(|d| (d, caret_blink)),
                             export: self.export.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
+                            gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);

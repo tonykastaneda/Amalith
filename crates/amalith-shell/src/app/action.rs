@@ -153,6 +153,11 @@ impl App {
                 self.gradient_select_stop(index, double)
             }
             panels::Action::GradientStep(field, delta) => self.gradient_step(field, delta),
+            panels::Action::GradientBeginEdit(field) => self.begin_gradient_edit(field),
+            panels::Action::GradientReverse => self.gradient_reverse(),
+            // The drag is armed by the press router; nothing to do on the
+            // bare click.
+            panels::Action::GradientMidDrag { .. } => {}
             panels::Action::GradientStopPicker => self.gradient_stop_picker(),
             panels::Action::SwapPaints => {
                 std::mem::swap(&mut self.doc.fill, &mut self.doc.stroke);

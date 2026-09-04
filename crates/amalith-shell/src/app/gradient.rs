@@ -321,6 +321,186 @@ impl App {
         self.gradient_target = Some(id);
     }
 
+    /// Reverse Gradient: flip the stop order (offsets mirrored about 0.5),
+    /// midpoints too.
+    pub(in crate::app) fn gradient_reverse(&mut self) {
+        let Some((id, mut g)) = self.target_gradient() else {
+            return;
+        };
+        let n = g.stops.len();
+        for s in &mut g.stops {
+            s.offset = 1.0 - s.offset;
+            s.midpoint = 1.0 - s.midpoint;
+        }
+        g.stops.reverse();
+        // `reverse` misaligns each stop's midpoint (it belongs to the gap
+        // *after* the stop): shift them back by one.
+        if n >= 2 {
+            let mids: Vec<f32> = g.stops.iter().map(|s| s.midpoint).collect();
+            for i in 0..n - 1 {
+                g.stops[i].midpoint = 1.0 - mids[i + 1];
+            }
+        }
+        g.normalize();
+        self.gradient_stop = n.saturating_sub(1).saturating_sub(self.gradient_stop.min(n - 1));
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id, gradient: g });
+        self.gradient_target = Some(id);
+        self.request_main_redraw();
+    }
+
+    // ---- Gradient panel: typed numeric fields ----------------------
+
+    /// Click a Gradient-panel field: seed its buffer with the current value.
+    pub(in crate::app) fn begin_gradient_edit(&mut self, field: panels::gradient::GradField) {
+        use panels::gradient::GradField;
+        // Commit any field already being edited before switching.
+        if self.gradient_edit.is_some() {
+            self.commit_gradient_edit();
+        }
+        let seed = self
+            .target_gradient()
+            .map(|(_, g)| {
+                let sel = self.gradient_stop.min(g.stops.len().saturating_sub(1));
+                let stop = g.stops.get(sel).copied().unwrap_or(g.stops[0]);
+                match field {
+                    GradField::Angle => format!("{:.0}", g.angle_deg()),
+                    GradField::Aspect => format!("{:.2}", g.aspect),
+                    GradField::Location => format!("{:.0}", stop.offset * 100.0),
+                    GradField::Opacity => format!("{:.0}", stop.opacity * 100.0),
+                }
+            })
+            .unwrap_or_default();
+        self.gradient_edit = Some((field, seed, true));
+        self.text_blink = Instant::now();
+        self.request_main_redraw();
+    }
+
+    /// Commit the typed buffer (no-op if the seed was never touched).
+    pub(in crate::app) fn commit_gradient_edit(&mut self) {
+        let Some((field, buf, fresh)) = self.gradient_edit.take() else {
+            return;
+        };
+        if fresh {
+            self.request_main_redraw();
+            return;
+        }
+        if let Some(v) = panels::gradient::parse_field(field, &buf) {
+            self.gradient_set_field(field, v);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Set one gradient numeric to an absolute value (from a committed edit).
+    /// Location / Opacity arrive as a 0..1 fraction.
+    pub(in crate::app) fn gradient_set_field(
+        &mut self,
+        field: panels::gradient::GradField,
+        value: f64,
+    ) {
+        use panels::gradient::GradField;
+        let Some((id, mut g)) = self.target_gradient() else {
+            return;
+        };
+        let sel = self.gradient_stop.min(g.stops.len().saturating_sub(1));
+        match field {
+            GradField::Angle => g.set_angle_deg(value),
+            GradField::Aspect => g.aspect = value.clamp(0.05, 20.0),
+            GradField::Location => {
+                g.stops[sel].offset = (value as f32).clamp(0.0, 1.0);
+                g.normalize();
+            }
+            GradField::Opacity => g.stops[sel].opacity = (value as f32).clamp(0.0, 1.0),
+        }
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id, gradient: g });
+        self.gradient_target = Some(id);
+        self.request_main_redraw();
+    }
+
+    /// Digit / Enter / Esc / Tab stay in the field; anything else commits
+    /// and returns `false` so the rest of `on_key` runs.
+    pub(in crate::app) fn gradient_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.gradient_edit.is_none() {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        use winit::keyboard::{Key, NamedKey};
+        match &event.logical_key {
+            Key::Named(NamedKey::Enter) => {
+                self.commit_gradient_edit();
+                true
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.gradient_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            Key::Named(NamedKey::Tab) => {
+                self.commit_gradient_edit();
+                false
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if let Some((_, buf, fresh)) = self.gradient_edit.as_mut() {
+                    if *fresh {
+                        buf.clear();
+                        *fresh = false;
+                    } else {
+                        buf.pop();
+                    }
+                }
+                self.request_main_redraw();
+                true
+            }
+            Key::Character(s)
+                if s.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') =>
+            {
+                if let Some((_, buf, fresh)) = self.gradient_edit.as_mut() {
+                    if *fresh {
+                        buf.clear();
+                        *fresh = false;
+                    }
+                    buf.push_str(s);
+                }
+                self.request_main_redraw();
+                true
+            }
+            Key::Character(_) => {
+                // A non-numeric key: commit and let it fall through.
+                self.commit_gradient_edit();
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// Drag the midpoint diamond between stops `index` and `index+1` to the
+    /// pointer's slider position `pos` (0..1, absolute).
+    pub(in crate::app) fn gradient_move_midpoint(&mut self, index: usize, pos: f32) {
+        let Some((id, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if index + 1 >= g.stops.len() {
+            return;
+        }
+        let a = g.stops[index].offset;
+        let b = g.stops[index + 1].offset;
+        let span = (b - a).max(1e-4);
+        g.stops[index].midpoint = ((pos - a) / span).clamp(0.05, 0.95);
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id, gradient: g });
+        self.gradient_target = Some(id);
+        self.request_main_redraw();
+    }
+
     // ---- Gradient tool (G) -----------------------------------------
 
     /// Map a document-space point into `id`'s bounding-box unit space

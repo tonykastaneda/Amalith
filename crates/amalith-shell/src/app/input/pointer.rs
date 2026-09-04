@@ -229,6 +229,12 @@ impl App {
                 self.gradient_axis_to(object, start_doc, cur);
                 self.drag = Drag::GradientAxis { object, start_doc };
             }
+            Drag::GradientMid { index, bar } => {
+                let (index, bar) = (*index, *bar);
+                let pos = ((self.pointer.x - bar.x0) / bar.width()).clamp(0.0, 1.0) as f32;
+                self.gradient_move_midpoint(index, pos);
+                self.drag = Drag::GradientMid { index, bar };
+            }
             Drag::LayerDrag { body, press, moved } => {
                 let (body, press, was_moved) = (*body, *press, *moved);
                 let far = (self.pointer - press).hypot() > 4.0;
@@ -578,6 +584,8 @@ impl App {
                 let cur = self.doc_point(self.pointer);
                 self.gradient_axis_to(object, start_doc, cur);
             }
+            // Midpoint drag committed live on every move; nothing to finalise.
+            Drag::GradientMid { .. } => {}
             Drag::LayerDrag { body, moved, .. } => {
                 if moved {
                     let ids = crate::panels::layers::order_front_to_back(

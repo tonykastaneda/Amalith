@@ -99,6 +99,8 @@ pub(in crate::app) fn paint_main(
     artboard_fill_menu: bool,
     // Gradient panel: target gradient clone + selected stop.
     gradient: Option<(amalith_core::Gradient, usize)>,
+    // Gradient panel: live numeric-field edit buffer.
+    gradient_edit: Option<(panels::gradient::GradField, &str)>,
     // Gradient tool: the on-canvas axis annotator (document space).
     gradient_annot: Option<crate::app::gradient::GradientAnnot>,
 ) {
@@ -404,6 +406,7 @@ pub(in crate::app) fn paint_main(
                 shape_dialog: None,
                 export: None,
                 gradient: gradient.clone(),
+                gradient_edit,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

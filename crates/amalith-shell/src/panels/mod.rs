@@ -151,6 +151,8 @@ pub struct Ctx<'a> {
     /// target), plus the selected stop index. `None` when the selection
     /// has no gradient paint.
     pub gradient: Option<(amalith_core::Gradient, usize)>,
+    /// Live buffer while a Gradient-panel numeric field is being typed.
+    pub gradient_edit: Option<(gradient::GradField, &'a str)>,
 }
 
 /// The primitive tool a `shapedlg.*` panel id stands for.
@@ -293,6 +295,13 @@ pub enum Action {
     /// Nudge a gradient numeric (angle / aspect / selected stop location /
     /// opacity) by `delta`.
     GradientStep(gradient::GradField, f64),
+    /// Click a gradient numeric field to type a value into it.
+    GradientBeginEdit(gradient::GradField),
+    /// Flip the stop order (Reverse Gradient).
+    GradientReverse,
+    /// Press on the midpoint diamond between stop `index` and `index + 1`;
+    /// `bar` is the ramp rect so a press can arm the midpoint drag.
+    GradientMidDrag { index: usize, bar: Rect },
     /// Open the colour picker retargeted at the selected stop.
     GradientStopPicker,
     /// An item from a panel's hamburger flyout (`id` is panel-defined).

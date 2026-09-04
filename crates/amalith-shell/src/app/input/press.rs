@@ -40,6 +40,9 @@ impl App {
         if self.xform_edit.is_some() && self.xform_field_at_pointer().is_none() {
             self.commit_xform_edit();
         }
+        if self.gradient_edit.is_some() && self.gradient_field_at_pointer().is_none() {
+            self.commit_gradient_edit();
+        }
         if self.align_spacing_edit.is_some() && !self.align_spacing_field_at_pointer() {
             self.commit_align_spacing_edit();
         }
@@ -531,6 +534,7 @@ impl App {
                                         shape_dialog: None,
                                         export: None,
                                         gradient: self.gradient_ctx(),
+                                        gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                                     };
                                     panels::hit(pid, pbody, self.pointer, &ctx)
                                 };
@@ -550,6 +554,7 @@ impl App {
                                     let arm_drag = !double
                                         && pid == PanelId("layers")
                                         && matches!(action, panels::Action::Select(_));
+                                    let grad_drag = gradient_drag_for(&action, double);
                                     self.apply_panel_action(action, double);
                                     if spawn {
                                         self.spawn_picker_window(event_loop);
@@ -560,6 +565,9 @@ impl App {
                                             press: self.pointer,
                                             moved: false,
                                         };
+                                    }
+                                    if let Some(d) = grad_drag {
+                                        self.drag = d;
                                     }
                                 }
                             }
@@ -1263,6 +1271,7 @@ impl App {
                                     shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
                                     export: self.export.as_ref().map(|d| (d, false)),
                                     gradient: self.gradient_ctx(),
+                                    gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };
@@ -1271,15 +1280,10 @@ impl App {
                             let arm_drag = !double
                                 && pid == PanelId("layers")
                                 && matches!(action, panels::Action::Select(_));
-                            let grad_stop_drag = match action {
-                                panels::Action::GradientSelectStop { index, bar } if !double => {
-                                    Some((index, bar))
-                                }
-                                _ => None,
-                            };
+                            let grad_drag = gradient_drag_for(&action, double);
                             self.apply_panel_action(action, double);
-                            if let Some((index, bar)) = grad_stop_drag {
-                                self.drag = Drag::GradientStop { index, bar };
+                            if let Some(d) = grad_drag {
+                                self.drag = d;
                             }
                             if spawn {
                                 self.spawn_picker_window(event_loop);
@@ -1297,5 +1301,23 @@ impl App {
                 }
             }
         }
+    }
+}
+
+/// If `action` is a Gradient-panel press that should start a drag (moving a
+/// stop or a midpoint), the drag to arm — else `None`. A double-click
+/// never starts a drag (it opens the picker).
+fn gradient_drag_for(action: &panels::Action, double: bool) -> Option<Drag> {
+    if double {
+        return None;
+    }
+    match *action {
+        panels::Action::GradientSelectStop { index, bar } => {
+            Some(Drag::GradientStop { index, bar })
+        }
+        panels::Action::GradientMidDrag { index, bar } => {
+            Some(Drag::GradientMid { index, bar })
+        }
+        _ => None,
     }
 }

@@ -279,6 +279,9 @@ enum Drag {
     /// is where the press landed (document space); the current pointer is
     /// the other end.
     GradientAxis { object: ObjectId, start_doc: Point },
+    /// Gradient panel: dragging the midpoint diamond between stop `index`
+    /// and `index + 1` along the ramp `bar` (screen px).
+    GradientMid { index: usize, bar: Rect },
     /// Moving the colour-picker dialog by its title bar.
     MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.
@@ -784,6 +787,9 @@ struct App {
     gradient_slot: panels::PaintSlot,
     /// The Gradient panel's currently selected stop index.
     gradient_stop: usize,
+    /// Live numeric edit in the Gradient panel: (which field, buffer,
+    /// `fresh` = first keystroke replaces the seed).
+    gradient_edit: Option<(panels::gradient::GradField, String, bool)>,
     /// The colour picker is retargeted to a gradient stop: `Some(stop index)`.
     picker_gradient_stop: Option<usize>,
     /// Align panel: what to align to, and the key object (thicker outline).
@@ -982,6 +988,7 @@ impl App {
             gradient_target: None,
             gradient_slot: panels::PaintSlot::Fill,
             gradient_stop: 0,
+            gradient_edit: None,
             picker_gradient_stop: None,
             align_to: amalith_commands::AlignTo::Selection,
             key_object: None,
@@ -4663,6 +4670,7 @@ impl App {
             shape_dialog: None,
             export: None,
             gradient: self.gradient_ctx(),
+            gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
     }
 
