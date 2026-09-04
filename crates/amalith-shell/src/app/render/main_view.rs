@@ -172,16 +172,45 @@ pub(in crate::app) fn paint_main(
         let b = vt * annot.end;
         let white = Color::WHITE;
         let dark = Color::from_rgb8(0x10, 0x10, 0x10);
-        let line = |p: Point, q: Point| vello::kurbo::Line::new(p, q);
-
-        // Axis: hairline dark casing under a thin white core.
-        scene.stroke(&Stroke::new(2.5), ID, dark, None, &line(a, b));
-        scene.stroke(&Stroke::new(1.0), ID, white, None, &line(a, b));
 
         let dir = b - a;
         let len = dir.hypot();
         let u = if len > 1e-6 { dir / len } else { Vec2::new(1.0, 0.0) };
         let at = |frac: f64| a + u * (len * frac);
+
+        // Axis: hairline dark casing under a thin white core, broken by a
+        // gap at each handle so the line never cuts through an icon.
+        {
+            let mut breaks: Vec<(f64, f64)> = vec![(0.0, 8.0), (1.0, 9.0)];
+            for (off, _, sel) in &annot.stops {
+                breaks.push((*off as f64, if *sel { 11.0 } else { 9.0 }));
+            }
+            for frac in &annot.mids {
+                breaks.push((*frac as f64, 5.5));
+            }
+            breaks.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            let seg = |scene: &mut Scene, p: Point, q: Point| {
+                let l = vello::kurbo::Line::new(p, q);
+                scene.stroke(&Stroke::new(2.5), ID, dark, None, &l);
+                scene.stroke(&Stroke::new(1.0), ID, white, None, &l);
+            };
+            if len < 4.0 {
+                seg(scene, a, b);
+            } else {
+                let mut cursor = 0.0f64;
+                for (bt, gap_px) in &breaks {
+                    let gap_t = (gap_px / len).min(0.49);
+                    let end = (bt - gap_t).clamp(0.0, 1.0);
+                    if end > cursor + 1e-4 {
+                        seg(scene, at(cursor), at(end));
+                    }
+                    cursor = cursor.max((bt + gap_t).clamp(0.0, 1.0));
+                }
+                if cursor < 1.0 - 1e-4 {
+                    seg(scene, at(cursor), at(1.0));
+                }
+            }
+        }
 
         // Radial: a hairline ring at the current radius.
         if annot.kind == amalith_core::GradientKind::Radial && len > 1.0 {
