@@ -212,23 +212,35 @@ pub(in crate::app) fn paint_main(
             }
         }
 
-        // Radial: a dashed ring at the current radius.
+        // Radial: a dashed guide at the current shape — an ellipse once
+        // aspect/rotation move it off a plain circle, derived from the
+        // rotate handle (a point on the unsquished/major axis) and the
+        // aspect handle (a point on the squished/minor axis), so the guide
+        // visually squishes and turns together with the rotate/aspect drag.
         if annot.kind == amalith_core::GradientKind::Radial && len > 1.0 {
-            let ring = vello::kurbo::Circle::new(a, len);
-            scene.stroke(
-                &Stroke::new(1.5).with_dashes(0.0, [6.0, 4.0]),
-                ID,
-                dark,
-                None,
-                &ring,
-            );
-            scene.stroke(
-                &Stroke::new(0.75).with_dashes(0.0, [6.0, 4.0]),
-                ID,
-                white,
-                None,
-                &ring,
-            );
+            if let (Some(rot_p), Some(asp_p)) = (annot.rotate_handle, annot.aspect_handle) {
+                let major_pt = vt * rot_p;
+                let minor_pt = vt * asp_p;
+                let major_v = major_pt - a;
+                let major_r = major_v.hypot().max(1.0);
+                let minor_r = (minor_pt - a).hypot().max(1.0);
+                let angle = major_v.y.atan2(major_v.x);
+                let ring = vello::kurbo::Ellipse::new(a, (major_r, minor_r), angle);
+                scene.stroke(
+                    &Stroke::new(1.5).with_dashes(0.0, [6.0, 4.0]),
+                    ID,
+                    dark,
+                    None,
+                    &ring,
+                );
+                scene.stroke(
+                    &Stroke::new(0.75).with_dashes(0.0, [6.0, 4.0]),
+                    ID,
+                    white,
+                    None,
+                    &ring,
+                );
+            }
         }
 
         // Midpoint markers: a small white square.
