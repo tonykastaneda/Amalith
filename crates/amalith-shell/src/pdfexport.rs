@@ -282,13 +282,17 @@ fn stitching_function(ctx: &mut PdfCtx, stops: &[GradientStop], sample: impl Fn(
 }
 
 /// Builds one axial/radial shading pattern and registers it as a page
-/// resource, returning its resource name. `pattern_xf` maps the
+/// resource, returning its resource name *and* its object reference (the
+/// caller needs the latter to also point a soft-mask form's own resource
+/// dictionary at the same pattern object — returning both here means
+/// there's no need to fish the just-pushed entry back out of
+/// `ctx.patterns` by assuming it's still last). `pattern_xf` maps the
 /// gradient's own unit space directly to page space (already includes
 /// the object's bbox→local, world, and doc→page transforms — see the
 /// module docs on why this must be absolute rather than relying on `cm`).
 /// `gray` swaps the color function for a luminosity (alpha-as-gray) one,
 /// for the soft-mask pass in `paint_shaded_layer`.
-fn shading_pattern(ctx: &mut PdfCtx, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, gray: bool, cmyk: bool) -> String {
+fn shading_pattern(ctx: &mut PdfCtx, g: &Gradient, coords: &[f32], pattern_xf: CoreAffine, gray: bool, cmyk: bool) -> (String, Ref) {
     let stops = g.render_stops();
     let func = if gray {
         stitching_function(ctx, &stops, |c| vec![c.a])
@@ -318,7 +322,7 @@ fn shading_pattern(ctx: &mut PdfCtx, g: &Gradient, coords: &[f32], pattern_xf: C
     pat.finish();
     let name = ctx.fresh_name("Sh");
     ctx.patterns.push((name.clone(), id));
-    name
+    (name, id)
 }
 
 /// This gradient's coordinates + pattern matrix in its *own* kind
@@ -352,7 +356,7 @@ fn paint_shaded_layer(ctx: &mut PdfCtx, bez: &BezPath, xf: CoreAffine, g: &Gradi
     let needs_alpha = g.render_stops().iter().any(|s| s.color.a < 0.999);
     ctx.content.save_state();
     if needs_alpha {
-        let mask_pat = shading_pattern(ctx, g, coords, pattern_xf, true, false);
+        let (mask_pat, mask_pat_id) = shading_pattern(ctx, g, coords, pattern_xf, true, false);
         let mut mc = Content::new();
         mc.set_fill_color_space(ColorSpaceOperand::Pattern);
         mc.set_fill_pattern([], Name(mask_pat.as_bytes()));
@@ -362,7 +366,7 @@ fn paint_shaded_layer(ctx: &mut PdfCtx, bez: &BezPath, xf: CoreAffine, g: &Gradi
         let form_id = ctx.bump();
         let mut form = ctx.pdf.form_xobject(form_id, &mask_bytes);
         form.bbox(PdfRect::new(0.0, 0.0, page_w, page_h));
-        form.resources().patterns().pair(Name(mask_pat.as_bytes()), *ctx.patterns.last().map(|(_, r)| r).unwrap());
+        form.resources().patterns().pair(Name(mask_pat.as_bytes()), mask_pat_id);
         {
             let mut grp = form.group();
             grp.transparency();
@@ -381,7 +385,7 @@ fn paint_shaded_layer(ctx: &mut PdfCtx, bez: &BezPath, xf: CoreAffine, g: &Gradi
         ctx.ext_gs.push((gs_name.clone(), gs_id));
         ctx.content.set_parameters(Name(gs_name.as_bytes()));
     }
-    let pat = shading_pattern(ctx, g, coords, pattern_xf, false, ctx.cmyk);
+    let (pat, _) = shading_pattern(ctx, g, coords, pattern_xf, false, ctx.cmyk);
     ctx.content.set_fill_color_space(ColorSpaceOperand::Pattern);
     ctx.content.set_fill_pattern([], Name(pat.as_bytes()));
     ctx.emit_geometry(bez, xf);
@@ -420,10 +424,17 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
     match appearance.fill {
         Paint::None => {}
         Paint::Solid(c) => {
+            // The color's own alpha (e.g. a fill picked at 50% in the
+            // color picker) is independent of `appearance.opacity` (the
+            // object-level Transparency-panel slider) — SVG export keeps
+            // these separate too (`fill-opacity` vs `opacity`); PDF's
+            // graphics state only has one constant alpha to paint with,
+            // so the two multiply together into it here.
+            let a = c.a * appearance.opacity;
             ctx.content.save_state();
-            if !opaque {
+            if a < 0.999 {
                 let gs_id = ctx.bump();
-                ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(appearance.opacity).finish();
+                ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(a).finish();
                 let name = ctx.fresh_name("Gs");
                 ctx.ext_gs.push((name.clone(), gs_id));
                 ctx.content.set_parameters(Name(name.as_bytes()));
@@ -446,10 +457,18 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
                 if g.kind == GradientKind::Freeform {
                     if !g.points.is_empty() {
                         let backstop = average_point_color(&g.points);
+                        // A PDF `gs` call *replaces* the graphics state's
+                        // alpha rather than multiplying into whatever's
+                        // already active, so the outer `ca` set just above
+                        // for `appearance.opacity` would otherwise be
+                        // silently lost here rather than combined with it —
+                        // fold both into the one value this `gs` actually
+                        // sets instead of relying on nesting to compose them.
+                        let backstop_alpha = backstop.a * appearance.opacity;
                         ctx.content.save_state();
-                        if backstop.a < 0.999 {
+                        if backstop_alpha < 0.999 {
                             let gs_id = ctx.bump();
-                            ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(backstop.a).finish();
+                            ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(backstop_alpha).finish();
                             let name = ctx.fresh_name("Gs");
                             ctx.ext_gs.push((name.clone(), gs_id));
                             ctx.content.set_parameters(Name(name.as_bytes()));
@@ -479,10 +498,18 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
 
     // --- Stroke -------------------------------------------------------
     if appearance.stroke.is_visible() {
+        // As with the fill above, a solid stroke color's own alpha folds
+        // in alongside the object's opacity. A gradient stroke's own stop
+        // alpha isn't folded in here — deliberately unmasked, see the
+        // comment where it's painted below.
+        let stroke_alpha = match appearance.stroke {
+            Paint::Solid(c) => c.a * appearance.opacity,
+            _ => appearance.opacity,
+        };
         ctx.content.save_state();
-        if !opaque {
+        if stroke_alpha < 0.999 {
             let gs_id = ctx.bump();
-            ctx.pdf.ext_graphics(gs_id).stroking_alpha(appearance.opacity).finish();
+            ctx.pdf.ext_graphics(gs_id).stroking_alpha(stroke_alpha).finish();
             let name = ctx.fresh_name("Gs");
             ctx.ext_gs.push((name.clone(), gs_id));
             ctx.content.set_parameters(Name(name.as_bytes()));
@@ -513,33 +540,14 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
             Paint::Solid(c) => ctx.set_stroke_solid(c),
             Paint::Gradient(gid) => {
                 if let Some(g) = doc.gradient(gid) {
+                    // A stroke's own alpha-fade (a semi-transparent stop) is
+                    // deliberately not soft-masked here the way a fill's is:
+                    // stroking traces a thin, self-contained ribbon rather
+                    // than filling an arbitrarily large region, so a flat
+                    // (unmasked) colour-only pattern reproduces it closely
+                    // enough not to be worth a second geometry pass.
                     let (coords, pattern_xf) = gradient_coords_and_matrix(g, unit_to_page);
-                    let cmyk = ctx.cmyk;
-                    let stops = g.render_stops();
-                    let func = if cmyk {
-                        stitching_function(ctx, &stops, |c| c.to_cmyk().to_vec())
-                    } else {
-                        stitching_function(ctx, &stops, |c| vec![c.r, c.g, c.b])
-                    };
-                    let id = ctx.bump();
-                    let matrix = coeffs(pattern_xf);
-                    let mut pat = ctx.pdf.shading_pattern(id);
-                    pat.matrix(matrix);
-                    {
-                        let mut sh = pat.function_shading();
-                        if cmyk {
-                            sh.color_space().device_cmyk();
-                        } else {
-                            sh.color_space().device_rgb();
-                        }
-                        sh.shading_type(if coords.len() == 6 { FunctionShadingType::Radial } else { FunctionShadingType::Axial });
-                        sh.function(func);
-                        sh.coords(coords.iter().copied());
-                        sh.extend([true, true]);
-                    }
-                    pat.finish();
-                    let name = ctx.fresh_name("Sh");
-                    ctx.patterns.push((name.clone(), id));
+                    let (name, _) = shading_pattern(ctx, g, &coords, pattern_xf, false, ctx.cmyk);
                     ctx.content.set_stroke_color_space(ColorSpaceOperand::Pattern);
                     ctx.content.set_stroke_pattern([], Name(name.as_bytes()));
                 }
@@ -557,8 +565,12 @@ fn paint_shape(ctx: &mut PdfCtx, doc: &Document, bez: &BezPath, xf: CoreAffine, 
 /// can flow through the same `render_stops`/stitching-function machinery
 /// as a real gradient.
 fn point_as_gradient(g: &Gradient, p: &FreeformPoint) -> Gradient {
-    let mut out = g.clone();
-    out.kind = GradientKind::Radial;
+    // `Gradient::radial(g.id)`'s own start/end/aspect are all irrelevant
+    // here — `shading_pattern` only ever reads `.render_stops()` off
+    // whatever's passed to it, since the caller (the freeform loop above)
+    // computes this blob's own coords/matrix directly rather than going
+    // through `gradient_coords_and_matrix`. Only `.stops` matters.
+    let mut out = Gradient::radial(g.id);
     let c = p.effective_color();
     out.stops = vec![
         GradientStop::new(0.0, c),
@@ -915,6 +927,63 @@ mod tests {
         assert!(s.contains("/SMask"), "no soft mask emitted for the alpha-fading gradient/freeform");
         assert!(s.contains("/PatternType"), "no shading pattern emitted");
         assert!(s.contains("xref") && s.contains("trailer"), "missing xref table / trailer");
+    }
+
+    /// Regression test: a PDF `gs` call *replaces* the graphics state's
+    /// alpha rather than multiplying into whatever's already active, so
+    /// an object's own opacity and a freeform gradient's backstop alpha
+    /// (two independently-computed alphas painted via nested `q`/`gs`
+    /// blocks) must be folded into one value *before* either `gs` is
+    /// written, not left to compose implicitly across the nesting — see
+    /// `paint_shape`'s Freeform branch. With opacity 0.5 and two points
+    /// both at alpha 0.5, the correctly-combined backstop `ca` is 0.25;
+    /// the bug this guards against would instead emit a bare 0.5.
+    #[test]
+    fn freeform_backstop_alpha_multiplies_with_object_opacity() {
+        let mut doc = Document::new("alpha compose test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        doc.insert_layer(layer, 0);
+
+        let gid = GradientId::new();
+        let mut g = Gradient::freeform(gid);
+        for p in &mut g.points {
+            p.color = Color::rgba(p.color.r, p.color.g, p.color.b, 0.5);
+            p.opacity = 1.0;
+        }
+        doc.add_gradient(g);
+
+        let mut obj = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            CoreRect::new(0.0, 0.0, 100.0, 60.0),
+        );
+        obj.appearance.fill = Paint::Gradient(gid);
+        obj.appearance.stroke = Paint::None;
+        obj.appearance.opacity = 0.5;
+        let id = obj.id;
+        doc.insert_object(obj, 0).unwrap();
+
+        let mut text = TextContext::new();
+        let images = HashMap::new();
+        let bytes = export_vector_pdf(
+            &doc,
+            &[id],
+            CoreRect::new(0.0, 0.0, 100.0, 60.0),
+            None,
+            false,
+            &mut text,
+            &images,
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        // The outer `ca 0.5` for the object's own opacity legitimately
+        // exists too (it's what the per-point blobs paint with) — the
+        // bug this guards against is the *backstop* using a bare 0.5
+        // instead of the combined 0.25, not the presence of 0.5 at all.
+        assert!(
+            s.contains("/ca 0.25"),
+            "expected the backstop's combined alpha (0.5 opacity * 0.5 average point alpha = 0.25); got: {s}"
+        );
     }
 
     #[test]
