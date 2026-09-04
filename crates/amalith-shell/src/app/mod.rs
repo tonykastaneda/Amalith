@@ -5391,6 +5391,40 @@ impl App {
         )
     }
 
+    /// Collapse-to-icons for a detached panel (states "Collapsed Icon +
+    /// Title / Icon Only [Detached]"): shrinks the actual OS window down
+    /// to one icon row, remembering its size to restore on
+    /// [`Self::expand_floating`].
+    fn collapse_floating(&mut self, id: u64) {
+        let Some(f) = self.dock.floating_mut(id) else {
+            return;
+        };
+        let Some([w, h]) = f.collapse() else {
+            return;
+        };
+        if let Some(win) = self.floating_window(id) {
+            let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
+            win.request_redraw();
+        }
+        self.request_main_redraw();
+    }
+
+    /// Restores a floating panel collapsed by [`Self::collapse_floating`]
+    /// to the size it had before.
+    fn expand_floating(&mut self, id: u64) {
+        let Some(f) = self.dock.floating_mut(id) else {
+            return;
+        };
+        let Some([w, h]) = f.expand() else {
+            return;
+        };
+        if let Some(win) = self.floating_window(id) {
+            let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
+            win.request_redraw();
+        }
+        self.request_main_redraw();
+    }
+
 }
 
 impl ApplicationHandler for App {

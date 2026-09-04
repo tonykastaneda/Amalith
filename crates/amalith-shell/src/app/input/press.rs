@@ -1256,9 +1256,23 @@ impl App {
                 self.request_main_redraw();
             }
             Role::Floating(fid) => {
+                // Collapsed to an icon (states 4/6): the whole tiny window
+                // is one big click target — there's nothing else on it to
+                // click, so any press just expands it back, matching how
+                // discoverable a single icon row needs to be with no
+                // flyout to preview it through first.
+                if self.dock.floating(fid).is_some_and(|f| f.icon_w.is_some()) {
+                    self.expand_floating(fid);
+                    return;
+                }
                 let laid = self.floating_layout(fid);
                 for area in &laid.areas {
                     if area.tab_strip.contains(self.pointer) {
+                        let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
+                        if collapse.contains(self.pointer) {
+                            self.collapse_floating(fid);
+                            return;
+                        }
                         let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
                         if area.show_menu && burger.contains(self.pointer) {
                             if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

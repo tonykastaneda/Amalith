@@ -106,6 +106,49 @@ pub struct Floating {
     /// Top-left + size of the OS window, in virtual-desktop logical points:
     /// `[x, y, w, h]`.
     pub rect: [f32; 4],
+    /// Set while this floating panel is collapsed to an icon (Illustrator
+    /// states "Collapsed Icon + Title [Detached]" / "Collapse Icon Only
+    /// [Detached]") — the width the OS window has actually been shrunk
+    /// to, icon+title at or above `layout::ICON_LABEL_THRESHOLD`, icon
+    /// only below. A floating group here is always a single panel (this
+    /// app has no floating-group stacking yet), so unlike a rail's icon
+    /// strip there's only ever one row — no `IconColumn`/rows needed.
+    pub icon_w: Option<f32>,
+    /// The OS window size to restore on expand — captured the moment the
+    /// collapse chevron shrinks it, since after that `rect`'s own size
+    /// tracks the shrunk icon window instead.
+    pub expanded_size: Option<[f32; 2]>,
+}
+
+impl Floating {
+    /// Shrinks this floating panel to its icon-strip size (Illustrator's
+    /// "Collapse to Icons" for a detached panel), remembering the size to
+    /// restore on [`Self::expand`]. Returns the `[w, h]` the caller should
+    /// resize the actual OS window to, or `None` if already collapsed.
+    pub fn collapse(&mut self) -> Option<[f32; 2]> {
+        if self.icon_w.is_some() {
+            return None;
+        }
+        self.expanded_size = Some([self.rect[2], self.rect[3]]);
+        // Matches layout::ICON_COL_W / ICON_ROW_H — a bare literal here
+        // rather than an import to avoid a dock <-> layout cycle; both
+        // describe the same "one collapsed row" geometry.
+        let size = [112.0_f32, 30.0];
+        self.icon_w = Some(size[0]);
+        self.rect[2] = size[0];
+        self.rect[3] = size[1];
+        Some(size)
+    }
+
+    /// Restores this floating panel to the size it had before collapsing.
+    /// Returns that `[w, h]`, or `None` if it wasn't collapsed.
+    pub fn expand(&mut self) -> Option<[f32; 2]> {
+        let size = self.expanded_size.take()?;
+        self.icon_w = None;
+        self.rect[2] = size[0];
+        self.rect[3] = size[1];
+        Some(size)
+    }
 }
 
 /// Which edge of the document window a rail sits on.
@@ -645,6 +688,8 @@ impl DockModel {
                 active: 0,
             },
             rect,
+            icon_w: None,
+            expanded_size: None,
         });
         id
     }
@@ -1016,6 +1061,39 @@ mod tests {
         assert_ne!(torn, id);
         assert!(m.right.is_empty());
         assert_eq!(m.floating.len(), 2);
+    }
+
+    #[test]
+    fn collapsing_a_floating_panel_shrinks_it_and_remembers_the_old_size() {
+        let mut m = DockModel::new(tabs(&[A]));
+        let id = m.float_alone(C, [8.0, 9.0, 240.0, 400.0]);
+        let f = m.floating_mut(id).unwrap();
+        assert_eq!(f.icon_w, None);
+
+        let size = f.collapse().expect("was open, should collapse");
+        assert_eq!(f.icon_w, Some(size[0]));
+        assert_eq!(f.expanded_size, Some([240.0, 400.0]));
+        assert_eq!([f.rect[2], f.rect[3]], size, "rect tracks the shrunk size");
+        // Collapsing an already-collapsed panel is a no-op, not a second
+        // stash that would clobber the real pre-collapse size.
+        assert_eq!(f.collapse(), None);
+        assert_eq!(f.expanded_size, Some([240.0, 400.0]));
+    }
+
+    #[test]
+    fn expanding_a_floating_panel_restores_its_pre_collapse_size() {
+        let mut m = DockModel::new(tabs(&[A]));
+        let id = m.float_alone(C, [8.0, 9.0, 240.0, 400.0]);
+        let f = m.floating_mut(id).unwrap();
+        f.collapse();
+
+        let size = f.expand().expect("was collapsed, should expand");
+        assert_eq!(size, [240.0, 400.0]);
+        assert_eq!(f.icon_w, None);
+        assert_eq!(f.expanded_size, None);
+        assert_eq!([f.rect[2], f.rect[3]], [240.0, 400.0]);
+        // Expanding an already-open panel is a no-op.
+        assert_eq!(f.expand(), None);
     }
 
     #[test]

@@ -310,6 +310,38 @@ pub fn paint_icon_col(
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
 }
 
+/// Paints a collapsed *detached* panel: the whole (tiny) OS window is one
+/// icon row, glyph plus label when there's room, with an expand («»)
+/// chevron at its far end — clicking anywhere on it re-opens the panel
+/// (see `App::expand_floating`), there being nothing else on a
+/// single-panel row worth clicking separately the way a rail's flyout
+/// preview needs to be.
+pub fn paint_floating_icon(
+    scene: &mut Scene,
+    rect: Rect,
+    panel: PanelId,
+    labeled: bool,
+    theme: &Theme,
+    text: &mut TextContext,
+    label: &dyn Fn(PanelId) -> String,
+) {
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &rect);
+    let icon_box = if labeled {
+        Rect::new(rect.x0 + 8.0, rect.y0 + (rect.height() - 18.0) * 0.5, rect.x0 + 26.0, rect.y0 + (rect.height() + 18.0) * 0.5)
+    } else {
+        let c = rect.center();
+        Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+    };
+    crate::panel_icon::draw(scene, panel, icon_box, theme.text);
+    if labeled {
+        let baseline = rect.y0 + rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+        text.draw(scene, &label(panel), TAB_TEXT_PX, theme.text, icon_box.x1 + 6.0, baseline);
+        let chevron = Rect::new(rect.x1 - theme.panel_collapse_w, rect.y0, rect.x1, rect.y1);
+        paint_chevrons(scene, chevron, theme.text_dim, false);
+    }
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rect);
+}
+
 fn edge_line(r: Rect, side: Side) -> Rect {
     let t = 3.0;
     match side {

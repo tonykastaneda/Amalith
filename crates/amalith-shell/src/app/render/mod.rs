@@ -513,13 +513,42 @@ impl App {
                 self.flyout_icon,
             ),
             Role::Floating(fid) => {
+                // Collapsed to an icon (states 4/6): the OS window itself
+                // has been shrunk to one icon row — paint just that,
+                // there's no tree/tabs to lay out at that size.
+                let collapsed_icon_w = self.dock.floating(fid).and_then(|f| f.icon_w);
+                if let Some(icon_w) = collapsed_icon_w {
+                    let panel = self.dock.floating(fid).and_then(|f| match &f.node {
+                        Node::Tabs { panels, active } => {
+                            panels.get(*active).or_else(|| panels.first()).copied()
+                        }
+                        _ => None,
+                    });
+                    let rect = Rect::new(0.0, 0.0, wl, hl);
+                    self.content.fill(Fill::NonZero, ID, self.theme.panel_bg, None, &rect);
+                    if let Some(pid) = panel {
+                        let labeled = icon_w as f64 >= layout::ICON_LABEL_THRESHOLD;
+                        chrome::paint_floating_icon(
+                            &mut self.content,
+                            rect,
+                            pid,
+                            labeled,
+                            &self.theme,
+                            &mut self.text,
+                            &tab_label,
+                        );
+                    }
+                } else {
                 let laid = self.floating_layout(fid);
                 let exists = self.dock.floating(fid).is_some();
                 if exists {
-                    // Same tab strip (with ×) and frame as a docked panel.
+                    // Same tab strip (with ×) and frame as a docked panel
+                    // — plus its own collapse chevron now (a detached
+                    // panel is its own one-group "column" and, per
+                    // Illustrator, still gets the control).
                     self.content
                         .fill(Fill::NonZero, ID, self.theme.panel_bg, None, &Rect::new(0.0, 0.0, wl, hl));
-                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, false, &tab_label);
+                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, true, &tab_label);
                     let area = laid.areas.first();
                     let pid = area.and_then(|a| a.tabs.get(a.active).map(|t| t.panel));
                     if let (Some(area), Some(pid)) = (area, pid) {
@@ -596,6 +625,7 @@ impl App {
                         );
                         self.content.pop_layer();
                     }
+                }
                 }
             }
         }
