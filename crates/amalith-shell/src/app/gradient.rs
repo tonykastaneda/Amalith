@@ -27,9 +27,9 @@ pub(in crate::app) struct GradientAnnot {
     pub mids: Vec<f32>,
 }
 
-/// A stop this close to `0` / `1` counts as sitting on the origin / end
-/// handle (both hit zones are live there).
-pub(in crate::app) const TERMINAL_EPS: f32 = 0.04;
+/// Clicking the axis line within this fraction of an end won't drop a new
+/// stop there (it would just land under the endpoint handle).
+pub(in crate::app) const TERMINAL_EPS: f32 = 0.03;
 
 /// What a Gradient-tool press landed on, if the annotator is showing.
 /// Hit zones are concentric at the ends: the inner disc is the stop, the
@@ -702,26 +702,24 @@ impl App {
 
     /// What the Gradient-tool press at `dp` (document space) landed on.
     ///
-    /// At each end the hit zones are concentric: the inner disc grabs the
-    /// terminal colour stop, the surrounding ring grabs the axis endpoint
-    /// handle. Interior stops and midpoints are matched first.
+    /// Every stop circle is tested at its real position first (so a stop
+    /// sitting right on an endpoint is still grabbable and can be dragged
+    /// all the way onto it), then midpoints, then the endpoint handles —
+    /// which live in the ring *just outside* the stop discs at `a` / `b`.
     fn gradient_annot_hit(&self, dp: Point) -> Option<AnnotHit> {
         if self.active_tool != Tool::Gradient {
             return None;
         }
         let (id, a, b) = self.gradient_axis_doc()?;
         let px = 1.0 / self.doc.view.zoom.max(1e-6); // one screen px in doc units
-        let stop_r = 7.0 * px;
-        let ring_r = 12.0 * px;
+        let stop_r = 8.0 * px;
+        let ring_r = 15.0 * px;
         let (_, g) = self.target_gradient()?;
         let ab = b - a;
         let n = g.stops.len();
 
-        // Interior stop circles.
+        // Every colour stop, at its actual position on the axis.
         for (i, stop) in g.stops.iter().enumerate() {
-            if stop.offset <= TERMINAL_EPS || stop.offset >= 1.0 - TERMINAL_EPS {
-                continue;
-            }
             if dp.distance(a + ab * stop.offset as f64) <= stop_r {
                 return Some(AnnotHit::Stop(id, i));
             }
@@ -734,20 +732,12 @@ impl App {
                 return Some(AnnotHit::Mid(id, i));
             }
         }
-        // Origin: inner disc = first stop, outer ring = endpoint handle.
-        let da = dp.distance(a);
-        if da <= stop_r {
-            return Some(AnnotHit::Stop(id, 0));
-        }
-        if da <= ring_r {
+        // Endpoint handles: the annulus around a / b, outside any stop that
+        // sits there.
+        if dp.distance(a) <= ring_r {
             return Some(AnnotHit::Start(id));
         }
-        // End: inner disc = last stop, outer ring = endpoint handle.
-        let db = dp.distance(b);
-        if db <= stop_r && n > 0 {
-            return Some(AnnotHit::Stop(id, n - 1));
-        }
-        if db <= ring_r {
+        if dp.distance(b) <= ring_r {
             return Some(AnnotHit::End(id));
         }
         None
