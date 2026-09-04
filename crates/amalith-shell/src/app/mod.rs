@@ -285,6 +285,9 @@ enum Drag {
     /// Gradient tool: dragging one end of the on-canvas axis of `object`
     /// (`start` = the origin handle, else the far handle).
     GradientEndpoint { object: ObjectId, start: bool },
+    /// Gradient tool: dragging the midpoint diamond in gap `index` of the
+    /// on-canvas axis of `object`.
+    GradientMidOnCanvas { object: ObjectId, index: usize },
     /// Gradient panel: dragging the midpoint diamond between stop `index`
     /// and `index + 1` along the ramp `bar` (screen px).
     GradientMid { index: usize, bar: Rect },

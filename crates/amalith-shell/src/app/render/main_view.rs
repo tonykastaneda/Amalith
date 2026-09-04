@@ -162,9 +162,10 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
 
-    // Gradient tool annotator: the axis line, a dot per stop (drag along
-    // the line to relocate it), a hollow diamond at the start and an open
-    // square at the end (drag to move the endpoints).
+    // Gradient tool annotator (Illustrator anatomy): a filled circle at
+    // the origin (first click), an open square at the far end (release
+    // point), a circle per colour stop that slides along the line, and a
+    // small diamond in each gap that shifts the blend balance.
     if let Some(annot) = &gradient_annot {
         let vt = view.to_screen();
         let a = vt * annot.start;
@@ -177,6 +178,7 @@ pub(in crate::app) fn paint_main(
         let dir = b - a;
         let len = dir.hypot().max(1e-6);
         let u = dir / len;
+        let at = |frac: f64| a + u * (len * frac);
 
         // Radial: a faint ring at the current radius.
         if annot.kind == amalith_core::GradientKind::Radial {
@@ -184,17 +186,25 @@ pub(in crate::app) fn paint_main(
             scene.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.7), None, &ring);
         }
 
-        // Stop dots — the selected one gets an accent ring.
+        // Midpoint diamonds (behind the stops so a coincident stop wins).
+        for frac in &annot.mids {
+            let p = at(*frac as f64);
+            let d = 4.5;
+            let mut dia = BezPath::new();
+            dia.move_to((p.x, p.y - d));
+            dia.line_to((p.x + d, p.y));
+            dia.line_to((p.x, p.y + d));
+            dia.line_to((p.x - d, p.y));
+            dia.close_path();
+            scene.fill(Fill::NonZero, ID, halo, None, &dia);
+            scene.fill(Fill::NonZero, ID, ink, None, &dia);
+        }
+
+        // Stop circles — the panel-selected one gets an accent ring.
         for (off, c, selected) in &annot.stops {
-            let p = a + u * (len * *off as f64);
+            let p = at(*off as f64);
             let r = if *selected { 6.0 } else { 5.0 };
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                halo,
-                None,
-                &vello::kurbo::Circle::new(p, r + 1.5),
-            );
+            scene.fill(Fill::NonZero, ID, halo, None, &vello::kurbo::Circle::new(p, r + 1.5));
             scene.fill(
                 Fill::NonZero,
                 ID,
@@ -211,18 +221,18 @@ pub(in crate::app) fn paint_main(
             );
         }
 
-        // Start: hollow diamond.
-        let d = 6.5;
-        let mut dia = BezPath::new();
-        dia.move_to((a.x, a.y - d));
-        dia.line_to((a.x + d, a.y));
-        dia.line_to((a.x, a.y + d));
-        dia.line_to((a.x - d, a.y));
-        dia.close_path();
-        scene.stroke(&Stroke::new(3.0), ID, halo, None, &dia);
-        scene.stroke(&Stroke::new(1.5), ID, ink, None, &dia);
+        // Origin: filled circle.
+        scene.fill(Fill::NonZero, ID, halo, None, &vello::kurbo::Circle::new(a, 7.0));
+        scene.fill(Fill::NonZero, ID, ink, None, &vello::kurbo::Circle::new(a, 5.5));
+        scene.stroke(
+            &Stroke::new(1.5),
+            ID,
+            Color::from_rgb8(0x20, 0x20, 0x20),
+            None,
+            &vello::kurbo::Circle::new(a, 5.5),
+        );
 
-        // End: open square.
+        // Far end: open square.
         let s = 5.5;
         let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
         scene.stroke(&Stroke::new(3.0), ID, halo, None, &sq);

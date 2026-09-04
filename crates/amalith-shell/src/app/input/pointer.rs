@@ -248,6 +248,14 @@ impl App {
                 self.gradient_set_endpoint(object, start, dp);
                 self.drag = Drag::GradientEndpoint { object, start };
             }
+            Drag::GradientMidOnCanvas { object, index } => {
+                let (object, index) = (*object, *index);
+                let dp = self.doc_point(self.pointer);
+                if let Some(t) = self.gradient_axis_param(dp) {
+                    self.gradient_move_midpoint(index, t as f32);
+                }
+                self.drag = Drag::GradientMidOnCanvas { object, index };
+            }
             Drag::GradientMid { index, bar } => {
                 let (index, bar) = (*index, *bar);
                 let pos = ((self.pointer.x - bar.x0) / bar.width()).clamp(0.0, 1.0) as f32;
@@ -606,7 +614,8 @@ impl App {
             // These all committed live on every move; nothing to finalise.
             Drag::GradientMid { .. }
             | Drag::GradientStopOnCanvas { .. }
-            | Drag::GradientEndpoint { .. } => {}
+            | Drag::GradientEndpoint { .. }
+            | Drag::GradientMidOnCanvas { .. } => {}
             Drag::LayerDrag { body, moved, .. } => {
                 if moved {
                     let ids = crate::panels::layers::order_front_to_back(

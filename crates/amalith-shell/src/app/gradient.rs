@@ -20,13 +20,19 @@ pub(in crate::app) struct GradientAnnot {
     pub kind: GradientKind,
     /// `(offset, colour, is the panel-selected stop)` for each stop.
     pub stops: Vec<(f32, amalith_core::Color, bool)>,
+    /// Absolute slider position (`0..1` along the axis) of the midpoint
+    /// diamond in each gap between consecutive stops (`stops.len() - 1`).
+    pub mids: Vec<f32>,
 }
 
 /// What a Gradient-tool press landed on, if the annotator is showing.
 pub(in crate::app) enum AnnotHit {
     /// A stop dot — drag it along the axis to re-locate that stop.
     Stop(ObjectId, usize),
-    /// The start handle (hollow diamond).
+    /// The midpoint diamond in gap `index` — drag it to shift the blend
+    /// balance between stops `index` and `index + 1`.
+    Mid(ObjectId, usize),
+    /// The start handle (filled circle).
     Start(ObjectId),
     /// The end handle (open square).
     End(ObjectId),
@@ -591,6 +597,12 @@ impl App {
                         index: i,
                     };
                 }
+                AnnotHit::Mid(obj, i) => {
+                    self.drag = Drag::GradientMidOnCanvas {
+                        object: obj,
+                        index: i,
+                    };
+                }
                 AnnotHit::Start(obj) => {
                     self.drag = Drag::GradientEndpoint {
                         object: obj,
@@ -654,6 +666,15 @@ impl App {
             let p = a + ab * stop.offset as f64;
             if dp.distance(p) <= tol {
                 return Some(AnnotHit::Stop(id, i));
+            }
+        }
+        // Midpoint diamonds sit between consecutive stops.
+        for i in 0..g.stops.len().saturating_sub(1) {
+            let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
+            let frac = o0 + (o1 - o0) * g.stops[i].midpoint;
+            let p = a + ab * frac as f64;
+            if dp.distance(p) <= tol {
+                return Some(AnnotHit::Mid(id, i));
             }
         }
         None
@@ -768,6 +789,12 @@ impl App {
             Point::new(wp.x, wp.y)
         };
         let sel = self.gradient_stop.min(g.stops.len().saturating_sub(1));
+        let mids = (0..g.stops.len().saturating_sub(1))
+            .map(|i| {
+                let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
+                o0 + (o1 - o0) * g.stops[i].midpoint
+            })
+            .collect();
         Some(GradientAnnot {
             start: map(g.start),
             end: map(g.end),
@@ -778,6 +805,7 @@ impl App {
                 .enumerate()
                 .map(|(i, s)| (s.offset, s.color, i == sel))
                 .collect(),
+            mids,
         })
     }
 }
