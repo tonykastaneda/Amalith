@@ -17,7 +17,7 @@
 use crate::error::CommandError;
 use amalith_core::{
     Affine, Artboard, ArtboardId, Asset, AssetId, Color, Document, DocumentError, Guide, GuideId,
-    Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle,
+    ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, StrokeStyle,
     TextData, Unit,
 };
 
@@ -40,6 +40,9 @@ pub(crate) enum Edit {
     },
     SetDocumentUnit {
         unit: Unit,
+    },
+    SetColorMode {
+        mode: ColorMode,
     },
     ResizeArtboard {
         id: ArtboardId,
@@ -167,6 +170,10 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         Edit::SetDocumentUnit { unit } => {
             let old = std::mem::replace(&mut doc.settings.default_unit, unit);
             Ok((Edit::SetDocumentUnit { unit: old }, None))
+        }
+        Edit::SetColorMode { mode } => {
+            let old = std::mem::replace(&mut doc.settings.color_mode, mode);
+            Ok((Edit::SetColorMode { mode: old }, None))
         }
         Edit::ResizeArtboard { id, rect } => {
             let artboard = doc

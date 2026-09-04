@@ -18,6 +18,8 @@ pub(in crate::app) struct NativeMenu {
     window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
     /// View ▸ Guides checkmarks — (show-guides, lock-guides).
     guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
+    /// File ▸ Document Color Mode checkmarks — (CMYK, RGB).
+    color_mode_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     /// View ▸ Outline checkmark.
     outline_check: muda::CheckMenuItem,
     /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
@@ -56,11 +58,16 @@ impl NativeMenu {
 
         let new_i = mk("New", sup, Code::KeyN);
         let open_i = mk("Open…", sup, Code::KeyO);
+        let close_i = mk("Close", sup, Code::KeyW);
+        let close_all_i = mk("Close All", sup_alt, Code::KeyW);
         let save_i = mk("Save", sup, Code::KeyS);
         let save_as_i = mk("Save As…", sup_shift, Code::KeyS);
+        let revert_i = MenuItem::new("Revert", true, None);
         let import_i = mk("Import SVG…", sup_shift, Code::KeyI);
         let place_i = mk("Place…", sup_shift, Code::KeyP);
         let export_screens_i = mk("Export for Screens…", sup_alt, Code::KeyE);
+        let cmyk_i = CheckMenuItem::new("CMYK Color", true, false, None);
+        let rgb_i = CheckMenuItem::new("RGB Color", true, false, None);
         let undo_i = mk("Undo", sup, Code::KeyZ);
         let redo_i = mk("Redo", sup_shift, Code::KeyZ);
         let cut_i = mk("Cut", sup, Code::KeyX);
@@ -163,12 +170,15 @@ impl NativeMenu {
 
         let export_menu = Submenu::with_items("Export", true, &[&export_screens_i])
             .expect("export menu");
+        let color_mode_menu = Submenu::with_items("Document Color Mode", true, &[&cmyk_i, &rgb_i])
+            .expect("color mode menu");
         let file = Submenu::with_items(
             "File",
             true,
             &[
-                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i,
-                &export_menu, &sep(), &scripts_menu,
+                &new_i, &open_i, &sep(), &close_i, &close_all_i, &sep(), &save_i, &save_as_i,
+                &revert_i, &sep(), &import_i, &place_i, &export_menu, &sep(), &color_mode_menu,
+                &sep(), &scripts_menu,
             ],
         )
         .expect("file menu");
@@ -289,6 +299,11 @@ impl NativeMenu {
             (prefs_i.id().clone(), MenuAction::Preferences),
             (new_i.id().clone(), MenuAction::New),
             (open_i.id().clone(), MenuAction::Open),
+            (close_i.id().clone(), MenuAction::Close),
+            (close_all_i.id().clone(), MenuAction::CloseAll),
+            (revert_i.id().clone(), MenuAction::Revert),
+            (cmyk_i.id().clone(), MenuAction::SetColorMode(amalith_core::ColorMode::Cmyk)),
+            (rgb_i.id().clone(), MenuAction::SetColorMode(amalith_core::ColorMode::Rgb)),
             (save_i.id().clone(), MenuAction::Save),
             (save_as_i.id().clone(), MenuAction::SaveAs),
             (import_i.id().clone(), MenuAction::ImportSvg),
@@ -344,6 +359,7 @@ impl NativeMenu {
             items,
             window_checks,
             guide_checks: (guides_show_i, guides_lock_i),
+            color_mode_checks: (cmyk_i, rgb_i),
             outline_check: outline_i,
             convert_text_i,
             clip_items: (clip_make_i, clip_release_i),
@@ -393,6 +409,13 @@ impl NativeMenu {
     pub(in crate::app) fn sync_guides(&self, hidden: bool, locked: bool) {
         self.guide_checks.0.set_checked(!hidden);
         self.guide_checks.1.set_checked(locked);
+    }
+
+    /// Tick the current Document Color Mode.
+    pub(in crate::app) fn sync_color_mode(&self, mode: amalith_core::ColorMode) {
+        let rgb = matches!(mode, amalith_core::ColorMode::Rgb);
+        self.color_mode_checks.0.set_checked(!rgb);
+        self.color_mode_checks.1.set_checked(rgb);
     }
 
     /// Every menu click queued since the last call.

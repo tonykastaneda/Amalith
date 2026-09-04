@@ -1,13 +1,13 @@
 //! The public command vocabulary. GUI tools, keyboard shortcuts, plugins,
 //! scripts, the CLI, and agents all describe mutations as a `Command`
-//! value and hand it to [`crate::Editor::execute`] — nothing constructs a
+//! value and hand it to [`crate::Editor::execute`] â nothing constructs a
 //! `Command` and applies it any other way, so there is exactly one place
 //! (`crate::edit`) that turns intent into an actual, undoable document
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
     Affine, ArtboardId, GuideId, Color, GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData,
-    Rect, StrokeStyle, TextData, Unit, Vec2,
+    ColorMode, Rect, StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -56,15 +56,20 @@ pub enum Command {
         fill: Option<Color>,
     },
     /// Sets the document's default measurement unit (rulers, dialogs).
-    /// Geometry stays in canonical px — this is a display-only setting.
+    /// Geometry stays in canonical px â this is a display-only setting.
     SetDocumentUnit {
         unit: Unit,
+    },
+    /// Sets the document colour mode (CMYK / RGB) — affects the New
+    /// Document defaults and colour readouts.
+    SetColorMode {
+        mode: ColorMode,
     },
     RenameLayer {
         id: LayerId,
         name: String,
     },
-    /// Renames an object (including a group) — the same field an object
+    /// Renames an object (including a group) â the same field an object
     /// is created with, so `None` clears it back to the panel's fallback
     /// display name rather than an empty string.
     RenameObject {
@@ -133,12 +138,12 @@ pub enum Command {
     },
     /// Replaces a text object's whole [`TextData`] (content, style, box,
     /// alignment, bounds) in one undoable step. v1's text edits are coarse
-    /// by design — the shell rebuilds the full `TextData` and swaps it.
+    /// by design â the shell rebuilds the full `TextData` and swaps it.
     SetText {
         object: ObjectId,
         data: TextData,
     },
-    /// Replaces several text objects' `TextData` in one undoable step —
+    /// Replaces several text objects' `TextData` in one undoable step â
     /// used when a multi-frame drag re-sizes every selected text box at
     /// once.
     SetTexts {
@@ -211,7 +216,7 @@ pub enum Command {
     /// Duplicates several objects at once (deep-copying any group's full
     /// descendant tree, with fresh ids throughout), one undo group. Unlike
     /// [`Command::Paste`], each duplicate lands as the top child of *its
-    /// own* existing parent — not funneled into one shared target — and
+    /// own* existing parent â not funneled into one shared target â and
     /// nothing here touches [`crate::Editor`]'s clipboard. Relative order
     /// among objects sharing a parent is preserved.
     DuplicateObjects {
@@ -234,7 +239,7 @@ pub enum Command {
     },
     /// Moves `ids` under `parent` (a layer or a group), as one undo group.
     /// The ids need not currently share a parent; they are spliced in
-    /// contiguously so that — reading front to back — they keep the order
+    /// contiguously so that â reading front to back â they keep the order
     /// given, landing so the frontmost sits just in front of `parent`'s
     /// existing child at stacking position `index` (an index into
     /// `parent`'s child list *before* this move; positions vacated by ids
@@ -260,7 +265,7 @@ pub enum Command {
     },
     /// Groups `ids` into one new group object, as one undo group. `ids`
     /// must all share the same current parent (a layer, or another
-    /// group) — that parent becomes the new group's parent too. The
+    /// group) â that parent becomes the new group's parent too. The
     /// group lands at the position of the topmost (frontmost) grouped
     /// object, so grouping never changes stacking relative to untouched
     /// siblings; the grouped objects themselves keep their relative order
@@ -278,7 +283,7 @@ pub enum Command {
     /// child's transform is composed with the group's so on-screen
     /// position, scale, and rotation survive. Errors if any id isn't a
     /// group. Group descendants that are themselves groups are left
-    /// alone — this dissolves exactly the groups named, not everything
+    /// alone â this dissolves exactly the groups named, not everything
     /// nested inside them.
     Ungroup {
         ids: Vec<ObjectId>,
@@ -306,7 +311,7 @@ pub enum Command {
         paint: Paint,
     },
     /// Sets fill and/or stroke paint on every listed object in one undo
-    /// group — for the Fill/Stroke proxy's swap and reset.
+    /// group â for the Fill/Stroke proxy's swap and reset.
     SetPaints {
         objects: Vec<ObjectId>,
         fill: Option<Paint>,
@@ -338,7 +343,7 @@ pub enum Command {
         objects: Vec<ObjectId>,
         locked: bool,
     },
-    /// Pathfinder boolean on `objects` (paint order back → front).
+    /// Pathfinder boolean on `objects` (paint order back â front).
     Pathfinder {
         op: PathfinderOp,
         objects: Vec<ObjectId>,
@@ -401,7 +406,7 @@ pub enum CommandOutcome {
     Artboard(ArtboardId),
     Layer(LayerId),
     /// The single new object (or, for [`Command::Paste`] with several
-    /// copied roots, the first root — same relative order as the
+    /// copied roots, the first root â same relative order as the
     /// clipboard) created by the command.
     Object(ObjectId),
     /// The new guide created by [`Command::AddGuide`].

@@ -383,6 +383,7 @@ impl Editor {
             Command::RenameArtboard { id, name } => vec![Edit::RenameArtboard { id, name }],
             Command::SetArtboardFill { id, fill } => vec![Edit::SetArtboardFill { id, fill }],
             Command::SetDocumentUnit { unit } => vec![Edit::SetDocumentUnit { unit }],
+            Command::SetColorMode { mode } => vec![Edit::SetColorMode { mode }],
             Command::RenameLayer { id, name } => vec![Edit::RenameLayer { id, name }],
             Command::RenameObject { id, name } => vec![Edit::RenameObject { id, name }],
             Command::ResizeArtboard { id, rect } => vec![Edit::ResizeArtboard { id, rect }],

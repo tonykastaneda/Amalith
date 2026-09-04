@@ -333,8 +333,12 @@ enum MenuAction {
     Quit,
     New,
     Open,
+    Close,
+    CloseAll,
+    Revert,
     Save,
     SaveAs,
+    SetColorMode(amalith_core::ColorMode),
     ImportSvg,
     Place,
     ExportForScreens,
@@ -1144,6 +1148,7 @@ impl App {
         self.pending_export = false;
         self.close_export(false);
         self.panel_menu = None;
+        self.sync_color_mode_menu();
     }
 
     /// Open `doc` in a new tab and make it active.
@@ -1588,6 +1593,32 @@ impl App {
         if let Some(m) = &self.native_menu {
             m.sync_type(self.text_convert_menu_state());
             m.sync_clip(self.clip_state());
+        }
+    }
+
+    /// Tick the current File ▸ Document Color Mode.
+    fn sync_color_mode_menu(&self) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_color_mode(self.doc.editor.document().settings.color_mode);
+        }
+    }
+
+    /// Close every open tab.
+    fn close_all_tabs(&mut self) {
+        while self.tabs.len() > 1 {
+            self.close_tab(self.active);
+        }
+        self.close_tab(self.active);
+    }
+
+    /// Reload the current document from disk, discarding unsaved changes.
+    fn revert_document(&mut self) {
+        if let Some(path) = self.doc.file_path.clone() {
+            self.open_path(&path);
+        } else {
+            self.doc.io_error = Some("Nothing to revert to — this document was never saved.".into());
+            self.request_main_redraw();
         }
     }
     fn toggle_outline_mode(&mut self) {
@@ -2528,8 +2559,16 @@ impl App {
             }
             MenuAction::New => self.open_new_doc(),
             MenuAction::Open => self.open_document(),
+            MenuAction::Close => self.close_tab(self.active),
+            MenuAction::CloseAll => self.close_all_tabs(),
+            MenuAction::Revert => self.revert_document(),
             MenuAction::Save => self.save_document(false),
             MenuAction::SaveAs => self.save_document(true),
+            MenuAction::SetColorMode(mode) => {
+                let _ = self.doc.editor.execute(Command::SetColorMode { mode });
+                self.sync_color_mode_menu();
+                self.request_main_redraw();
+            }
             MenuAction::ImportSvg => self.import_svg(),
             MenuAction::Place => self.place_image_dialog(),
             MenuAction::ExportForScreens => self.request_export_dialog(),
@@ -5174,6 +5213,7 @@ impl ApplicationHandler for App {
             // Refresh selection-dependent menu items before the loop
             // parks — the user's next click on the menu bar sees them.
             self.sync_type_menu();
+            self.sync_color_mode_menu();
         }
         #[cfg(target_os = "macos")]
         self.drain_mac_drops();
