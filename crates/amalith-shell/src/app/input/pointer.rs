@@ -386,20 +386,36 @@ impl App {
                 self.request_main_redraw();
             }
             Drag::MoveGuide {
-                id, orient, orig, ..
+                id,
+                orient,
+                orig,
+                grab,
+                press,
+                moved,
+                ..
             } => {
                 use amalith_core::GuideOrient;
-                let (id, orient, orig) = (*id, *orient, *orig);
-                let dp = self.doc_point(self.pointer);
-                let pos = match orient {
-                    GuideOrient::Horizontal => dp.y,
-                    GuideOrient::Vertical => dp.x,
+                let (id, orient, orig, grab, press) = (*id, *orient, *orig, *grab, *press);
+                // Hold the guide put until the pointer leaves a 3px slop
+                // circle — a click shouldn't nudge it.
+                let far = *moved || (self.pointer - press).hypot() > 3.0;
+                let pos = if far {
+                    let dp = self.doc_point(self.pointer);
+                    (match orient {
+                        GuideOrient::Horizontal => dp.y,
+                        GuideOrient::Vertical => dp.x,
+                    }) - grab
+                } else {
+                    orig
                 };
                 self.drag = Drag::MoveGuide {
                     id,
                     orient,
                     pos,
                     orig,
+                    grab,
+                    press,
+                    moved: far,
                 };
                 self.request_main_redraw();
             }

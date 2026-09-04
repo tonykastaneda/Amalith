@@ -201,12 +201,18 @@ enum Drag {
         pos: f64,
     },
     /// Moving an existing ruler guide. `orig` is its coordinate at press;
-    /// released over a ruler strip it's deleted instead.
+    /// released over a ruler strip it's deleted instead. `grab` is the
+    /// cursor-to-guide offset along the axis at press (doc units) so the
+    /// guide doesn't snap to the exact click point, and it holds still
+    /// until the pointer leaves a small slop circle around `press`.
     MoveGuide {
         id: amalith_core::GuideId,
         orient: amalith_core::GuideOrient,
         pos: f64,
         orig: f64,
+        grab: f64,
+        press: Point,
+        moved: bool,
     },
     /// Rotate tool: turning the selection about `pivot` (document space).
     /// A release with `moved == false` was a click and re-places the

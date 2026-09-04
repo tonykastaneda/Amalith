@@ -611,11 +611,19 @@ impl App {
                             self.selected_guides = vec![id];
                         }
                         if let Some(g) = self.doc.editor.document().guide(id).copied() {
+                            use amalith_core::GuideOrient;
+                            let axis0 = match g.orient {
+                                GuideOrient::Horizontal => dp.y,
+                                GuideOrient::Vertical => dp.x,
+                            };
                             self.drag = Drag::MoveGuide {
                                 id,
                                 orient: g.orient,
                                 pos: g.pos,
                                 orig: g.pos,
+                                grab: axis0 - g.pos,
+                                press: self.pointer,
+                                moved: false,
                             };
                         }
                         self.request_main_redraw();
