@@ -18,23 +18,36 @@ pub(in crate::app) struct GradientAnnot {
     pub start: Point,
     pub end: Point,
     pub kind: GradientKind,
-    /// `(offset, colour, is the panel-selected stop)` for each stop.
-    pub stops: Vec<(f32, amalith_core::Color, bool)>,
+    /// The round origin handle (t=0) doubles as the first stop: its
+    /// colour, and whether that stop is the panel-selected one.
+    pub start_color: amalith_core::Color,
+    pub start_sel: bool,
+    /// The square end handle (t=1) doubles as the last stop.
+    pub end_color: amalith_core::Color,
+    pub end_sel: bool,
+    /// **Interior** stops only — the ones not sitting under the origin /
+    /// end handles. `(offset, colour, is the panel-selected stop, real
+    /// index into the gradient's stop list)`.
+    pub stops: Vec<(f32, amalith_core::Color, bool, usize)>,
     /// Absolute slider position (`0..1` along the axis) of the midpoint
     /// diamond in each gap between consecutive stops (`stops.len() - 1`).
     pub mids: Vec<f32>,
 }
 
+/// A stop this close to `0` / `1` is drawn *as* the origin / end handle,
+/// not as its own circle.
+pub(in crate::app) const TERMINAL_EPS: f32 = 0.03;
+
 /// What a Gradient-tool press landed on, if the annotator is showing.
 pub(in crate::app) enum AnnotHit {
-    /// A stop dot — drag it along the axis to re-locate that stop.
+    /// An interior stop circle — drag it along the axis to relocate it.
     Stop(ObjectId, usize),
     /// The midpoint diamond in gap `index` — drag it to shift the blend
     /// balance between stops `index` and `index + 1`.
     Mid(ObjectId, usize),
-    /// The start handle (filled circle).
+    /// The round origin handle (t=0) — also selects the first stop.
     Start(ObjectId),
-    /// The end handle (open square).
+    /// The square end handle (t=1) — also selects the last stop.
     End(ObjectId),
 }
 
@@ -587,11 +600,28 @@ impl App {
     /// Gradient tool press router: a press near the annotator's handles
     /// edits that handle; anything else lays down a fresh axis. Call this
     /// from the press handler instead of `begin_gradient_drag` directly.
-    pub(in crate::app) fn gradient_tool_press(&mut self, dp: Point) {
+    /// `double` = this was a double-click (opens the stop colour picker).
+    pub(in crate::app) fn gradient_tool_press(&mut self, dp: Point, double: bool) {
         if let Some(hit) = self.gradient_annot_hit(dp) {
+            // Every handle also selects its stop so the panel + picker
+            // target it.
+            let last = self
+                .target_gradient()
+                .map(|(_, g)| g.stops.len().saturating_sub(1))
+                .unwrap_or(0);
+            match hit {
+                AnnotHit::Stop(_, i) => self.gradient_stop = i,
+                AnnotHit::Start(_) => self.gradient_stop = 0,
+                AnnotHit::End(_) => self.gradient_stop = last,
+                AnnotHit::Mid(..) => {}
+            }
+            if double && !matches!(hit, AnnotHit::Mid(..)) {
+                self.ensure_panel("gradient");
+                self.gradient_stop_picker();
+                return;
+            }
             match hit {
                 AnnotHit::Stop(obj, i) => {
-                    self.gradient_stop = i;
                     self.drag = Drag::GradientStopOnCanvas {
                         object: obj,
                         index: i,
@@ -620,7 +650,44 @@ impl App {
             self.request_main_redraw();
             return;
         }
+        // A press on the axis line itself (between the handles) adds a stop
+        // there and starts dragging it — Illustrator's "click the bar".
+        if let Some(t) = self.gradient_on_axis_line(dp) {
+            if let Some((id, _, _)) = self.gradient_axis_doc() {
+                self.gradient_add_stop(t as f32);
+                self.drag = Drag::GradientStopOnCanvas {
+                    object: id,
+                    index: self.gradient_stop,
+                };
+                self.ensure_panel("gradient");
+                self.request_main_redraw();
+                return;
+            }
+        }
         self.begin_gradient_drag(dp);
+    }
+
+    /// If `dp` (document space) lies on the axis line *segment* between the
+    /// two handles (not at an end), the projected parameter `t` in
+    /// `0..1` — for "click the bar to add a stop".
+    fn gradient_on_axis_line(&self, dp: Point) -> Option<f64> {
+        if self.active_tool != Tool::Gradient {
+            return None;
+        }
+        let (_, a, b) = self.gradient_axis_doc()?;
+        let ab = b - a;
+        let len2 = ab.hypot2();
+        if len2 < 1.0 {
+            return None;
+        }
+        let t = (dp - a).dot(ab) / len2;
+        // Stay clear of the end handles.
+        if !(TERMINAL_EPS as f64..1.0 - TERMINAL_EPS as f64).contains(&t) {
+            return None;
+        }
+        let foot = a + ab * t;
+        let tol = 7.0 / self.doc.view.zoom.max(1e-6);
+        (dp.distance(foot) <= tol).then_some(t)
     }
 
     /// The target gradient's axis endpoints in **document space**
@@ -647,28 +714,32 @@ impl App {
     }
 
     /// What the Gradient-tool press at `dp` (document space) landed on.
+    ///
+    /// Interior stops and midpoints are matched **before** the endpoint
+    /// handles, so a stop sitting on the axis is grabbable. Stops right at
+    /// `t=0` / `t=1` sit under the origin / end handles by design — those
+    /// handles double as the first / last stop (they select it, a
+    /// double-click opens its picker, a drag moves the axis end).
     fn gradient_annot_hit(&self, dp: Point) -> Option<AnnotHit> {
         if self.active_tool != Tool::Gradient {
             return None;
         }
         let (id, a, b) = self.gradient_axis_doc()?;
         let tol = 9.0 / self.doc.view.zoom.max(1e-6);
-        // Endpoints take priority (they sit under stop 0 / stop N).
-        if dp.distance(a) <= tol * 1.4 {
-            return Some(AnnotHit::Start(id));
-        }
-        if dp.distance(b) <= tol * 1.4 {
-            return Some(AnnotHit::End(id));
-        }
         let (_, g) = self.target_gradient()?;
         let ab = b - a;
+
+        // Interior stops first.
         for (i, stop) in g.stops.iter().enumerate() {
+            if stop.offset <= TERMINAL_EPS || stop.offset >= 1.0 - TERMINAL_EPS {
+                continue;
+            }
             let p = a + ab * stop.offset as f64;
             if dp.distance(p) <= tol {
                 return Some(AnnotHit::Stop(id, i));
             }
         }
-        // Midpoint diamonds sit between consecutive stops.
+        // Then midpoint diamonds.
         for i in 0..g.stops.len().saturating_sub(1) {
             let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
             let frac = o0 + (o1 - o0) * g.stops[i].midpoint;
@@ -676,6 +747,13 @@ impl App {
             if dp.distance(p) <= tol {
                 return Some(AnnotHit::Mid(id, i));
             }
+        }
+        // Then the endpoint handles (they also cover the terminal stops).
+        if dp.distance(a) <= tol * 1.4 {
+            return Some(AnnotHit::Start(id));
+        }
+        if dp.distance(b) <= tol * 1.4 {
+            return Some(AnnotHit::End(id));
         }
         None
     }
@@ -788,23 +866,34 @@ impl App {
             let wp = wt * lp;
             Point::new(wp.x, wp.y)
         };
-        let sel = self.gradient_stop.min(g.stops.len().saturating_sub(1));
-        let mids = (0..g.stops.len().saturating_sub(1))
+        let n = g.stops.len();
+        let sel = self.gradient_stop.min(n.saturating_sub(1));
+        let mids = (0..n.saturating_sub(1))
             .map(|i| {
                 let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
                 o0 + (o1 - o0) * g.stops[i].midpoint
             })
             .collect();
+        // Terminal stops are drawn *as* the origin / end handles; only
+        // stops that sit clearly on the axis body get their own circle.
+        let stops = g
+            .stops
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                s.offset > TERMINAL_EPS && s.offset < 1.0 - TERMINAL_EPS
+            })
+            .map(|(i, s)| (s.offset, s.color, i == sel, i))
+            .collect();
         Some(GradientAnnot {
             start: map(g.start),
             end: map(g.end),
             kind: g.kind,
-            stops: g
-                .stops
-                .iter()
-                .enumerate()
-                .map(|(i, s)| (s.offset, s.color, i == sel))
-                .collect(),
+            start_color: g.stops.first().map(|s| s.color).unwrap_or(amalith_core::Color::rgb(1.0, 1.0, 1.0)),
+            start_sel: sel == 0,
+            end_color: g.stops.last().map(|s| s.color).unwrap_or(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
+            end_sel: n > 0 && sel == n - 1,
+            stops,
             mids,
         })
     }

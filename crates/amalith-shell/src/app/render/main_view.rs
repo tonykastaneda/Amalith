@@ -204,37 +204,40 @@ pub(in crate::app) fn paint_main(
             scene.stroke(&Stroke::new(1.25), ID, dark, None, &dia);
         }
 
-        // Stop circles — colour-filled, dark ring, white keyline so the
-        // ring reads even on a same-colour part of the gradient. Selected
-        // stop gets the accent ring.
-        for (off, c, selected) in &annot.stops {
-            let p = at(*off as f64);
-            let r = if *selected { 6.5 } else { 5.5 };
+        // A colour swatch on any handle: white keyline, colour fill, dark
+        // ring, accent ring when it's the panel-selected stop.
+        let stop_circle = |scene: &mut Scene, p: Point, c: &amalith_core::Color, sel: bool| {
+            let r = if sel { 7.0 } else { 6.0 };
             let circ = vello::kurbo::Circle::new(p, r);
             scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(p, r + 1.0));
             scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &circ);
             scene.stroke(&Stroke::new(2.0), ID, dark, None, &circ);
-            scene.stroke(
-                &Stroke::new(1.0),
-                ID,
-                if *selected { theme.accent } else { white },
-                None,
-                &circ,
-            );
+            if sel {
+                scene.stroke(&Stroke::new(1.5), ID, theme.accent, None, &circ);
+            }
+        };
+
+        // Interior stop circles (stops at t=0 / t=1 are the handles below).
+        for (off, c, selected, _) in &annot.stops {
+            stop_circle(scene, at(*off as f64), c, *selected);
         }
 
-        // Origin handle (t=0): a small solid round marker.
-        let oc = vello::kurbo::Circle::new(a, 4.5);
-        scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(a, 5.5));
-        scene.fill(Fill::NonZero, ID, white, None, &oc);
-        scene.stroke(&Stroke::new(1.5), ID, dark, None, &oc);
+        // Origin handle (t=0) — the round first-stop handle.
+        stop_circle(scene, a, &annot.start_color, annot.start_sel);
 
-        // End handle (t=1): a square (also the rotate grip in IL).
-        let s = 5.5;
-        let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
-        scene.fill(Fill::NonZero, ID, white, None, &Rect::new(b.x - s - 1.0, b.y - s - 1.0, b.x + s + 1.0, b.y + s + 1.0));
-        scene.fill(Fill::NonZero, ID, white, None, &sq);
-        scene.stroke(&Stroke::new(2.0), ID, dark, None, &sq);
+        // End handle (t=1) — a square around the last-stop swatch.
+        {
+            let c = &annot.end_color;
+            let r = if annot.end_sel { 7.0 } else { 6.0 };
+            let outer = Rect::new(b.x - r - 1.0, b.y - r - 1.0, b.x + r + 1.0, b.y + r + 1.0);
+            let sq = Rect::new(b.x - r, b.y - r, b.x + r, b.y + r);
+            scene.fill(Fill::NonZero, ID, white, None, &outer);
+            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &sq);
+            scene.stroke(&Stroke::new(2.0), ID, dark, None, &sq);
+            if annot.end_sel {
+                scene.stroke(&Stroke::new(1.5), ID, theme.accent, None, &sq);
+            }
+        }
     }
 
     // Clip masks are otherwise invisible — outline them in the accent

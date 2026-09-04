@@ -618,7 +618,7 @@ impl App {
                 // anywhere else lays down a fresh axis on the object under
                 // the cursor.
                 if self.active_tool == Tool::Gradient {
-                    self.gradient_tool_press(dp);
+                    self.gradient_tool_press(dp, double);
                     return;
                 }
 
