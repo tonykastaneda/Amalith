@@ -47,6 +47,7 @@ pub mod macdrop;
 pub mod newdoc;
 pub mod palette;
 pub mod panels;
+pub mod pdfexport;
 pub mod picker;
 pub mod prefs;
 pub mod recent;

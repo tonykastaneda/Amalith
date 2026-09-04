@@ -191,16 +191,14 @@ impl App {
         let mut written = 0usize;
         let mut first_err: Option<String> = None;
         for (ab_i, row) in jobs {
-            let (name, ab_rect, bg) = {
+            let (name, ab_rect, ab_fill) = {
                 let doc = self.doc.editor.document();
                 let Some(ab) = doc.artboards().get(ab_i) else {
                     continue;
                 };
-                let bg = ab
-                    .fill
-                    .map(|c| vello::peniko::Color::new([c.r, c.g, c.b, c.a]));
-                (ab.name.clone(), ab.rect, bg)
+                (ab.name.clone(), ab.rect, ab.fill)
             };
+            let bg = ab_fill.map(|c| vello::peniko::Color::new([c.r, c.g, c.b, c.a]));
             let src = amalith_core::Rect::new(
                 ab_rect.x0 - bleed.left,
                 ab_rect.y0 - bleed.top,
@@ -226,7 +224,7 @@ impl App {
                     self.export_raster(src, row.scale, row.format, bg, &path)
                 }
                 Format::Svg => self.export_svg_file(ab_rect, src, &path),
-                Format::Pdf => self.export_pdf_file(src, bg, &path),
+                Format::Pdf => self.export_pdf_file(src, ab_fill, &path),
             };
             match result {
                 Ok(()) => written += 1,
@@ -340,43 +338,35 @@ impl App {
         std::fs::write(path, svg)
     }
 
+    /// A real vector PDF (paths, text-as-outlines, gradients as shading
+    /// patterns, images as JPEG XObjects) — see `crate::pdfexport` for
+    /// the writer and its documented coordinate/alpha strategy and known
+    /// simplifications. `bg` is the artboard's own fill, painted as a
+    /// full-page backdrop rect.
     fn export_pdf_file(
         &mut self,
         src: amalith_core::Rect,
-        bg: Option<vello::peniko::Color>,
+        bg: Option<amalith_core::Color>,
         path: &std::path::Path,
     ) -> std::io::Result<()> {
-        // A raster-backed PDF: one page sized to the artboard (in points),
-        // with a 2× JPEG of the render embedded to fill it.
-        let scale = 2.0;
-        let w = ((src.x1 - src.x0) * scale).round().max(1.0) as u32;
-        let h = ((src.y1 - src.y0) * scale).round().max(1.0) as u32;
-        let ksrc = vello::kurbo::Rect::new(src.x0, src.y0, src.x1, src.y1);
-        let scene = crate::canvas::export_scene(
-            self.doc.editor.document(),
-            ksrc,
-            scale,
+        let doc = self.doc.editor.document();
+        let ids: Vec<amalith_core::ObjectId> = doc
+            .layers()
+            .iter()
+            .filter(|l| l.visible)
+            .flat_map(|l| l.children.iter().copied())
+            .filter(|&id| doc.bounds_of(id).is_some_and(|b| rects_overlap(b, src)))
+            .collect();
+        let cmyk = doc.settings.color_mode == amalith_core::ColorMode::Cmyk;
+        let pdf = crate::pdfexport::export_vector_pdf(
+            doc,
+            &ids,
+            src,
             bg,
-            &self.image_cache,
-            self.outline_mode,
+            cmyk,
             &mut self.text,
+            &self.image_cache,
         );
-        let rgba = self
-            .render_scene_to_rgba(&scene, w, h)
-            .ok_or_else(|| io_err("offscreen render failed"))?;
-        let rgb = image::DynamicImage::ImageRgba8(
-            image::RgbaImage::from_raw(w, h, rgba).ok_or_else(|| io_err("bad pixel buffer"))?,
-        )
-        .to_rgb8();
-        let mut jpeg = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 92)
-            .encode_image(&rgb)
-            .map_err(|e| io_err(&e.to_string()))?;
-
-        // Page size in PostScript points (72dpi); doc units are px @96dpi.
-        let pw = (src.x1 - src.x0) * 72.0 / 96.0;
-        let ph = (src.y1 - src.y0) * 72.0 / 96.0;
-        let pdf = build_image_pdf(&jpeg, w, h, pw, ph);
         std::fs::write(path, pdf)
     }
 
@@ -531,48 +521,6 @@ fn reframe_svg(svg: &str, x: f64, y: f64, w: f64, h: f64) -> String {
     } else {
         svg.to_string()
     }
-}
-
-/// A minimal valid PDF: one page, one full-bleed JPEG image.
-fn build_image_pdf(jpeg: &[u8], iw: u32, ih: u32, page_w: f64, page_h: f64) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::with_capacity(jpeg.len() + 1024);
-    let mut offsets = [0usize; 6];
-    macro_rules! w { ($($a:tt)*) => { out.extend_from_slice(format!($($a)*).as_bytes()) } }
-
-    w!("%PDF-1.4\n%\u{00e2}\u{00e3}\u{00cf}\u{00d3}\n");
-    offsets[1] = out.len();
-    w!("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-    offsets[2] = out.len();
-    w!("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
-    offsets[3] = out.len();
-    w!(
-        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] \
-         /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
-        page_w, page_h
-    );
-    offsets[4] = out.len();
-    w!(
-        "4 0 obj\n<< /Type /XObject /Subtype /Image /Width {iw} /Height {ih} \
-         /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream\n",
-        jpeg.len()
-    );
-    out.extend_from_slice(jpeg);
-    w!("\nendstream\nendobj\n");
-    let content = format!("q {:.2} 0 0 {:.2} 0 0 cm /Im0 Do Q\n", page_w, page_h);
-    offsets[5] = out.len();
-    w!(
-        "5 0 obj\n<< /Length {} >>\nstream\n{content}endstream\nendobj\n",
-        content.len()
-    );
-    let xref = out.len();
-    w!("xref\n0 6\n0000000000 65535 f \n");
-    for off in &offsets[1..] {
-        w!("{:010} 00000 n \n", off);
-    }
-    w!(
-        "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"
-    );
-    out
 }
 
 fn reveal(dir: &std::path::Path) {
