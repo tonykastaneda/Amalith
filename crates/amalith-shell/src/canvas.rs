@@ -180,6 +180,38 @@ pub fn cull_rect(viewport: Rect, inset: f64) -> Rect {
 
 /// Paint the document into `viewport` (the screen rect between the rails).
 #[allow(clippy::too_many_arguments)]
+/// Render just the document content inside `src` (document space) into a
+/// fresh transparent [`Scene`] sized `src` × `scale` pixels — no chrome,
+/// no artboard frame, no selection. Used by Export for Screens.
+pub fn export_scene(
+    doc: &Document,
+    src: Rect,
+    scale: f64,
+    images: &HashMap<AssetId, ImageLods>,
+    outline: bool,
+    text: &mut TextContext,
+) -> Scene {
+    let mut scene = Scene::new();
+    let px = Rect::new(
+        0.0,
+        0.0,
+        (src.width() * scale).max(1.0),
+        (src.height() * scale).max(1.0),
+    );
+    let vt = Affine::scale(scale) * Affine::translate((-src.x0, -src.y0));
+    scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &px);
+    for layer in doc.layers() {
+        if !layer.visible {
+            continue;
+        }
+        for &id in &layer.children {
+            paint_object(&mut scene, doc, id, vt, scale, px, None, text, None, images, outline);
+        }
+    }
+    scene.pop_layer();
+    scene
+}
+
 pub fn paint(
     scene: &mut Scene,
     doc: &Document,

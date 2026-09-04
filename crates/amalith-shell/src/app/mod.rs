@@ -642,6 +642,8 @@ pub(crate) enum PenHint {
 
 struct App {
     context: RenderContext,
+    /// A headless vello renderer, made on first use by Export for Screens.
+    export_renderer: Option<Renderer>,
     hosts: HashMap<WindowId, WindowHost>,
     main_id: Option<WindowId>,
     scene: Scene,
@@ -890,6 +892,7 @@ impl App {
         }
         Self {
             context: RenderContext::new(),
+            export_renderer: None,
             hosts: HashMap::new(),
             main_id: None,
             scene: Scene::new(),

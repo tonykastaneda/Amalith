@@ -12,7 +12,7 @@
 
 mod formats;
 
-pub use formats::{Format, Row};
+pub use formats::{scale_label, Format, Row};
 
 use std::path::PathBuf;
 
@@ -64,6 +64,13 @@ enum Focus {
     Suffix(usize),
 }
 
+/// An open Scale / Format dropdown on a Formats-table row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OpenMenu {
+    Scale(usize),
+    Format(usize),
+}
+
 /// One artboard as far as the dialog cares.
 pub struct Item {
     pub name: String,
@@ -87,6 +94,7 @@ pub struct ExportForScreens {
     pub rows: Vec<Row>,
     pub items: Vec<Item>,
     focus: Focus,
+    menu: Option<OpenMenu>,
 }
 
 /// Where a pointer at `local` (panel-body coords) landed.
@@ -104,9 +112,13 @@ pub enum Hit {
     FocusRange,
     FocusPrefix,
     FocusSuffix(usize),
-    /// Cycle a row's scale / format to the next value (a click on the cell).
-    CycleScale(usize),
-    CycleFormat(usize),
+    /// Open a row's Scale / Format dropdown.
+    OpenScale(usize),
+    OpenFormat(usize),
+    /// Pick item `k` from whichever dropdown is open.
+    MenuPick(usize),
+    /// A click that just dismisses an open dropdown.
+    MenuClose,
     RemoveRow(usize),
     AddScale,
     ToggleItem(usize),
@@ -139,6 +151,7 @@ impl ExportForScreens {
             rows: formats::defaults(),
             items,
             focus: Focus::None,
+            menu: None,
         }
     }
 
@@ -189,21 +202,37 @@ impl ExportForScreens {
             }
             Hit::FocusPrefix => self.focus = Focus::Prefix,
             Hit::FocusSuffix(i) => self.focus = Focus::Suffix(i),
-            Hit::CycleScale(i) => {
-                if let Some(row) = self.rows.get_mut(i) {
-                    let cur = formats::SCALES
-                        .iter()
-                        .position(|s| (s - row.scale).abs() < 1e-6)
-                        .unwrap_or(1);
-                    row.scale = formats::SCALES[(cur + 1) % formats::SCALES.len()];
-                }
+            Hit::OpenScale(i) => {
+                self.menu = if self.menu == Some(OpenMenu::Scale(i)) {
+                    None
+                } else {
+                    Some(OpenMenu::Scale(i))
+                };
             }
-            Hit::CycleFormat(i) => {
-                if let Some(row) = self.rows.get_mut(i) {
-                    let cur = Format::ALL.iter().position(|f| *f == row.format).unwrap_or(0);
-                    row.format = Format::ALL[(cur + 1) % Format::ALL.len()];
-                }
+            Hit::OpenFormat(i) => {
+                self.menu = if self.menu == Some(OpenMenu::Format(i)) {
+                    None
+                } else {
+                    Some(OpenMenu::Format(i))
+                };
             }
+            Hit::MenuPick(k) => {
+                match self.menu {
+                    Some(OpenMenu::Scale(i)) => {
+                        if let (Some(row), Some(&s)) = (self.rows.get_mut(i), formats::SCALES.get(k)) {
+                            row.scale = s;
+                        }
+                    }
+                    Some(OpenMenu::Format(i)) => {
+                        if let (Some(row), Some(&f)) = (self.rows.get_mut(i), Format::ALL.get(k)) {
+                            row.format = f;
+                        }
+                    }
+                    None => {}
+                }
+                self.menu = None;
+            }
+            Hit::MenuClose => self.menu = None,
             Hit::RemoveRow(i) => {
                 if self.rows.len() > 1 && i < self.rows.len() {
                     self.rows.remove(i);
@@ -272,11 +301,38 @@ impl ExportForScreens {
 
     pub fn defocus(&mut self) {
         self.focus = Focus::None;
+        self.menu = None;
     }
 
     fn any_pdf(&self) -> bool {
         formats::any_pdf(&self.rows)
     }
+}
+
+/// A dropdown popup: the item rects, and whether it drops up or down.
+struct MenuLayout {
+    items: Vec<Rect>,
+    frame: Rect,
+}
+
+fn menu_layout(anchor: Rect, n: usize, body: Rect) -> MenuLayout {
+    let item_h = 22.0;
+    let w = anchor.width().max(74.0);
+    let h = n as f64 * item_h + 6.0;
+    let up = anchor.y1 + h > body.y1 - 8.0;
+    let (top, x0) = if up {
+        (anchor.y0 - h, anchor.x0)
+    } else {
+        (anchor.y1 + 2.0, anchor.x0)
+    };
+    let frame = Rect::new(x0, top, x0 + w, top + h);
+    let items = (0..n)
+        .map(|i| {
+            let y = frame.y0 + 3.0 + i as f64 * item_h;
+            Rect::new(frame.x0 + 2.0, y, frame.x1 - 2.0, y + item_h)
+        })
+        .collect();
+    MenuLayout { items, frame }
 }
 
 // --- layout --------------------------------------------------------
@@ -433,6 +489,22 @@ fn layout(body: Rect, n_items: usize, n_rows: usize) -> L {
 
 pub fn hit(dlg: &ExportForScreens, body: Rect, p: Point) -> Hit {
     let l = layout(body, dlg.items.len(), dlg.rows.len());
+
+    // An open dropdown captures the next click.
+    if let Some(m) = dlg.menu {
+        let (anchor, n) = match m {
+            OpenMenu::Scale(i) => (l.fmt_rows[i].scale, formats::SCALES.len()),
+            OpenMenu::Format(i) => (l.fmt_rows[i].format, Format::ALL.len()),
+        };
+        let ml = menu_layout(anchor, n, body);
+        for (k, r) in ml.items.iter().enumerate() {
+            if r.contains(p) {
+                return Hit::MenuPick(k);
+            }
+        }
+        return Hit::MenuClose;
+    }
+
     if l.tab_artboards.contains(p) {
         return Hit::Tab(Tab::Artboards);
     }
@@ -514,13 +586,13 @@ pub fn hit(dlg: &ExportForScreens, body: Rect, p: Point) -> Hit {
             return Hit::RemoveRow(i);
         }
         if fr.scale.contains(p) {
-            return Hit::CycleScale(i);
+            return Hit::OpenScale(i);
         }
         if fr.suffix.contains(p) {
             return Hit::FocusSuffix(i);
         }
         if fr.format.contains(p) {
-            return Hit::CycleFormat(i);
+            return Hit::OpenFormat(i);
         }
     }
     if l.add_scale.contains(p) {
@@ -668,6 +740,35 @@ pub fn paint(
     );
     button(scene, text, theme, l.cancel, "Cancel", false);
     button(scene, text, theme, l.export, "Export Artboard", true);
+
+    // Open dropdown — drawn last so it sits over everything.
+    if let Some(m) = dlg.menu {
+        let (anchor, items): (Rect, Vec<String>) = match m {
+            OpenMenu::Scale(i) => (
+                l.fmt_rows[i].scale,
+                formats::SCALES.iter().map(|s| formats::scale_label(*s)).collect(),
+            ),
+            OpenMenu::Format(i) => (
+                l.fmt_rows[i].format,
+                Format::ALL.iter().map(|f| f.label().to_string()).collect(),
+            ),
+        };
+        let cur = match m {
+            OpenMenu::Scale(i) => formats::SCALES
+                .iter()
+                .position(|s| (s - dlg.rows[i].scale).abs() < 1e-6),
+            OpenMenu::Format(i) => Format::ALL.iter().position(|f| *f == dlg.rows[i].format),
+        };
+        let ml = menu_layout(anchor, items.len(), body);
+        scene.fill(Fill::NonZero, ID, theme.bg, None, &ml.frame.to_rounded_rect(4.0));
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &ml.frame.to_rounded_rect(4.0));
+        for (k, r) in ml.items.iter().enumerate() {
+            if Some(k) == cur {
+                scene.fill(Fill::NonZero, ID, theme.strip_active, None, r);
+            }
+            text.draw(scene, &items[k], 12.0, theme.text, r.x0 + 8.0, r.y0 + r.height() * 0.5 + 4.0);
+        }
+    }
 }
 
 const ID: Affine = Affine::IDENTITY;
