@@ -12,7 +12,7 @@
 //!
 //! Rendered with vello + parley like the rest of the chrome. It's a full-window
 //! surface: while it's up, the canvas underneath takes no input. Artwork comes
-//! from `branding/NewDocument/` (SVGs rasterised to PNG at build prep time).
+//! from `assets/home/` (SVGs rasterised to PNG at build prep time).
 
 use std::path::{Path, PathBuf};
 
@@ -23,11 +23,11 @@ use vello::Scene;
 use crate::text::TextContext;
 use crate::theme::Theme;
 
-const MARK_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/mark.png");
-const WELCOME_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/welcome.png");
-const YOUTUBE_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/youtube.png");
-const GITHUB_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/github.png");
-const TILE_PNG: &[u8] = include_bytes!("../../../branding/NewDocument/newdoc-tile.png");
+const MARK_PNG: &[u8] = include_bytes!("../assets/home/mark.png");
+const WELCOME_PNG: &[u8] = include_bytes!("../assets/home/welcome.png");
+const YOUTUBE_PNG: &[u8] = include_bytes!("../assets/home/youtube.png");
+const GITHUB_PNG: &[u8] = include_bytes!("../assets/home/github.png");
+const TILE_PNG: &[u8] = include_bytes!("../assets/home/newdoc-tile.png");
 
 /// A blanket YouTube search, per the brief. Hidden for now — kept so the
 /// link can be restored without redoing the wiring.

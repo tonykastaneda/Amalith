@@ -57,7 +57,7 @@ EOF
 archive_root="$work/amalith-$VERSION-x86_64"
 mkdir -p "$archive_root"
 install -m 0755 "$bin" "$archive_root/$APP"
-install -m 0644 "$root/branding/app-icon.png" "$archive_root/$APP_ID.png"
+install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$archive_root/$APP_ID.png"
 install -m 0644 "$desktop" "$archive_root/$APP_ID.desktop"
 cat > "$archive_root/README.txt" <<EOF
 $APP $VERSION — Linux x86_64
@@ -74,7 +74,7 @@ mkdir -p "$debroot/DEBIAN" "$debroot/usr/bin" \
   "$debroot/usr/share/applications" "$debroot/usr/share/icons/hicolor/512x512/apps"
 install -m 0755 "$bin" "$debroot/usr/bin/$APP"
 install -m 0644 "$desktop" "$debroot/usr/share/applications/$APP_ID.desktop"
-install -m 0644 "$root/branding/app-icon.png" \
+install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" \
   "$debroot/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
 installed_size="$(du -sk "$debroot/usr" | cut -f1)"
 cat > "$debroot/DEBIAN/control" <<EOF
@@ -96,7 +96,7 @@ mkdir -p "$rpmroot/BUILD" "$rpmroot/BUILDROOT" "$rpmroot/RPMS" \
   "$rpmroot/SOURCES" "$rpmroot/SPECS" "$rpmroot/SRPMS"
 install -m 0755 "$bin" "$rpmroot/SOURCES/$APP"
 install -m 0644 "$desktop" "$rpmroot/SOURCES/$APP_ID.desktop"
-install -m 0644 "$root/branding/app-icon.png" "$rpmroot/SOURCES/$APP_ID.png"
+install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$rpmroot/SOURCES/$APP_ID.png"
 cat > "$rpmroot/SPECS/amalith.spec" <<EOF
 Name:           amalith
 Version:        $VERSION
@@ -133,8 +133,8 @@ mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
 install -m 0755 "$bin" "$appdir/usr/bin/$APP"
 install -m 0644 "$desktop" "$appdir/$APP_ID.desktop"
 install -m 0644 "$desktop" "$appdir/usr/share/applications/$APP_ID.desktop"
-install -m 0644 "$root/branding/app-icon.png" "$appdir/$APP_ID.png"
-install -m 0644 "$root/branding/app-icon.png" \
+install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$appdir/$APP_ID.png"
+install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" \
   "$appdir/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
 ln -s "usr/bin/$APP" "$appdir/AppRun"
 ARCH=x86_64 appimagetool "$appdir" "$out/$APP-$VERSION-x86_64.AppImage" >/dev/null

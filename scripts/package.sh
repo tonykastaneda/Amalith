@@ -66,7 +66,7 @@ else
   rm -rf "$win"
   mkdir -p "$win"
   cp "$root/target/$WIN_TARGET/release/$APP.exe" "$win/$APP.exe"
-  cp "$root/branding/amalith.ico" "$win/$APP.ico"
+  cp "$root/crates/amalith-shell/assets/amalith.ico" "$win/$APP.ico"
   cat > "$win/README.txt" <<EOF
 Amalith $VERSION — Windows
 

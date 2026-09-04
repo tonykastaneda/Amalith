@@ -8,12 +8,12 @@
 //! - Windows / Linux: [`window_icon`] feeds `WindowAttributes::with_window_icon`
 //!   for the title bar and taskbar.
 //!
-//! Both read the same art: `branding/app-icon.png`, embedded at build time.
+//! Both read the same art: `assets/app-icon.png`, embedded at build time.
 //! Replace that file with the real export (a square PNG, 1024×1024) and both
 //! paths pick it up on the next build.
 
 /// The icon art, embedded at build time.
-const ICON_PNG: &[u8] = include_bytes!("../../../branding/app-icon.png");
+const ICON_PNG: &[u8] = include_bytes!("../assets/app-icon.png");
 
 /// Decode a PNG byte slice to `(rgba8, width, height)`. Shared with the About
 /// splash ([`crate::about`]).

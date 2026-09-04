@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Regenerate branding/app-icon.png from the master icon export.
+# Regenerate the app icon (crates/amalith-shell/assets/app-icon.png) from the
+# master icon export.
 #
 # Source: branding/icn-comp-iOS-Default-1024@1x.png — a full-bleed 1024x1024
 # iOS-style icon (squircle + gradient already baked in, 16-bit).
@@ -15,7 +16,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 src="$here/icn-comp-iOS-Default-1024@1x.png"
-out="$here/app-icon.png"
+out="$here/../crates/amalith-shell/assets/app-icon.png"
 
 magick "$src" -depth 8 -alpha on \
   -resize 824x824 -background none -gravity center -extent 1024x1024 \

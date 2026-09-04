@@ -33,7 +33,7 @@ amalith-io = { path = "../amalith-io" }
 rfd.workspace = true
 # Text-only OS clipboard, for SVG copy/paste with Illustrator & the web.
 arboard = { version = "3.6", default-features = false }
-# Decode the embedded app-icon PNG (branding/app-icon.png).
+# Decode the embedded app-icon PNG (assets/app-icon.png).
 png = "0.18"
 # Raster decode for File ▸ Place / drag-and-drop (PNG + JPEG).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

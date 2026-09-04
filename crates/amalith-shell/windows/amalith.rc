@@ -1,4 +1,4 @@
 // Windows resources for Amalith.exe. Compiled by build.rs (embed-resource)
 // only when targeting Windows. Icon id 1 is the default application icon
 // Explorer and the taskbar display.
-1 ICON "../../../branding/amalith.ico"
+1 ICON "../assets/amalith.ico"

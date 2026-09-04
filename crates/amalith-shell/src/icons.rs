@@ -1,5 +1,5 @@
 //! Tool icons. The six tools with brand artwork are painted from the
-//! `branding/ToolIcons` files via a tiny SVG-primitive reader (ported from
+//! `assets/tool-icons` files via a tiny SVG-primitive reader (ported from
 //! `amalith-app`'s `paint_brand_tool_icon`); the rest stay hand-drawn.
 //! `vello_svg` still targets vello 0.9, so a full SVG stack isn't an
 //! option — but the glyphs only use `<polygon>` / `<rect>` / `<ellipse>`
@@ -16,26 +16,26 @@ const CURSOR_BODY: Color = Color::from_rgb8(0x1a, 0x1a, 0x1a);
 
 const ID: Affine = Affine::IDENTITY;
 
-const SELECT_SVG: &str = include_str!("../../../branding/ToolIcons/V-selectio.svg");
-const DIRECT_SELECT_SVG: &str = include_str!("../../../branding/ToolIcons/A-selection.svg");
-const PEN_SVG: &str = include_str!("../../../branding/ToolIcons/Pen.svg");
-const RECT_SVG: &str = include_str!("../../../branding/ToolIcons/Square.svg");
-const ROUND_RECT_SVG: &str = include_str!("../../../branding/ToolIcons/round-square.svg");
-const ELLIPSE_SVG: &str = include_str!("../../../branding/ToolIcons/Circle.svg");
-const POLYGON_SVG: &str = include_str!("../../../branding/ToolIcons/Polygon.svg");
-const STAR_SVG: &str = include_str!("../../../branding/ToolIcons/Start.svg");
-const ARTBOARD_SVG: &str = include_str!("../../../branding/ToolIcons/Artboard Tool.svg");
+const SELECT_SVG: &str = include_str!("../assets/tool-icons/V-selectio.svg");
+const DIRECT_SELECT_SVG: &str = include_str!("../assets/tool-icons/A-selection.svg");
+const PEN_SVG: &str = include_str!("../assets/tool-icons/Pen.svg");
+const RECT_SVG: &str = include_str!("../assets/tool-icons/Square.svg");
+const ROUND_RECT_SVG: &str = include_str!("../assets/tool-icons/round-square.svg");
+const ELLIPSE_SVG: &str = include_str!("../assets/tool-icons/Circle.svg");
+const POLYGON_SVG: &str = include_str!("../assets/tool-icons/Polygon.svg");
+const STAR_SVG: &str = include_str!("../assets/tool-icons/Start.svg");
+const ARTBOARD_SVG: &str = include_str!("../assets/tool-icons/Artboard Tool.svg");
 
 // "-onDocument" variants: how a tool glyph is drawn as the canvas cursor
 // (a light body with a dark keyline, readable on any background).
 pub const CURSOR_SELECT_SVG: &str =
-    include_str!("../../../branding/ToolIcons/V-selectio-onDocument.svg");
+    include_str!("../assets/tool-icons/V-selectio-onDocument.svg");
 pub const CURSOR_DIRECT_SELECT_SVG: &str =
-    include_str!("../../../branding/ToolIcons/A-selection-onDocument.svg");
+    include_str!("../assets/tool-icons/A-selection-onDocument.svg");
 pub const CURSOR_PEN_DRAWING_SVG: &str =
-    include_str!("../../../branding/ToolIcons/Pen-drawingShape-onDocument.svg");
+    include_str!("../assets/tool-icons/Pen-drawingShape-onDocument.svg");
 pub const CURSOR_PEN_CLOSING_SVG: &str =
-    include_str!("../../../branding/ToolIcons/Pen-closingShape-onDocument.svg");
+    include_str!("../assets/tool-icons/Pen-closingShape-onDocument.svg");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {

@@ -28,7 +28,7 @@ BUNDLE_ID="${BUNDLE_ID:-com.tonykastaneda.amalith}"
 VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
 VERSION="${VERSION:-0.1.0}"
 MIN_MACOS="${MIN_MACOS:-11.0}"
-ICON_SRC="$root/branding/app-icon.png"
+ICON_SRC="$root/crates/amalith-shell/assets/app-icon.png"
 
 out="$root/dist/mac"
 app="$out/$APP_NAME.app"

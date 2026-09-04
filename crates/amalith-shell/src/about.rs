@@ -21,9 +21,9 @@ use vello::peniko::Brush;
 use crate::text::TextContext;
 
 /// Right-side illustration (pre-cropped to the panel's aspect).
-const ART_PNG: &[u8] = include_bytes!("../../../branding/About/art.png");
+const ART_PNG: &[u8] = include_bytes!("../assets/about/art.png");
 /// The Amalith wordmark, white on transparent.
-const LOGO_PNG: &[u8] = include_bytes!("../../../branding/About/wordmark.png");
+const LOGO_PNG: &[u8] = include_bytes!("../assets/about/wordmark.png");
 
 /// Where `Github` points.
 const GITHUB_URL: &str = "https://github.com/tonykastaneda/Amalith";
