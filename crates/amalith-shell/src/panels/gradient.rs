@@ -182,8 +182,9 @@ fn checker(scene: &mut Scene, r: Rect) {
     }
 }
 
+/// The ramp is always shown fully opaque — it's reading the *colour*
+/// sequence, not previewing alpha, so no checkerboard and no blending.
 fn paint_ramp(scene: &mut Scene, bar: Rect, g: &Gradient) {
-    checker(scene, bar);
     let n = bar.width().ceil().max(1.0) as i64;
     for i in 0..n {
         let t = i as f32 / n as f32;
@@ -192,7 +193,7 @@ fn paint_ramp(scene: &mut Scene, bar: Rect, g: &Gradient) {
         scene.fill(
             Fill::NonZero,
             ID,
-            Color::new([c.r, c.g, c.b, c.a]),
+            Color::new([c.r, c.g, c.b, 1.0]),
             None,
             &Rect::new(x, bar.y0, x + 1.0, bar.y1),
         );
@@ -422,15 +423,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     // --- Selected-stop swatch + Location + Opacity ----------------------
     if let Some((g, sel)) = grad {
         let stop = g.stops.get(*sel).copied().unwrap_or(g.stops[0]);
-        checker(scene, l.swatch);
         let c = stop.color;
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            Color::new([c.r, c.g, c.b, c.a * stop.opacity]),
-            None,
-            &l.swatch,
-        );
+        scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &l.swatch);
         scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.swatch);
 
         text.draw(scene, "Location", 11.0, th.text_dim, l.loc_label.x, l.loc_label.y);

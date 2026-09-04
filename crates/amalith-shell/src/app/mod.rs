@@ -5860,6 +5860,7 @@ fn tab_label(panel: PanelId) -> String {
         "character" => "Character",
         "paragraph" => "Paragraph",
         "color" => "Color",
+        "gradient" => "Gradient",
         "transform" => "Transform",
         "pathfinder" => "Pathfinder",
         "align" => "Align",
