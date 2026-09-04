@@ -619,6 +619,11 @@ impl App {
                 // the cursor.
                 if self.active_tool == Tool::Gradient {
                     self.gradient_tool_press(dp, double);
+                    // A double-click on a stop opened the colour picker —
+                    // give it its floating window.
+                    if self.picker.is_some() {
+                        self.spawn_picker_window(event_loop);
+                    }
                     return;
                 }
 

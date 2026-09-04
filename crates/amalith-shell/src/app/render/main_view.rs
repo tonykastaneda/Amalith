@@ -233,13 +233,16 @@ pub(in crate::app) fn paint_main(
             scene.fill(Fill::NonZero, ID, white, None, &Rect::new(p.x - d, p.y - d, p.x + d, p.y + d));
         }
 
-        // Colour stops: hollow rings. White keyline so the ring reads on
-        // any background; blue double ring when panel-selected.
-        for (off, _c, selected) in &annot.stops {
+        // Colour stops: a disc filled with the stop's colour, white
+        // keyline + dark ring so it reads on any background; blue double
+        // ring when panel-selected.
+        for (off, c, selected) in &annot.stops {
             let p = at(*off as f64);
             let r = 7.0;
             let circ = vello::kurbo::Circle::new(p, r);
-            scene.stroke(&Stroke::new(3.5), ID, white, None, &circ);
+            scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(p, r + 1.0));
+            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &circ);
+            scene.stroke(&Stroke::new(1.75), ID, dark, None, &circ);
             if *selected {
                 scene.stroke(&Stroke::new(1.75), ID, theme.accent, None, &circ);
                 scene.stroke(
@@ -249,8 +252,6 @@ pub(in crate::app) fn paint_main(
                     None,
                     &vello::kurbo::Circle::new(p, r + 3.0),
                 );
-            } else {
-                scene.stroke(&Stroke::new(1.75), ID, dark, None, &circ);
             }
         }
 

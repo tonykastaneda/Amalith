@@ -700,12 +700,22 @@ impl App {
         Some((id, map(g.start), map(g.end)))
     }
 
+    /// The minimum fraction a colour stop is kept away from each end of
+    /// the axis, so it can never sit on the origin dot / end square. About
+    /// 22 screen px of clearance, with a 3% floor and a 42% ceiling — the
+    /// annotator, the hit test and the drag all use this so the displayed,
+    /// grabbable and stored positions agree.
+    fn grad_end_margin(&self, a: Point, b: Point) -> f64 {
+        let len = (b - a).hypot();
+        if len < 1e-6 {
+            return 0.06;
+        }
+        (22.0 / self.doc.view.zoom.max(1e-6) / len).clamp(0.03, 0.42)
+    }
+
     /// What the Gradient-tool press at `dp` (document space) landed on.
-    ///
-    /// Every stop circle is tested at its real position first (so a stop
-    /// sitting right on an endpoint is still grabbable and can be dragged
-    /// all the way onto it), then midpoints, then the endpoint handles —
-    /// which live in the ring *just outside* the stop discs at `a` / `b`.
+    /// Stops are tested at their **shown** positions, then midpoints, then
+    /// the endpoint handles (the ring just outside the stop discs).
     fn gradient_annot_hit(&self, dp: Point) -> Option<AnnotHit> {
         if self.active_tool != Tool::Gradient {
             return None;
@@ -714,26 +724,28 @@ impl App {
         let px = 1.0 / self.doc.view.zoom.max(1e-6); // one screen px in doc units
         let stop_r = 8.0 * px;
         let ring_r = 15.0 * px;
+        let mf = self.grad_end_margin(a, b);
         let (_, g) = self.target_gradient()?;
         let ab = b - a;
         let n = g.stops.len();
 
-        // Every colour stop, at its actual position on the axis.
+        // Every colour stop, at its shown position on the axis.
         for (i, stop) in g.stops.iter().enumerate() {
-            if dp.distance(a + ab * stop.offset as f64) <= stop_r {
+            let t = (stop.offset as f64).clamp(mf, 1.0 - mf);
+            if dp.distance(a + ab * t) <= stop_r {
                 return Some(AnnotHit::Stop(id, i));
             }
         }
         // Midpoint diamonds.
         for i in 0..n.saturating_sub(1) {
-            let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
-            let frac = o0 + (o1 - o0) * g.stops[i].midpoint;
-            if dp.distance(a + ab * frac as f64) <= stop_r {
+            let o0 = (g.stops[i].offset as f64).clamp(mf, 1.0 - mf);
+            let o1 = (g.stops[i + 1].offset as f64).clamp(mf, 1.0 - mf);
+            let frac = o0 + (o1 - o0) * g.stops[i].midpoint as f64;
+            if dp.distance(a + ab * frac) <= stop_r {
                 return Some(AnnotHit::Mid(id, i));
             }
         }
-        // Endpoint handles: the annulus around a / b, outside any stop that
-        // sits there.
+        // Endpoint handles: the annulus around a / b.
         if dp.distance(a) <= ring_r {
             return Some(AnnotHit::Start(id));
         }
@@ -744,9 +756,8 @@ impl App {
     }
 
     /// Project `dp` onto the target gradient's axis → parameter `t`, for
-    /// dragging a stop along the on-canvas line. Clamped to keep a stop
-    /// clear of the endpoint handles (~14 screen px of headroom) so a
-    /// colour stop can never sit on top of the origin dot / end square.
+    /// dragging a stop along the on-canvas line. Clamped by
+    /// [`Self::grad_end_margin`] so a stop can never reach an endpoint.
     pub(in crate::app) fn gradient_axis_param(&self, dp: Point) -> Option<f64> {
         let (_, a, b) = self.gradient_axis_doc()?;
         let ab = b - a;
@@ -755,8 +766,8 @@ impl App {
             return Some(0.5);
         }
         let raw = (dp - a).dot(ab) / (len * len);
-        let margin = (14.0 / self.doc.view.zoom.max(1e-6) / len).clamp(0.0, 0.45);
-        Some(raw.clamp(margin, 1.0 - margin))
+        let mf = self.grad_end_margin(a, b);
+        Some(raw.clamp(mf, 1.0 - mf))
     }
 
     /// Slide one axis endpoint along the **current** axis direction (the
@@ -855,23 +866,26 @@ impl App {
             let wp = wt * lp;
             Point::new(wp.x, wp.y)
         };
+        let (as_, bs) = (map(g.start), map(g.end));
+        let mf = self.grad_end_margin(as_, bs) as f32;
+        let shown = |off: f32| off.clamp(mf, 1.0 - mf);
         let n = g.stops.len();
         let sel = self.gradient_stop.min(n.saturating_sub(1));
         let mids = (0..n.saturating_sub(1))
             .map(|i| {
-                let (o0, o1) = (g.stops[i].offset, g.stops[i + 1].offset);
+                let (o0, o1) = (shown(g.stops[i].offset), shown(g.stops[i + 1].offset));
                 o0 + (o1 - o0) * g.stops[i].midpoint
             })
             .collect();
         Some(GradientAnnot {
-            start: map(g.start),
-            end: map(g.end),
+            start: as_,
+            end: bs,
             kind: g.kind,
             stops: g
                 .stops
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (s.offset, s.color, i == sel))
+                .map(|(i, s)| (shown(s.offset), s.color, i == sel))
                 .collect(),
             mids,
         })
