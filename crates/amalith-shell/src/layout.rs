@@ -6,8 +6,62 @@
 
 use vello::kurbo::{Point, Rect};
 
-use crate::dock::{Axis, DropTarget, Node, NodePath, PanelId, Side};
+use crate::dock::{Axis, DropTarget, IconGroup, Node, NodePath, PanelId, RailSide, Side};
 use crate::theme::Theme;
+
+/// Width of a rail's icon strip (Illustrator's "Collapse to Icons"),
+/// when it has any collapsed groups.
+pub const ICON_COL_W: f64 = 112.0;
+/// Height of one collapsed group's row in the icon strip.
+pub const ICON_ROW_H: f64 = 30.0;
+
+/// One entry in a rail's icon strip: the `Rail::icons` index (what
+/// `Rail::expand` takes) and where it's drawn/hit-tested.
+#[derive(Clone, Debug)]
+pub struct IconRect {
+    pub index: usize,
+    pub rect: Rect,
+}
+
+/// Splits a rail's full rect into (tree region, icon-strip region) when it
+/// has any collapsed groups. The icon strip always sits at the rail's
+/// *outer* edge — away from the canvas, at the window edge — matching
+/// Illustrator: the right rail's strip hugs the window's right edge, the
+/// left rail's hugs the left edge, and ordinary docked panels sit between
+/// the strip and the canvas either way. `None` when `has_icons` is false;
+/// the tree then gets the whole rect.
+pub fn split_icon_col(rail_rect: Rect, side: RailSide, has_icons: bool) -> (Rect, Option<Rect>) {
+    if !has_icons {
+        return (rail_rect, None);
+    }
+    match side {
+        RailSide::Right => {
+            let col = Rect::new(rail_rect.x1 - ICON_COL_W, rail_rect.y0, rail_rect.x1, rail_rect.y1);
+            let tree = Rect::new(rail_rect.x0, rail_rect.y0, col.x0, rail_rect.y1);
+            (tree, Some(col))
+        }
+        RailSide::Left => {
+            let col = Rect::new(rail_rect.x0, rail_rect.y0, rail_rect.x0 + ICON_COL_W, rail_rect.y1);
+            let tree = Rect::new(col.x1, rail_rect.y0, rail_rect.x1, rail_rect.y1);
+            (tree, Some(col))
+        }
+    }
+}
+
+/// Stacks `icons` top-down in `col`, one [`ICON_ROW_H`]-tall row each.
+pub fn layout_icons(icons: &[IconGroup], col: Rect) -> Vec<IconRect> {
+    icons
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let y0 = col.y0 + index as f64 * ICON_ROW_H;
+            IconRect {
+                index,
+                rect: Rect::new(col.x0, y0, col.x1, (y0 + ICON_ROW_H).min(col.y1)),
+            }
+        })
+        .collect()
+}
 
 /// One rendered tab group: its outer bounds, the strip, the body, and the
 /// clickable rect of each tab.
@@ -22,6 +76,11 @@ pub struct PanelArea {
     pub active: usize,
     /// Draw the hamburger on this strip (active panel has menu items).
     pub show_menu: bool,
+    /// This area is a rail's transient icon-strip flyout, synthesized
+    /// fresh each frame rather than a real position in the dock tree —
+    /// `path` is meaningless for it (there's nothing at that path to act
+    /// on). `false` for every ordinary docked/floating area.
+    pub is_flyout: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +129,11 @@ impl SplitterHandle {
 pub struct Layout {
     pub areas: Vec<PanelArea>,
     pub splitters: Vec<SplitterHandle>,
+    /// The rail's icon strip (collapsed groups), if it has any — `None`
+    /// for a rail with nothing collapsed, and always `None` for a
+    /// floating group's own layout (icons are a rail-only concept).
+    pub icon_col: Option<Rect>,
+    pub icon_rects: Vec<IconRect>,
 }
 
 /// Lay `root` out within `within`. `tab_width(panel)` gives each tab's
@@ -104,12 +168,10 @@ fn layout_node(
             let tab_strip = Rect::new(rect.x0, rect.y0, rect.x1, strip_y1);
             let body = Rect::new(rect.x0, strip_y1, rect.x1, rect.y1);
             let show_menu = panels.get(*active).copied().is_some_and(has_menu);
-            // Leave the hamburger a clear slot when this group shows one.
-            let tab_limit = if show_menu {
-                (rect.x1 - theme.panel_menu_w).max(rect.x0)
-            } else {
-                rect.x1
-            };
+            // Leave the collapse-to-icons button a clear slot always, and
+            // the hamburger's too when this group shows one.
+            let reserved = theme.panel_collapse_w + if show_menu { theme.panel_menu_w } else { 0.0 };
+            let tab_limit = (rect.x1 - reserved).max(rect.x0);
 
             let mut x = rect.x0;
             let mut tabs = Vec::with_capacity(panels.len());
@@ -133,6 +195,7 @@ fn layout_node(
                 tabs,
                 active: *active,
                 show_menu,
+                is_flyout: false,
             });
         }
         Node::Split { axis, children } => {
@@ -442,5 +505,53 @@ mod tests {
         let lay = layout(&stacked(), root, &theme(), &mut |p| w80(p), &|_| false);
         let t = hit_test(&lay, root, Point::new(-20.0, 200.0), &theme());
         assert_eq!(t, DropTarget::Float);
+    }
+
+    #[test]
+    fn icon_col_sits_at_the_outer_edge_for_each_side() {
+        let rail = Rect::new(0.0, 0.0, 320.0, 600.0);
+        let (tree, col) = split_icon_col(rail, RailSide::Right, true);
+        let col = col.expect("right rail with icons carves a column");
+        // Outer edge = the window edge = this rail's own x1 for the right rail.
+        assert_eq!(col.x1, rail.x1);
+        assert_eq!(col.x0, rail.x1 - ICON_COL_W);
+        // The tree gets everything up to the column, nothing overlapping.
+        assert_eq!(tree.x1, col.x0);
+        assert_eq!(tree.x0, rail.x0);
+
+        let (tree, col) = split_icon_col(rail, RailSide::Left, true);
+        let col = col.expect("left rail with icons carves a column");
+        assert_eq!(col.x0, rail.x0);
+        assert_eq!(col.x1, rail.x0 + ICON_COL_W);
+        assert_eq!(tree.x0, col.x1);
+        assert_eq!(tree.x1, rail.x1);
+    }
+
+    #[test]
+    fn icon_col_is_none_without_any_collapsed_groups() {
+        let rail = Rect::new(0.0, 0.0, 320.0, 600.0);
+        let (tree, col) = split_icon_col(rail, RailSide::Right, false);
+        assert!(col.is_none());
+        assert_eq!(tree, rail, "the tree gets the whole rail when nothing is collapsed");
+    }
+
+    #[test]
+    fn layout_icons_stacks_rows_top_down_at_a_fixed_height() {
+        use crate::dock::IconGroup;
+        let col = Rect::new(200.0, 0.0, 312.0, 600.0);
+        let icons = vec![
+            IconGroup { panels: vec![L], active: 0 },
+            IconGroup { panels: vec![A, S], active: 1 },
+        ];
+        let rects = layout_icons(&icons, col);
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].index, 0);
+        assert_eq!(rects[1].index, 1);
+        assert_eq!(rects[0].rect.y0, 0.0);
+        assert_eq!(rects[0].rect.y1, ICON_ROW_H);
+        assert_eq!(rects[1].rect.y0, ICON_ROW_H);
+        // Full column width, not just a sliver.
+        assert_eq!(rects[0].rect.x0, col.x0);
+        assert_eq!(rects[0].rect.x1, col.x1);
     }
 }

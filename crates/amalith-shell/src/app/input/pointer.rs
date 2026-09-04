@@ -73,7 +73,7 @@ impl App {
                 };
                 let rect = rail_rect_for(side, self.dock.rail(side).width as f64, w, h);
                 let laid =
-                    build_rail_layout(self.dock.rail(side), &self.theme, &mut self.text, rect);
+                    build_rail_layout(self.dock.rail(side), side, &self.theme, &mut self.text, rect);
                 if let Some(sp) = laid
                     .splitters
                     .iter()

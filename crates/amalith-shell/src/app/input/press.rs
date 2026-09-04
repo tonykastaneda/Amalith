@@ -430,10 +430,27 @@ impl App {
                         self.drag = Drag::RailWidth { side };
                         return;
                     }
-                    if !rect.contains(self.pointer) {
+                    // A side's open flyout can spill past the rail's own
+                    // rect onto the canvas (it sits between the icon strip
+                    // and the canvas, not squeezed inside the rail width),
+                    // so a pointer outside `rect` still needs this side's
+                    // (flyout-aware) layout built before being ruled out.
+                    let has_open_flyout = self.flyout_icon.is_some_and(|(s, _)| s == side);
+                    if !rect.contains(self.pointer) && !has_open_flyout {
                         continue;
                     }
-                    let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+                    let laid = build_rail_layout_with_flyout(
+                        rail,
+                        side,
+                        rect,
+                        self.flyout_icon,
+                        &self.theme,
+                        &mut self.text,
+                    );
+                    if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
+                        self.toggle_flyout(side, ir.index);
+                        return;
+                    }
                     if let Some(sp) = laid
                         .splitters
                         .iter()
@@ -448,6 +465,17 @@ impl App {
                     }
                     for area in &laid.areas {
                         if area.tab_strip.contains(self.pointer) {
+                            let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
+                            if collapse.contains(self.pointer) {
+                                if area.is_flyout {
+                                    if let Some((_, idx)) = self.flyout_icon {
+                                        self.expand_icon(side, idx);
+                                    }
+                                } else {
+                                    self.collapse_group(side, &area.path);
+                                }
+                                return;
+                            }
                             let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
                             if area.show_menu && burger.contains(self.pointer) {
                                 if let Some(pid) =
@@ -573,6 +601,19 @@ impl App {
                                 }
                             }
                             return;
+                        }
+                    }
+                    // Nothing on this side's rail (or flyout) matched. A
+                    // flyout that reached here only because it spills past
+                    // the rail's own rect onto the canvas means the click
+                    // was really meant for whatever's underneath —
+                    // dismiss it and let the click fall through instead of
+                    // swallowing it; otherwise keep the usual behaviour of
+                    // a rail dead-zone click doing nothing further.
+                    if has_open_flyout {
+                        self.dismiss_flyout();
+                        if !rect.contains(self.pointer) {
+                            continue;
                         }
                     }
                     return;

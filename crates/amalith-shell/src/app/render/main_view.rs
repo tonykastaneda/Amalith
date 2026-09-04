@@ -104,6 +104,8 @@ pub(in crate::app) fn paint_main(
     gradient_edit: Option<(panels::gradient::GradField, &str)>,
     // Gradient tool: the on-canvas axis annotator (document space).
     gradient_annot: Option<crate::app::gradient::GradientAnnot>,
+    // Which rail icon-strip row (if any) has its flyout open.
+    flyout_icon: Option<(RailSide, usize)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -516,8 +518,20 @@ pub(in crate::app) fn paint_main(
             continue;
         }
         let rect = rail_rect_for(side, rail.width as f64, width, height);
-        let laid = build_rail_layout(rail, theme, text, rect);
+        let laid = build_rail_layout_with_flyout(rail, side, rect, flyout_icon, theme, text);
         if !rail.is_empty() {
+            if let Some(col) = laid.icon_col {
+                chrome::paint_icon_col(
+                    scene,
+                    col,
+                    &rail.icons,
+                    &laid.icon_rects,
+                    flyout_icon.filter(|(s, _)| *s == side).map(|(_, i)| i),
+                    theme,
+                    text,
+                    &tab_label,
+                );
+            }
             chrome::paint(scene, &laid, theme, text, &tab_label);
             let ctx = panels::Ctx {
                 theme,

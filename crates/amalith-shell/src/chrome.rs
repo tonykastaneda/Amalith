@@ -5,8 +5,8 @@ use vello::kurbo::{Affine, Line, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use crate::dock::{DropTarget, NodePath, PanelId, Side};
-use crate::layout::Layout;
+use crate::dock::{DropTarget, IconGroup, NodePath, PanelId, Side};
+use crate::layout::{IconRect, Layout};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
@@ -31,6 +31,18 @@ pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
         tab_strip.x1,
         tab_strip.y1,
     )
+}
+
+/// The collapse-to-icons («) button, always at the far right of a panel
+/// group's tab strip — just left of the hamburger when `has_menu` (that
+/// group's active tab has one).
+pub fn collapse_rect(tab_strip: Rect, has_menu: bool, theme: &Theme) -> Rect {
+    let x1 = if has_menu {
+        tab_strip.x1 - theme.panel_menu_w
+    } else {
+        tab_strip.x1
+    };
+    Rect::new(x1 - theme.panel_collapse_w, tab_strip.y0, x1, tab_strip.y1)
 }
 
 /// Paint every group and splitter in `layout`. `label(panel)` supplies the
@@ -102,6 +114,12 @@ pub fn paint(
             scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &menu);
             paint_hamburger(scene, menu, theme.text_dim);
         }
+
+        // Collapse-to-icons («) on an ordinary group, or expand-from-icons
+        // (») on a flyout's own strip — same drawn-last-so-it-wins spot.
+        let collapse = collapse_rect(area.tab_strip, area.show_menu, theme);
+        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &collapse);
+        paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
 
         scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);
     }
@@ -180,6 +198,65 @@ fn paint_hamburger(scene: &mut Scene, r: Rect, color: vello::peniko::Color) {
             &Line::new((c.x - half, y), (c.x + half, y)),
         );
     }
+}
+
+/// A double-chevron glyph — `«` (`pointing_left = true`, "Collapse to
+/// Icons") or `»` (`pointing_left = false`, "Expand from Icons").
+fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, pointing_left: bool) {
+    let c = r.center();
+    let (dx, half) = (3.0_f64, 3.5_f64);
+    let sign = if pointing_left { 1.0 } else { -1.0 };
+    let stroke = Stroke::new(1.4);
+    for i in [-1.0_f64, 1.0] {
+        let cx = c.x + i * dx;
+        scene.stroke(
+            &stroke,
+            ID,
+            color,
+            None,
+            &Line::new((cx + sign * half * 0.6, c.y - half), (cx - sign * half * 0.6, c.y)),
+        );
+        scene.stroke(
+            &stroke,
+            ID,
+            color,
+            None,
+            &Line::new((cx - sign * half * 0.6, c.y), (cx + sign * half * 0.6, c.y + half)),
+        );
+    }
+}
+
+/// Paints a rail's icon strip: one row per collapsed group, its first
+/// panel's label, and a highlight when that row's flyout is open.
+/// `label` is the same tab-caption function [`paint`] takes.
+pub fn paint_icon_col(
+    scene: &mut Scene,
+    col: Rect,
+    icons: &[IconGroup],
+    icon_rects: &[IconRect],
+    open: Option<usize>,
+    theme: &Theme,
+    text: &mut TextContext,
+    label: &dyn Fn(PanelId) -> String,
+) {
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &col);
+    for ir in icon_rects {
+        let Some(group) = icons.get(ir.index) else {
+            continue;
+        };
+        let is_open = open == Some(ir.index);
+        if is_open {
+            scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
+        }
+        if let Some(&first) = group.panels.first() {
+            let color = if is_open { theme.text } else { theme.text_dim };
+            let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+            text.draw(scene, &label(first), TAB_TEXT_PX, color, ir.rect.x0 + 8.0, baseline);
+        }
+        let sep = Rect::new(ir.rect.x0, ir.rect.y1 - 0.5, ir.rect.x1, ir.rect.y1 + 0.5);
+        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
+    }
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
 }
 
 fn edge_line(r: Rect, side: Side) -> Rect {

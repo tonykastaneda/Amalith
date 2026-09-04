@@ -51,6 +51,9 @@ pub struct Theme {
     pub tab_pad_x: f64,
     /// Width reserved on the right of a tab strip for the panel hamburger.
     pub panel_menu_w: f64,
+    /// Width reserved on the right of a tab strip for the collapse-to-
+    /// icons button, just left of the hamburger when that group has one.
+    pub panel_collapse_w: f64,
 }
 
 impl Theme {
@@ -99,6 +102,7 @@ impl Default for Theme {
             splitter_thickness: 6.0,
             tab_pad_x: 12.6,
             panel_menu_w: 26.0,
+            panel_collapse_w: 22.0,
         }
     }
 }

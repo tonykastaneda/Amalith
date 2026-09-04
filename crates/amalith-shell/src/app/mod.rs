@@ -808,6 +808,12 @@ struct App {
     /// `None` — the default — means every CMYK conversion in the app
     /// stays the disclosed approximation.
     cmyk_profile: Option<colormanage::CmykProfile>,
+    /// A collapsed-to-icons group's transient flyout: showing that
+    /// group's full tab strip + body as an overlay next to its icon,
+    /// without disturbing the dock tree. At most one open at a time;
+    /// clicking its own icon again, or anywhere outside it, closes it —
+    /// see `dismiss_flyout`.
+    flyout_icon: Option<(RailSide, usize)>,
     /// Transform panel: 9-point origin, W/H lock, live numeric edit.
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
@@ -1023,6 +1029,7 @@ impl App {
             picker: None,
             color_mode: panels::ColorSpace::Rgb,
             cmyk_profile: None,
+            flyout_icon: None,
             xform_ref: amalith_core::RefPoint::CENTER,
             xform_constrain: true,
             xform_edit: None,
@@ -1178,7 +1185,7 @@ impl App {
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
                     let rect = rail_rect_for(side, rail.width as f64, w, h);
-                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
         } else if let Some(fid) = self.pointer_win.and_then(|wid| {
@@ -4803,7 +4810,7 @@ impl App {
                     }
                     let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
                     let rect = rail_rect_for(side, rail.width as f64, w, h);
-                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
                 })
                 .collect()
         } else if let Some(fid) = self.pointer_win.and_then(|wid| {
@@ -4863,6 +4870,9 @@ impl App {
     /// The × on a panel tab. In a rail: remove the panel. In a floating
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
+        // See the matching comment in `toggle_panel` — this can also
+        // reorder a rail's `icons` out from under a stored flyout index.
+        self.flyout_icon = None;
         if pid.0 == "picker" {
             self.picker = None;
         }
@@ -4903,6 +4913,11 @@ impl App {
             Some((p, _)) => *p,
             None => return,
         });
+        // `flyout_icon` is a plain index into a rail's `icons` list, which
+        // this can reorder (removing an earlier group shifts every later
+        // one down) — safest to just drop it rather than risk it now
+        // pointing at a different group than the one the user opened.
+        self.flyout_icon = None;
         if self.dock.contains(pid) {
             self.dock.remove(pid);
         } else {
@@ -4921,6 +4936,58 @@ impl App {
         }
         self.request_main_redraw();
     }
+
+    /// The « button on a tab strip: collapses that whole group to an
+    /// icon-strip entry.
+    pub(in crate::app) fn collapse_group(&mut self, side: RailSide, path: &NodePath) {
+        if self.dock.rail_mut(side).collapse(path) {
+            if self.flyout_icon.is_some_and(|(s, _)| s == side) {
+                self.flyout_icon = None;
+            }
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(m) = &self.native_menu {
+                m.sync_window(&self.dock);
+            }
+            self.request_main_redraw();
+        }
+    }
+
+    /// The » button on an open flyout: expands that icon-strip entry back
+    /// into the tree for good (not just previewing it — see
+    /// `toggle_flyout` for the transient click-to-preview path).
+    pub(in crate::app) fn expand_icon(&mut self, side: RailSide, index: usize) {
+        if self.dock.rail_mut(side).expand(index) {
+            self.flyout_icon = None;
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(m) = &self.native_menu {
+                m.sync_window(&self.dock);
+            }
+            self.request_main_redraw();
+        }
+    }
+
+    /// Clicking an icon-strip row: opens its flyout, or closes it if that
+    /// same row's flyout is already open (Illustrator's click-to-preview,
+    /// click-again-to-dismiss).
+    pub(in crate::app) fn toggle_flyout(&mut self, side: RailSide, index: usize) {
+        self.flyout_icon = if self.flyout_icon == Some((side, index)) {
+            None
+        } else {
+            Some((side, index))
+        };
+        self.request_main_redraw();
+    }
+
+    /// Closes any open flyout — a click anywhere outside it dismisses it
+    /// (called from the general press router before that click is routed
+    /// anywhere else, so the same click can still do its own thing too).
+    pub(in crate::app) fn dismiss_flyout(&mut self) {
+        if self.flyout_icon.is_some() {
+            self.flyout_icon = None;
+            self.request_main_redraw();
+        }
+    }
+
 
     /// Snap the view onto one artboard (Artboards panel, double-click its
     /// number).
@@ -5125,7 +5192,7 @@ impl App {
                     );
                 }
             } else if rect.contains(local) {
-                let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+                let laid = build_rail_layout(rail, side, &self.theme, &mut self.text, rect);
                 return (side, layout::hit_test(&laid, rect, local, &self.theme));
             }
         }
@@ -5168,7 +5235,7 @@ impl App {
                 continue;
             }
             let rect = rail_rect_for(side, rail.width as f64, w, h);
-            let laid = build_rail_layout(rail, &self.theme, &mut self.text, rect);
+            let laid = build_rail_layout(rail, side, &self.theme, &mut self.text, rect);
             if let Some(area) = laid
                 .areas
                 .iter()
@@ -5969,11 +6036,18 @@ fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
     }
 }
 
-fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: Rect) -> Layout {
-    match &rail.tree {
+fn build_rail_layout(
+    rail: &Rail,
+    side: RailSide,
+    theme: &Theme,
+    text: &mut TextContext,
+    rect: Rect,
+) -> Layout {
+    let (tree_rect, icon_col) = layout::split_icon_col(rect, side, !rail.icons.is_empty());
+    let mut out = match &rail.tree {
         Some(tree) => layout::layout(
             tree,
-            rect,
+            tree_rect,
             theme,
             &mut |p| {
                 text.measure(&tab_label(p), 12.0)
@@ -5983,7 +6057,80 @@ fn build_rail_layout(rail: &Rail, theme: &Theme, text: &mut TextContext, rect: R
             &panels::has_menu,
         ),
         None => Layout::default(),
+    };
+    if let Some(col) = icon_col {
+        out.icon_rects = layout::layout_icons(&rail.icons, col);
+        out.icon_col = Some(col);
     }
+    out
+}
+
+/// Where an icon strip's open flyout goes: a panel just inside the icon
+/// column (canvas side), its tab strip aligned with the icon row that
+/// opened it, sized like the rail itself and clamped to the rail's own
+/// vertical extent so it never spills past the window.
+fn flyout_rect_for(side: RailSide, icon_col: Rect, icon_row: Rect, rail_rect: Rect, rail_w: f64) -> Rect {
+    let h = 360.0_f64.min((rail_rect.y1 - icon_row.y0).max(120.0));
+    match side {
+        RailSide::Right => Rect::new(icon_col.x0 - rail_w, icon_row.y0, icon_col.x0, icon_row.y0 + h),
+        RailSide::Left => Rect::new(icon_col.x1, icon_row.y0, icon_col.x1 + rail_w, icon_row.y0 + h),
+    }
+}
+
+/// [`build_rail_layout`], plus — if `flyout` names an icon-strip row on
+/// `side` — one extra synthesized `PanelArea` appended for that group's
+/// own tab strip and body, positioned by [`flyout_rect_for`]. A plain
+/// function (not an `App` method) so both the click router (`press.rs`,
+/// which has `self`) and the renderer (`paint_main`, a free function
+/// with no `self`) can call the exact same logic — every caller that
+/// already walks `Layout::areas` for clicks, painting, or hit-testing
+/// then handles the flyout exactly like any other docked group, with no
+/// separate code path to fall out of sync.
+fn build_rail_layout_with_flyout(
+    rail: &Rail,
+    side: RailSide,
+    rect: Rect,
+    flyout: Option<(RailSide, usize)>,
+    theme: &Theme,
+    text: &mut TextContext,
+) -> Layout {
+    let mut laid = build_rail_layout(rail, side, theme, text, rect);
+    let Some((fs, idx)) = flyout else {
+        return laid;
+    };
+    if fs != side {
+        return laid;
+    }
+    let (Some(col), Some(row)) = (
+        laid.icon_col,
+        laid.icon_rects.iter().find(|r| r.index == idx).map(|r| r.rect),
+    ) else {
+        return laid;
+    };
+    let Some(group) = rail.icons.get(idx).cloned() else {
+        return laid;
+    };
+    let flyout_rect = flyout_rect_for(side, col, row, rect, rail.width as f64);
+    let node = Node::Tabs {
+        panels: group.panels,
+        active: group.active,
+    };
+    let mut fl = layout::layout(
+        &node,
+        flyout_rect,
+        theme,
+        &mut |p| {
+            text.measure(&tab_label(p), 12.0)
+                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                + chrome::PANEL_TAB_CLOSE_W
+        },
+        &panels::has_menu,
+    );
+    for a in &mut fl.areas {
+        a.is_flyout = true;
+    }
+    laid.areas.append(&mut fl.areas);
+    laid
 }
 
 /// The options / context bar: full window width, directly under the app

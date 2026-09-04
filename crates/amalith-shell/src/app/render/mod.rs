@@ -510,6 +510,7 @@ impl App {
                 grad_ctx.clone(),
                 grad_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
                 grad_annot.clone(),
+                self.flyout_icon,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);
