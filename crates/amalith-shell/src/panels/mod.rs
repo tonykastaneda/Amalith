@@ -289,6 +289,13 @@ pub enum Action {
         field: transform::XformField,
         delta: f64,
     },
+    // --- Artboard options-bar segment ---
+    ArtboardOrient(bool),
+    ToggleArtboardFillMenu,
+    ArtboardFillPick(u8),
+    BeginArtboardEdit(transform::ABField),
+    NudgeArtboard(transform::ABField, f64),
+    ToggleArtboardLink,
     Pathfinder(amalith_commands::PathfinderOp),
     ExpandStroke,
     Align(amalith_commands::AlignKind),

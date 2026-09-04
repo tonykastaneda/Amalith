@@ -43,6 +43,9 @@ impl App {
         if self.align_spacing_edit.is_some() && !self.align_spacing_field_at_pointer() {
             self.commit_align_spacing_edit();
         }
+        if self.artboard_edit.is_some() && !self.over_artboard_segment() {
+            self.commit_artboard_edit();
+        }
         // An open Character-panel dropdown is topmost — it eats the press.
         if self.font_menu.is_some() && self.font_menu_click(self.pointer) {
             return;

@@ -757,6 +757,13 @@ struct App {
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
     xform_edit: Option<(panels::transform::XformField, String, bool)>,
+    /// Artboard options-bar segment: live field edit, W/H link, fill menu,
+    /// and whether the colour picker is currently retargeted to the
+    /// selected artboard's fill.
+    artboard_edit: Option<(panels::transform::ABField, String)>,
+    artboard_link: bool,
+    artboard_fill_menu: bool,
+    picker_artboard: bool,
     /// Align panel: what to align to, and the key object (thicker outline).
     align_to: amalith_commands::AlignTo,
     key_object: Option<ObjectId>,
@@ -946,6 +953,10 @@ impl App {
             xform_ref: amalith_core::RefPoint::CENTER,
             xform_constrain: true,
             xform_edit: None,
+            artboard_edit: None,
+            artboard_link: false,
+            artboard_fill_menu: false,
+            picker_artboard: false,
             align_to: amalith_commands::AlignTo::Selection,
             key_object: None,
             align_spacing: Some(0.0),
@@ -1304,8 +1315,18 @@ impl App {
     /// and Cancel always take the window with them.
     fn dismiss_picker(&mut self, apply: bool) {
         if apply {
-            self.apply_picker_color();
+            if self.picker_artboard {
+                if let (Some(pk), Some(id)) = (self.picker, self.doc.selected_artboard) {
+                    let _ = self.doc.editor.execute(Command::SetArtboardFill {
+                        id,
+                        fill: Some(pk.color()),
+                    });
+                }
+            } else {
+                self.apply_picker_color();
+            }
         }
+        self.picker_artboard = false;
         self.picker = None;
         self.dock.remove(PanelId("picker"));
         let dead: Vec<WindowId> = self
@@ -3214,6 +3235,8 @@ impl App {
         }
         if t != Tool::Artboard {
             self.doc.selected_artboard = None;
+            self.artboard_edit = None;
+            self.artboard_fill_menu = false;
         }
         if t.is_shape() {
             self.last_shape_tool = t;
@@ -3743,7 +3766,31 @@ impl App {
             pointer: self.pointer,
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
+            artboard: self.artboard_bar(),
+            artboard_edit: None,
+            artboard_link: self.artboard_link,
+            artboard_fill_menu: self.artboard_fill_menu,
         }
+    }
+
+    /// The selected artboard's data for the options-bar segment, when the
+    /// Artboard tool is active.
+    fn artboard_bar(&self) -> Option<context_bar::artboard::ArtboardBar> {
+        if self.active_tool != Tool::Artboard {
+            return None;
+        }
+        let id = self.doc.selected_artboard?;
+        let ab = self.doc.editor.document().artboard(id)?;
+        let r = ab.rect;
+        Some(context_bar::artboard::ArtboardBar {
+            name: ab.name.clone(),
+            x: r.x0,
+            y: r.y0,
+            w: r.x1 - r.x0,
+            h: r.y1 - r.y0,
+            fill: ab.fill,
+            portrait: (r.y1 - r.y0) >= (r.x1 - r.x0),
+        })
     }
 
     /// The read-only slice of state the context bar's segments draw from.
@@ -3770,6 +3817,10 @@ impl App {
             pointer: self.pointer,
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
+            artboard: self.artboard_bar(),
+            artboard_edit: self.artboard_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
+            artboard_link: self.artboard_link,
+            artboard_fill_menu: self.artboard_fill_menu,
         }
     }
 

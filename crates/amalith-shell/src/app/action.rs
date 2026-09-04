@@ -402,6 +402,24 @@ impl App {
             panels::Action::NudgeXform { field, delta } => {
                 self.nudge_xform(field, delta);
             }
+            panels::Action::ArtboardOrient(portrait) => self.set_artboard_orient(portrait),
+            panels::Action::ToggleArtboardFillMenu => {
+                self.artboard_fill_menu = !self.artboard_fill_menu;
+                self.request_main_redraw();
+            }
+            panels::Action::ArtboardFillPick(i) => {
+                self.artboard_fill_menu = false;
+                self.pick_artboard_fill(i);
+            }
+            panels::Action::ToggleArtboardLink => {
+                self.artboard_link = !self.artboard_link;
+                self.request_main_redraw();
+            }
+            panels::Action::BeginArtboardEdit(field) => {
+                self.commit_artboard_edit();
+                self.begin_artboard_edit(field);
+            }
+            panels::Action::NudgeArtboard(field, delta) => self.nudge_artboard(field, delta),
             panels::Action::Pathfinder(op) => {
                 let objects = self.doc.selection.clone();
                 match self.doc.editor.execute(Command::Pathfinder { op, objects }) {
@@ -741,6 +759,229 @@ impl App {
                 true
             }
         }
+    }
+
+    // --- Artboard options-bar segment ---------------------------------
+
+    fn artboard_current(&self, field: panels::transform::ABField) -> Option<f64> {
+        use panels::transform::ABField as F;
+        let id = self.doc.selected_artboard?;
+        let r = self.doc.editor.document().artboard(id)?.rect;
+        Some(match field {
+            F::X => r.x0,
+            F::Y => r.y0,
+            F::W => r.x1 - r.x0,
+            F::H => r.y1 - r.y0,
+            F::Name => return None,
+        })
+    }
+
+    fn begin_artboard_edit(&mut self, field: panels::transform::ABField) {
+        use panels::transform::ABField as F;
+        let seed = if field == F::Name {
+            self.doc
+                .selected_artboard
+                .and_then(|id| self.doc.editor.document().artboard(id).map(|a| a.name.clone()))
+                .unwrap_or_default()
+        } else {
+            self.artboard_current(field).map(trim_num).unwrap_or_default()
+        };
+        self.artboard_edit = Some((field, seed));
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn commit_artboard_edit(&mut self) {
+        use panels::transform::ABField as F;
+        let Some((field, buf)) = self.artboard_edit.take() else {
+            return;
+        };
+        let Some(id) = self.doc.selected_artboard else {
+            return;
+        };
+        if field == F::Name {
+            let name = buf.trim();
+            if !name.is_empty() {
+                let _ = self
+                    .doc
+                    .editor
+                    .execute(Command::RenameArtboard { id, name: name.to_string() });
+            }
+        } else if let Some(v) = parse_num(&buf) {
+            self.apply_artboard_value(field, v);
+        }
+        self.request_main_redraw();
+    }
+
+    fn apply_artboard_value(&mut self, field: panels::transform::ABField, v: f64) {
+        use panels::transform::ABField as F;
+        if !v.is_finite() {
+            return;
+        }
+        let Some(id) = self.doc.selected_artboard else {
+            return;
+        };
+        let Some(mut r) = self.doc.editor.document().artboard(id).map(|a| a.rect) else {
+            return;
+        };
+        let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
+        let ratio = if w.abs() > 1e-6 { h / w } else { 1.0 };
+        match field {
+            F::X => r = amalith_core::Rect::new(v, r.y0, v + w, r.y1),
+            F::Y => r = amalith_core::Rect::new(r.x0, v, r.x1, v + h),
+            F::W => {
+                let nw = v.max(1.0);
+                let nh = if self.artboard_link { nw * ratio } else { h };
+                r = amalith_core::Rect::new(r.x0, r.y0, r.x0 + nw, r.y0 + nh);
+            }
+            F::H => {
+                let nh = v.max(1.0);
+                let nw = if self.artboard_link && ratio.abs() > 1e-6 {
+                    nh / ratio
+                } else {
+                    w
+                };
+                r = amalith_core::Rect::new(r.x0, r.y0, r.x0 + nw, r.y0 + nh);
+            }
+            F::Name => return,
+        }
+        let _ = self.doc.editor.execute(Command::ResizeArtboard { id, rect: r });
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn nudge_artboard(&mut self, field: panels::transform::ABField, dir: f64) {
+        let Some(cur) = self.artboard_current(field) else {
+            return;
+        };
+        let step = if self.shift_down { 10.0 } else { 1.0 };
+        self.apply_artboard_value(field, cur + step * dir);
+        let new = self.artboard_current(field);
+        if let (Some((f, buf)), Some(v)) = (self.artboard_edit.as_mut(), new) {
+            if *f == field {
+                *buf = trim_num(v);
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    fn set_artboard_orient(&mut self, portrait: bool) {
+        let Some(id) = self.doc.selected_artboard else {
+            return;
+        };
+        let Some(r) = self.doc.editor.document().artboard(id).map(|a| a.rect) else {
+            return;
+        };
+        let (w, h) = (r.x1 - r.x0, r.y1 - r.y0);
+        let is_portrait = h >= w;
+        if is_portrait != portrait {
+            let nr = amalith_core::Rect::new(r.x0, r.y0, r.x0 + h, r.y0 + w);
+            let _ = self
+                .doc
+                .editor
+                .execute(Command::ResizeArtboard { id, rect: nr });
+            self.request_main_redraw();
+        }
+    }
+
+    fn pick_artboard_fill(&mut self, item: u8) {
+        let Some(id) = self.doc.selected_artboard else {
+            return;
+        };
+        let fill = match item {
+            0 => Some(amalith_core::Color::rgb(1.0, 1.0, 1.0)),
+            1 => Some(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
+            2 => None,
+            _ => {
+                // "Other…" — open the colour picker, retargeted to this fill.
+                let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                let start = self
+                    .doc
+                    .editor
+                    .document()
+                    .artboard(id)
+                    .and_then(|a| a.fill)
+                    .map(|c| amalith_core::Color::rgba(c.r, c.g, c.b, c.a));
+                let origin = Point::new(
+                    ((w - crate::picker::W) * 0.5).max(4.0),
+                    ((h - crate::picker::H) * 0.5).max(4.0),
+                );
+                self.picker = Some(crate::picker::Picker::from_color(
+                    self.active_slot,
+                    origin,
+                    start,
+                ));
+                self.picker_artboard = true;
+                self.request_main_redraw();
+                return;
+            }
+        };
+        let _ = self.doc.editor.execute(Command::SetArtboardFill { id, fill });
+        self.request_main_redraw();
+    }
+
+    /// Feed a key to the artboard field being edited. Returns `true` if it
+    /// was consumed.
+    pub(in crate::app) fn artboard_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        use panels::transform::ABField as F;
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        let Some((field, _)) = self.artboard_edit else {
+            return false;
+        };
+        if !event.state.is_pressed() {
+            return true;
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.commit_artboard_edit();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.artboard_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some((_, buf)) = &mut self.artboard_edit {
+                    buf.pop();
+                }
+                self.request_main_redraw();
+                true
+            }
+            _ => {
+                let Some(txt) = event.text.as_ref() else {
+                    return true;
+                };
+                let ok = field == F::Name
+                    || txt.chars().all(|c| {
+                        c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ','
+                    });
+                if !ok {
+                    return true;
+                }
+                if let Some((_, buf)) = &mut self.artboard_edit {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        buf.push(ch);
+                    }
+                }
+                self.request_main_redraw();
+                true
+            }
+        }
+    }
+
+    /// Whether the pointer is over the Artboard options-bar segment (used
+    /// to decide if a press should commit the current field edit).
+    pub(in crate::app) fn over_artboard_segment(&self) -> bool {
+        if self.pointer_win != self.main_id
+            || self.pointer.y < APP_BAR_H
+            || self.pointer.y >= APP_BAR_H + OPT_BAR_H
+        {
+            return false;
+        }
+        let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+        let bar = opt_bar_rect(w);
+        let cx = self.context_bar_ctx();
+        context_bar::segment_rect(bar, &cx, context_bar::SegKind::Artboard)
+            .is_some_and(|r| r.contains(self.pointer))
     }
 
     pub(in crate::app) fn commit_align_spacing_edit(&mut self) {

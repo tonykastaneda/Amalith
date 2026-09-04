@@ -27,6 +27,16 @@ pub enum XformField {
     Shear,
 }
 
+/// An editable field of the Artboard options-bar segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ABField {
+    Name,
+    X,
+    Y,
+    W,
+    H,
+}
+
 struct L {
     locator: Rect,
     cells: [Rect; 9],

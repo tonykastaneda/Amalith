@@ -187,6 +187,7 @@ pub fn export_scene(
     doc: &Document,
     src: Rect,
     scale: f64,
+    bg: Option<Color>,
     images: &HashMap<AssetId, ImageLods>,
     outline: bool,
     text: &mut TextContext,
@@ -200,6 +201,9 @@ pub fn export_scene(
     );
     let vt = Affine::scale(scale) * Affine::translate((-src.x0, -src.y0));
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &px);
+    if let Some(c) = bg {
+        scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &px);
+    }
     for layer in doc.layers() {
         if !layer.visible {
             continue;
@@ -268,13 +272,14 @@ pub fn paint(
             None,
             &r.with_origin(Point::new(r.x0 + 3.0, r.y0 + 3.0)),
         );
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            Color::from_rgb8(0xff, 0xff, 0xff),
-            None,
-            &r,
-        );
+        // Paper: the artboard's background fill; transparent (the default)
+        // still shows as white paper on the canvas, like Illustrator — the
+        // fill only changes the exported background.
+        let paper = ab
+            .fill
+            .map(|c| Color::new([c.r, c.g, c.b, c.a]))
+            .unwrap_or(Color::from_rgb8(0xff, 0xff, 0xff));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, paper, None, &r);
         // Thin black outline on every artboard (Illustrator); the active
         // one gets a slightly heavier line.
         scene.stroke(

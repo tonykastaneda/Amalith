@@ -377,6 +377,9 @@ impl App {
             (self.effective_tool(), hint, over_selectable)
         });
         let stroke_flyout = self.stroke_flyout_layout(wl);
+        let ab_bar = self.artboard_bar();
+        let ab_edit = self.artboard_edit.clone();
+        let (ab_link, ab_fill_menu) = (self.artboard_link, self.artboard_fill_menu);
         let stroke_style_shown = self.stroke_style_repr();
         let panel_text_style = self.active_text_style();
         let panel_text_align = self.active_text_align();
@@ -493,6 +496,10 @@ impl App {
                 self.outline_mode,
                 iso_root,
                 self.layer_drop.map(|(_, _, row, into)| (row, into)),
+                ab_bar,
+                ab_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
+                ab_link,
+                ab_fill_menu,
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

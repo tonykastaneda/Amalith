@@ -94,8 +94,13 @@ impl App {
                 over(context_bar::SegKind::Character),
             );
             let xf = context_bar::xform_field_at(bar, &cx, p);
+            let abf = context_bar::ab_field_at(bar, &cx, p);
             drop(cx);
             let dir = if dy > 0.0 { 1 } else { -1 };
+            if let Some(field) = abf {
+                self.nudge_artboard(field, dir as f64);
+                return;
+            }
             if sw {
                 self.step_weight(dir);
                 return;

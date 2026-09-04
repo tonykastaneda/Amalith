@@ -191,12 +191,15 @@ impl App {
         let mut written = 0usize;
         let mut first_err: Option<String> = None;
         for (ab_i, row) in jobs {
-            let (name, ab_rect) = {
+            let (name, ab_rect, bg) = {
                 let doc = self.doc.editor.document();
                 let Some(ab) = doc.artboards().get(ab_i) else {
                     continue;
                 };
-                (ab.name.clone(), ab.rect)
+                let bg = ab
+                    .fill
+                    .map(|c| vello::peniko::Color::new([c.r, c.g, c.b, c.a]));
+                (ab.name.clone(), ab.rect, bg)
             };
             let src = amalith_core::Rect::new(
                 ab_rect.x0 - bleed.left,
@@ -219,9 +222,11 @@ impl App {
             ));
 
             let result = match row.format {
-                Format::Png | Format::Jpg => self.export_raster(src, row.scale, row.format, &path),
+                Format::Png | Format::Jpg => {
+                    self.export_raster(src, row.scale, row.format, bg, &path)
+                }
                 Format::Svg => self.export_svg_file(ab_rect, src, &path),
-                Format::Pdf => self.export_pdf_file(src, &path),
+                Format::Pdf => self.export_pdf_file(src, bg, &path),
             };
             match result {
                 Ok(()) => written += 1,
@@ -264,6 +269,7 @@ impl App {
         src: amalith_core::Rect,
         scale: f64,
         fmt: crate::export::Format,
+        bg: Option<vello::peniko::Color>,
         path: &std::path::Path,
     ) -> std::io::Result<()> {
         let w = ((src.x1 - src.x0) * scale).round().max(1.0) as u32;
@@ -273,6 +279,7 @@ impl App {
             self.doc.editor.document(),
             ksrc,
             scale,
+            bg,
             &self.image_cache,
             self.outline_mode,
             &mut self.text,
@@ -336,6 +343,7 @@ impl App {
     fn export_pdf_file(
         &mut self,
         src: amalith_core::Rect,
+        bg: Option<vello::peniko::Color>,
         path: &std::path::Path,
     ) -> std::io::Result<()> {
         // A raster-backed PDF: one page sized to the artboard (in points),
@@ -348,6 +356,7 @@ impl App {
             self.doc.editor.document(),
             ksrc,
             scale,
+            bg,
             &self.image_cache,
             self.outline_mode,
             &mut self.text,

@@ -28,6 +28,7 @@ use crate::theme::Theme;
 
 mod align;
 mod anchor;
+pub(crate) mod artboard;
 mod character;
 mod fill_stroke;
 mod opacity;
@@ -76,6 +77,13 @@ pub struct Ctx<'a> {
     pub align_to: amalith_commands::AlignTo,
     /// True while the options-bar Align To dropdown is open.
     pub align_to_menu: bool,
+    /// The selected artboard (Artboard tool) — flips the `artboard` segment
+    /// on and everything else off.
+    pub artboard: Option<artboard::ArtboardBar>,
+    /// Live edit buffer for the artboard segment's Name / X / Y / W / H.
+    pub artboard_edit: Option<(crate::panels::transform::ABField, &'a str)>,
+    pub artboard_link: bool,
+    pub artboard_fill_menu: bool,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -90,6 +98,7 @@ pub enum SegKind {
     Anchor,
     Xform,
     Align,
+    Artboard,
 }
 
 struct Segment {
@@ -105,6 +114,7 @@ struct Segment {
 /// list serves every selection kind.
 const SEGMENTS: &[Segment] = &[
     status::SEGMENT,
+    artboard::SEGMENT,
     xform::SEGMENT,
     align::SEGMENT,
     anchor::SEGMENT,
@@ -173,6 +183,12 @@ pub fn hit(bar: Rect, local: Point, ctx: &Ctx) -> Action {
 pub fn xform_field_at(bar: Rect, ctx: &Ctx, p: Point) -> Option<crate::panels::transform::XformField> {
     let r = segment_rect(bar, ctx, SegKind::Xform)?;
     xform::field_at(r, p)
+}
+
+/// Which Artboard-segment numeric field the pointer is over, if any.
+pub fn ab_field_at(bar: Rect, ctx: &Ctx, p: Point) -> Option<crate::panels::transform::ABField> {
+    let r = segment_rect(bar, ctx, SegKind::Artboard)?;
+    artboard::field_at(r, p)
 }
 
 pub fn segment_rect(bar: Rect, ctx: &Ctx, kind: SegKind) -> Option<Rect> {

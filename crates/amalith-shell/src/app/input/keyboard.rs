@@ -275,6 +275,9 @@ impl App {
         if self.xform_edit.is_some() && self.xform_key(&event) {
             return;
         }
+        if self.artboard_edit.is_some() && self.artboard_key(&event) {
+            return;
+        }
         if self.align_spacing_edit.is_some() && self.align_spacing_key(&event) {
             return;
         }

@@ -92,6 +92,11 @@ pub(in crate::app) fn paint_main(
     isolate: Option<ObjectId>,
     // Layers panel drag-reorder indicator: (visible-row index, into-container).
     layer_drop: Option<(i64, bool)>,
+    // Artboard options-bar segment state.
+    artboard_bar: Option<context_bar::artboard::ArtboardBar>,
+    artboard_edit: Option<(panels::transform::ABField, &str)>,
+    artboard_link: bool,
+    artboard_fill_menu: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -410,6 +415,10 @@ pub(in crate::app) fn paint_main(
         pointer,
         align_to,
         align_to_menu,
+        artboard: artboard_bar,
+        artboard_edit,
+        artboard_link,
+        artboard_fill_menu,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
     // The Stroke flyout is painted by the overlay pass (after the rulers)
