@@ -819,9 +819,11 @@ impl App {
         None
     }
 
-    /// Radial only: rotate the ellipse so its unsquished axis's "behind
-    /// the origin" point tracks `dp` (absolute — the handle follows the
-    /// pointer directly, like a standard rotate-around-centre control).
+    /// Radial only: rotate the ellipse by spinning `end` itself around
+    /// `start` to track `dp` — the rotate handle sits 180° from `end`, so
+    /// `end` (and the axis line, and the aspect handle) all turn together
+    /// with it, one rigid unit. The radius (`end`'s distance from `start`)
+    /// is unchanged; only its angle moves.
     pub(in crate::app) fn gradient_set_rotation(&mut self, id: ObjectId, dp: Point) {
         let Some(u) = self.gradient_unit_of(id, dp) else {
             return;
@@ -832,12 +834,13 @@ impl App {
         if g.kind != GradientKind::Radial {
             return;
         }
-        let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
         let pointer = (u[1] - g.start[1]).atan2(u[0] - g.start[0]);
-        // The rotate handle rests 180° from `base` (behind the origin).
-        let mut rot = (pointer - base).to_degrees() - 180.0;
-        rot = ((rot + 180.0).rem_euclid(360.0)) - 180.0;
-        g.rotation = rot;
+        let end_angle = pointer - std::f64::consts::PI; // handle rests at end_angle + 180°
+        let r = g.radius();
+        g.end = [
+            g.start[0] + r * end_angle.cos(),
+            g.start[1] + r * end_angle.sin(),
+        ];
         let _ = self
             .doc
             .editor
