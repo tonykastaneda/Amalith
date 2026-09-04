@@ -743,16 +743,20 @@ impl App {
         None
     }
 
-    /// Project `dp` onto the target gradient's axis → parameter `t` in
-    /// `0..1` (for dragging a stop along the on-canvas line).
+    /// Project `dp` onto the target gradient's axis → parameter `t`, for
+    /// dragging a stop along the on-canvas line. Clamped to keep a stop
+    /// clear of the endpoint handles (~14 screen px of headroom) so a
+    /// colour stop can never sit on top of the origin dot / end square.
     pub(in crate::app) fn gradient_axis_param(&self, dp: Point) -> Option<f64> {
         let (_, a, b) = self.gradient_axis_doc()?;
         let ab = b - a;
-        let len2 = ab.hypot2();
-        if len2 < 1e-9 {
-            return Some(0.0);
+        let len = ab.hypot();
+        if len < 1e-6 {
+            return Some(0.5);
         }
-        Some(((dp - a).dot(ab) / len2).clamp(0.0, 1.0))
+        let raw = (dp - a).dot(ab) / (len * len);
+        let margin = (14.0 / self.doc.view.zoom.max(1e-6) / len).clamp(0.0, 0.45);
+        Some(raw.clamp(margin, 1.0 - margin))
     }
 
     /// Slide one axis endpoint along the **current** axis direction (the
