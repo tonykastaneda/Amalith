@@ -620,16 +620,17 @@ impl App {
                         index: i,
                     };
                 }
-                AnnotHit::Start(obj) => {
+                AnnotHit::Start(obj) | AnnotHit::End(obj) => {
+                    let (orig_start, orig_end) = self
+                        .gradient_axis_doc()
+                        .map(|(_, a, b)| (a, b))
+                        .unwrap_or((dp, dp));
                     self.drag = Drag::GradientEndpoint {
                         object: obj,
-                        start: true,
-                    };
-                }
-                AnnotHit::End(obj) => {
-                    self.drag = Drag::GradientEndpoint {
-                        object: obj,
-                        start: false,
+                        start: matches!(hit, AnnotHit::Start(_)),
+                        press: dp,
+                        orig_start,
+                        orig_end,
                     };
                 }
             }
@@ -770,39 +771,51 @@ impl App {
         Some(raw.clamp(mf, 1.0 - mf))
     }
 
-    /// Slide one axis endpoint along the **current** axis direction (the
-    /// angle is fixed — only the gradient's extent changes). The other
-    /// endpoint stays put. Changing the angle is done by dragging in empty
-    /// space, not by grabbing a handle.
-    pub(in crate::app) fn gradient_set_endpoint(&mut self, id: ObjectId, start: bool, dp: Point) {
-        let Some((_, a, b)) = self.gradient_axis_doc() else {
-            return;
-        };
-        let dir = b - a;
-        let len2 = dir.hypot2();
-        // Project the pointer onto the axis line and keep the moving end on
-        // its own side of the fixed end (never let the axis collapse).
-        let new_doc = if len2 < 1e-9 {
-            dp
-        } else if start {
-            // Anchor at `b`; the original start sits at t = -1 (a = b - dir).
-            let t = ((dp - b).dot(dir) / len2).min(-0.02);
-            b + dir * t
+    /// Move a gradient-tool endpoint handle, using the axis as it stood at
+    /// press time (`orig_start`/`orig_end`) as the stable reference:
+    ///
+    /// - dragging the **origin** translates the whole axis by the pointer's
+    ///   total movement since the press — angle *and* length both stay
+    ///   fixed, only position changes;
+    /// - dragging the **end** keeps the origin fixed and slides just that
+    ///   end along the original direction (angle fixed, extent changes).
+    ///
+    /// Changing the angle itself is done by dragging in empty space, not by
+    /// grabbing a handle.
+    pub(in crate::app) fn gradient_set_endpoint(
+        &mut self,
+        id: ObjectId,
+        start: bool,
+        press: Point,
+        orig_start: Point,
+        orig_end: Point,
+        dp: Point,
+    ) {
+        let (new_start, new_end) = if start {
+            let delta = dp - press;
+            (orig_start + delta, orig_end + delta)
         } else {
-            let t = ((dp - a).dot(dir) / len2).max(0.02);
-            a + dir * t
+            let dir = orig_end - orig_start;
+            let len2 = dir.hypot2();
+            let new_end = if len2 < 1e-9 {
+                dp
+            } else {
+                let t = ((dp - orig_start).dot(dir) / len2).max(0.02);
+                orig_start + dir * t
+            };
+            (orig_start, new_end)
         };
-        let Some(u) = self.gradient_unit_of(id, new_doc) else {
+        let (Some(su), Some(eu)) = (
+            self.gradient_unit_of(id, new_start),
+            self.gradient_unit_of(id, new_end),
+        ) else {
             return;
         };
         let Some((gid, mut g)) = self.target_gradient() else {
             return;
         };
-        if start {
-            g.start = u;
-        } else {
-            g.end = u;
-        }
+        g.start = su;
+        g.end = eu;
         // Guard against a zero-length axis.
         if (g.end[0] - g.start[0]).abs() < 1e-4 && (g.end[1] - g.start[1]).abs() < 1e-4 {
             g.end[0] += 1e-3;

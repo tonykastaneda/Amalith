@@ -284,7 +284,18 @@ enum Drag {
     GradientStopOnCanvas { object: ObjectId, index: usize },
     /// Gradient tool: dragging one end of the on-canvas axis of `object`
     /// (`start` = the origin handle, else the far handle).
-    GradientEndpoint { object: ObjectId, start: bool },
+    /// `press`/`orig_start`/`orig_end` are captured once at press time
+    /// (document space) so the drag can be computed from a stable
+    /// reference instead of drifting frame to frame: dragging the origin
+    /// translates the whole axis (angle *and* length fixed), dragging the
+    /// end slides just that end along the fixed axis direction.
+    GradientEndpoint {
+        object: ObjectId,
+        start: bool,
+        press: Point,
+        orig_start: Point,
+        orig_end: Point,
+    },
     /// Gradient tool: dragging the midpoint diamond in gap `index` of the
     /// on-canvas axis of `object`.
     GradientMidOnCanvas { object: ObjectId, index: usize },

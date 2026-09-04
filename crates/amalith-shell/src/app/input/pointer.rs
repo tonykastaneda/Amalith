@@ -242,11 +242,24 @@ impl App {
                     index: self.gradient_stop,
                 };
             }
-            Drag::GradientEndpoint { object, start } => {
-                let (object, start) = (*object, *start);
+            Drag::GradientEndpoint {
+                object,
+                start,
+                press,
+                orig_start,
+                orig_end,
+            } => {
+                let (object, start, press, orig_start, orig_end) =
+                    (*object, *start, *press, *orig_start, *orig_end);
                 let dp = self.doc_point(self.pointer);
-                self.gradient_set_endpoint(object, start, dp);
-                self.drag = Drag::GradientEndpoint { object, start };
+                self.gradient_set_endpoint(object, start, press, orig_start, orig_end, dp);
+                self.drag = Drag::GradientEndpoint {
+                    object,
+                    start,
+                    press,
+                    orig_start,
+                    orig_end,
+                };
             }
             Drag::GradientMidOnCanvas { object, index } => {
                 let (object, index) = (*object, *index);
