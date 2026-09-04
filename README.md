@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="branding/NewDocument/mark.png" width="180" alt="Amalith logo">
+  <img src="website/public/brand/favicon.svg" width="180" alt="Amalith logo">
 </p>
 
 <h1 align="center">Amalith</h1>
