@@ -151,26 +151,16 @@ fn rgb_of(paint: Paint) -> (f32, f32, f32) {
         .unwrap_or((0.0, 0.0, 0.0))
 }
 
+// RGB↔CMYK conversion lives on `amalith_core::Color` (`to_cmyk`/`from_cmyk`)
+// so the PDF exporter's `DeviceCMYK` output uses the exact same formula the
+// Color panel previews — one conversion, not two that could drift apart.
 fn rgb_to_cmyk(r: f32, g: f32, b: f32) -> [f32; 4] {
-    let k = 1.0 - r.max(g).max(b);
-    if k >= 1.0 - f32::EPSILON {
-        [0.0, 0.0, 0.0, 1.0]
-    } else {
-        [
-            (1.0 - r - k) / (1.0 - k),
-            (1.0 - g - k) / (1.0 - k),
-            (1.0 - b - k) / (1.0 - k),
-            k,
-        ]
-    }
+    amalith_core::Color::rgb(r, g, b).to_cmyk()
 }
 
 fn cmyk_to_rgb(c: f32, m: f32, y: f32, k: f32) -> (f32, f32, f32) {
-    (
-        (1.0 - c) * (1.0 - k),
-        (1.0 - m) * (1.0 - k),
-        (1.0 - y) * (1.0 - k),
-    )
+    let rgb = amalith_core::Color::from_cmyk(c, m, y, k);
+    (rgb.r, rgb.g, rgb.b)
 }
 
 /// Channel values in 0..1 for the current mode, plus display strings.

@@ -2568,6 +2568,13 @@ impl App {
         let mut doc = amalith_core::Document::new(&name);
         doc.settings.default_unit = unit;
         doc.settings.color_mode = color_mode;
+        // A fresh CMYK document opens the Color panel on CMYK sliders,
+        // matching Illustrator — the panel itself stays free to switch
+        // afterward; this only seeds where a *new* document starts.
+        self.color_mode = match color_mode {
+            amalith_core::ColorMode::Cmyk => panels::ColorSpace::Cmyk,
+            amalith_core::ColorMode::Rgb => panels::ColorSpace::Rgb,
+        };
         doc.settings.raster_effects = raster;
         doc.settings.preview_mode = preview;
         doc.settings.bleed = amalith_core::Bleed {
