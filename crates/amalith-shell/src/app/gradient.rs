@@ -32,22 +32,23 @@ pub(in crate::app) struct GradientAnnot {
 }
 
 /// Radial-only: the (rotate handle, aspect handle) positions in **unit
-/// space**, derived from the gradient's current geometry. The rotate
-/// handle sits 90° around the (rotated) unsquished axis; the aspect
-/// handle sits at the fixed, un-rotated axis's opposite point, at
-/// `radius * aspect` from the centre (so it slides with the squish).
+/// space**, derived from the gradient's current geometry. Both track the
+/// ellipse's current rotation (`radial_axis_rad`, which folds in
+/// `rotation`): the rotate handle sits on the unsquished axis, opposite
+/// the `start`→`end` side ("behind" the origin); the aspect handle sits
+/// perpendicular to it ("off to the side"), at `radius * aspect` from the
+/// centre so it slides with the squish.
 fn radial_handle_units(g: &Gradient) -> ([f64; 2], [f64; 2]) {
     use std::f64::consts::{FRAC_PI_2, PI};
-    let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
     let axis = g.radial_axis_rad();
     let r = g.radius();
     let rotate = [
-        g.start[0] + r * (axis + FRAC_PI_2).cos(),
-        g.start[1] + r * (axis + FRAC_PI_2).sin(),
+        g.start[0] + r * (axis + PI).cos(),
+        g.start[1] + r * (axis + PI).sin(),
     ];
     let aspect = [
-        g.start[0] + r * g.aspect * (base + PI).cos(),
-        g.start[1] + r * g.aspect * (base + PI).sin(),
+        g.start[0] + r * g.aspect * (axis + FRAC_PI_2).cos(),
+        g.start[1] + r * g.aspect * (axis + FRAC_PI_2).sin(),
     ];
     (rotate, aspect)
 }
@@ -818,9 +819,9 @@ impl App {
         None
     }
 
-    /// Radial only: rotate the ellipse so its unsquished axis points at
-    /// `dp` (absolute — the handle tracks the pointer directly, like a
-    /// standard rotate-around-centre control).
+    /// Radial only: rotate the ellipse so its unsquished axis's "behind
+    /// the origin" point tracks `dp` (absolute — the handle follows the
+    /// pointer directly, like a standard rotate-around-centre control).
     pub(in crate::app) fn gradient_set_rotation(&mut self, id: ObjectId, dp: Point) {
         let Some(u) = self.gradient_unit_of(id, dp) else {
             return;
@@ -833,7 +834,8 @@ impl App {
         }
         let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
         let pointer = (u[1] - g.start[1]).atan2(u[0] - g.start[0]);
-        let mut rot = (pointer - base).to_degrees() - 90.0;
+        // The rotate handle rests 180° from `base` (behind the origin).
+        let mut rot = (pointer - base).to_degrees() - 180.0;
         rot = ((rot + 180.0).rem_euclid(360.0)) - 180.0;
         g.rotation = rot;
         let _ = self
@@ -845,9 +847,10 @@ impl App {
     }
 
     /// Radial only: set the ellipse's aspect from how far `dp` sits toward
-    /// or away from the centre, along the fixed (un-rotated) axis.
+    /// or away from the centre, along the (rotated) perpendicular axis —
+    /// "off to the side" of the `start`→`end` line, not behind it.
     pub(in crate::app) fn gradient_set_aspect(&mut self, id: ObjectId, dp: Point) {
-        use std::f64::consts::PI;
+        use std::f64::consts::FRAC_PI_2;
         let Some(u) = self.gradient_unit_of(id, dp) else {
             return;
         };
@@ -857,8 +860,7 @@ impl App {
         if g.kind != GradientKind::Radial {
             return;
         }
-        let base = (g.end[1] - g.start[1]).atan2(g.end[0] - g.start[0]);
-        let dir = base + PI;
+        let dir = g.radial_axis_rad() + FRAC_PI_2;
         let (ux, uy) = (u[0] - g.start[0], u[1] - g.start[1]);
         let proj = ux * dir.cos() + uy * dir.sin();
         let radius = g.radius().max(1e-6);
