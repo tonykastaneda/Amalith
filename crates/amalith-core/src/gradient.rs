@@ -214,8 +214,10 @@ impl Gradient {
     }
 
     /// Sampled color at slider position `t` (`0..=1`), honoring per-stop
-    /// opacity but not midpoint skew — a straight lerp between the
-    /// bracketing stops. For previews / eyedropper, not the GPU path.
+    /// opacity *and* midpoint skew (see [`Self::render_stops`] for why a
+    /// renderer that only understands straight-line interpolation between
+    /// stops — SVG, our own GPU gradients — needs a different, baked
+    /// representation to show the same skew).
     pub fn sample(&self, t: f32) -> Color {
         if self.stops.is_empty() {
             return Color::rgb(0.0, 0.0, 0.0);
@@ -233,7 +235,7 @@ impl Gradient {
             let (a, b) = (pair[0], pair[1]);
             if t >= a.offset && t <= b.offset {
                 let span = (b.offset - a.offset).max(1e-6);
-                let k = (t - a.offset) / span;
+                let k = biased_t((t - a.offset) / span, a.midpoint);
                 let ca = a.effective_color();
                 let cb = b.effective_color();
                 return Color::rgba(
@@ -245,6 +247,70 @@ impl Gradient {
             }
         }
         last.effective_color()
+    }
+
+    /// This gradient's stops, "baked" for a renderer that can only do
+    /// straight-line interpolation between consecutive stops (SVG,
+    /// vello/peniko's GPU gradients — [`Self::sample`] can evaluate the
+    /// midpoint-skewed curve directly, but neither of those can). Any gap
+    /// between two adjacent stops whose `midpoint` skews the 50% blend
+    /// point away from the centre gets subdivided into extra samples that
+    /// closely approximate the skewed curve as a polyline; a gap already
+    /// at the default `0.5` is left as its original two stops (exact
+    /// either way, so no point paying for extra stops). Every returned
+    /// stop already has per-stop opacity folded into its colour alpha
+    /// (`opacity` is always `1.0`) and `midpoint` reset to `0.5` — it's
+    /// flat output, not a gradient definition to edit further.
+    pub fn render_stops(&self) -> Vec<GradientStop> {
+        const SUBDIVISIONS: usize = 24;
+        const FLAT: f32 = 0.5;
+        let baked = |offset: f32, color: Color| GradientStop {
+            offset,
+            color,
+            opacity: 1.0,
+            midpoint: FLAT,
+        };
+        if self.stops.len() < 2 {
+            return self
+                .stops
+                .iter()
+                .map(|s| baked(s.offset, s.effective_color()))
+                .collect();
+        }
+        let mut out = vec![baked(self.stops[0].offset, self.stops[0].effective_color())];
+        for pair in self.stops.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a.midpoint - FLAT).abs() < 0.01 {
+                out.push(baked(b.offset, b.effective_color()));
+                continue;
+            }
+            let span = (b.offset - a.offset).max(0.0);
+            let (ca, cb) = (a.effective_color(), b.effective_color());
+            for i in 1..=SUBDIVISIONS {
+                let k = i as f32 / SUBDIVISIONS as f32;
+                let bk = biased_t(k, a.midpoint);
+                let c = Color::rgba(
+                    ca.r + (cb.r - ca.r) * bk,
+                    ca.g + (cb.g - ca.g) * bk,
+                    ca.b + (cb.b - ca.b) * bk,
+                    ca.a + (cb.a - ca.a) * bk,
+                );
+                out.push(baked(a.offset + span * k, c));
+            }
+        }
+        out
+    }
+}
+
+/// Remaps a raw `0..=1` blend fraction so the 50% blend point lands at
+/// `midpoint` instead of the centre — Illustrator's gradient-stop
+/// midpoint diamond. `midpoint == 0.5` is the identity (`k` unchanged).
+fn biased_t(k: f32, midpoint: f32) -> f32 {
+    let m = midpoint.clamp(0.02, 0.98);
+    if k <= m {
+        0.5 * (k / m)
+    } else {
+        0.5 + 0.5 * (k - m) / (1.0 - m)
     }
 }
 
@@ -290,6 +356,47 @@ mod tests {
         let g = Gradient::linear(GradientId::new());
         let mid = g.sample(0.5);
         assert!((mid.r - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn midpoint_skews_the_sampled_blend() {
+        let mut g = Gradient::linear(GradientId::new());
+        // Pull the midpoint toward the white (offset 0.0) stop: the 50%
+        // blend should now land at t=0.2, not t=0.5, and the straight
+        // t=0.5 sample should read closer to black than an even lerp.
+        g.stops[0].midpoint = 0.2;
+        let at_midpoint = g.sample(0.2);
+        assert!(
+            (at_midpoint.r - 0.5).abs() < 1e-5,
+            "the 50% blend should sit at the midpoint, not the centre: {at_midpoint:?}"
+        );
+        let at_half = g.sample(0.5);
+        assert!(
+            at_half.r < 0.5,
+            "past a midpoint pulled toward the start, t=0.5 should already be past 50%: {at_half:?}"
+        );
+        // A midpoint of exactly 0.5 is a no-op (plain lerp).
+        let mut flat = Gradient::linear(GradientId::new());
+        flat.stops[0].midpoint = 0.5;
+        assert!((flat.sample(0.5).r - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn render_stops_tracks_sample_and_flattens_midpoint() {
+        let mut g = Gradient::linear(GradientId::new());
+        g.stops[0].midpoint = 0.25;
+        let baked = g.render_stops();
+        // Every baked stop has a flat (no-op) midpoint and full opacity.
+        assert!(baked.iter().all(|s| s.midpoint == 0.5 && s.opacity == 1.0));
+        // The baked polyline should closely approximate `sample()` at the
+        // same slider position, at every subdivision point.
+        for s in &baked {
+            let expected = g.sample(s.offset);
+            assert!((s.color.r - expected.r).abs() < 1e-4, "{s:?} vs {expected:?}");
+        }
+        // A flat (0.5) midpoint needs no subdividing: exactly the 2 stops.
+        let flat = Gradient::linear(GradientId::new());
+        assert_eq!(flat.render_stops().len(), 2);
     }
 
     #[test]

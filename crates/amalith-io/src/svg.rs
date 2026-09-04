@@ -136,8 +136,12 @@ fn gradient_svg_id(id: amalith_core::GradientId) -> String {
 fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
     let svg_id = gradient_svg_id(gradient.id);
     if defs.seen.insert(svg_id.clone()) {
+        // SVG stops, like our GPU gradient, only interpolate linearly, so
+        // export the midpoint-baked stops (see `render_stops`) rather than
+        // the raw ones — otherwise a skewed midpoint would silently vanish
+        // on export.
         let stops: String = gradient
-            .stops
+            .render_stops()
             .iter()
             .map(|s| {
                 let c = s.color;
@@ -145,7 +149,7 @@ fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
                     "<stop offset=\"{}\" stop-color=\"{}\" stop-opacity=\"{}\"/>",
                     s.offset.clamp(0.0, 1.0),
                     hex_color(c),
-                    (c.a * s.opacity).clamp(0.0, 1.0),
+                    c.a.clamp(0.0, 1.0),
                 )
             })
             .collect();

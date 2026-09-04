@@ -50,18 +50,24 @@ pub fn color(c: amalith_core::Color) -> vello::peniko::Color {
 /// **bounding-box unit space** (`0..1`). The caller pairs it with a
 /// `brush_transform` that maps the unit square onto the object's local
 /// bounds (`translate(x0,y0) * scale(w,h)`), matching SVG's
-/// `objectBoundingBox` gradient units. Per-stop opacity is folded into
-/// each stop's alpha.
+/// `objectBoundingBox` gradient units.
+///
+/// vello's GPU gradient, like SVG's, only interpolates *linearly* between
+/// consecutive stops — it has no notion of a stop's midpoint (the
+/// gradient-slider diamond that skews the 50% blend point off-centre). So
+/// this builds from [`amalith_core::Gradient::render_stops`], which bakes
+/// any skewed gap into a fine polyline of extra stops that a linear-only
+/// interpolator reproduces closely, rather than from the raw stop list
+/// (which would silently ignore every midpoint).
 pub fn peniko_gradient(g: &amalith_core::Gradient) -> vello::peniko::Gradient {
     use vello::peniko::{Color, ColorStop, Extend, Gradient};
 
     let stops: Vec<ColorStop> = g
-        .stops
+        .render_stops()
         .iter()
         .map(|s| {
             let c = s.color;
-            let a = (c.a * s.opacity).clamp(0.0, 1.0);
-            ColorStop::from((s.offset.clamp(0.0, 1.0), Color::new([c.r, c.g, c.b, a])))
+            ColorStop::from((s.offset.clamp(0.0, 1.0), Color::new([c.r, c.g, c.b, c.a])))
         })
         .collect();
 
