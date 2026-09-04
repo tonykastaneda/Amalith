@@ -31,7 +31,7 @@ pub struct ArtboardBar {
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Artboard,
     applies: |ctx| ctx.artboard.is_some(),
-    measure: |_| 968.0,
+    measure: |_| 1112.0,
     paint,
     hit,
 };

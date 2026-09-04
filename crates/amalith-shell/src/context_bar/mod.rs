@@ -129,7 +129,14 @@ const SEGMENTS: &[Segment] = &[
 fn placed<'s>(bar: Rect, ctx: &Ctx) -> Vec<(&'s Segment, Rect)> {
     let mut out = Vec::new();
     let mut x = bar.x0 + 12.0;
+    // An artboard selection replaces the whole bar with its own segment;
+    // the object segments (which show stored defaults even with nothing
+    // selected) must not bleed through.
+    let ab = ctx.artboard.is_some();
     for seg in SEGMENTS {
+        if ab && !matches!(seg.kind, SegKind::Status | SegKind::Artboard) {
+            continue;
+        }
         if !(seg.applies)(ctx) {
             continue;
         }
