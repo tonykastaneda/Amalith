@@ -651,6 +651,26 @@ impl Rail {
         }
         true
     }
+
+    /// Pulls just *one* group out of a collapsed column's icon strip —
+    /// Illustrator lets you tear a group straight off its icon, not only
+    /// after expanding the whole column back to the dock. Returns that
+    /// group's own `Node::Tabs` (for `DockModel::float_node`), pruning it
+    /// out of the column (and dropping the column entirely if that was
+    /// its last group) while leaving every other collapsed group in this
+    /// or any other column untouched. `None` if `column`/`group` don't
+    /// resolve to anything.
+    pub fn detach_icon_group(&mut self, column: usize, group: usize) -> Option<Node> {
+        let col = self.icons.get_mut(column)?;
+        let (panels, active) = col.groups().into_iter().nth(group)?;
+        for &p in &panels {
+            remove_in(&mut col.node, p);
+        }
+        if node_is_empty(&col.node) {
+            self.icons.remove(column);
+        }
+        Some(Node::Tabs { panels, active })
+    }
 }
 
 /// The whole panel layout: a rail on each side of the canvas, plus any
@@ -753,14 +773,28 @@ impl DockModel {
     }
 
     fn push_floating(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
+        self.float_node(
+            Node::Tabs {
+                panels: vec![panel],
+                active: 0,
+            },
+            rect,
+        )
+    }
+
+    /// Places an already-built `node` — usually a whole multi-tab group
+    /// pulled out of a collapsed column's icon strip via
+    /// `Rail::detach_icon_group` — into its own new floating window at
+    /// `rect`. Unlike `push_floating`/`detach`/`float_alone`, which only
+    /// ever start a single-panel group, this keeps the group's tabs (and
+    /// which one was active) together, matching what tearing a *group*
+    /// off a dock in Illustrator does.
+    pub fn float_node(&mut self, node: Node, rect: [f32; 4]) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.floating.push(Floating {
             id,
-            node: Node::Tabs {
-                panels: vec![panel],
-                active: 0,
-            },
+            node,
             rect,
             icon_w: None,
             expanded_size: None,
@@ -1522,6 +1556,63 @@ mod tests {
     fn expand_rejects_an_out_of_range_index() {
         let mut r = Rail::with(tabs(&[A]));
         assert!(!r.expand(0));
+    }
+
+    #[test]
+    fn detach_icon_group_pulls_just_one_group_out_of_a_multi_group_column() {
+        // A stacked column of two groups, both collapsed to one icon
+        // column (matches collapse_takes_the_whole_column_...): detaching
+        // the second group by itself must leave the first fully intact.
+        let mut r = Rail::with(Node::Split {
+            axis: Axis::Vertical,
+            children: vec![
+                Child { node: tabs(&[A]), weight: 1.0 },
+                Child { node: tabs(&[B, C]), weight: 2.0 },
+            ],
+        });
+        r.collapse(&NodePath(vec![1]));
+        assert_eq!(r.icons.len(), 1);
+
+        let out = r.detach_icon_group(0, 1).expect("group 1 exists");
+        assert_eq!(out, Node::Tabs { panels: vec![B, C], active: 0 });
+        // Group 0 (A) is still there, group 1 is gone — not the whole
+        // column, just the one group.
+        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[A]) }]);
+        assert!(r.panels().contains(&A));
+        assert!(!r.panels().contains(&B));
+        assert!(!r.panels().contains(&C));
+    }
+
+    #[test]
+    fn detach_icon_group_drops_the_whole_column_once_its_last_group_leaves() {
+        let mut r = Rail::with(tabs(&[A]));
+        r.collapse(&NodePath(vec![]));
+        assert_eq!(r.icons.len(), 1);
+
+        let out = r.detach_icon_group(0, 0).expect("the only group");
+        assert_eq!(out, Node::Tabs { panels: vec![A], active: 0 });
+        assert!(r.icons.is_empty(), "an emptied column is dropped, not left as a husk");
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn detach_icon_group_rejects_an_out_of_range_column_or_group() {
+        let mut r = Rail::with(tabs(&[A]));
+        r.collapse(&NodePath(vec![]));
+        assert!(r.detach_icon_group(1, 0).is_none());
+        assert!(r.detach_icon_group(0, 5).is_none());
+    }
+
+    #[test]
+    fn float_node_keeps_a_multi_tab_group_together_in_one_window() {
+        let mut m = DockModel::new(tabs(&[A]));
+        let node = Node::Tabs { panels: vec![B, C], active: 1 };
+        let id = m.float_node(node.clone(), [1.0, 2.0, 300.0, 400.0]);
+        assert_eq!(m.floating.len(), 1);
+        assert_eq!(m.floating[0].id, id);
+        assert_eq!(m.floating[0].node, node);
+        assert_eq!(m.floating[0].rect, [1.0, 2.0, 300.0, 400.0]);
+        assert_eq!(m.floating[0].icon_w, None);
     }
 
     #[test]

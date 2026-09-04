@@ -145,6 +145,19 @@ enum Drag {
         tab: usize,
         press: Point,
     },
+    /// Pressed an icon-strip row; a click opens/switches that group's
+    /// flyout (see `App::toggle_flyout`), a drag tears the *whole group*
+    /// (every tab it holds, not just the one row clicked) off the icon
+    /// strip into a new floating window — Illustrator lets you detach a
+    /// group straight from its collapsed icon, not only after expanding
+    /// it back to the dock.
+    PendingIconTearoff {
+        side: RailSide,
+        column: usize,
+        group: usize,
+        tab: usize,
+        press: Point,
+    },
     /// Pressed a floating window's tab strip; a click activates that tab, a
     /// drag moves the window.
     PendingFloatMove { id: u64, tab: usize, press: Point },
@@ -900,6 +913,9 @@ struct App {
     /// Set by cursor-move handling (no `event_loop` in scope) so the
     /// window-event dispatch can spawn the torn-off window.
     pending_tearoff: Option<(PanelId, Point)>,
+    /// Same as `pending_tearoff`, for dragging a whole group off an
+    /// icon-strip row (see `Drag::PendingIconTearoff`).
+    pending_icon_tearoff: Option<(RailSide, usize, usize, Point)>,
     /// The "About Amalith" panel: a modal card centred over the main window,
     /// with live text selection. `Some` while it's showing.
     about: Option<about::About>,
@@ -1078,6 +1094,7 @@ impl App {
             drag: Drag::None,
             redock_preview: None,
             pending_tearoff: None,
+            pending_icon_tearoff: None,
             about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
@@ -5317,6 +5334,64 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Tear a *whole group* off an icon-strip row — every tab it holds,
+    /// not just the one clicked — into a new floating window, same as
+    /// [`Self::tear_off`] but sourced from a collapsed column instead of
+    /// the docked tree (there's nothing to measure a prior on-screen size
+    /// from, so it starts at the plain floating default).
+    fn tear_off_icon_group(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        side: RailSide,
+        column: usize,
+        group: usize,
+        main_local_press: Point,
+    ) {
+        let Some(node) = self.dock.rail_mut(side).detach_icon_group(column, group) else {
+            return;
+        };
+        let title = match &node {
+            Node::Tabs { panels, active } => panels
+                .get(*active)
+                .or_else(|| panels.first())
+                .map(|&p| tab_label(p))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        self.flyout_icon = None;
+        let global = self.main_inner_origin() + main_local_press.to_vec2();
+        let (fw, fh) = (FLOAT_W, FLOAT_H);
+        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let pos = global - grab;
+        let id = self
+            .dock
+            .float_node(node, [pos.x as f32, pos.y as f32, fw as f32, fh as f32]);
+
+        let attrs = Window::default_attributes()
+            .with_title(title)
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_inner_size(LogicalSize::new(fw, fh))
+            .with_position(LogicalPosition::new(pos.x, pos.y));
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs)
+                .expect("create float window"),
+        );
+        let wid = window.id();
+        let host = self.make_host(window.clone(), Role::Floating(id));
+        self.hosts.insert(wid, host);
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.drag = Drag::MovingFloating { id, grab, pos };
+        window.request_redraw();
+        self.request_main_redraw();
+    }
+
     /// Open the colour picker as its own non-resizable floating window,
     /// centred over the main window. Dragging the tab strip moves it
     /// anywhere on the desktop — same path as a torn-off panel.
@@ -5714,6 +5789,9 @@ impl ApplicationHandler for App {
                 self.on_cursor_move();
                 if let Some((panel, press)) = self.pending_tearoff.take() {
                     self.tear_off(event_loop, panel, press);
+                }
+                if let Some((side, column, group, press)) = self.pending_icon_tearoff.take() {
+                    self.tear_off_icon_group(event_loop, side, column, group, press);
                 }
             }
             WindowEvent::CursorLeft { .. } => {

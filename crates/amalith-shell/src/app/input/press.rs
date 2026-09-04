@@ -466,7 +466,16 @@ impl App {
                         }
                     }
                     if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
-                        self.toggle_flyout(side, ir.column, ir.group, ir.tab);
+                        // A click opens/switches the flyout; a drag tears
+                        // the whole group off into a floating window (see
+                        // `Drag::PendingIconTearoff` / `tear_off_icon_group`).
+                        self.drag = Drag::PendingIconTearoff {
+                            side,
+                            column: ir.column,
+                            group: ir.group,
+                            tab: ir.tab,
+                            press: self.pointer,
+                        };
                         return;
                     }
                     if let Some(sp) = laid

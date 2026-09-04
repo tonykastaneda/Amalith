@@ -565,6 +565,14 @@ impl App {
                     self.pending_tearoff = Some((panel, press));
                 }
             }
+            Drag::PendingIconTearoff {
+                side, column, group, press, ..
+            } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let (side, column, group, press) = (*side, *column, *group, *press);
+                    self.pending_icon_tearoff = Some((side, column, group, press));
+                }
+            }
             Drag::PendingFloatMove { id, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let id = *id;
@@ -1173,6 +1181,13 @@ impl App {
             } => {
                 self.dock.rail_mut(side).activate_tab(&path, tab);
                 self.request_main_redraw();
+            }
+            Drag::PendingIconTearoff {
+                side, column, group, tab, ..
+            } => {
+                // Released before the drag threshold: just a click on the
+                // icon row, same as any other — open/switch its flyout.
+                self.toggle_flyout(side, column, group, tab);
             }
             Drag::PendingFloatMove { id, tab, .. } => {
                 if let Some(f) = self.dock.floating_mut(id) {
