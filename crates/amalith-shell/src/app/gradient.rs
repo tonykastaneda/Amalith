@@ -125,6 +125,9 @@ impl App {
             if let Some(mut g) = self.doc.editor.document().gradient(id).cloned() {
                 if g.kind != kind {
                     g.kind = kind;
+                    if kind == GradientKind::Freeform && g.points.is_empty() {
+                        g.points = Gradient::default_points();
+                    }
                     let _ = self
                         .doc
                         .editor
@@ -218,6 +221,13 @@ impl App {
                 if kind == GradientKind::Radial {
                     g.start = [0.5, 0.5];
                     g.end = [1.0, 0.5];
+                }
+                // A gradient re-typed *into* Freeform from Linear/Radial has
+                // no points yet (that field is only ever populated by
+                // `Gradient::freeform`) — seed the default scatter so the
+                // canvas has something to render instead of nothing.
+                if kind == GradientKind::Freeform && g.points.is_empty() {
+                    g.points = Gradient::default_points();
                 }
                 let _ = self
                     .doc

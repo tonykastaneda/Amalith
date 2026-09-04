@@ -1141,6 +1141,61 @@ fn stroke_path(
     }
 }
 
+/// Paints a freeform gradient fill: a soft radial "blob" per colour point
+/// (opaque at its centre, fading to transparent by `spread`), layered over
+/// a flat backstop of the points' average colour so a spot outside every
+/// point's reach doesn't show through as a hole. This isn't a true
+/// weighted-distance diffusion — that needs a per-pixel compute pass — but
+/// it's a fully vector-native approximation: every layer is a real peniko
+/// radial gradient, so it stays crisp at any zoom and exports as real
+/// gradients, not a baked raster.
+fn paint_freeform_fill(
+    scene: &mut Scene,
+    m: Affine,
+    bbox_xf: Affine,
+    g: &amalith_core::Gradient,
+    bp: &vello::kurbo::BezPath,
+) {
+    if g.points.is_empty() {
+        return;
+    }
+    scene.push_clip_layer(Fill::NonZero, m, bp);
+    // The object's local bounds (== the unit square under `bbox_xf`)
+    // fully contain the path, so filling it inside the clip above paints
+    // exactly the path's shape.
+    let unit_xf = m * bbox_xf;
+    let unit_rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+
+    let n = g.points.len() as f32;
+    let mut avg = [0.0f32; 4];
+    for p in &g.points {
+        let c = p.effective_color();
+        avg[0] += c.r;
+        avg[1] += c.g;
+        avg[2] += c.b;
+        avg[3] += c.a;
+    }
+    let backstop = Color::new([avg[0] / n, avg[1] / n, avg[2] / n, avg[3] / n]);
+    scene.fill(Fill::NonZero, unit_xf, backstop, None, &unit_rect);
+
+    for p in &g.points {
+        let c = convert::color(p.effective_color());
+        let outer = (p.spread * 2.2).max(0.02) as f32;
+        let transparent = c.with_alpha(0.0);
+        let blob = vello::peniko::Gradient::new_radial((p.pos[0], p.pos[1]), outer)
+            .with_extend(vello::peniko::Extend::Pad)
+            .with_stops(
+                [
+                    vello::peniko::ColorStop::from((0.0, c)),
+                    vello::peniko::ColorStop::from((1.0, transparent)),
+                ]
+                .as_slice(),
+            );
+        scene.fill(Fill::NonZero, unit_xf, &blob, None, &unit_rect);
+    }
+    scene.pop_layer();
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_object(
     scene: &mut Scene,
@@ -1200,7 +1255,23 @@ fn paint_object(
         let bbox = bbox_xf?;
         Some((convert::peniko_gradient(g), bbox * convert::radial_squish(g)))
     };
-    let fill_grad = resolve_grad(obj.appearance.fill);
+    // A freeform *fill* is a composite of per-point layers (paint_freeform_
+    // fill below), not a single peniko::Gradient — resolve_grad's
+    // placeholder is only used when that's not possible (no local bounds)
+    // or on a stroke (Illustrator restricts freeform to fills; a freeform
+    // stroke keeps the single-gradient placeholder rather than needing a
+    // stroke-shaped clip for the layered composite).
+    let fill_freeform = match obj.appearance.fill {
+        amalith_core::Paint::Gradient(gid) => doc
+            .gradient(gid)
+            .filter(|g| g.kind == amalith_core::GradientKind::Freeform),
+        _ => None,
+    };
+    let fill_grad = if fill_freeform.is_some() {
+        None
+    } else {
+        resolve_grad(obj.appearance.fill)
+    };
     let stroke_grad = resolve_grad(obj.appearance.stroke);
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
         // Outline (wireframe) view: hairline contour only, no fill/stroke.
@@ -1220,7 +1291,9 @@ fn paint_object(
             .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
         // An open path still fills — the fill closes the contour
         // implicitly (Illustrator / SVG), while the stroke stays open.
-        if let Some((g, xf)) = &fill_grad {
+        if let (Some(g), Some(bbox)) = (fill_freeform, bbox_xf) {
+            paint_freeform_fill(scene, m, bbox, g, bp);
+        } else if let Some((g, xf)) = &fill_grad {
             scene.fill(Fill::NonZero, m, g, Some(*xf), bp);
         } else if let Some(c) = fill {
             scene.fill(Fill::NonZero, m, c, None, bp);

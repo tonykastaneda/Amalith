@@ -300,7 +300,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         let v = 0.12 + k as f32 * 0.34;
         scene.fill(Fill::NonZero, ID, Color::new([v, v, v, 1.0]), None, &rr.to_ellipse());
     }
-    let fi = type_btn(scene, l.type_free, false);
+    let fi = type_btn(scene, l.type_free, kind == Some(GradientKind::Freeform));
     for (dx, dy) in [(0.25, 0.3), (0.72, 0.26), (0.4, 0.72), (0.78, 0.7)] {
         let p = Point::new(fi.x0 + fi.width() * dx, fi.y0 + fi.height() * dy);
         scene.fill(
@@ -338,7 +338,12 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     // The linear angle is set only by dragging the gradient tool on the
     // canvas — it's shown here but not editable. The radial aspect ratio
     // *is* an editable field.
-    if kind == Some(GradientKind::Radial) {
+    if kind == Some(GradientKind::Freeform) {
+        text.draw(scene, "Points", 11.0, th.text_dim, l.geom_label.x, l.geom_label.y);
+        let gval = grad.map(|(g, _)| format!("{}", g.points.len())).unwrap_or_default();
+        let w = text.measure(&gval, 11.0);
+        text.draw(scene, &gval, 11.0, th.text_dim, l.geom_up.x1 - w, l.geom_label.y);
+    } else if kind == Some(GradientKind::Radial) {
         text.draw(scene, "Aspect Ratio", 11.0, th.text_dim, l.geom_label.x, l.geom_label.y);
         let gval = live(GradField::Aspect)
             .map(str::to_string)
@@ -356,6 +361,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     }
 
     // --- Ramp + stops ------------------------------------------------
+    let freeform = kind == Some(GradientKind::Freeform);
     match grad {
         None => {
             checker(scene, l.bar);
@@ -371,6 +377,26 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             text.draw(
                 scene,
                 "or select a shape with a gradient fill.",
+                10.5,
+                th.text_dim,
+                l.bar.x0,
+                l.track.y0 + 26.0,
+            );
+        }
+        Some(_) if freeform => {
+            scene.fill(Fill::NonZero, ID, th.strip_bg, None, &l.bar);
+            scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.bar);
+            text.draw(
+                scene,
+                "Points blend on canvas — drag the object's",
+                10.5,
+                th.text_dim,
+                l.bar.x0,
+                l.track.y0 + 12.0,
+            );
+            text.draw(
+                scene,
+                "fill to preview; per-point editing is next.",
                 10.5,
                 th.text_dim,
                 l.bar.x0,
@@ -421,7 +447,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     }
 
     // --- Selected-stop swatch + Location + Opacity ----------------------
-    if let Some((g, sel)) = grad {
+    if let Some((g, sel)) = grad.filter(|_| !freeform) {
         let stop = g.stops.get(*sel).copied().unwrap_or(g.stops[0]);
         let c = stop.color;
         scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &l.swatch);
@@ -455,15 +481,17 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
         return Action::GradientKind(GradientKind::Radial);
     }
     if l.type_free.contains(p) {
-        return Action::None;
+        return Action::GradientKind(GradientKind::Freeform);
     }
     if l.reverse.contains(p) {
         return Action::GradientReverse;
     }
 
     let has = ctx.gradient.is_some();
-    let radial = ctx.gradient.as_ref().map(|(g, _)| g.kind) == Some(GradientKind::Radial);
-    if has {
+    let kind = ctx.gradient.as_ref().map(|(g, _)| g.kind);
+    let radial = kind == Some(GradientKind::Radial);
+    let freeform = kind == Some(GradientKind::Freeform);
+    if has && !freeform {
         // Only the radial Aspect field is editable here. The linear angle
         // is set by dragging the gradient tool on the canvas — the panel
         // just displays it.
@@ -558,6 +586,9 @@ pub fn parse_field(field: GradField, buf: &str) -> Option<f64> {
 /// linear Angle is deliberately excluded — it isn't editable from here.
 pub fn field_at(body: Rect, p: Point, kind: Option<GradientKind>) -> Option<GradField> {
     let l = layout(body);
+    if kind == Some(GradientKind::Freeform) {
+        return None;
+    }
     if kind == Some(GradientKind::Radial) && l.geom_val.inflate(CHEV_W, 3.0).contains(p) {
         return Some(GradField::Aspect);
     }
@@ -577,7 +608,7 @@ pub fn tip(body: Rect, p: Point, _ctx: &Ctx) -> Option<&'static str> {
     } else if l.type_rad.contains(p) {
         Some("Radial gradient")
     } else if l.type_free.contains(p) {
-        Some("Freeform gradient — not yet supported")
+        Some("Freeform gradient (Points mode)")
     } else if l.reverse.contains(p) {
         Some("Reverse gradient")
     } else if l.bar.contains(p) || l.track.contains(p) {
