@@ -1,10 +1,6 @@
-<table align="center" cellpadding="24" bgcolor="#11110f">
-  <tr>
-    <td align="center">
-      <img src="website/public/brand/amalith-wordmark.png" width="360" alt="Amalith logo">
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="website/public/brand/amalith-wordmark.png" width="360" alt="Amalith logo">
+</p>
 
 <p align="center"><em>The Illustrator-class vector editor that launched yesterday with 20 years of tutorials.</em></p>
 
