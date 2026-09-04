@@ -162,31 +162,35 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
     }
 
-    // Gradient tool annotator (Illustrator anatomy): a filled circle at
-    // the origin (first click), an open square at the far end (release
-    // point), a circle per colour stop that slides along the line, and a
-    // small diamond in each gap that shifts the blend balance.
+    // Gradient tool annotator (Illustrator anatomy): a round handle at the
+    // origin (t=0), a square handle at the far end (t=1), a colour-filled
+    // circle per stop along the line, and a diamond in each gap. Every
+    // handle is white-filled with a dark outline so it reads on any
+    // background.
     if let Some(annot) = &gradient_annot {
         let vt = view.to_screen();
         let a = vt * annot.start;
         let b = vt * annot.end;
-        let ink = Color::WHITE;
-        let halo = Color::from_rgb8(0x10, 0x10, 0x10).with_alpha(0.6);
-        scene.stroke(&Stroke::new(3.0), ID, halo, None, &vello::kurbo::Line::new(a, b));
-        scene.stroke(&Stroke::new(1.25), ID, ink, None, &vello::kurbo::Line::new(a, b));
+        let white = Color::WHITE;
+        let dark = Color::from_rgb8(0x1a, 0x1a, 0x1a);
+
+        // Axis: dark casing under a white core.
+        scene.stroke(&Stroke::new(3.5), ID, dark, None, &vello::kurbo::Line::new(a, b));
+        scene.stroke(&Stroke::new(1.5), ID, white, None, &vello::kurbo::Line::new(a, b));
 
         let dir = b - a;
-        let len = dir.hypot().max(1e-6);
-        let u = dir / len;
+        let len = dir.hypot();
+        let u = if len > 1e-6 { dir / len } else { Vec2::new(1.0, 0.0) };
         let at = |frac: f64| a + u * (len * frac);
 
         // Radial: a faint ring at the current radius.
-        if annot.kind == amalith_core::GradientKind::Radial {
+        if annot.kind == amalith_core::GradientKind::Radial && len > 1.0 {
             let ring = vello::kurbo::Circle::new(a, len);
-            scene.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.7), None, &ring);
+            scene.stroke(&Stroke::new(1.5), ID, dark, None, &ring);
+            scene.stroke(&Stroke::new(0.75), ID, white, None, &ring);
         }
 
-        // Midpoint diamonds (behind the stops so a coincident stop wins).
+        // Midpoint diamonds.
         for frac in &annot.mids {
             let p = at(*frac as f64);
             let d = 4.5;
@@ -196,47 +200,41 @@ pub(in crate::app) fn paint_main(
             dia.line_to((p.x, p.y + d));
             dia.line_to((p.x - d, p.y));
             dia.close_path();
-            scene.fill(Fill::NonZero, ID, halo, None, &dia);
-            scene.fill(Fill::NonZero, ID, ink, None, &dia);
+            scene.fill(Fill::NonZero, ID, white, None, &dia);
+            scene.stroke(&Stroke::new(1.25), ID, dark, None, &dia);
         }
 
-        // Stop circles — the panel-selected one gets an accent ring.
+        // Stop circles — colour-filled, dark ring, white keyline so the
+        // ring reads even on a same-colour part of the gradient. Selected
+        // stop gets the accent ring.
         for (off, c, selected) in &annot.stops {
             let p = at(*off as f64);
-            let r = if *selected { 6.0 } else { 5.0 };
-            scene.fill(Fill::NonZero, ID, halo, None, &vello::kurbo::Circle::new(p, r + 1.5));
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                Color::new([c.r, c.g, c.b, 1.0]),
-                None,
-                &vello::kurbo::Circle::new(p, r),
-            );
+            let r = if *selected { 6.5 } else { 5.5 };
+            let circ = vello::kurbo::Circle::new(p, r);
+            scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(p, r + 1.0));
+            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &circ);
+            scene.stroke(&Stroke::new(2.0), ID, dark, None, &circ);
             scene.stroke(
-                &Stroke::new(if *selected { 2.0 } else { 1.25 }),
+                &Stroke::new(1.0),
                 ID,
-                if *selected { theme.accent } else { ink },
+                if *selected { theme.accent } else { white },
                 None,
-                &vello::kurbo::Circle::new(p, r),
+                &circ,
             );
         }
 
-        // Origin: filled circle.
-        scene.fill(Fill::NonZero, ID, halo, None, &vello::kurbo::Circle::new(a, 7.0));
-        scene.fill(Fill::NonZero, ID, ink, None, &vello::kurbo::Circle::new(a, 5.5));
-        scene.stroke(
-            &Stroke::new(1.5),
-            ID,
-            Color::from_rgb8(0x20, 0x20, 0x20),
-            None,
-            &vello::kurbo::Circle::new(a, 5.5),
-        );
+        // Origin handle (t=0): a small solid round marker.
+        let oc = vello::kurbo::Circle::new(a, 4.5);
+        scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(a, 5.5));
+        scene.fill(Fill::NonZero, ID, white, None, &oc);
+        scene.stroke(&Stroke::new(1.5), ID, dark, None, &oc);
 
-        // Far end: open square.
+        // End handle (t=1): a square (also the rotate grip in IL).
         let s = 5.5;
         let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
-        scene.stroke(&Stroke::new(3.0), ID, halo, None, &sq);
-        scene.stroke(&Stroke::new(1.5), ID, ink, None, &sq);
+        scene.fill(Fill::NonZero, ID, white, None, &Rect::new(b.x - s - 1.0, b.y - s - 1.0, b.x + s + 1.0, b.y + s + 1.0));
+        scene.fill(Fill::NonZero, ID, white, None, &sq);
+        scene.stroke(&Stroke::new(2.0), ID, dark, None, &sq);
     }
 
     // Clip masks are otherwise invisible — outline them in the accent
