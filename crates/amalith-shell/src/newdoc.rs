@@ -9,6 +9,7 @@ use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use crate::text::TextContext;
+use crate::text_field::TextField;
 use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
@@ -106,12 +107,12 @@ pub enum Hit {
 }
 
 pub struct NewDocForm {
-    pub name: String,
-    /// Width / height edit buffers, in the current [`unit`](Self::unit).
-    pub width: String,
-    pub height: String,
-    /// Bleed buffers: top, bottom, left, right.
-    pub bleed: [String; 4],
+    pub name: TextField,
+    /// Width / height fields, in the current [`unit`](Self::unit).
+    pub width: TextField,
+    pub height: TextField,
+    /// Bleed fields: top, bottom, left, right.
+    pub bleed: [TextField; 4],
     pub unit: Unit,
     pub artboards: usize,
     pub bleed_linked: bool,
@@ -132,10 +133,10 @@ pub struct NewDocForm {
 impl Default for NewDocForm {
     fn default() -> Self {
         Self {
-            name: "Untitled-1".into(),
-            width: "3".into(),
-            height: "3".into(),
-            bleed: std::array::from_fn(|_| "0".into()),
+            name: TextField::new("Untitled-1"),
+            width: TextField::new("3"),
+            height: TextField::new("3"),
+            bleed: std::array::from_fn(|_| TextField::new("0")),
             unit: Unit::In,
             artboards: 1,
             bleed_linked: true,
@@ -172,7 +173,7 @@ const FIELDS: [Field; 7] = [
 ];
 
 impl NewDocForm {
-    fn buf(&mut self, f: Field) -> &mut String {
+    pub fn field(&mut self, f: Field) -> &mut TextField {
         match f {
             Field::Name => &mut self.name,
             Field::Width => &mut self.width,
@@ -184,38 +185,55 @@ impl NewDocForm {
         }
     }
 
-    fn buf_ref(&self, f: Field) -> &str {
+    fn text_of(&self, f: Field) -> String {
         match f {
-            Field::Name => &self.name,
-            Field::Width => &self.width,
-            Field::Height => &self.height,
-            Field::BleedTop => &self.bleed[0],
-            Field::BleedBottom => &self.bleed[1],
-            Field::BleedLeft => &self.bleed[2],
-            Field::BleedRight => &self.bleed[3],
+            Field::Name => self.name.text(),
+            Field::Width => self.width.text(),
+            Field::Height => self.height.text(),
+            Field::BleedTop => self.bleed[0].text(),
+            Field::BleedBottom => self.bleed[1].text(),
+            Field::BleedLeft => self.bleed[2].text(),
+            Field::BleedRight => self.bleed[3].text(),
         }
     }
 
-    /// Type a character into the focused field.
-    pub fn push_char(&mut self, ch: char) {
-        if let Some(f) = self.focus {
-            self.buf(f).push(ch);
-        }
+    /// The focused field, if any.
+    pub fn focused(&self) -> Option<Field> {
+        self.focus
     }
 
-    /// Backspace the focused field.
-    pub fn backspace(&mut self) {
-        if let Some(f) = self.focus {
-            self.buf(f).pop();
-        }
-    }
-
-    /// Move focus to the next field (Tab), reformatting the one we leave.
-    pub fn focus_next(&mut self) {
+    /// Move focus to the next / previous field (Tab), reformatting the one
+    /// we leave and selecting all of the one we land on.
+    pub fn focus_next(&mut self, back: bool, tcx: &mut TextContext) {
         self.commit_focus();
         let cur = self.focus.and_then(|f| FIELDS.iter().position(|x| *x == f));
-        let next = cur.map_or(0, |i| (i + 1) % FIELDS.len());
+        let n = FIELDS.len();
+        let next = cur.map_or(0, |i| if back { (i + n - 1) % n } else { (i + 1) % n });
         self.focus = Some(FIELDS[next]);
+        self.field(FIELDS[next]).select_all(tcx);
+    }
+
+    /// Nudge the focused numeric field by `delta` (the Up / Down arrows),
+    /// re-select it, and propagate to the linked bleed set.
+    pub fn step_focused(&mut self, delta: f64, tcx: &mut TextContext) {
+        let Some(f) = self.focus else { return };
+        if f == Field::Name {
+            return;
+        }
+        let v = (parse(&self.text_of(f)) + delta).max(0.0);
+        let s = fmt(v);
+        self.field(f).set_text(&s);
+        self.field(f).select_all(tcx);
+        if self.bleed_linked
+            && matches!(
+                f,
+                Field::BleedTop | Field::BleedBottom | Field::BleedLeft | Field::BleedRight
+            )
+        {
+            for i in 0..4 {
+                self.bleed[i].set_text(&s);
+            }
+        }
     }
 
     /// Normalise the focused numeric field (and propagate linked bleed).
@@ -224,11 +242,18 @@ impl NewDocForm {
         if f == Field::Name {
             return;
         }
-        let v = parse(self.buf_ref(f));
-        *self.buf(f) = fmt(v);
-        if self.bleed_linked && matches!(f, Field::BleedTop | Field::BleedBottom | Field::BleedLeft | Field::BleedRight) {
+        let v = parse(&self.text_of(f));
+        self.field(f).set_text(&fmt(v));
+        if self.bleed_linked
+            && matches!(
+                f,
+                Field::BleedTop | Field::BleedBottom | Field::BleedLeft | Field::BleedRight
+            )
+        {
             let s = fmt(v);
-            self.bleed = [s.clone(), s.clone(), s.clone(), s];
+            for i in 0..4 {
+                self.bleed[i].set_text(&s);
+            }
         }
     }
 
@@ -237,23 +262,30 @@ impl NewDocForm {
             return;
         }
         let old = self.unit;
-        let conv = |s: &str| fmt(Length::new(parse(s), old).in_unit(unit));
-        self.width = conv(&self.width);
-        self.height = conv(&self.height);
-        self.bleed = std::array::from_fn(|i| conv(&self.bleed[i]));
+        let conv = |tf: &mut TextField| {
+            let v = Length::new(parse(&tf.text()), old).in_unit(unit);
+            tf.set_text(&fmt(v));
+        };
+        conv(&mut self.width);
+        conv(&mut self.height);
+        for b in &mut self.bleed {
+            conv(b);
+        }
         self.unit = unit;
     }
 
     pub fn set_link(&mut self, on: bool) {
         self.bleed_linked = on;
         if on {
-            let s = self.bleed[0].clone();
-            self.bleed = [s.clone(), s.clone(), s.clone(), s];
+            let s = self.bleed[0].text();
+            for i in 0..4 {
+                self.bleed[i].set_text(&s);
+            }
         }
     }
 
     fn portrait(&self) -> bool {
-        parse(&self.height) >= parse(&self.width)
+        parse(&self.height.text()) >= parse(&self.width.text())
     }
 
     pub fn set_orientation(&mut self, portrait: bool) {
@@ -264,14 +296,14 @@ impl NewDocForm {
     }
 
     pub fn width_px(&self) -> f64 {
-        Length::new(parse(&self.width), self.unit).px()
+        Length::new(parse(&self.width.text()), self.unit).px()
     }
     pub fn height_px(&self) -> f64 {
-        Length::new(parse(&self.height), self.unit).px()
+        Length::new(parse(&self.height.text()), self.unit).px()
     }
     /// Bleed in px: top, bottom, left, right.
     pub fn bleed_px(&self) -> [f64; 4] {
-        std::array::from_fn(|i| Length::new(parse(&self.bleed[i]), self.unit).px())
+        std::array::from_fn(|i| Length::new(parse(&self.bleed[i].text()), self.unit).px())
     }
 }
 
@@ -627,7 +659,14 @@ pub fn hit(form: &NewDocForm, lay: &Layout, p: Point) -> Hit {
 
 // ---- painting --------------------------------------------------------
 
-pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect, form: &NewDocForm) {
+pub fn paint(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    win: Rect,
+    form: &mut NewDocForm,
+    caret_on: bool,
+) {
     let lay = layout(win, form.scroll);
     let l = &lay.l;
     let dim = theme.text_dim;
@@ -681,7 +720,10 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     scene.push_clip_layer(Fill::NonZero, ID, &lay.scroll_rect);
 
     text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.name.y0 - 16.0);
-    draw_field(scene, text, theme, l.name, &form.name, form.focus == Some(Field::Name));
+    {
+        let fc = form.focus == Some(Field::Name);
+        field_box(scene, text, theme, l.name, form.field(Field::Name), fc, caret_on);
+    }
     let hy = l.name.y1 + 15.0;
     scene.fill(
         Fill::NonZero,
@@ -692,29 +734,35 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     );
 
     caption(scene, text, "Width", l.width);
-    draw_field(scene, text, theme, l.width, &form.width, form.focus == Some(Field::Width));
+    {
+        let fc = form.focus == Some(Field::Width);
+        field_box(scene, text, theme, l.width, form.field(Field::Width), fc, caret_on);
+    }
     draw_dropdown(scene, text, theme, l.unit, unit_label(form.unit));
 
     caption(scene, text, "Height", l.height);
     caption(scene, text, "Orientation", l.orient_p);
     caption(scene, text, "Artboards", l.ab_minus);
-    draw_field(scene, text, theme, l.height, &form.height, form.focus == Some(Field::Height));
-    draw_orient(scene, theme, l.orient_p, l.orient_l, form.portrait());
+    {
+        let fc = form.focus == Some(Field::Height);
+        field_box(scene, text, theme, l.height, form.field(Field::Height), fc, caret_on);
+    }
+    let portrait = form.portrait();
+    draw_orient(scene, theme, l.orient_p, l.orient_l, portrait);
     draw_stepper(scene, text, theme, l.ab_minus, l.ab_field, l.ab_plus, form.artboards);
 
     text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed_header_y + 12.0);
     let bl = ["Top", "Bottom", "Left", "Right"];
+    let bfields = [
+        Field::BleedTop,
+        Field::BleedBottom,
+        Field::BleedLeft,
+        Field::BleedRight,
+    ];
     for i in 0..4 {
         caption(scene, text, bl[i], l.bleed[i]);
-        let f = [Field::BleedTop, Field::BleedBottom, Field::BleedLeft, Field::BleedRight][i];
-        draw_field(
-            scene,
-            text,
-            theme,
-            l.bleed[i],
-            &form.bleed[i],
-            form.focus == Some(f),
-        );
+        let fc = form.focus == Some(bfields[i]);
+        field_box(scene, text, theme, l.bleed[i], form.field(bfields[i]), fc, caret_on);
     }
 
     draw_check(scene, text, theme, l.link, "Link bleed values", form.bleed_linked);
@@ -788,13 +836,16 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, theme: &Theme, win: Rect
     draw_button(scene, text, theme, lay.create, "Create", true);
 }
 
-fn draw_field(
+/// Draw a field box (chrome) and let its [`TextField`] render the text,
+/// selection and caret inside it.
+fn field_box(
     scene: &mut Scene,
     text: &mut TextContext,
     theme: &Theme,
     r: Rect,
-    value: &str,
+    tf: &mut TextField,
     focused: bool,
+    caret_on: bool,
 ) {
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
     let border = if focused {
@@ -803,18 +854,7 @@ fn draw_field(
         theme.text_dim.with_alpha(0.5)
     };
     scene.stroke(&Stroke::new(1.0), ID, border, None, &r);
-    let baseline = r.y0 + r.height() * 0.5 + 4.5;
-    text.draw(scene, value, 12.5, theme.text, r.x0 + 8.0, baseline);
-    if focused {
-        let cx = r.x0 + 8.0 + text.measure(value, 12.5) + 1.5;
-        scene.stroke(
-            &Stroke::new(1.0),
-            ID,
-            theme.text,
-            None,
-            &vello::kurbo::Line::new((cx, r.y0 + 6.0), (cx, r.y1 - 6.0)),
-        );
-    }
+    tf.paint(scene, text, theme, r, "", focused && caret_on);
 }
 
 fn draw_dropdown(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str) {

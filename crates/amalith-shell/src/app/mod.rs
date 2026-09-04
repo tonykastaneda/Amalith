@@ -300,6 +300,8 @@ enum Drag {
     DrawText { start_doc: Point, cur_doc: Point },
     /// Type tool: dragging to select text inside the open editor.
     TextSelect,
+    /// New Document modal: drag-selecting text in a form field.
+    NewdocSelect { field: newdoc::Field },
     /// Artboard tool: dragging an existing artboard. Alt (held at any
     /// point) drops a copy; Shift locks to 8 directions — both read live.
     MoveArtboard {
@@ -2347,41 +2349,67 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// A key while the New Document modal is open.
+    /// A key while the New Document modal is open. Editing goes through the
+    /// focused field's [`TextField`]; Up / Down step the numeric ones.
     fn newdoc_key(&mut self, event: &winit::event::KeyEvent) {
         if !event.state.is_pressed() {
             return;
         }
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::Escape) => {
-                // Cancel — back to Home (or the document that was open).
-                self.newdoc = None;
-                self.request_main_redraw();
-                return;
-            }
-            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
-                // Enter = the Create button.
-                if let Some(f) = self.newdoc.as_mut() {
-                    f.commit_focus();
+        let Some(f) = self.newdoc.as_ref().and_then(newdoc::NewDocForm::focused) else {
+            // No field focused: Esc closes, Enter creates.
+            match event.physical_key {
+                PhysicalKey::Code(KeyCode::Escape) => {
+                    self.newdoc = None;
+                    self.request_main_redraw();
                 }
-                self.create_from_form();
-                return;
+                PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => self.create_from_form(),
+                _ => {}
             }
-            _ => {}
-        }
-        let Some(form) = self.newdoc.as_mut() else {
             return;
         };
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::Tab) => form.focus_next(),
-            PhysicalKey::Code(KeyCode::Backspace) => form.backspace(),
-            _ => {
-                if let Some(txt) = &event.text {
-                    for ch in txt.chars().filter(|c| !c.is_control()) {
-                        form.push_char(ch);
-                    }
+
+        // Up / Down nudge a numeric field (TextField doesn't handle them).
+        if let PhysicalKey::Code(code @ (KeyCode::ArrowUp | KeyCode::ArrowDown)) = event.physical_key {
+            let dir = if code == KeyCode::ArrowUp { 1.0 } else { -1.0 };
+            let step = if self.shift_down { 10.0 } else { 1.0 } * dir;
+            if let Some(form) = self.newdoc.as_mut() {
+                form.step_focused(step, &mut self.text);
+            }
+            self.request_main_redraw();
+            return;
+        }
+
+        let mods = textedit::Mods {
+            shift: self.shift_down,
+            alt: self.alt_down,
+            meta: self.cmd_down,
+        };
+        let logical = event.logical_key.clone();
+        let typed = event.text.clone();
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        let resp = self.newdoc.as_mut().unwrap().field(f).key(
+            &logical,
+            mods,
+            typed.as_deref(),
+            self.clipboard.as_mut(),
+            &mut self.text,
+        );
+        match resp {
+            crate::text_field::Resp::Cancel => self.newdoc = None,
+            crate::text_field::Resp::Submit => {
+                if let Some(form) = self.newdoc.as_mut() {
+                    form.commit_focus();
+                }
+                self.create_from_form();
+            }
+            crate::text_field::Resp::Tab(back) => {
+                if let Some(form) = self.newdoc.as_mut() {
+                    form.focus_next(back, &mut self.text);
                 }
             }
+            _ => {}
         }
         self.request_main_redraw();
     }
@@ -2399,7 +2427,8 @@ impl App {
             return;
         }
         let name = {
-            let n = form.name.trim();
+            let n = form.name.text();
+            let n = n.trim();
             if n.is_empty() { "Untitled".to_string() } else { n.to_string() }
         };
         let n_ab = form.artboards.max(1);

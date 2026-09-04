@@ -405,6 +405,14 @@ impl App {
                 let _ = self.doc.editor.execute(Command::DeleteObjects { ids });
                 self.request_main_redraw();
             }
+            // Nothing else selected but an artboard is — delete it (the
+            // last artboard is kept; see Action::DeleteArtboard).
+            PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                if pressed && self.doc.selected_artboard.is_some() =>
+            {
+                self.apply_panel_action(crate::panels::Action::DeleteArtboard, false);
+                self.request_main_redraw();
+            }
             // ⌘ shortcuts (copy / paste / duplicate / group / all).
             PhysicalKey::Code(code) if pressed && self.cmd_down => {
                 let chord = KeyChord {

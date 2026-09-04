@@ -456,9 +456,6 @@ impl App {
                 self.doc.selected_layer,
                 self.doc.selected_artboard,
                 active_artboard,
-                // On Home, the modal is drawn in the overlay pass below so it
-                // lands on top of the Home screen.
-                self.newdoc.as_ref().filter(|_| self.home.is_none()),
                 &tab_labels,
                 active_tab,
                 cursor_glyph,
@@ -468,8 +465,6 @@ impl App {
                 self.last_shape_tool,
                 self.shape_flyout,
                 self.stroke_popover,
-                stroke_style_shown,
-                stroke_flyout,
                 self.text_edit.as_ref().map(|t| t.object),
                 panel_text_style,
                 panel_text_align,
@@ -587,6 +582,21 @@ impl App {
             if self.rulers {
                 self.paint_rulers();
             }
+            // The Stroke flyout — drawn after the rulers so a dropped-down
+            // popover isn't hidden by the ruler strip.
+            if self.stroke_popover {
+                let shown_weight = representative
+                    .map(|a| a.stroke_width)
+                    .unwrap_or(self.doc.stroke_w);
+                stroke_panel::paint(
+                    &mut self.content,
+                    &mut self.text,
+                    &self.theme,
+                    &stroke_flyout,
+                    &stroke_style_shown,
+                    shown_weight,
+                );
+            }
             // Live text edit — drawn over the canvas, clipped to the viewport.
             if let Some(obj) = self.text_edit.as_ref().map(|t| t.object) {
                 let vp = self.canvas_viewport();
@@ -623,18 +633,20 @@ impl App {
             self.paint_ruler_menu();
             self.paint_ctx_menu();
             // The Home screen covers the canvas; the New Document modal and
-            // the About panel each sit on top of that.
+            // the About panel each sit on top of that (and of the canvas).
             if let Some(hm) = &mut self.home {
                 hm.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
-                if let Some(form) = &self.newdoc {
-                    newdoc::paint(
-                        &mut self.content,
-                        &mut self.text,
-                        &self.theme,
-                        Rect::new(0.0, 0.0, wl, hl),
-                        form,
-                    );
-                }
+            }
+            if self.newdoc.is_some() {
+                let caret = self.text_blink_on();
+                newdoc::paint(
+                    &mut self.content,
+                    &mut self.text,
+                    &self.theme,
+                    Rect::new(0.0, 0.0, wl, hl),
+                    self.newdoc.as_mut().unwrap(),
+                    caret,
+                );
             }
             if let Some(a) = &mut self.about {
                 a.paint(&mut self.content, &mut self.text, wl, hl);

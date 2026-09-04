@@ -236,6 +236,22 @@ impl App {
                 if let Some(form) = &self.newdoc {
                     let lay = newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll);
                     let hit = newdoc::hit(form, &lay, self.pointer);
+                    if let newdoc::Hit::Field(f) = hit {
+                        // Click / double-click / drag select inside the
+                        // field, via its TextField (uses the box rect it
+                        // cached at paint).
+                        let (p, clicks) = (self.pointer, self.click_streak);
+                        if let Some(form) = self.newdoc.as_mut() {
+                            if form.focused() != Some(f) {
+                                form.commit_focus();
+                            }
+                            form.focus = Some(f);
+                            form.field(f).pointer_down(p, clicks, &mut self.text);
+                        }
+                        self.drag = Drag::NewdocSelect { field: f };
+                        self.request_main_redraw();
+                        return;
+                    }
                     self.apply_newdoc_hit(hit);
                     return;
                 }

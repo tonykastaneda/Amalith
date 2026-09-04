@@ -50,7 +50,6 @@ pub(in crate::app) fn paint_main(
     selected_layer: Option<LayerId>,
     selected_artboard: Option<ArtboardId>,
     active_artboard: Option<ArtboardId>,
-    newdoc_form: Option<&newdoc::NewDocForm>,
     tab_labels: &[String],
     active_tab: usize,
     cursor_glyph: Option<(Tool, PenHint, bool)>,
@@ -60,8 +59,6 @@ pub(in crate::app) fn paint_main(
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
     stroke_popover: bool,
-    stroke_style: StrokeStyle,
-    stroke_flyout: stroke_panel::Layout,
     editing_text: Option<ObjectId>,
     text_style: amalith_core::TextStyle,
     text_align: amalith_core::TextAlign,
@@ -415,12 +412,8 @@ pub(in crate::app) fn paint_main(
         align_to_menu,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
-
-    // The Stroke flyout hangs off the options bar's "Stroke" link.
-    if stroke_popover {
-        let shown_weight = representative.map(|a| a.stroke_width).unwrap_or(cur_weight);
-        stroke_panel::paint(scene, text, theme, &stroke_flyout, &stroke_style, shown_weight);
-    }
+    // The Stroke flyout is painted by the overlay pass (after the rulers)
+    // so a dropped-down popover isn't covered by the ruler strip.
 
     // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, hint, over_selectable)) = cursor_glyph {
@@ -619,8 +612,4 @@ pub(in crate::app) fn paint_main(
         }
     }
 
-    // The New Document modal sits over everything.
-    if let Some(form) = newdoc_form {
-        newdoc::paint(scene, text, theme, Rect::new(0.0, 0.0, width, height), form);
-    }
 }

@@ -285,6 +285,14 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            Drag::NewdocSelect { field } => {
+                let field = *field;
+                let p = self.pointer;
+                if let Some(form) = self.newdoc.as_mut() {
+                    form.field(field).pointer_drag(p, &mut self.text);
+                }
+                self.request_main_redraw();
+            }
             Drag::MoveArtboard { id, start_doc, .. } => {
                 let (id, start_doc) = (*id, *start_doc);
                 self.drag = Drag::MoveArtboard {
@@ -714,7 +722,7 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::TextSelect => {}
+            Drag::TextSelect | Drag::NewdocSelect { .. } => {}
             Drag::DrawText { start_doc, cur_doc } => {
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 4.0 && r.height() > 4.0 {
