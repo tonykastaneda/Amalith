@@ -812,12 +812,14 @@ struct App {
     /// `None` — the default — means every CMYK conversion in the app
     /// stays the disclosed approximation.
     cmyk_profile: Option<colormanage::CmykProfile>,
-    /// A collapsed icon row's transient flyout: showing that one nested
-    /// group's full tab strip + body as an overlay next to its icon,
+    /// A collapsed icon's transient flyout: showing that one nested
+    /// group's full tab strip + body as an overlay next to its icons,
     /// without disturbing the dock tree — `(side, column index into
-    /// `Rail::icons`, row index into that column's own `IconColumn::rows`)`.
-    /// At most one open at a time; clicking its own icon again, or
-    /// anywhere outside it, closes it — see `dismiss_flyout`.
+    /// `Rail::icons`, group index into that column's own
+    /// `IconColumn::groups`)`. Clicking any of that group's several
+    /// per-tab icon rows opens the same flyout. At most one open at a
+    /// time; clicking its own icon again, or anywhere outside it, closes
+    /// it — see `dismiss_flyout`.
     flyout_icon: Option<(RailSide, usize, usize)>,
     /// Transform panel: 9-point origin, W/H lock, live numeric edit.
     xform_ref: amalith_core::RefPoint,
@@ -4973,16 +4975,32 @@ impl App {
         }
     }
 
-    /// Clicking an icon-strip row: opens its flyout, or closes it if that
-    /// same row's flyout is already open (Illustrator's click-to-preview,
-    /// click-again-to-dismiss). `column`/`row` address one nested group
-    /// within a collapsed column, same as `layout::IconRect`.
-    pub(in crate::app) fn toggle_flyout(&mut self, side: RailSide, column: usize, row: usize) {
-        self.flyout_icon = if self.flyout_icon == Some((side, column, row)) {
-            None
+    /// Clicking one of a group's icon rows: opens its flyout, or closes it
+    /// if that exact tab's flyout is already open showing that same tab
+    /// (Illustrator's click-to-preview, click-again-to-dismiss).
+    /// `column`/`group` address one nested group within a collapsed
+    /// column; `tab` is which of that group's own tabs was actually
+    /// clicked (a multi-tab group shows one icon row per tab). Clicking a
+    /// *different* tab of a group whose flyout is already open just
+    /// switches it to that tab and leaves the flyout open, rather than
+    /// dismissing it — only re-clicking the one already showing closes it.
+    pub(in crate::app) fn toggle_flyout(&mut self, side: RailSide, column: usize, group: usize, tab: usize) {
+        let showing_this_tab = self.flyout_icon == Some((side, column, group))
+            && self
+                .dock
+                .rail(side)
+                .icons
+                .get(column)
+                .and_then(|c| c.groups().get(group).map(|&(_, active)| active == tab))
+                .unwrap_or(false);
+        if showing_this_tab {
+            self.flyout_icon = None;
         } else {
-            Some((side, column, row))
-        };
+            if let Some(col) = self.dock.rail_mut(side).icons.get_mut(column) {
+                col.set_active(group, tab);
+            }
+            self.flyout_icon = Some((side, column, group));
+        }
         self.request_main_redraw();
     }
 
@@ -6176,22 +6194,26 @@ fn build_rail_layout_with_flyout(
     text: &mut TextContext,
 ) -> Layout {
     let mut laid = build_rail_layout(rail, side, theme, text, rect);
-    let Some((fs, column, row)) = flyout else {
+    let Some((fs, column, group)) = flyout else {
         return laid;
     };
     if fs != side {
         return laid;
     }
-    let (Some(col), Some(row_rect)) = (
-        laid.icon_col,
-        laid.icon_rects
-            .iter()
-            .find(|r| r.column == column && r.row == row)
-            .map(|r| r.rect),
-    ) else {
+    // Anchor the flyout at the *top* of the group's icon cluster — a
+    // multi-tab group now spans several rows (one per tab), any of which
+    // could have been clicked.
+    let group_top = laid
+        .icon_rects
+        .iter()
+        .filter(|r| r.column == column && r.group == group)
+        .map(|r| r.rect)
+        .reduce(|a, b| if b.y0 < a.y0 { b } else { a });
+    let (Some(col), Some(row_rect)) = (laid.icon_col, group_top) else {
         return laid;
     };
-    let Some((panels, active)) = rail.icons.get(column).and_then(|c| c.rows().into_iter().nth(row)) else {
+    let Some((panels, active)) = rail.icons.get(column).and_then(|c| c.groups().into_iter().nth(group))
+    else {
         return laid;
     };
     let flyout_rect = flyout_rect_for(side, col, row_rect, rect, rail.width as f64);

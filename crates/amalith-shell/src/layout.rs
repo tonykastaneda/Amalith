@@ -26,16 +26,27 @@ pub const ICON_LABEL_THRESHOLD: f64 = 74.0;
 /// Height of one collapsed group's row in the icon strip.
 pub const ICON_ROW_H: f64 = 30.0;
 
-/// One row in a rail's icon strip: one `Tabs` group nested inside
-/// collapsed column `column` (a `Rail::icons` index — what `Rail::expand`
-/// takes to restore the *whole* column), specifically the `row`'th group
-/// within it (top-to-bottom, per `IconColumn::rows`) — a whole column
-/// collapses/expands as one unit, but each of its original groups still
-/// gets its own row here for an individual flyout preview.
-#[derive(Clone, Debug)]
+/// Extra vertical gap inserted above a group's first tab (skipped for the
+/// very first row in the strip) — so a collapsed column's original
+/// groups still read as separate clusters, matching Illustrator, instead
+/// of one flat list of icons.
+pub const ICON_GROUP_GAP: f64 = 10.0;
+
+/// One row in a rail's icon strip: one *tab* — not one group — nested
+/// inside collapsed column `column` (a `Rail::icons` index, what
+/// `Rail::expand` takes to restore the *whole* column). `group` and `tab`
+/// address it the same way `IconPanelRow` does: every tab in a collapsed
+/// group gets its own icon (a 3-tab "Pathfinder / Transform / Align"
+/// group collapses to three icons, not one), but a whole column still
+/// collapses/expands as one unit, and a click on any of a group's rows
+/// opens the same flyout for that group.
+#[derive(Clone, Copy, Debug)]
 pub struct IconRect {
     pub column: usize,
-    pub row: usize,
+    pub group: usize,
+    pub tab: usize,
+    pub panel: PanelId,
+    pub active: bool,
     pub rect: Rect,
 }
 
@@ -67,20 +78,31 @@ pub fn split_icon_col(rail_rect: Rect, side: RailSide, icon_col_w: Option<f64>) 
     }
 }
 
-/// Stacks every row of every collapsed column top-down in `col`, one
-/// [`ICON_ROW_H`]-tall row each — a multi-group column's rows stack
-/// consecutively, with no visual gap between columns (Illustrator shows
-/// one continuous strip; which rows share a column only matters for
-/// which single `Rail::expand` call a given row's own «/» button makes).
+/// Stacks every tab of every collapsed column top-down in `col`, one
+/// [`ICON_ROW_H`]-tall row per tab — every tab in a group gets its own
+/// icon (not just the active one), with [`ICON_GROUP_GAP`] of extra
+/// space above each group's first tab so a column's original groups
+/// still read as separate clusters. Different *columns* stack with no
+/// extra gap beyond that (a column boundary only matters for which
+/// single `Rail::expand` call a given row's «/» makes, not for spacing).
 pub fn layout_icons(icons: &[IconColumn], col: Rect) -> Vec<IconRect> {
     let mut out = Vec::new();
     let mut y = col.y0;
     for (ci, column) in icons.iter().enumerate() {
-        for ri in 0..column.rows().len() {
+        for row in column.icon_rows() {
+            // `!out.is_empty()`, not "not this column's first row" — a
+            // new column's very first group is still a group boundary
+            // relative to whatever the previous column's last row was.
+            if row.group_start && !out.is_empty() {
+                y = (y + ICON_GROUP_GAP).min(col.y1);
+            }
             let y1 = (y + ICON_ROW_H).min(col.y1);
             out.push(IconRect {
                 column: ci,
-                row: ri,
+                group: row.group,
+                tab: row.tab,
+                panel: row.panel,
+                active: row.active,
                 rect: Rect::new(col.x0, y, col.x1, y1),
             });
             y = y1;
@@ -581,15 +603,39 @@ mod tests {
         ];
         let rects = layout_icons(&icons, col);
         assert_eq!(rects.len(), 3);
-        assert_eq!((rects[0].column, rects[0].row), (0, 0));
-        assert_eq!((rects[1].column, rects[1].row), (1, 0));
-        assert_eq!((rects[2].column, rects[2].row), (1, 1));
+        assert_eq!((rects[0].column, rects[0].group, rects[0].tab), (0, 0, 0));
+        assert_eq!((rects[1].column, rects[1].group, rects[1].tab), (1, 0, 0));
+        assert_eq!((rects[2].column, rects[2].group, rects[2].tab), (1, 1, 0));
         assert_eq!(rects[0].rect.y0, 0.0);
         assert_eq!(rects[0].rect.y1, ICON_ROW_H);
-        assert_eq!(rects[1].rect.y0, ICON_ROW_H);
-        assert_eq!(rects[2].rect.y0, ICON_ROW_H * 2.0);
+        // rects[1] starts a new *group* (column 1's second Tabs node), so
+        // it gets the extra ICON_GROUP_GAP above it; rects[2] is the same
+        // column but its own group too (each Tabs node here holds a
+        // single tab), so it also gets the gap.
+        assert_eq!(rects[1].rect.y0, ICON_ROW_H + ICON_GROUP_GAP);
+        assert_eq!(rects[2].rect.y0, (ICON_ROW_H + ICON_GROUP_GAP) * 2.0);
         // Full column width, not just a sliver.
         assert_eq!(rects[0].rect.x0, col.x0);
         assert_eq!(rects[0].rect.x1, col.x1);
+    }
+
+    #[test]
+    fn layout_icons_gives_every_tab_in_a_group_its_own_row() {
+        // A single collapsed group with three tabs — Illustrator shows
+        // all three as separate icons, not just the active one.
+        use crate::dock::IconColumn;
+        let col = Rect::new(200.0, 0.0, 312.0, 600.0);
+        let icons = vec![IconColumn {
+            node: Node::Tabs { panels: vec![L, A, S], active: 1 },
+        }];
+        let rects = layout_icons(&icons, col);
+        assert_eq!(rects.len(), 3);
+        assert!(rects.iter().all(|r| r.group == 0));
+        assert_eq!(rects.iter().map(|r| r.tab).collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(rects.iter().map(|r| r.panel).collect::<Vec<_>>(), vec![L, A, S]);
+        assert_eq!(rects.iter().map(|r| r.active).collect::<Vec<_>>(), vec![false, true, false]);
+        // No group boundary within one group — no extra gap between tabs.
+        assert_eq!(rects[1].rect.y0, ICON_ROW_H);
+        assert_eq!(rects[2].rect.y0, ICON_ROW_H * 2.0);
     }
 }

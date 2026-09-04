@@ -183,10 +183,35 @@ pub struct IconColumn {
     pub node: Node,
 }
 
+/// One icon in a collapsed column's strip: `panel`'s own icon row, tagged
+/// with which of the column's original `Tabs` groups it came from
+/// (`group`, indexing [`IconColumn::groups`] — a single `Rail::expand`
+/// call restores the whole group's group's column together) and its
+/// index within that group's own tab list (`tab`). Illustrator gives
+/// every *tab* in a collapsed group its own icon, not just the group's
+/// active one — a 3-tab "Pathfinder / Transform / Align" group collapses
+/// to three icons, not one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IconPanelRow {
+    pub group: usize,
+    pub tab: usize,
+    pub panel: PanelId,
+    /// Whether `panel` is currently `group`'s active tab — the strip
+    /// highlights this one, matching whichever tab a click elsewhere on
+    /// the group would currently show.
+    pub active: bool,
+    /// True for a group's first tab — tells the renderer to leave extra
+    /// space above this row, so a column's original groups still read as
+    /// separate clusters once collapsed, not one flat list.
+    pub group_start: bool,
+}
+
 impl IconColumn {
-    /// Every `Tabs` group nested in this column, top-to-bottom — one icon
-    /// row each.
-    pub fn rows(&self) -> Vec<(Vec<PanelId>, usize)> {
+    /// Every `Tabs` group nested in this column, top-to-bottom, as
+    /// `(panels, active)` — what a flyout needs to reconstruct one
+    /// group's full tab strip. Use [`Self::icon_rows`] for what the icon
+    /// strip itself draws (one row per *tab*, not per group).
+    pub fn groups(&self) -> Vec<(Vec<PanelId>, usize)> {
         let mut out = Vec::new();
         fn walk(n: &Node, out: &mut Vec<(Vec<PanelId>, usize)>) {
             match n {
@@ -200,6 +225,55 @@ impl IconColumn {
         }
         walk(&self.node, &mut out);
         out
+    }
+
+    /// Every panel in this column, top-to-bottom, one icon row each — see
+    /// [`IconPanelRow`].
+    pub fn icon_rows(&self) -> Vec<IconPanelRow> {
+        let mut out = Vec::new();
+        for (gi, (panels, active)) in self.groups().into_iter().enumerate() {
+            for (ti, panel) in panels.into_iter().enumerate() {
+                out.push(IconPanelRow {
+                    group: gi,
+                    tab: ti,
+                    panel,
+                    active: ti == active,
+                    group_start: ti == 0,
+                });
+            }
+        }
+        out
+    }
+
+    /// Sets group `group`'s active tab to `tab` — walked in the same
+    /// order as [`Self::groups`]/[`Self::icon_rows`]. Called when a click
+    /// lands on a specific tab's icon row, so the flyout that opens (and
+    /// the strip's own highlighted icon) reflects the one actually
+    /// clicked, not whichever was active when the column collapsed.
+    /// `false` if `group` is out of range.
+    pub fn set_active(&mut self, group: usize, tab: usize) -> bool {
+        fn walk(n: &mut Node, remaining: &mut usize, tab: usize) -> bool {
+            match n {
+                Node::Tabs { active, .. } => {
+                    if *remaining == 0 {
+                        *active = tab;
+                        return true;
+                    }
+                    *remaining -= 1;
+                    false
+                }
+                Node::Split { children, .. } => {
+                    for c in children {
+                        if walk(&mut c.node, remaining, tab) {
+                            return true;
+                        }
+                    }
+                    false
+                }
+            }
+        }
+        let mut remaining = group;
+        walk(&mut self.node, &mut remaining, tab)
     }
 }
 
@@ -1351,10 +1425,15 @@ mod tests {
         assert!(r.panels().contains(&A));
         assert!(r.panels().contains(&B));
         assert!(r.panels().contains(&C));
-        // Each originally-stacked group still gets its own icon row.
+        // Each originally-stacked group still gets its own entry.
+        assert_eq!(r.icons[0].groups(), vec![(vec![A], 0), (vec![B, C], 0)]);
+        // ...and, in the icon strip itself, every *tab* in a group gets
+        // its own icon row (three tabs total across the two groups here).
+        let icon_rows = r.icons[0].icon_rows();
+        assert_eq!(icon_rows.len(), 3);
         assert_eq!(
-            r.icons[0].rows(),
-            vec![(vec![A], 0), (vec![B, C], 0)]
+            icon_rows.iter().map(|r| (r.group, r.tab, r.panel)).collect::<Vec<_>>(),
+            vec![(0, 0, A), (1, 0, B), (1, 1, C)]
         );
     }
 

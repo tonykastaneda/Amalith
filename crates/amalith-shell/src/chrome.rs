@@ -5,7 +5,7 @@ use vello::kurbo::{Affine, Line, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
-use crate::dock::{DropTarget, IconColumn, NodePath, PanelId, Side};
+use crate::dock::{DropTarget, NodePath, PanelId, Side};
 use crate::layout::{IconRect, Layout, PanelArea};
 use crate::text::TextContext;
 use crate::theme::Theme;
@@ -249,16 +249,17 @@ fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, point
     }
 }
 
-/// Paints a rail's icon strip: one row per group nested in a collapsed
-/// column, that group's glyph, its active tab's label (dropped once the
-/// strip is dragged narrower than [`crate::layout::ICON_LABEL_THRESHOLD`]
-/// — Illustrator has no separate on/off switch for this, just width), and
-/// a highlight when that row's flyout is open. `label` is the same
-/// tab-caption function [`paint`] takes.
+/// Paints a rail's icon strip: one row per *tab* nested in a collapsed
+/// column (every tab in a group gets its own icon — see
+/// `dock::IconColumn::icon_rows` — not just the group's active one), its
+/// label (dropped once the strip is dragged narrower than
+/// [`crate::layout::ICON_LABEL_THRESHOLD`] — Illustrator has no separate
+/// on/off switch for this, just width), and a highlight both for the
+/// group's actual active tab and for whichever row's flyout is open.
+/// `label` is the same tab-caption function [`paint`] takes.
 pub fn paint_icon_col(
     scene: &mut Scene,
     col: Rect,
-    icons: &[IconColumn],
     icon_rects: &[IconRect],
     open: Option<(usize, usize)>,
     theme: &Theme,
@@ -268,44 +269,34 @@ pub fn paint_icon_col(
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &col);
     let labeled = col.width() >= crate::layout::ICON_LABEL_THRESHOLD;
     for ir in icon_rects {
-        let Some(rows) = icons.get(ir.column).map(IconColumn::rows) else {
-            continue;
-        };
-        let Some((panels, active)) = rows.get(ir.row) else {
-            continue;
-        };
-        let is_open = open == Some((ir.column, ir.row));
-        if is_open {
+        let is_open = open == Some((ir.column, ir.group));
+        if is_open && ir.active {
             scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
         }
-        // Icon + label by the group's *active* tab, not just its first —
-        // a "Character/Paragraph" group with Paragraph active should show
-        // Paragraph's glyph, matching what the flyout opens to.
-        let shown = panels.get(*active).or_else(|| panels.first());
-        if let Some(&shown) = shown {
-            let color = if is_open { theme.text } else { theme.text_dim };
-            let icon_box = Rect::new(
-                ir.rect.x0 + 8.0,
-                ir.rect.y0 + (ir.rect.height() - 18.0) * 0.5,
-                ir.rect.x0 + 26.0,
-                ir.rect.y0 + (ir.rect.height() + 18.0) * 0.5,
-            );
-            let icon_box = if labeled {
-                icon_box
-            } else {
-                // Icon-only: center the glyph in the whole row instead of
-                // hugging the left edge meant for the label to follow.
-                let c = ir.rect.center();
-                Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
-            };
-            crate::panel_icon::draw(scene, shown, icon_box, color);
-            if labeled {
-                let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-                text.draw(scene, &label(shown), TAB_TEXT_PX, color, icon_box.x1 + 6.0, baseline);
-            }
+        // The group's actual active tab reads full-strength even when its
+        // flyout isn't open; the rest of that group's tabs (and anything
+        // in a closed group) stay dim — matching a docked tab strip's own
+        // active/inactive contrast.
+        let color = if ir.active { theme.text } else { theme.text_dim };
+        let icon_box = Rect::new(
+            ir.rect.x0 + 8.0,
+            ir.rect.y0 + (ir.rect.height() - 18.0) * 0.5,
+            ir.rect.x0 + 26.0,
+            ir.rect.y0 + (ir.rect.height() + 18.0) * 0.5,
+        );
+        let icon_box = if labeled {
+            icon_box
+        } else {
+            // Icon-only: center the glyph in the whole row instead of
+            // hugging the left edge meant for the label to follow.
+            let c = ir.rect.center();
+            Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+        };
+        crate::panel_icon::draw(scene, ir.panel, icon_box, color);
+        if labeled {
+            let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+            text.draw(scene, &label(ir.panel), TAB_TEXT_PX, color, icon_box.x1 + 6.0, baseline);
         }
-        let sep = Rect::new(ir.rect.x0, ir.rect.y1 - 0.5, ir.rect.x1, ir.rect.y1 + 0.5);
-        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
     }
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
 }

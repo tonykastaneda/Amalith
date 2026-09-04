@@ -524,7 +524,6 @@ pub(in crate::app) fn paint_main(
                 chrome::paint_icon_col(
                     scene,
                     col,
-                    &rail.icons,
                     &laid.icon_rects,
                     flyout_icon.filter(|(s, ..)| *s == side).map(|(_, c, r)| (c, r)),
                     theme,

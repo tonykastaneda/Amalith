@@ -466,7 +466,7 @@ impl App {
                         }
                     }
                     if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
-                        self.toggle_flyout(side, ir.column, ir.row);
+                        self.toggle_flyout(side, ir.column, ir.group, ir.tab);
                         return;
                     }
                     if let Some(sp) = laid
