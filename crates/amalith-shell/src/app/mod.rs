@@ -308,6 +308,12 @@ enum Drag {
     /// Gradient panel: dragging the midpoint diamond between stop `index`
     /// and `index + 1` along the ramp `bar` (screen px).
     GradientMid { index: usize, bar: Rect },
+    /// Gradient tool (freeform only): dragging colour point `index` of
+    /// `object` to relocate it.
+    GradientPointOnCanvas { object: ObjectId, index: usize },
+    /// Gradient tool (freeform only): dragging point `index`'s spread
+    /// handle to resize its spread.
+    GradientPointSpread { object: ObjectId, index: usize },
     /// Moving the colour-picker dialog by its title bar.
     MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.
@@ -813,11 +819,15 @@ struct App {
     gradient_slot: panels::PaintSlot,
     /// The Gradient panel's currently selected stop index.
     gradient_stop: usize,
+    /// The on-canvas-selected freeform colour point index (Freeform only).
+    gradient_point: usize,
     /// Live numeric edit in the Gradient panel: (which field, buffer,
     /// `fresh` = first keystroke replaces the seed).
     gradient_edit: Option<(panels::gradient::GradField, String, bool)>,
     /// The colour picker is retargeted to a gradient stop: `Some(stop index)`.
     picker_gradient_stop: Option<usize>,
+    /// The colour picker is retargeted to a freeform point: `Some(point index)`.
+    picker_gradient_point: Option<usize>,
     /// Align panel: what to align to, and the key object (thicker outline).
     align_to: amalith_commands::AlignTo,
     key_object: Option<ObjectId>,
@@ -1014,8 +1024,10 @@ impl App {
             gradient_target: None,
             gradient_slot: panels::PaintSlot::Fill,
             gradient_stop: 0,
+            gradient_point: 0,
             gradient_edit: None,
             picker_gradient_stop: None,
+            picker_gradient_point: None,
             align_to: amalith_commands::AlignTo::Selection,
             key_object: None,
             align_spacing: Some(0.0),
@@ -1386,12 +1398,17 @@ impl App {
                 if let Some(pk) = self.picker {
                     self.apply_picker_to_stop(pk.color());
                 }
+            } else if self.picker_gradient_point.is_some() {
+                if let Some(pk) = self.picker {
+                    self.apply_picker_to_point(pk.color());
+                }
             } else {
                 self.apply_picker_color();
             }
         }
         self.picker_artboard = false;
         self.picker_gradient_stop = None;
+        self.picker_gradient_point = None;
         self.picker = None;
         self.dock.remove(PanelId("picker"));
         let dead: Vec<WindowId> = self

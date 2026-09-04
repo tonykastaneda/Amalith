@@ -403,6 +403,20 @@ impl App {
                 }
                 self.request_main_redraw();
             }
+            // Delete with the Gradient tool on a freeform gradient removes
+            // the on-canvas-selected colour point, not the whole shape
+            // (checked before the plain-object-selection arm below, which
+            // would otherwise win since the gradient's object stays
+            // selected while its points are being edited).
+            PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                if pressed
+                    && self.active_tool == Tool::Gradient
+                    && self.target_gradient().is_some_and(|(_, g)| {
+                        g.kind == amalith_core::GradientKind::Freeform && g.points.len() > 1
+                    }) =>
+            {
+                self.gradient_remove_point(self.gradient_point);
+            }
             PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                 if pressed && !self.doc.selection.is_empty() =>
             {

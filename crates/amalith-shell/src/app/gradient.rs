@@ -29,6 +29,10 @@ pub(in crate::app) struct GradientAnnot {
     /// handle (squishes it), in document space.
     pub rotate_handle: Option<Point>,
     pub aspect_handle: Option<Point>,
+    /// Freeform only: every colour point as `(position, colour, spread
+    /// handle position, is the on-canvas-selected point)`, all in document
+    /// space.
+    pub points: Vec<(Point, amalith_core::Color, Point, bool)>,
 }
 
 /// Radial-only: the (rotate handle, aspect handle) positions in **unit
@@ -76,6 +80,12 @@ pub(in crate::app) enum AnnotHit {
     /// Radial only: the aspect handle — drag toward/away from the centre
     /// to squish the ellipse.
     Aspect(ObjectId),
+    /// Freeform only: a colour point — drag to relocate it, double-click
+    /// for the colour picker.
+    Point(ObjectId, usize),
+    /// Freeform only: a point's spread handle — drag toward/away from the
+    /// point to resize its spread.
+    PointSpread(ObjectId, usize),
 }
 
 impl App {
@@ -651,12 +661,20 @@ impl App {
     /// `double` = this was a double-click (opens the stop colour picker).
     pub(in crate::app) fn gradient_tool_press(&mut self, dp: Point, double: bool) {
         if let Some(hit) = self.gradient_annot_hit(dp) {
-            // Grabbing a stop selects it for the panel / picker.
+            // Grabbing a stop or point selects it for the panel / picker.
             if let AnnotHit::Stop(_, i) = hit {
                 self.gradient_stop = i;
                 if double {
                     self.ensure_panel("gradient");
                     self.gradient_stop_picker();
+                    return;
+                }
+            }
+            if let AnnotHit::Point(_, i) = hit {
+                self.gradient_point = i;
+                if double {
+                    self.ensure_panel("gradient");
+                    self.gradient_point_picker(i);
                     return;
                 }
             }
@@ -692,10 +710,39 @@ impl App {
                 AnnotHit::Aspect(obj) => {
                     self.drag = Drag::GradientAspect { object: obj };
                 }
+                AnnotHit::Point(obj, i) => {
+                    self.drag = Drag::GradientPointOnCanvas {
+                        object: obj,
+                        index: i,
+                    };
+                }
+                AnnotHit::PointSpread(obj, i) => {
+                    self.drag = Drag::GradientPointSpread {
+                        object: obj,
+                        index: i,
+                    };
+                }
             }
             self.ensure_panel("gradient");
             self.request_main_redraw();
             return;
+        }
+        // Freeform, already applied to the pressed-on object: a press that
+        // missed every point handle drops a new point there and starts
+        // dragging it — Illustrator's "click empty space with the tool".
+        if self
+            .target_gradient()
+            .is_some_and(|(_, g)| g.kind == GradientKind::Freeform)
+        {
+            if let Some((obj, index)) = self.gradient_add_point(dp) {
+                self.drag = Drag::GradientPointOnCanvas {
+                    object: obj,
+                    index,
+                };
+                self.ensure_panel("gradient");
+                self.request_main_redraw();
+                return;
+            }
         }
         // A press on the axis line itself (between the handles) adds a stop
         // there and starts dragging it — Illustrator's "click the bar".
@@ -784,8 +831,30 @@ impl App {
         let px = 1.0 / self.doc.view.zoom.max(1e-6); // one screen px in doc units
         let stop_r = 8.0 * px;
         let ring_r = 15.0 * px;
-        let mf = self.grad_end_margin(a, b);
         let (_, g) = self.target_gradient()?;
+
+        // Freeform has no axis at all — test each point's handle and its
+        // spread handle instead of the stop/midpoint/endpoint geometry
+        // below (which reads meaningless placeholder `start`/`end`/`stops`
+        // data for this kind).
+        if g.kind == GradientKind::Freeform {
+            for (i, p) in g.points.iter().enumerate() {
+                if let Some(pp) = self.gradient_doc_of(id, p.pos) {
+                    if dp.distance(pp) <= stop_r {
+                        return Some(AnnotHit::Point(id, i));
+                    }
+                }
+                let spread_u = [p.pos[0] + p.spread as f64, p.pos[1]];
+                if let Some(sp) = self.gradient_doc_of(id, spread_u) {
+                    if dp.distance(sp) <= stop_r {
+                        return Some(AnnotHit::PointSpread(id, i));
+                    }
+                }
+            }
+            return None;
+        }
+
+        let mf = self.grad_end_margin(a, b);
         let ab = b - a;
         let n = g.stops.len();
 
@@ -884,6 +953,159 @@ impl App {
             .execute(Command::EditGradient { id: gid, gradient: g });
         self.gradient_target = Some(gid);
         self.request_main_redraw();
+    }
+
+    /// The selected object whose active slot's paint already points at a
+    /// gradient — the object a freeform point edit applies to. (Freeform
+    /// points have no axis, so there's no `gradient_axis_doc` equivalent to
+    /// share; this is that lookup's object-finding half on its own.)
+    fn gradient_target_object(&self) -> Option<ObjectId> {
+        let stroke = self.active_slot == panels::PaintSlot::Stroke;
+        let doc = self.doc.editor.document();
+        self.doc.selection.iter().copied().find(|id| {
+            Self::obj_slot_paint(doc, *id, stroke)
+                .and_then(|p| p.gradient_id())
+                .is_some()
+        })
+    }
+
+    /// Freeform only: add a new colour point at document point `dp`,
+    /// colour-sampled from whichever existing point sits closest (white if
+    /// there are none yet) — Illustrator's "click empty space with the
+    /// tool to drop a new point". Selects it and returns `(object, index)`
+    /// so the caller can arm a drag to reposition it immediately.
+    pub(in crate::app) fn gradient_add_point(&mut self, dp: Point) -> Option<(ObjectId, usize)> {
+        let id = self.gradient_target_object()?;
+        let u = self.gradient_unit_of(id, dp)?;
+        let (gid, mut g) = self.target_gradient()?;
+        if g.kind != GradientKind::Freeform {
+            return None;
+        }
+        let color = g
+            .points
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.pos[0] - u[0]).powi(2) + (a.pos[1] - u[1]).powi(2);
+                let db = (b.pos[0] - u[0]).powi(2) + (b.pos[1] - u[1]).powi(2);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.color)
+            .unwrap_or(amalith_core::Color::rgb(1.0, 1.0, 1.0));
+        g.points.push(amalith_core::FreeformPoint::new(u, color));
+        let index = g.points.len() - 1;
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.gradient_point = index;
+        self.request_main_redraw();
+        Some((id, index))
+    }
+
+    /// Live drag: move freeform point `index` (on object `id`) to `dp`.
+    pub(in crate::app) fn gradient_move_point(&mut self, id: ObjectId, index: usize, dp: Point) {
+        let Some(u) = self.gradient_unit_of(id, dp) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if index >= g.points.len() {
+            return;
+        }
+        g.points[index].pos = u;
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
+    }
+
+    /// Live drag: set freeform point `index`'s spread from how far `dp`
+    /// sits from the point itself, in unit space.
+    pub(in crate::app) fn gradient_set_point_spread(
+        &mut self,
+        id: ObjectId,
+        index: usize,
+        dp: Point,
+    ) {
+        let Some(u) = self.gradient_unit_of(id, dp) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        let Some(p) = g.points.get_mut(index) else {
+            return;
+        };
+        let (dx, dy) = (u[0] - p.pos[0], u[1] - p.pos[1]);
+        p.spread = ((dx * dx + dy * dy).sqrt() as f32).clamp(0.02, 3.0);
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
+    }
+
+    /// Delete freeform point `index` (never below one point — a single
+    /// point is still a valid, if flat, freeform gradient).
+    pub(in crate::app) fn gradient_remove_point(&mut self, index: usize) {
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if g.points.len() <= 1 || index >= g.points.len() {
+            return;
+        }
+        g.points.remove(index);
+        let remaining = g.points.len();
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.gradient_point = self.gradient_point.min(remaining.saturating_sub(1));
+        self.request_main_redraw();
+    }
+
+    /// Open the colour picker retargeted at freeform point `index`.
+    pub(in crate::app) fn gradient_point_picker(&mut self, index: usize) {
+        let Some((_, g)) = self.target_gradient() else {
+            return;
+        };
+        let Some(p) = g.points.get(index) else {
+            return;
+        };
+        let c = p.color;
+        let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let origin = Point::new(
+            ((w - picker::W) * 0.5).max(4.0),
+            ((h - picker::H) * 0.5).max(4.0),
+        );
+        self.picker_gradient_point = Some(index);
+        self.picker = Some(picker::Picker::from_color(self.active_slot, origin, Some(c)));
+        self.request_main_redraw();
+    }
+
+    /// Write a picked colour into the targeted freeform point (called by
+    /// `dismiss_picker` when `picker_gradient_point` is set).
+    pub(in crate::app) fn apply_picker_to_point(&mut self, color: amalith_core::Color) {
+        let Some(index) = self.picker_gradient_point else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        if let Some(p) = g.points.get_mut(index) {
+            p.color = color;
+        }
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
     }
 
     /// Project `dp` onto the target gradient's axis → parameter `t`, for
@@ -1026,6 +1248,16 @@ impl App {
         } else {
             (None, None)
         };
+        let psel = self.gradient_point.min(g.points.len().saturating_sub(1));
+        let points = g
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let spread_u = [p.pos[0] + p.spread as f64, p.pos[1]];
+                (map(p.pos), p.color, map(spread_u), i == psel)
+            })
+            .collect();
         Some(GradientAnnot {
             start: as_,
             end: bs,
@@ -1039,6 +1271,7 @@ impl App {
             mids,
             rotate_handle,
             aspect_handle,
+            points,
         })
     }
 }

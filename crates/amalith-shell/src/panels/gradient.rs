@@ -388,7 +388,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.bar);
             text.draw(
                 scene,
-                "Points blend on canvas — drag the object's",
+                "Edit with the Gradient tool (G): drag a point to",
                 10.5,
                 th.text_dim,
                 l.bar.x0,
@@ -396,7 +396,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             );
             text.draw(
                 scene,
-                "fill to preview; per-point editing is next.",
+                "move, its ring to resize, click empty space to add.",
                 10.5,
                 th.text_dim,
                 l.bar.x0,

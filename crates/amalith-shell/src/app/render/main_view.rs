@@ -168,10 +168,62 @@ pub(in crate::app) fn paint_main(
     // blue double ring), and a small white square at each midpoint.
     if let Some(annot) = &gradient_annot {
         let vt = view.to_screen();
-        let a = vt * annot.start;
-        let b = vt * annot.end;
         let white = Color::WHITE;
         let dark = Color::from_rgb8(0x10, 0x10, 0x10);
+
+        if annot.kind == amalith_core::GradientKind::Freeform {
+            // Freeform: no axis at all — each colour point is its own
+            // draggable dot, ringed by a dashed circle for its spread with
+            // a small handle on the ring to resize it.
+            for (pos, color, spread_handle, selected) in &annot.points {
+                let p = vt * *pos;
+                let hp = vt * *spread_handle;
+                let r = (hp - p).hypot().max(4.0);
+                let ring = vello::kurbo::Circle::new(p, r);
+                scene.stroke(
+                    &Stroke::new(1.5).with_dashes(0.0, [5.0, 4.0]),
+                    ID,
+                    dark,
+                    None,
+                    &ring,
+                );
+                scene.stroke(
+                    &Stroke::new(0.75).with_dashes(0.0, [5.0, 4.0]),
+                    ID,
+                    white,
+                    None,
+                    &ring,
+                );
+                // Spread handle: a small dot on the ring.
+                scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(hp, 4.5));
+                scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(hp, 3.25));
+                // The colour point itself — a disc filled with its colour,
+                // blue double ring when on-canvas-selected.
+                let cr = if *selected { 8.0 } else { 7.0 };
+                let circ = vello::kurbo::Circle::new(p, cr);
+                scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(p, cr + 1.0));
+                scene.fill(
+                    Fill::NonZero,
+                    ID,
+                    Color::new([color.r, color.g, color.b, 1.0]),
+                    None,
+                    &circ,
+                );
+                scene.stroke(&Stroke::new(1.75), ID, dark, None, &circ);
+                if *selected {
+                    scene.stroke(&Stroke::new(1.75), ID, theme.accent, None, &circ);
+                    scene.stroke(
+                        &Stroke::new(1.5),
+                        ID,
+                        theme.accent,
+                        None,
+                        &vello::kurbo::Circle::new(p, cr + 3.0),
+                    );
+                }
+            }
+        } else {
+        let a = vt * annot.start;
+        let b = vt * annot.end;
 
         let dir = b - a;
         let len = dir.hypot();
@@ -302,6 +354,7 @@ pub(in crate::app) fn paint_main(
             scene.fill(Fill::NonZero, ID, white, None, &vello::kurbo::Circle::new(hp, 6.5));
             scene.stroke(&Stroke::new(1.75), ID, dark, None, &vello::kurbo::Circle::new(hp, 5.0));
             scene.fill(Fill::NonZero, ID, dark, None, &vello::kurbo::Circle::new(hp, 1.6));
+        }
         }
     }
 

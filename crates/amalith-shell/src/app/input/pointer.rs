@@ -287,6 +287,18 @@ impl App {
                 self.gradient_move_midpoint(index, pos);
                 self.drag = Drag::GradientMid { index, bar };
             }
+            Drag::GradientPointOnCanvas { object, index } => {
+                let (object, index) = (*object, *index);
+                let dp = self.doc_point(self.pointer);
+                self.gradient_move_point(object, index, dp);
+                self.drag = Drag::GradientPointOnCanvas { object, index };
+            }
+            Drag::GradientPointSpread { object, index } => {
+                let (object, index) = (*object, *index);
+                let dp = self.doc_point(self.pointer);
+                self.gradient_set_point_spread(object, index, dp);
+                self.drag = Drag::GradientPointSpread { object, index };
+            }
             Drag::LayerDrag { body, press, moved } => {
                 let (body, press, was_moved) = (*body, *press, *moved);
                 let far = (self.pointer - press).hypot() > 4.0;
@@ -642,7 +654,9 @@ impl App {
             | Drag::GradientEndpoint { .. }
             | Drag::GradientMidOnCanvas { .. }
             | Drag::GradientRotate { .. }
-            | Drag::GradientAspect { .. } => {}
+            | Drag::GradientAspect { .. }
+            | Drag::GradientPointOnCanvas { .. }
+            | Drag::GradientPointSpread { .. } => {}
             Drag::LayerDrag { body, moved, .. } => {
                 if moved {
                     let ids = crate::panels::layers::order_front_to_back(
