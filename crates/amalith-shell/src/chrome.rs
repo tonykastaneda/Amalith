@@ -305,36 +305,56 @@ pub fn paint_icon_col(
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
 }
 
-/// Paints a collapsed *detached* panel: the whole (tiny) OS window is one
-/// icon row, glyph plus label when there's room, with an expand («»)
-/// chevron at its far end — clicking anywhere on it re-opens the panel
-/// (see `App::expand_floating`), there being nothing else on a
-/// single-panel row worth clicking separately the way a rail's flyout
-/// preview needs to be.
-pub fn paint_floating_icon(
+/// Paints a collapsed *detached* panel: a persistent header (close × and
+/// expand », always visible — a collapsed floating group must never be
+/// left with no way back, unlike a rail's icon row which can lean on its
+/// flyout) above one icon row per tab, every tab shown (not just the
+/// active one, matching a docked column's own icon strip), the active
+/// one highlighted. `header` and `rows` come from
+/// [`crate::layout::floating_collapsed_rows`].
+pub fn paint_floating_collapsed(
     scene: &mut Scene,
-    rect: Rect,
-    panel: PanelId,
+    header: Rect,
+    rows: &[Rect],
+    node: &crate::dock::Node,
     labeled: bool,
     theme: &Theme,
     text: &mut TextContext,
     label: &dyn Fn(PanelId) -> String,
 ) {
-    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &rect);
-    let icon_box = if labeled {
-        Rect::new(rect.x0 + 8.0, rect.y0 + (rect.height() - 18.0) * 0.5, rect.x0 + 26.0, rect.y0 + (rect.height() + 18.0) * 0.5)
-    } else {
-        let c = rect.center();
-        Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+    let bottom = rows.last().map_or(header.y1, |r| r.y1);
+    let bounds = Rect::new(header.x0, header.y0, header.x1, bottom);
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
+
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
+    paint_x(scene, group_close_rect(header, theme), theme.text_dim, 3.5);
+    paint_chevrons(scene, collapse_rect(header, theme), theme.text_dim, false);
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &header);
+
+    let crate::dock::Node::Tabs { panels, active } = node else {
+        return;
     };
-    crate::panel_icon::draw(scene, panel, icon_box, theme.text);
-    if labeled {
-        let baseline = rect.y0 + rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-        text.draw(scene, &label(panel), TAB_TEXT_PX, theme.text, icon_box.x1 + 6.0, baseline);
-        let chevron = Rect::new(rect.x1 - theme.panel_collapse_w, rect.y0, rect.x1, rect.y1);
-        paint_chevrons(scene, chevron, theme.text_dim, false);
+    for (i, (&r, &panel)) in rows.iter().zip(panels.iter()).enumerate() {
+        let is_active = i == *active;
+        if is_active {
+            scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r);
+        }
+        let color = if is_active { theme.text } else { theme.text_dim };
+        let icon_box = if labeled {
+            Rect::new(r.x0 + 8.0, r.y0 + (r.height() - 18.0) * 0.5, r.x0 + 26.0, r.y0 + (r.height() + 18.0) * 0.5)
+        } else {
+            let c = r.center();
+            Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+        };
+        crate::panel_icon::draw(scene, panel, icon_box, color);
+        if labeled {
+            let baseline = r.y0 + r.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+            text.draw(scene, &label(panel), TAB_TEXT_PX, color, icon_box.x1 + 6.0, baseline);
+        }
+        let sep = Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 0.5);
+        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
     }
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rect);
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bounds);
 }
 
 fn edge_line(r: Rect, side: Side) -> Rect {

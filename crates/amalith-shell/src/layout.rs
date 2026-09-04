@@ -111,6 +111,25 @@ pub fn layout_icons(icons: &[IconColumn], col: Rect) -> Vec<IconRect> {
     out
 }
 
+/// Header + one icon row per tab for a *floating* group collapsed to
+/// icons (`dock::Floating::collapse`) — the standalone-window equivalent
+/// of a rail's icon strip, sized to exactly fill `rect` (the OS window's
+/// own current size, which `Floating::collapse` picked to fit this
+/// content in the first place). The header is a persistent close/expand
+/// bar (never just a click-any-row affordance — a collapsed floating
+/// panel must always have a visible way back to full size).
+pub fn floating_collapsed_rows(rect: Rect, tab_count: usize, header_h: f64) -> (Rect, Vec<Rect>) {
+    let header = Rect::new(rect.x0, rect.y0, rect.x1, (rect.y0 + header_h).min(rect.y1));
+    let mut rows = Vec::with_capacity(tab_count.max(1));
+    let mut y = header.y1;
+    for _ in 0..tab_count.max(1) {
+        let y1 = (y + ICON_ROW_H).min(rect.y1);
+        rows.push(Rect::new(rect.x0, y, rect.x1, y1));
+        y = y1;
+    }
+    (header, rows)
+}
+
 /// One rendered tab group: its outer bounds, the title bar, the strip,
 /// the body, and the clickable rect of each tab.
 #[derive(Clone, Debug)]
@@ -646,5 +665,29 @@ mod tests {
         // No group boundary within one group — no extra gap between tabs.
         assert_eq!(rects[1].rect.y0, ICON_ROW_H);
         assert_eq!(rects[2].rect.y0, ICON_ROW_H * 2.0);
+    }
+
+    #[test]
+    fn floating_collapsed_rows_reserves_a_header_then_one_row_per_tab() {
+        let rect = Rect::new(0.0, 0.0, 112.0, 20.0 + ICON_ROW_H * 3.0);
+        let (header, rows) = floating_collapsed_rows(rect, 3, 20.0);
+        assert_eq!(header, Rect::new(0.0, 0.0, 112.0, 20.0));
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], Rect::new(0.0, 20.0, 112.0, 20.0 + ICON_ROW_H));
+        assert_eq!(rows[1].y0, 20.0 + ICON_ROW_H);
+        assert_eq!(rows[2].y1, rect.y1);
+        // Full width, not a sliver.
+        assert_eq!(rows[0].x0, rect.x0);
+        assert_eq!(rows[0].x1, rect.x1);
+    }
+
+    #[test]
+    fn floating_collapsed_rows_always_leaves_at_least_one_row() {
+        // A group can't have zero tabs in practice, but the geometry
+        // shouldn't produce an empty strip if it somehow did — there
+        // must always be a way back to full size.
+        let rect = Rect::new(0.0, 0.0, 112.0, 50.0);
+        let (_, rows) = floating_collapsed_rows(rect, 0, 20.0);
+        assert_eq!(rows.len(), 1);
     }
 }

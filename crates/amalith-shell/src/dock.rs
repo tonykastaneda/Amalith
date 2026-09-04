@@ -123,17 +123,28 @@ pub struct Floating {
 impl Floating {
     /// Shrinks this floating panel to its icon-strip size (Illustrator's
     /// "Collapse to Icons" for a detached panel), remembering the size to
-    /// restore on [`Self::expand`]. Returns the `[w, h]` the caller should
+    /// restore on [`Self::expand`]. Every tab gets its own icon row (not
+    /// just the active one — matching a docked column's icon strip), plus
+    /// a persistent header row above them with its own close/expand
+    /// controls, so a fully collapsed group is never left with no visible
+    /// way back to full size. Returns the `[w, h]` the caller should
     /// resize the actual OS window to, or `None` if already collapsed.
     pub fn collapse(&mut self) -> Option<[f32; 2]> {
         if self.icon_w.is_some() {
             return None;
         }
         self.expanded_size = Some([self.rect[2], self.rect[3]]);
-        // Matches layout::ICON_COL_W / ICON_ROW_H — a bare literal here
-        // rather than an import to avoid a dock <-> layout cycle; both
-        // describe the same "one collapsed row" geometry.
-        let size = [112.0_f32, 30.0];
+        let rows = match &self.node {
+            Node::Tabs { panels, .. } => panels.len().max(1),
+            Node::Split { .. } => 1,
+        } as f32;
+        // Matches layout::ICON_COL_W / ICON_ROW_H and theme::group_title_h
+        // — bare literals here rather than imports, to avoid a dock <->
+        // layout <-> theme cycle; all three describe the same
+        // "header + one row per tab" geometry the icon strip itself uses.
+        const HEADER_H: f32 = 20.0;
+        const ROW_H: f32 = 30.0;
+        let size = [112.0_f32, HEADER_H + ROW_H * rows];
         self.icon_w = Some(size[0]);
         self.rect[2] = size[0];
         self.rect[3] = size[1];
@@ -1205,6 +1216,33 @@ mod tests {
         // stash that would clobber the real pre-collapse size.
         assert_eq!(f.collapse(), None);
         assert_eq!(f.expanded_size, Some([240.0, 400.0]));
+    }
+
+    #[test]
+    fn collapsing_a_multi_tab_floating_group_leaves_room_for_every_tab() {
+        // A group torn off with several tabs together (float_node) must
+        // collapse tall enough for one icon row per tab, not squash them
+        // all into a single-row height the way an early version did.
+        let mut three = Floating {
+            id: 0,
+            node: Node::Tabs { panels: vec![A, B, C], active: 0 },
+            rect: [0.0, 0.0, 240.0, 400.0],
+            icon_w: None,
+            expanded_size: None,
+        };
+        let mut one = Floating {
+            id: 1,
+            node: Node::Tabs { panels: vec![A], active: 0 },
+            rect: [0.0, 0.0, 240.0, 400.0],
+            icon_w: None,
+            expanded_size: None,
+        };
+        let three_h = three.collapse().expect("was open")[1];
+        let one_h = one.collapse().expect("was open")[1];
+        assert!(
+            three_h > one_h,
+            "three tabs must collapse taller than a lone one ({three_h} vs {one_h})"
+        );
     }
 
     #[test]

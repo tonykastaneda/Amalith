@@ -1293,12 +1293,54 @@ impl App {
                 self.request_main_redraw();
             }
             Role::Floating(fid) => {
-                // Collapsed to an icon (states 4/6): the whole tiny window
-                // is one big click target — there's nothing else on it to
-                // click, so any press just expands it back, matching how
-                // discoverable a single icon row needs to be with no
-                // flyout to preview it through first.
-                if self.dock.floating(fid).is_some_and(|f| f.icon_w.is_some()) {
+                // Collapsed to an icon (states 4/6): a persistent header
+                // (close × / expand ») plus one row per tab, same
+                // geometry the renderer uses (`floating_collapsed_rows`).
+                if let Some(node) = self.dock.floating(fid).filter(|f| f.icon_w.is_some()).map(|f| f.node.clone()) {
+                    let tab_count = match &node {
+                        Node::Tabs { panels, .. } => panels.len(),
+                        Node::Split { .. } => 1,
+                    };
+                    let sz = self.floating_window(fid).map(|w| w.inner_size()).unwrap_or_default();
+                    let (wl, hl) = (
+                        (sz.width as f64 / self.scale).max(1.0),
+                        (sz.height as f64 / self.scale).max(1.0),
+                    );
+                    let rect = Rect::new(0.0, 0.0, wl, hl);
+                    let (header, rows) =
+                        layout::floating_collapsed_rows(rect, tab_count, self.theme.group_title_h);
+                    if header.contains(self.pointer) {
+                        if chrome::group_close_rect(header, &self.theme).contains(self.pointer) {
+                            self.close_floating(fid);
+                            return;
+                        }
+                        if chrome::collapse_rect(header, &self.theme).contains(self.pointer) {
+                            self.expand_floating(fid);
+                            return;
+                        }
+                        // Anything else on the header drags the still-
+                        // collapsed window, same as the open state's title
+                        // bar — it stays repositionable while shrunk.
+                        self.drag = Drag::PendingFloatMove {
+                            id: fid,
+                            tab: 0,
+                            press: self.pointer,
+                        };
+                        return;
+                    }
+                    // A specific tab's row: activate it, then expand —
+                    // there's no separate "preview" step worth having for
+                    // an already-standalone window, unlike a rail's icon
+                    // strip flyout.
+                    if let Some(tab) = rows.iter().position(|r| r.contains(self.pointer)) {
+                        if let Some(f) = self.dock.floating_mut(fid) {
+                            if let Node::Tabs { active, panels } = &mut f.node {
+                                if tab < panels.len() {
+                                    *active = tab;
+                                }
+                            }
+                        }
+                    }
                     self.expand_floating(fid);
                     return;
                 }

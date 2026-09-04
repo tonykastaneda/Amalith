@@ -514,24 +514,26 @@ impl App {
             ),
             Role::Floating(fid) => {
                 // Collapsed to an icon (states 4/6): the OS window itself
-                // has been shrunk to one icon row — paint just that,
-                // there's no tree/tabs to lay out at that size.
+                // has been shrunk to fit a persistent header plus one
+                // icon row per tab — paint just that, there's no
+                // tree/tabs body to lay out at that size.
                 let collapsed_icon_w = self.dock.floating(fid).and_then(|f| f.icon_w);
                 if let Some(icon_w) = collapsed_icon_w {
-                    let panel = self.dock.floating(fid).and_then(|f| match &f.node {
-                        Node::Tabs { panels, active } => {
-                            panels.get(*active).or_else(|| panels.first()).copied()
-                        }
-                        _ => None,
-                    });
-                    let rect = Rect::new(0.0, 0.0, wl, hl);
-                    self.content.fill(Fill::NonZero, ID, self.theme.panel_bg, None, &rect);
-                    if let Some(pid) = panel {
+                    let node = self.dock.floating(fid).map(|f| f.node.clone());
+                    if let Some(node) = node {
+                        let tab_count = match &node {
+                            Node::Tabs { panels, .. } => panels.len(),
+                            Node::Split { .. } => 1,
+                        };
+                        let rect = Rect::new(0.0, 0.0, wl, hl);
+                        let (header, rows) =
+                            layout::floating_collapsed_rows(rect, tab_count, self.theme.group_title_h);
                         let labeled = icon_w as f64 >= layout::ICON_LABEL_THRESHOLD;
-                        chrome::paint_floating_icon(
+                        chrome::paint_floating_collapsed(
                             &mut self.content,
-                            rect,
-                            pid,
+                            header,
+                            &rows,
+                            &node,
                             labeled,
                             &self.theme,
                             &mut self.text,
