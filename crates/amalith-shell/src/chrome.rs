@@ -1,7 +1,7 @@
 //! Draws a [`Layout`] into a vello [`Scene`]: panel bodies, tab strips,
 //! tab labels, splitters, and the drop indicator.
 
-use vello::kurbo::{Affine, Line, Rect, Stroke};
+use vello::kurbo::{Affine, Circle, Line, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
@@ -272,7 +272,15 @@ pub fn paint_icon_col(
 ) {
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &col);
     let labeled = col.width() >= crate::layout::ICON_LABEL_THRESHOLD;
-    for ir in icon_rects {
+    for (i, ir) in icon_rects.iter().enumerate() {
+        // A new group's first tab (skip the very first row overall, which
+        // has no group above it to separate from): a full-width divider
+        // plus a small drag-handle, so a column of several collapsed
+        // groups still reads as distinct, individually grabbable groups
+        // rather than one flat list of icons.
+        if i > 0 && ir.tab == 0 {
+            paint_group_handle(scene, col, ir.rect.y0, theme);
+        }
         let is_open = open == Some((ir.column, ir.group));
         if is_open && ir.active {
             scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
@@ -303,6 +311,32 @@ pub fn paint_icon_col(
         }
     }
     scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
+}
+
+/// The visual boundary between two collapsed groups in an icon strip: a
+/// full-width divider line plus a small centered drag-handle (a row of
+/// dots), sitting in the [`crate::layout::ICON_GROUP_GAP`] space above
+/// `group_top_y` (the first row of the group that starts here). Purely
+/// decorative — it doesn't change what's clickable, but without it nothing
+/// visually distinguishes "several separate groups" from "one flat list",
+/// especially once each is reduced to bare icons.
+fn paint_group_handle(scene: &mut Scene, col: Rect, group_top_y: f64, theme: &Theme) {
+    let gap_top = group_top_y - crate::layout::ICON_GROUP_GAP;
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        theme.border,
+        None,
+        &Rect::new(col.x0, gap_top, col.x1, gap_top + 1.0),
+    );
+    let cy = (gap_top + group_top_y) * 0.5 + 0.5;
+    let dots = 5;
+    let spacing = 5.0;
+    let cx0 = col.x0 + col.width() * 0.5 - spacing * (dots - 1) as f64 * 0.5;
+    for i in 0..dots {
+        let c = (cx0 + spacing * i as f64, cy);
+        scene.fill(Fill::NonZero, ID, theme.text_dim, None, &Circle::new(c, 1.3));
+    }
 }
 
 /// Paints a collapsed *detached* panel: a persistent header (close × and
@@ -419,5 +453,27 @@ mod tests {
         let all = [left.clone(), right.clone()];
         assert!(is_column_top(&left, &all));
         assert!(is_column_top(&right, &all));
+    }
+
+    #[test]
+    fn paint_icon_col_draws_a_group_handle_between_groups_without_panicking() {
+        // Two collapsed groups in one column — the handle/divider between
+        // them (drawn at each group's first row, skipping the very first
+        // row overall) shouldn't panic on a real IconRect list, narrow or
+        // wide (icon-only vs. labeled).
+        use crate::dock::{IconColumn, Node};
+        use crate::layout::layout_icons;
+        let icons = vec![
+            IconColumn { node: Node::Tabs { panels: vec![PanelId("swatches")], active: 0 } },
+            IconColumn { node: Node::Tabs { panels: vec![PanelId("gradient")], active: 0 } },
+        ];
+        let mut text = TextContext::new();
+        for w in [40.0, 112.0] {
+            let col = Rect::new(0.0, 0.0, w, 400.0);
+            let rects = layout_icons(&icons, col);
+            assert_eq!(rects.len(), 2, "one row per single-tab group");
+            let mut scene = Scene::new();
+            paint_icon_col(&mut scene, col, &rects, None, &Theme::default(), &mut text, &|p| p.0.to_string());
+        }
     }
 }
