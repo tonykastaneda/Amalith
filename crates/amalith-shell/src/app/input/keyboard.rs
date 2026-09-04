@@ -215,6 +215,11 @@ impl App {
             self.shape_dialog_key(&event);
             return;
         }
+        // The Export for Screens dialog takes every key while open.
+        if self.export.is_some() {
+            self.export_key(&event);
+            return;
+        }
         // The New Document modal, then an inline rename, each
         // swallow all keyboard input while active.
         if self.newdoc.is_some() {
@@ -477,6 +482,8 @@ impl App {
                     KeyCode::KeyO => self.open_document(),
                     KeyCode::KeyS => self.save_document(self.shift_down),
                     KeyCode::KeyI if self.shift_down => self.import_svg(),
+                    // ⌘⌥E — Export for Screens.
+                    KeyCode::KeyE if self.alt_down => self.request_export_dialog(),
                     KeyCode::KeyW => self.close_tab(self.active),
                     // ⌘R — show / hide the canvas rulers.
                     KeyCode::KeyR if !self.shift_down => {

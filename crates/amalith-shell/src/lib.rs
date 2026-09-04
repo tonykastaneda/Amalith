@@ -33,6 +33,7 @@ pub mod chrome;
 pub mod context_bar;
 pub mod convert;
 pub mod dock;
+pub mod export;
 pub mod handles;
 pub mod home;
 pub mod icons;

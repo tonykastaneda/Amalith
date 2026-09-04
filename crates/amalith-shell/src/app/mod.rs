@@ -17,6 +17,7 @@
 
 mod action;
 mod command_palette;
+mod export;
 mod guides;
 mod input;
 mod isolation;
@@ -334,6 +335,7 @@ enum MenuAction {
     SaveAs,
     ImportSvg,
     Place,
+    ExportForScreens,
     Undo,
     Redo,
     Cut,
@@ -666,6 +668,12 @@ struct App {
     /// Set on a plain shape-tool click (release has no `event_loop`); the
     /// dialog window is spawned right after, in `window_event`.
     pending_shape_dialog: Option<(Tool, Point)>,
+    /// The Export for Screens dialog (File ▸ Export, ⌘⌥E). Free-floating
+    /// like the colour picker; never dockable, never in the Window menu.
+    export: Option<crate::export::ExportForScreens>,
+    /// Menu / shortcut have no `event_loop`; the window spawns next
+    /// `about_to_wait`.
+    pending_export: bool,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -896,6 +904,8 @@ impl App {
             shape_dialog: None,
             shape_params: shapedialog::Params::default(),
             pending_shape_dialog: None,
+            export: None,
+            pending_export: false,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -1115,6 +1125,8 @@ impl App {
         self.picker = None;
         self.pending_shape_dialog = None;
         self.close_shape_dialog(false);
+        self.pending_export = false;
+        self.close_export(false);
         self.panel_menu = None;
     }
 
@@ -2467,6 +2479,7 @@ impl App {
             MenuAction::SaveAs => self.save_document(true),
             MenuAction::ImportSvg => self.import_svg(),
             MenuAction::Place => self.place_image_dialog(),
+            MenuAction::ExportForScreens => self.request_export_dialog(),
             MenuAction::Undo => {
                 // macOS routes ⌘Z through this native item, not the
                 // keyboard handler — commit any open text edit first so the
@@ -4499,6 +4512,7 @@ impl App {
             align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
             key_object: self.key_object,
             shape_dialog: None,
+            export: None,
         }
     }
 
@@ -4601,6 +4615,9 @@ impl App {
         }
         if panels::shape_dialog_tool(pid).is_some() {
             self.shape_dialog = None;
+        }
+        if pid == export::EXPORT_PID {
+            self.export = None;
         }
         if self.panel_menu.as_ref().is_some_and(|m| m.panel == pid) {
             self.panel_menu = None;
@@ -5078,6 +5095,9 @@ impl ApplicationHandler for App {
         #[cfg(target_os = "macos")]
         self.drain_mac_drops();
         self.drain_lod();
+        if std::mem::take(&mut self.pending_export) {
+            self.spawn_export_dialog(event_loop);
+        }
         if self.pending_fit {
             self.fit_view();
         }
@@ -5123,7 +5143,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -5362,6 +5382,7 @@ impl ApplicationHandler for App {
                 // windows too (Shift-Tab in a shape dialog, etc.).
                 if Some(id) == self.main_id
                     || self.shape_dialog.is_some()
+                    || self.export.is_some()
                     || self.picker.is_some()
                 {
                     self.cmd_down = m.state().super_key();
@@ -5399,7 +5420,8 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. }
                 if Some(id) == self.main_id
                     || self.picker.is_some()
-                    || self.shape_dialog.is_some() =>
+                    || self.shape_dialog.is_some()
+                    || self.export.is_some() =>
             {
                 self.on_key(event);
             }
@@ -5668,6 +5690,7 @@ fn tab_label(panel: PanelId) -> String {
         "shapedlg.ellipse" => "Ellipse",
         "shapedlg.polygon" => "Polygon",
         "shapedlg.star" => "Star",
+        "export-screens" => "Export for Screens",
         other => other,
     }
     .to_string()

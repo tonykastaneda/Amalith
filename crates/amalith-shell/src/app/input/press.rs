@@ -510,6 +510,7 @@ impl App {
                                             .map(|(s, _)| s.as_str()),
                                         key_object: self.key_object,
                                         shape_dialog: None,
+                                        export: None,
                                     };
                                     panels::hit(pid, pbody, self.pointer, &ctx)
                                 };
@@ -1234,6 +1235,7 @@ impl App {
                                         .map(|(s, _)| s.as_str()),
                                     key_object: self.key_object,
                                     shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
+                                    export: self.export.as_ref().map(|d| (d, false)),
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };

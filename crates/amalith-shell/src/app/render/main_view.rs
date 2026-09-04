@@ -351,6 +351,7 @@ pub(in crate::app) fn paint_main(
                 align_spacing_edit,
                 key_object,
                 shape_dialog: None,
+                export: None,
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

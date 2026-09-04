@@ -567,6 +567,7 @@ impl App {
                                 .shape_dialog
                                 .as_ref()
                                 .map(|d| (d, caret_blink)),
+                            export: self.export.as_ref().map(|d| (d, caret_blink)),
                         };
                         self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                         panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);

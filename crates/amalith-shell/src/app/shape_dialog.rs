@@ -26,6 +26,9 @@ impl App {
         if self.dock.floating_id_of(PanelId("picker")) == Some(fid) {
             return true;
         }
+        if self.export.is_some() && self.dock.floating_id_of(export::EXPORT_PID) == Some(fid) {
+            return true;
+        }
         self.shape_dialog
             .as_ref()
             .is_some_and(|d| self.dock.floating_id_of(Self::shape_panel_id(d.tool)) == Some(fid))

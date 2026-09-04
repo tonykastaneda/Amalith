@@ -125,6 +125,21 @@ impl App {
             }
             panels::Action::ShapeCancel => self.close_shape_dialog(false),
             panels::Action::ShapeOk => self.close_shape_dialog(true),
+            panels::Action::ExportHit(h) => {
+                let outcome = self
+                    .export
+                    .as_mut()
+                    .map(|d| d.apply(h))
+                    .unwrap_or(crate::export::Outcome::None);
+                match outcome {
+                    crate::export::Outcome::PickFolder => self.export_pick_folder(),
+                    crate::export::Outcome::Run => self.close_export(true),
+                    crate::export::Outcome::Cancel => self.close_export(false),
+                    crate::export::Outcome::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
             panels::Action::SetPaint(paint) => {
                 self.set_paint(self.active_slot, paint);
                 if let Some(c) = paint.color() {

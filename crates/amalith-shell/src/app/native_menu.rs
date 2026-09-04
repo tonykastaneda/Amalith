@@ -60,6 +60,7 @@ impl NativeMenu {
         let save_as_i = mk("Save As…", sup_shift, Code::KeyS);
         let import_i = mk("Import SVG…", sup_shift, Code::KeyI);
         let place_i = mk("Place…", sup_shift, Code::KeyP);
+        let export_screens_i = mk("Export for Screens…", sup_alt, Code::KeyE);
         let undo_i = mk("Undo", sup, Code::KeyZ);
         let redo_i = mk("Redo", sup_shift, Code::KeyZ);
         let cut_i = mk("Cut", sup, Code::KeyX);
@@ -160,12 +161,14 @@ impl NativeMenu {
             Submenu::with_items("Scripts", true, &refs).expect("scripts menu")
         };
 
+        let export_menu = Submenu::with_items("Export", true, &[&export_screens_i])
+            .expect("export menu");
         let file = Submenu::with_items(
             "File",
             true,
             &[
-                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i, &sep(),
-                &scripts_menu,
+                &new_i, &open_i, &sep(), &save_i, &save_as_i, &sep(), &import_i, &place_i,
+                &export_menu, &sep(), &scripts_menu,
             ],
         )
         .expect("file menu");
@@ -290,6 +293,7 @@ impl NativeMenu {
             (save_as_i.id().clone(), MenuAction::SaveAs),
             (import_i.id().clone(), MenuAction::ImportSvg),
             (place_i.id().clone(), MenuAction::Place),
+            (export_screens_i.id().clone(), MenuAction::ExportForScreens),
             (undo_i.id().clone(), MenuAction::Undo),
             (redo_i.id().clone(), MenuAction::Redo),
             (cut_i.id().clone(), MenuAction::Cut),

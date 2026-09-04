@@ -143,6 +143,9 @@ pub struct Ctx<'a> {
     /// The exact-size shape dialog and its caret-blink phase, when one of
     /// the `shapedlg.*` float-only panels is being drawn / hit-tested.
     pub shape_dialog: Option<(&'a crate::shapedialog::ShapeDialog, bool)>,
+    /// The Export for Screens dialog + caret-blink phase, when the
+    /// `export-screens` float-only panel is being drawn / hit-tested.
+    pub export: Option<(&'a crate::export::ExportForScreens, bool)>,
 }
 
 /// The primitive tool a `shapedlg.*` panel id stands for.
@@ -213,6 +216,9 @@ pub enum Action {
     ShapeOption(u32),
     ShapeCancel,
     ShapeOk,
+    /// Export for Screens — the whole hit enum passes through; the App
+    /// owns the state machine (`ExportForScreens::apply`).
+    ExportHit(crate::export::Hit),
     SetPaint(Paint),
     SetStrokeWidth(f64),
     /// Layers panel: flip an object's `visible` / `locked` flag.
@@ -358,6 +364,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::shapedialog::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        "export-screens" => {
+            if let Some((dlg, caret)) = ctx.export {
+                crate::export::paint(scene, dlg, body, ctx.theme, text, caret, ctx.doc);
+            }
+        }
         _ => {}
     }
 }
@@ -399,6 +410,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
                 _ => Action::None,
             }
         }
+        "export-screens" => match ctx.export {
+            Some((dlg, _)) => Action::ExportHit(crate::export::hit(dlg, body, local)),
+            None => Action::None,
+        },
         _ => Action::None,
     }
 }
@@ -431,6 +446,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "align" => align::natural_height(),
         "paragraph" => paragraph::natural_height(),
         "picker" => crate::picker::H,
+        "export-screens" => crate::export::H,
         s if shape_dialog_tool(PanelId(s)).is_some() => {
             crate::shapedialog::body_height(shape_dialog_tool(PanelId(s)).unwrap())
         }
