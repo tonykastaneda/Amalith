@@ -167,6 +167,17 @@ fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
                      cx=\"{sx}\" cy=\"{sy}\" r=\"{r}\" fx=\"{sx}\" fy=\"{sy}\">{stops}</radialGradient>"
                 ));
             }
+            // TODO(freeform-export): a real per-point radial composite,
+            // matching the canvas renderer. Until that lands, fall back to
+            // the (otherwise-unused-by-Freeform) start/end/stops fields as
+            // a placeholder linear gradient so an exported file stays
+            // valid SVG rather than missing the fill entirely.
+            GradientKind::Freeform => {
+                defs.xml.push_str(&format!(
+                    "<linearGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
+                     x1=\"{sx}\" y1=\"{sy}\" x2=\"{ex}\" y2=\"{ey}\">{stops}</linearGradient>"
+                ));
+            }
         }
     }
     format!("url(#{svg_id})")

@@ -402,6 +402,7 @@ impl Editor {
                         let gradient = match kind {
                             GradientKind::Linear => Gradient::linear(id),
                             GradientKind::Radial => Gradient::radial(id),
+                            GradientKind::Freeform => Gradient::freeform(id),
                         };
                         // Must be first so `execute` reports the new id.
                         edits.push(Edit::InsertGradient {

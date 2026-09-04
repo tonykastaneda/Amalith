@@ -78,6 +78,14 @@ pub fn peniko_gradient(g: &amalith_core::Gradient) -> vello::peniko::Gradient {
         amalith_core::GradientKind::Radial => {
             Gradient::new_radial((g.start[0], g.start[1]), g.radius() as f32)
         }
+        // TODO(freeform-render): a real composite of one soft radial per
+        // point (see the module docs on why a single peniko::Gradient
+        // can't represent a scattered-point blend at all). This one-brush
+        // placeholder keeps a freeform-filled object visibly painted
+        // (not blank) until that lands.
+        amalith_core::GradientKind::Freeform => {
+            Gradient::new_radial((0.5, 0.5), 0.75)
+        }
     };
     base.with_extend(Extend::Pad).with_stops(stops.as_slice())
 }

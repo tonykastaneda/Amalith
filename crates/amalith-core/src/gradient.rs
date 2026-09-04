@@ -16,20 +16,23 @@
 //! maps sensibly onto objects of any size, and a non-square bounding box
 //! squishes a radial gradient into an ellipse (same as SVG / Illustrator).
 //! The renderer converts unit space to the object's local coordinates when
-//! it builds the GPU gradient.
+//! it builds the GPU gradient. [`FreeformPoint::pos`] uses the same
+//! convention, so a freeform gradient's points scale with the object too.
 
 use crate::ids::GradientId;
 use crate::swatch::Color;
 use serde::{Deserialize, Serialize};
 
-/// Linear (blend along a line) or radial (blend out from a point in
-/// concentric rings). Freeform gradients are a different data model
-/// (a mesh of free-placed color points) and are not represented here yet.
+/// Linear (blend along a line), radial (blend out from a point in
+/// concentric rings), or freeform (Illustrator's "Points" mode: an
+/// arbitrary scatter of colored points blending into each other, no axis
+/// at all — see [`FreeformPoint`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GradientKind {
     #[default]
     Linear,
     Radial,
+    Freeform,
 }
 
 fn default_opacity() -> f32 {
@@ -80,6 +83,52 @@ impl GradientStop {
     }
 }
 
+fn default_spread() -> f32 {
+    0.35
+}
+
+/// One color point in a **freeform** gradient (Illustrator's "Points"
+/// mode). Unlike a [`GradientStop`], a point has no slider position or
+/// neighbors it's implicitly ordered against — it's placed anywhere in
+/// the shape and blends with whichever other points are nearby.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FreeformPoint {
+    /// Position in bounding-box unit space (`0..1`), same convention as
+    /// every other gradient coordinate in this module.
+    pub pos: [f64; 2],
+    pub color: Color,
+    /// Illustrator's per-point "Opacity", `0.0..=1.0`.
+    #[serde(default = "default_opacity")]
+    pub opacity: f32,
+    /// How far this point's color reaches at (near-)full strength before
+    /// blending into its neighbors, as a fraction of the object's
+    /// bounding-box diagonal. Illustrator's per-point "Spread" (the
+    /// soft-edged circle shown around a selected point).
+    #[serde(default = "default_spread")]
+    pub spread: f32,
+}
+
+impl FreeformPoint {
+    pub fn new(pos: [f64; 2], color: Color) -> Self {
+        Self {
+            pos,
+            color,
+            opacity: 1.0,
+            spread: default_spread(),
+        }
+    }
+
+    /// The point's color with its opacity folded into the alpha.
+    pub fn effective_color(&self) -> Color {
+        Color::rgba(
+            self.color.r,
+            self.color.g,
+            self.color.b,
+            self.color.a * self.opacity.clamp(0.0, 1.0),
+        )
+    }
+}
+
 fn default_start() -> [f64; 2] {
     [0.0, 0.5]
 }
@@ -112,6 +161,10 @@ pub struct Gradient {
     /// height / width). `1.0` = circle. Ignored for linear gradients.
     #[serde(default = "default_aspect")]
     pub aspect: f64,
+    /// Freeform only: the scattered color points (`stops`/`start`/`end`/
+    /// `aspect` are unused and left at their defaults for this kind).
+    #[serde(default)]
+    pub points: Vec<FreeformPoint>,
 }
 
 impl Gradient {
@@ -120,6 +173,17 @@ impl Gradient {
         vec![
             GradientStop::new(0.0, Color::rgb(1.0, 1.0, 1.0)),
             GradientStop::new(1.0, Color::rgb(0.0, 0.0, 0.0)),
+        ]
+    }
+
+    /// The three-point white / gray / black scatter Illustrator gives a
+    /// fresh freeform gradient, spread wide enough to cover most shapes
+    /// with no gaps at the default spread.
+    pub fn default_points() -> Vec<FreeformPoint> {
+        vec![
+            FreeformPoint::new([0.2, 0.2], Color::rgb(1.0, 1.0, 1.0)),
+            FreeformPoint::new([0.8, 0.35], Color::rgb(0.5, 0.5, 0.5)),
+            FreeformPoint::new([0.4, 0.8], Color::rgb(0.0, 0.0, 0.0)),
         ]
     }
 
@@ -132,6 +196,7 @@ impl Gradient {
             start: default_start(),
             end: default_end(),
             aspect: 1.0,
+            points: Vec::new(),
         }
     }
 
@@ -144,6 +209,21 @@ impl Gradient {
             start: [0.5, 0.5],
             end: [1.0, 0.5],
             aspect: 1.0,
+            points: Vec::new(),
+        }
+    }
+
+    /// A fresh freeform gradient (Illustrator's "Points" mode) with a
+    /// white / gray / black scatter.
+    pub fn freeform(id: GradientId) -> Self {
+        Self {
+            id,
+            kind: GradientKind::Freeform,
+            stops: Self::default_stops(),
+            start: default_start(),
+            end: default_end(),
+            aspect: 1.0,
+            points: Self::default_points(),
         }
     }
 
@@ -190,13 +270,18 @@ impl Gradient {
     }
 
     /// Ensures stops are sorted by offset and clamped to `0..=1`, and that
-    /// there are at least two. Call after any edit that can reorder or
-    /// remove stops.
+    /// there are at least two; also clamps every freeform point's opacity
+    /// and spread. Call after any edit that can reorder or remove stops
+    /// or points.
     pub fn normalize(&mut self) {
         for stop in &mut self.stops {
             stop.offset = stop.offset.clamp(0.0, 1.0);
             stop.opacity = stop.opacity.clamp(0.0, 1.0);
             stop.midpoint = stop.midpoint.clamp(0.05, 0.95);
+        }
+        for point in &mut self.points {
+            point.opacity = point.opacity.clamp(0.0, 1.0);
+            point.spread = point.spread.clamp(0.02, 3.0);
         }
         self.stops
             .sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
@@ -328,6 +413,38 @@ mod tests {
     }
 
     #[test]
+    fn freeform_default_has_three_points_and_no_axis_dependency() {
+        let g = Gradient::freeform(GradientId::new());
+        assert_eq!(g.kind, GradientKind::Freeform);
+        assert_eq!(g.points.len(), 3);
+        for p in &g.points {
+            assert_eq!(p.opacity, 1.0);
+            assert!(p.spread > 0.0);
+        }
+    }
+
+    #[test]
+    fn freeform_point_folds_opacity_into_alpha() {
+        let mut p = FreeformPoint::new([0.3, 0.6], Color::rgb(1.0, 0.0, 0.0));
+        p.opacity = 0.5;
+        let c = p.effective_color();
+        assert_eq!((c.r, c.g, c.b), (1.0, 0.0, 0.0));
+        assert!((c.a - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_clamps_freeform_points() {
+        let mut g = Gradient::freeform(GradientId::new());
+        g.points[0].opacity = 5.0;
+        g.points[0].spread = -1.0;
+        g.points[1].spread = 100.0;
+        g.normalize();
+        assert_eq!(g.points[0].opacity, 1.0);
+        assert!(g.points[0].spread >= 0.02);
+        assert!(g.points[1].spread <= 3.0);
+    }
+
+    #[test]
     fn set_angle_preserves_length() {
         let mut g = Gradient::linear(GradientId::new());
         let len0 = g.radius();
@@ -345,6 +462,7 @@ mod tests {
             start: default_start(),
             end: default_end(),
             aspect: 1.0,
+            points: Vec::new(),
         };
         g.normalize();
         assert_eq!(g.stops.len(), 2);
