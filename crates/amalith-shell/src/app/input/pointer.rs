@@ -573,6 +573,12 @@ impl App {
                     self.pending_icon_tearoff = Some((side, column, group, press));
                 }
             }
+            Drag::PendingGroupTearoff { side, path, press } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let (side, path, press) = (*side, path.clone(), *press);
+                    self.pending_group_tearoff = Some((side, path, press));
+                }
+            }
             Drag::PendingFloatMove { id, press, .. } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let id = *id;
@@ -643,6 +649,7 @@ impl App {
             | Drag::Splitter { .. }
             | Drag::RailWidth { .. }
             | Drag::IconColWidth { .. }
+            | Drag::PendingGroupTearoff { .. }
             | Drag::Pan { .. } => {}
             // A scrubby-zoom that never moved = a click: step-zoom at the
             // point (Alt / left-drag direction = out).

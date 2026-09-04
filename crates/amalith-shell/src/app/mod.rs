@@ -145,6 +145,18 @@ enum Drag {
         tab: usize,
         press: Point,
     },
+    /// Pressed an attached group's title bar (not its tab strip); a drag
+    /// tears the *whole group* — every tab it holds — off the dock into a
+    /// new floating window, mirroring `PendingIconTearoff` but sourced
+    /// from an already-docked/open group instead of a collapsed one. A
+    /// title-bar press that never moves is simply a no-op (there's no
+    /// tab under it to activate — unlike the tab strip, which still
+    /// handles clicks the same as always).
+    PendingGroupTearoff {
+        side: RailSide,
+        path: NodePath,
+        press: Point,
+    },
     /// Pressed an icon-strip row; a click opens/switches that group's
     /// flyout (see `App::toggle_flyout`), a drag tears the *whole group*
     /// (every tab it holds, not just the one row clicked) off the icon
@@ -916,6 +928,9 @@ struct App {
     /// Same as `pending_tearoff`, for dragging a whole group off an
     /// icon-strip row (see `Drag::PendingIconTearoff`).
     pending_icon_tearoff: Option<(RailSide, usize, usize, Point)>,
+    /// Same, for dragging a whole *attached* group off its title bar (see
+    /// `Drag::PendingGroupTearoff`).
+    pending_group_tearoff: Option<(RailSide, NodePath, Point)>,
     /// The "About Amalith" panel: a modal card centred over the main window,
     /// with live text selection. `Some` while it's showing.
     about: Option<about::About>,
@@ -1095,6 +1110,7 @@ impl App {
             redock_preview: None,
             pending_tearoff: None,
             pending_icon_tearoff: None,
+            pending_group_tearoff: None,
             about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
@@ -4909,19 +4925,106 @@ impl App {
         if self.panel_menu.as_ref().is_some_and(|m| m.panel == pid) {
             self.panel_menu = None;
         }
+        // Removing the one panel is right for both cases now that a
+        // floating window can hold several tabs at once (a group torn
+        // off its icon strip together, or a group's title bar dragged
+        // off the dock) — `DockModel::remove` already drops an emptied
+        // floating group on its own; only tear down the OS window if
+        // that was actually its last tab.
+        self.dock.remove(pid);
         if let Some(fid) = floating {
-            let wid = self
-                .hosts
-                .iter()
-                .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == fid))
-                .map(|(k, _)| *k);
-            if let Some(wid) = wid {
-                self.hosts.remove(&wid);
-                self.focused.remove(&wid);
+            if self.dock.floating(fid).is_none() {
+                let wid = self
+                    .hosts
+                    .iter()
+                    .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == fid))
+                    .map(|(k, _)| *k);
+                if let Some(wid) = wid {
+                    self.hosts.remove(&wid);
+                    self.focused.remove(&wid);
+                }
             }
-            self.dock.remove_floating(fid);
-        } else {
-            self.dock.remove(pid);
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.request_main_redraw();
+    }
+
+    /// The title bar's × on a docked group: closes every tab it holds at
+    /// once, not just one. `path` addresses the `Tabs` node the same way
+    /// the rest of the dock does; a no-op if it doesn't resolve to one.
+    pub(in crate::app) fn close_group(&mut self, side: RailSide, path: &NodePath) {
+        let Some(Node::Tabs { panels, .. }) = self.dock.rail(side).node_at(path) else {
+            return;
+        };
+        for p in panels.clone() {
+            self.close_panel_tab(p, None);
+        }
+    }
+
+    /// Same, for a group still collapsed to an icon strip — closes every
+    /// tab in that one group without expanding the column first.
+    pub(in crate::app) fn close_icon_group(&mut self, side: RailSide, column: usize, group: usize) {
+        let Some((panels, _)) = self
+            .dock
+            .rail(side)
+            .icons
+            .get(column)
+            .and_then(|c| c.groups().into_iter().nth(group))
+        else {
+            return;
+        };
+        for p in panels {
+            self.dock.remove(p);
+        }
+        self.flyout_icon = None;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.request_main_redraw();
+    }
+
+    /// The title bar's × on a *floating* group: closes the whole window
+    /// outright, all tabs at once, regardless of how many it holds —
+    /// unlike a single tab's own ×, which only removes that one panel
+    /// (see the `floating` branch of `close_panel_tab`).
+    pub(in crate::app) fn close_floating(&mut self, fid: u64) {
+        let Some(f) = self.dock.floating(fid) else {
+            return;
+        };
+        // A floating group is always a plain `Tabs` node in this app (no
+        // floating-group stacking yet — see `dock::Floating`'s docs).
+        let panels = match &f.node {
+            Node::Tabs { panels, .. } => panels.clone(),
+            Node::Split { .. } => Vec::new(),
+        };
+        let wid = self
+            .hosts
+            .iter()
+            .find(|(_, h)| matches!(h.role, Role::Floating(x) if x == fid))
+            .map(|(k, _)| *k);
+        if let Some(wid) = wid {
+            self.hosts.remove(&wid);
+            self.focused.remove(&wid);
+        }
+        self.dock.remove_floating(fid);
+        self.flyout_icon = None;
+        for p in panels {
+            if p.0 == "picker" {
+                self.picker = None;
+            }
+            if panels::shape_dialog_tool(p).is_some() {
+                self.shape_dialog = None;
+            }
+            if p == export::EXPORT_PID {
+                self.export = None;
+            }
+            if self.panel_menu.as_ref().is_some_and(|m| m.panel == p) {
+                self.panel_menu = None;
+            }
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
@@ -5392,6 +5495,69 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Tear a *whole group* off its title bar — every tab it holds, not
+    /// just one — into a new floating window. Same idea as
+    /// [`Self::tear_off_icon_group`], sourced from an already-docked/open
+    /// group instead of a collapsed one, so (unlike that one) there's a
+    /// real on-screen size to carry over.
+    fn tear_off_group(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        side: RailSide,
+        path: &NodePath,
+        main_local_press: Point,
+    ) {
+        // Measure the group's on-screen size *before* detaching it — once
+        // gone from the rail there's nothing left in the docked layout to
+        // measure.
+        let peek_panel = match self.dock.rail(side).node_at(path) {
+            Some(Node::Tabs { panels, active }) => panels.get(*active).or_else(|| panels.first()).copied(),
+            _ => None,
+        };
+        let (fw, fh) = peek_panel
+            .and_then(|p| self.panel_dock_size(p))
+            .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
+            .unwrap_or((FLOAT_W, FLOAT_H));
+        let Some(node) = self.dock.rail_mut(side).detach_group(path) else {
+            return;
+        };
+        let Node::Tabs { panels, active } = &node else {
+            return;
+        };
+        let title = panels.get(*active).or_else(|| panels.first()).map(|&p| tab_label(p)).unwrap_or_default();
+        self.flyout_icon = None;
+        let global = self.main_inner_origin() + main_local_press.to_vec2();
+        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let pos = global - grab;
+        let id = self
+            .dock
+            .float_node(node, [pos.x as f32, pos.y as f32, fw as f32, fh as f32]);
+
+        let attrs = Window::default_attributes()
+            .with_title(title)
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
+            .with_inner_size(LogicalSize::new(fw, fh))
+            .with_position(LogicalPosition::new(pos.x, pos.y));
+        let window = Arc::new(
+            event_loop
+                .create_window(attrs)
+                .expect("create float window"),
+        );
+        let wid = window.id();
+        let host = self.make_host(window.clone(), Role::Floating(id));
+        self.hosts.insert(wid, host);
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_window(&self.dock);
+        }
+        self.drag = Drag::MovingFloating { id, grab, pos };
+        window.request_redraw();
+        self.request_main_redraw();
+    }
+
     /// Open the colour picker as its own non-resizable floating window,
     /// centred over the main window. Dragging the tab strip moves it
     /// anywhere on the desktop — same path as a torn-off panel.
@@ -5792,6 +5958,9 @@ impl ApplicationHandler for App {
                 }
                 if let Some((side, column, group, press)) = self.pending_icon_tearoff.take() {
                     self.tear_off_icon_group(event_loop, side, column, group, press);
+                }
+                if let Some((side, path, press)) = self.pending_group_tearoff.take() {
+                    self.tear_off_group(event_loop, side, &path, press);
                 }
             }
             WindowEvent::CursorLeft { .. } => {

@@ -491,19 +491,47 @@ impl App {
                         return;
                     }
                     for area in &laid.areas {
-                        if area.tab_strip.contains(self.pointer) {
-                            let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
-                            let collapse_shown = area.is_flyout || chrome::is_column_top(area, &laid.areas);
-                            if collapse_shown && collapse.contains(self.pointer) {
+                        if area.title_bar.contains(self.pointer) {
+                            let close = chrome::group_close_rect(area.title_bar, &self.theme);
+                            if close.contains(self.pointer) {
                                 if area.is_flyout {
-                                    if let Some((_, column, _)) = self.flyout_icon {
-                                        self.expand_column(side, column);
+                                    if let Some((_, column, group)) = self.flyout_icon {
+                                        self.close_icon_group(side, column, group);
                                     }
                                 } else {
-                                    self.collapse_column(side, &area.path);
+                                    self.close_group(side, &area.path);
                                 }
                                 return;
                             }
+                            let collapse_shown = area.is_flyout || chrome::is_column_top(area, &laid.areas);
+                            if collapse_shown {
+                                let collapse = chrome::collapse_rect(area.title_bar, &self.theme);
+                                if collapse.contains(self.pointer) {
+                                    if area.is_flyout {
+                                        if let Some((_, column, _)) = self.flyout_icon {
+                                            self.expand_column(side, column);
+                                        }
+                                    } else {
+                                        self.collapse_column(side, &area.path);
+                                    }
+                                    return;
+                                }
+                            }
+                            // Anything else on the title bar: press-drag
+                            // tears the *whole group* off into a floating
+                            // window (a flyout has no real tree position
+                            // to detach from, so it's skipped here — drag
+                            // its icon row instead, same as any other).
+                            if !area.is_flyout {
+                                self.drag = Drag::PendingGroupTearoff {
+                                    side,
+                                    path: area.path.clone(),
+                                    press: self.pointer,
+                                };
+                            }
+                            return;
+                        }
+                        if area.tab_strip.contains(self.pointer) {
                             let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
                             if area.show_menu && burger.contains(self.pointer) {
                                 if let Some(pid) =
@@ -1276,12 +1304,33 @@ impl App {
                 }
                 let laid = self.floating_layout(fid);
                 for area in &laid.areas {
-                    if area.tab_strip.contains(self.pointer) {
-                        let collapse = chrome::collapse_rect(area.tab_strip, area.show_menu, &self.theme);
+                    if area.title_bar.contains(self.pointer) {
+                        let close = chrome::group_close_rect(area.title_bar, &self.theme);
+                        if close.contains(self.pointer) {
+                            self.close_floating(fid);
+                            return;
+                        }
+                        // A floating window is its own column of exactly
+                        // one — it always owns the collapse control,
+                        // unlike an attached group which only gets it at
+                        // the top of a stack.
+                        let collapse = chrome::collapse_rect(area.title_bar, &self.theme);
                         if collapse.contains(self.pointer) {
                             self.collapse_floating(fid);
                             return;
                         }
+                        // Anything else on the title bar drags the whole
+                        // window — the tab strip below it still does the
+                        // same for now too (unchanged), so existing
+                        // muscle memory keeps working.
+                        self.drag = Drag::PendingFloatMove {
+                            id: fid,
+                            tab: area.active,
+                            press: self.pointer,
+                        };
+                        return;
+                    }
+                    if area.tab_strip.contains(self.pointer) {
                         let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
                         if area.show_menu && burger.contains(self.pointer) {
                             if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

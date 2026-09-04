@@ -45,14 +45,23 @@ pub struct Theme {
 
     /// Height of a tab strip.
     pub tab_strip_h: f64,
+    /// Height of a group's title bar — a separate row above its tab
+    /// strip, matching Illustrator: the close (×) and collapse-to-icons
+    /// («/») controls, and the whole-group drag/detach handle, live here,
+    /// fully decoupled from the tab strip (which only ever handles
+    /// individual tabs).
+    pub group_title_h: f64,
     /// Thickness of the gap between split children.
     pub splitter_thickness: f64,
     /// Horizontal padding inside a tab, per side.
     pub tab_pad_x: f64,
     /// Width reserved on the right of a tab strip for the panel hamburger.
     pub panel_menu_w: f64,
-    /// Width reserved on the right of a tab strip for the collapse-to-
-    /// icons button, just left of the hamburger when that group has one.
+    /// Width of the close (×) button on a group's title bar (left end).
+    pub group_close_w: f64,
+    /// Width of the collapse-to-icons («/») button on a group's title bar
+    /// (right end) — shown only on the group that owns the control (a
+    /// column's leader when attached; always, when floating).
     pub panel_collapse_w: f64,
 }
 
@@ -99,9 +108,11 @@ impl Default for Theme {
             text_dim: Color::from_rgb8(0x8a, 0x8a, 0x8a),
 
             tab_strip_h: 27.3,
+            group_title_h: 20.0,
             splitter_thickness: 6.0,
             tab_pad_x: 12.6,
             panel_menu_w: 26.0,
+            group_close_w: 22.0,
             panel_collapse_w: 22.0,
         }
     }

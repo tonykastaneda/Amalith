@@ -671,6 +671,25 @@ impl Rail {
         }
         Some(Node::Tabs { panels, active })
     }
+
+    /// Pulls a whole *docked* group out at once — Illustrator's own
+    /// title-bar drag: grabbing a group (any group, not just the top of
+    /// its column) and dragging it detaches every tab it holds together,
+    /// not one at a time. Returns that group's `Node::Tabs` (for
+    /// `DockModel::float_node`); `None` if `path` doesn't resolve to a
+    /// `Tabs` node. Reuses `remove` per panel rather than splicing the
+    /// tree directly, so the same column-width-absorption bookkeeping a
+    /// panel-by-panel removal already gets (see `remove`) applies here
+    /// too.
+    pub fn detach_group(&mut self, path: &NodePath) -> Option<Node> {
+        let Node::Tabs { panels, active } = self.node_at(path)?.clone() else {
+            return None;
+        };
+        for &p in &panels {
+            self.remove(p);
+        }
+        Some(Node::Tabs { panels, active })
+    }
 }
 
 /// The whole panel layout: a rail on each side of the canvas, plus any
@@ -1613,6 +1632,54 @@ mod tests {
         assert_eq!(m.floating[0].node, node);
         assert_eq!(m.floating[0].rect, [1.0, 2.0, 300.0, 400.0]);
         assert_eq!(m.floating[0].icon_w, None);
+    }
+
+    #[test]
+    fn detach_group_pulls_a_middle_group_out_of_a_stack_intact() {
+        // A three-group stack, fully docked (not collapsed) — dragging
+        // the *middle* group's title bar must detach only that group,
+        // leaving the ones above and below it exactly where they were.
+        // (Multi-tab groups are covered by detach_icon_group's and
+        // float_node's own tests; this one is purely about position.)
+        let mut r = Rail::with(Node::Split {
+            axis: Axis::Vertical,
+            children: vec![
+                Child { node: tabs(&[A]), weight: 1.0 },
+                Child { node: tabs(&[B]), weight: 1.0 },
+                Child { node: tabs(&[C]), weight: 1.0 },
+            ],
+        });
+        let out = r.detach_group(&NodePath(vec![1])).expect("middle group");
+        assert_eq!(out, Node::Tabs { panels: vec![B], active: 0 });
+        assert!(r.panels().contains(&A));
+        assert!(r.panels().contains(&C));
+        assert!(!r.panels().contains(&B));
+        // The remaining two groups collapse down to a plain two-child
+        // split, not left with a hole where the middle one was.
+        assert_eq!(
+            r.tree,
+            Some(Node::Split {
+                axis: Axis::Vertical,
+                children: vec![
+                    Child { node: tabs(&[A]), weight: 1.0 },
+                    Child { node: tabs(&[C]), weight: 1.0 },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn detach_group_rejects_a_path_that_is_not_a_tabs_node() {
+        let mut r = Rail::with(Node::Split {
+            axis: Axis::Vertical,
+            children: vec![
+                Child { node: tabs(&[A]), weight: 1.0 },
+                Child { node: tabs(&[B]), weight: 1.0 },
+            ],
+        });
+        // The root here is a Split, not a Tabs — not a real group.
+        assert!(r.detach_group(&NodePath(vec![])).is_none());
+        assert!(r.detach_group(&NodePath(vec![9])).is_none());
     }
 
     #[test]

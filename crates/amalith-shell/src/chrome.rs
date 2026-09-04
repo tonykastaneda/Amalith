@@ -23,7 +23,10 @@ pub fn panel_tab_close_rect(tab: Rect) -> Rect {
     Rect::new(tab.x1 - PANEL_TAB_CLOSE_W, tab.y0, tab.x1, tab.y1)
 }
 
-/// The hamburger button on the right of a panel group's tab strip.
+/// The hamburger button on the right of a panel group's tab strip. Stays
+/// on the tab strip (not the title bar) — it's a per-*tab* menu (the
+/// active tab's own flyout), unlike close/collapse which act on the
+/// whole group.
 pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
     Rect::new(
         tab_strip.x1 - theme.panel_menu_w,
@@ -33,16 +36,20 @@ pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
     )
 }
 
-/// The collapse-to-icons («) button, always at the far right of a panel
-/// group's tab strip — just left of the hamburger when `has_menu` (that
-/// group's active tab has one).
-pub fn collapse_rect(tab_strip: Rect, has_menu: bool, theme: &Theme) -> Rect {
-    let x1 = if has_menu {
-        tab_strip.x1 - theme.panel_menu_w
-    } else {
-        tab_strip.x1
-    };
-    Rect::new(x1 - theme.panel_collapse_w, tab_strip.y0, x1, tab_strip.y1)
+/// The close (×) button at the left end of a group's title bar — closes
+/// every tab the group holds (see `App::close_group`), matching
+/// Illustrator's own title bar. Distinct from a single tab's own × (see
+/// `panel_tab_close_rect`), which closes only that one tab.
+pub fn group_close_rect(title_bar: Rect, theme: &Theme) -> Rect {
+    Rect::new(title_bar.x0, title_bar.y0, title_bar.x0 + theme.group_close_w, title_bar.y1)
+}
+
+/// The collapse-to-icons («/») button at the right end of a group's title
+/// bar — shown only on the group that owns the control (see
+/// `is_column_top`), everything below it in the same column sharing that
+/// one button's effect.
+pub fn collapse_rect(title_bar: Rect, theme: &Theme) -> Rect {
+    Rect::new(title_bar.x1 - theme.panel_collapse_w, title_bar.y0, title_bar.x1, title_bar.y1)
 }
 
 /// Is `area` the topmost group in its column — the one whose strip should
@@ -61,10 +68,11 @@ pub fn is_column_top(area: &PanelArea, all: &[PanelArea]) -> bool {
 }
 
 /// Paint every group and splitter in `layout`. `label(panel)` supplies the
-/// tab caption; `text` rasterizes it. `show_collapse` gates the «/»
-/// button — on for a rail (which has an icon strip to collapse into),
-/// off for a floating window (which doesn't, and has no click handling
-/// wired up for it either).
+/// tab caption; `text` rasterizes it. `show_collapse`, together with
+/// [`is_column_top`], gates the «/» button on each group's title bar —
+/// callers pass `true` for both a rail (an attached group only shows it
+/// at the top of its column) and a floating window (its one group is
+/// trivially "the top of its own column", so it always qualifies).
 pub fn paint(
     scene: &mut Scene,
     layout: &Layout,
@@ -75,6 +83,20 @@ pub fn paint(
 ) {
     for area in &layout.areas {
         scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &area.body);
+
+        // Title bar: the whole-group handle, fully separate from the tab
+        // strip below it — close (×) always, collapse («/») only on the
+        // group that owns the control, both live here rather than woven
+        // into per-tab chrome.
+        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &area.title_bar);
+        let close = group_close_rect(area.title_bar, theme);
+        paint_x(scene, close, theme.text_dim, 3.5);
+        if show_collapse && (area.is_flyout || is_column_top(area, &layout.areas)) {
+            let collapse = collapse_rect(area.title_bar, theme);
+            paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
+        }
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.title_bar);
+
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &area.tab_strip);
 
         for (i, tab) in area.tabs.iter().enumerate() {
@@ -105,25 +127,9 @@ pub fn paint(
                 tab.rect.x0 + theme.tab_pad_x * PANEL_TAB_PAD_MUL,
                 baseline,
             );
-            // Close (×): right-aligned.
-            let cr = panel_tab_close_rect(tab.rect);
-            let c = cr.center();
-            let a = 3.5;
-            let xcol = if active { theme.text } else { theme.text_dim };
-            scene.stroke(
-                &Stroke::new(1.4),
-                ID,
-                xcol,
-                None,
-                &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)),
-            );
-            scene.stroke(
-                &Stroke::new(1.4),
-                ID,
-                xcol,
-                None,
-                &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)),
-            );
+            // Close (×): right-aligned — this tab only, unlike the title
+            // bar's close which takes the whole group.
+            paint_x(scene, panel_tab_close_rect(tab.rect), color, 3.5);
         }
 
         if area.show_menu {
@@ -132,16 +138,6 @@ pub fn paint(
             let menu = panel_menu_rect(area.tab_strip, theme);
             scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &menu);
             paint_hamburger(scene, menu, theme.text_dim);
-        }
-
-        // Collapse-to-icons («) on the top group of an ordinary column
-        // (every group below it shares that one button's effect, so only
-        // the top needs it — see `is_column_top`), or expand-from-icons
-        // (») on a flyout's own strip regardless of position.
-        if show_collapse && (area.is_flyout || is_column_top(area, &layout.areas)) {
-            let collapse = collapse_rect(area.tab_strip, area.show_menu, theme);
-            scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &collapse);
-            paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
         }
 
         scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);
@@ -204,6 +200,14 @@ fn rect_for_path(path: &NodePath, layout: &Layout, root: Rect) -> Option<Rect> {
         .iter()
         .find(|a| a.path == *path)
         .map(|a| a.bounds)
+}
+
+/// A close ("×") glyph centered in `r`, arm half-length `a`.
+fn paint_x(scene: &mut Scene, r: Rect, color: vello::peniko::Color, a: f64) {
+    let c = r.center();
+    let stroke = Stroke::new(1.4);
+    scene.stroke(&stroke, ID, color, None, &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)));
+    scene.stroke(&stroke, ID, color, None, &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)));
 }
 
 fn paint_hamburger(scene: &mut Scene, r: Rect, color: vello::peniko::Color) {
@@ -363,6 +367,7 @@ mod tests {
         PanelArea {
             path: NodePath(Vec::new()),
             bounds,
+            title_bar: bounds,
             tab_strip: bounds,
             body: bounds,
             tabs: Vec::new(),

@@ -111,13 +111,18 @@ pub fn layout_icons(icons: &[IconColumn], col: Rect) -> Vec<IconRect> {
     out
 }
 
-/// One rendered tab group: its outer bounds, the strip, the body, and the
-/// clickable rect of each tab.
+/// One rendered tab group: its outer bounds, the title bar, the strip,
+/// the body, and the clickable rect of each tab.
 #[derive(Clone, Debug)]
 pub struct PanelArea {
     /// Path to this `Tabs` node in the source tree.
     pub path: NodePath,
     pub bounds: Rect,
+    /// The whole-group bar above the tab strip — close (×), collapse
+    /// («/», only for the group that owns the control) and the
+    /// whole-group drag/detach handle all live here, separate from the
+    /// tab strip below it.
+    pub title_bar: Rect,
     pub tab_strip: Rect,
     pub body: Rect,
     pub tabs: Vec<TabRect>,
@@ -212,13 +217,15 @@ fn layout_node(
 ) {
     match node {
         Node::Tabs { panels, active } => {
-            let strip_y1 = (rect.y0 + theme.tab_strip_h).min(rect.y1);
-            let tab_strip = Rect::new(rect.x0, rect.y0, rect.x1, strip_y1);
+            let title_y1 = (rect.y0 + theme.group_title_h).min(rect.y1);
+            let title_bar = Rect::new(rect.x0, rect.y0, rect.x1, title_y1);
+            let strip_y1 = (title_y1 + theme.tab_strip_h).min(rect.y1);
+            let tab_strip = Rect::new(rect.x0, title_y1, rect.x1, strip_y1);
             let body = Rect::new(rect.x0, strip_y1, rect.x1, rect.y1);
             let show_menu = panels.get(*active).copied().is_some_and(has_menu);
-            // Leave the collapse-to-icons button a clear slot always, and
-            // the hamburger's too when this group shows one.
-            let reserved = theme.panel_collapse_w + if show_menu { theme.panel_menu_w } else { 0.0 };
+            // The tab strip only reserves the hamburger's slot now — the
+            // collapse-to-icons button moved to the title bar above it.
+            let reserved = if show_menu { theme.panel_menu_w } else { 0.0 };
             let tab_limit = (rect.x1 - reserved).max(rect.x0);
 
             let mut x = rect.x0;
@@ -238,6 +245,7 @@ fn layout_node(
             out.areas.push(PanelArea {
                 path: NodePath(path.clone()),
                 bounds: rect,
+                title_bar,
                 tab_strip,
                 body,
                 tabs,
@@ -436,8 +444,9 @@ mod tests {
         // Top ends where the splitter begins; bottom starts after it.
         assert!(top.bounds.y1 <= lay.splitters[0].rect.y0 + 0.01);
         assert!(bottom.bounds.y0 >= lay.splitters[0].rect.y1 - 0.01);
-        // Strip then body.
-        assert_eq!(top.tab_strip.y0, top.bounds.y0);
+        // Title bar, then strip, then body.
+        assert_eq!(top.title_bar.y0, top.bounds.y0);
+        assert_eq!(top.tab_strip.y0, top.title_bar.y1);
         assert_eq!(top.body.y0, top.tab_strip.y1);
         // Bottom group's two tabs, laid left to right at 80px each.
         assert_eq!(bottom.tabs.len(), 2);
