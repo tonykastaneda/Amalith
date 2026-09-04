@@ -28,8 +28,8 @@ pub use svg::{export_svg, import_svg, ImportedSvg, SvgError};
 mod tests {
     use super::*;
     use amalith_core::{
-        Affine, Artboard, ArtboardId, Color, Document, Layer, LayerId, Object, ObjectId,
-        ObjectKind, ObjectParent, Rect, Swatch, Vec2,
+        Affine, Artboard, ArtboardId, Color, Document, Gradient, GradientId, Layer, LayerId, Object,
+        ObjectId, ObjectKind, ObjectParent, Paint, Rect, Swatch, Vec2,
     };
     use tempfile::tempdir;
 
@@ -44,6 +44,68 @@ mod tests {
 
         assert_eq!(document, loaded);
         assert!(assets.is_empty());
+    }
+
+    #[test]
+    fn roundtrip_preserves_gradient_pool_and_gradient_paint() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("grad.amalith");
+
+        let mut document = Document::new("Gradients");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+
+        let gid = GradientId::new();
+        let mut gradient = Gradient::radial(gid);
+        gradient.stops[0].opacity = 0.4;
+        gradient.aspect = 1.75;
+        document.add_gradient(gradient.clone());
+
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+        );
+        object.appearance.fill = Paint::Gradient(gid);
+        let object_id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        save(&document, &AssetStore::new(), &path).unwrap();
+        let (loaded, _assets) = load(&path).unwrap();
+
+        assert_eq!(loaded, document, "full document equality after roundtrip");
+        assert_eq!(loaded.gradients().len(), 1);
+        assert_eq!(loaded.gradient(gid), Some(&gradient));
+        assert_eq!(
+            loaded.object(object_id).unwrap().appearance.fill,
+            Paint::Gradient(gid)
+        );
+    }
+
+    #[test]
+    fn svg_export_emits_gradient_defs_for_gradient_fill() {
+        let mut document = Document::new("SVG grad");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+
+        let gid = GradientId::new();
+        document.add_gradient(Gradient::linear(gid));
+
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+        );
+        object.appearance.fill = Paint::Gradient(gid);
+        let object_id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[object_id]).expect("svg");
+        assert!(svg.contains("<linearGradient"), "{svg}");
+        assert!(svg.contains(&format!("url(#grad-{}", gid.as_uuid())), "{svg}");
+        assert!(svg.contains("gradientUnits=\"objectBoundingBox\""), "{svg}");
     }
 
     #[test]

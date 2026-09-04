@@ -43,8 +43,8 @@ pub use error::CommandError;
 mod tests {
     use super::*;
     use amalith_core::{
-        Affine, AssetKind, AssetSource, Color, Document, Layer, LayerId, Object, ObjectId,
-        ObjectKind, ObjectParent, Paint, Rect, Vec2,
+        Affine, AssetKind, AssetSource, Color, Document, GradientKind, Layer, LayerId, Object,
+        ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
     };
 
     fn new_editor() -> Editor {
@@ -1979,6 +1979,87 @@ mod tests {
         assert_eq!(
             appearance.stroke_width,
             amalith_core::Appearance::DEFAULT_STROKE_WIDTH
+        );
+    }
+
+    #[test]
+    fn apply_gradient_mints_pool_entry_assigns_paint_and_undoes() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(obj) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        let CommandOutcome::Gradient(gid) = editor
+            .execute(Command::ApplyGradient {
+                objects: vec![obj],
+                stroke: false,
+                source: GradientRef::New(GradientKind::Linear),
+            })
+            .unwrap()
+        else {
+            panic!("expected Gradient outcome");
+        };
+        assert_eq!(editor.document().gradients().len(), 1);
+        assert_eq!(
+            editor.document().object(obj).unwrap().appearance.fill,
+            Paint::Gradient(gid)
+        );
+
+        // Edit the pooled definition, then undo it.
+        let mut edited = editor.document().gradient(gid).unwrap().clone();
+        edited.kind = GradientKind::Radial;
+        edited.stops.push(amalith_core::GradientStop::new(
+            0.5,
+            Color::rgb(1.0, 0.0, 0.0),
+        ));
+        edited.normalize();
+        editor
+            .execute(Command::EditGradient {
+                id: gid,
+                gradient: edited,
+            })
+            .unwrap();
+        assert_eq!(
+            editor.document().gradient(gid).unwrap().kind,
+            GradientKind::Radial
+        );
+        assert_eq!(editor.document().gradient(gid).unwrap().stops.len(), 3);
+
+        editor.undo().unwrap(); // undo edit
+        assert_eq!(
+            editor.document().gradient(gid).unwrap().kind,
+            GradientKind::Linear
+        );
+        assert_eq!(editor.document().gradient(gid).unwrap().stops.len(), 2);
+
+        editor.undo().unwrap(); // undo apply: pool entry + paint both revert
+        assert!(editor.document().gradients().is_empty());
+        assert!(matches!(
+            editor.document().object(obj).unwrap().appearance.fill,
+            Paint::Solid(_)
+        ));
+
+        editor.redo().unwrap();
+        assert_eq!(editor.document().gradients().len(), 1);
+        assert_eq!(
+            editor.document().object(obj).unwrap().appearance.fill,
+            Paint::Gradient(gid)
         );
     }
 

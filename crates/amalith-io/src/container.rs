@@ -30,6 +30,7 @@ pub fn save(
         settings: document.settings,
         artboards: document.artboards().to_vec(),
         swatches: document.swatches().to_vec(),
+        gradients: document.gradients().to_vec(),
         assets: document.assets().to_vec(),
         layers: document
             .layers()
@@ -89,6 +90,9 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
     }
     for swatch in manifest.swatches {
         document.add_swatch(swatch);
+    }
+    for gradient in manifest.gradients {
+        document.add_gradient(gradient);
     }
     for asset in manifest.assets {
         document.add_asset(asset);
