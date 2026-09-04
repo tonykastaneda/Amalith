@@ -106,19 +106,35 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String, defs: &mut D
             out.push_str("</g>");
         }
         ObjectKind::Path(path) => {
-            let paint_attrs = paint_attrs(&object.appearance, document, defs);
-            out.push_str(&format!(
-                "<path d=\"{}\"{transform_attr}{paint_attrs} />",
-                path.geometry.to_svg()
-            ));
+            let d = path.geometry.to_svg();
+            match freeform_fill(&object.appearance, document) {
+                Some(g) => {
+                    emit_freeform_path(&d, &transform_attr, &object.appearance, g, document, defs, out);
+                }
+                None => {
+                    let paint_attrs = paint_attrs(&object.appearance, document, defs);
+                    out.push_str(&format!("<path d=\"{d}\"{transform_attr}{paint_attrs} />"));
+                }
+            }
         }
         ObjectKind::CompoundPath(compound) => {
-            let paint_attrs = paint_attrs(&object.appearance, document, defs);
-            out.push_str(&format!("<g{transform_attr}>"));
-            for subpath in &compound.subpaths {
-                out.push_str(&format!("<path d=\"{}\"{paint_attrs} />", subpath.to_svg()));
+            match freeform_fill(&object.appearance, document) {
+                Some(g) => {
+                    out.push_str(&format!("<g{transform_attr}>"));
+                    for subpath in &compound.subpaths {
+                        emit_freeform_path(&subpath.to_svg(), "", &object.appearance, g, document, defs, out);
+                    }
+                    out.push_str("</g>");
+                }
+                None => {
+                    let paint_attrs = paint_attrs(&object.appearance, document, defs);
+                    out.push_str(&format!("<g{transform_attr}>"));
+                    for subpath in &compound.subpaths {
+                        out.push_str(&format!("<path d=\"{}\"{paint_attrs} />", subpath.to_svg()));
+                    }
+                    out.push_str("</g>");
+                }
             }
-            out.push_str("</g>");
         }
         // Stub kinds with no real content to export yet (see module docs).
         ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) => {}
@@ -167,11 +183,14 @@ fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
                      cx=\"{sx}\" cy=\"{sy}\" r=\"{r}\" fx=\"{sx}\" fy=\"{sy}\">{stops}</radialGradient>"
                 ));
             }
-            // TODO(freeform-export): a real per-point radial composite,
-            // matching the canvas renderer. Until that lands, fall back to
+            // Freeform gradients only export their real layered-radial
+            // composite on a *fill* (see `emit_freeform_path`, called
+            // directly from `export_node` before a fill ever reaches this
+            // function) — Illustrator's own freeform gradients don't apply
+            // to strokes either, so a freeform *stroke* falls back here to
             // the (otherwise-unused-by-Freeform) start/end/stops fields as
-            // a placeholder linear gradient so an exported file stays
-            // valid SVG rather than missing the fill entirely.
+            // a placeholder linear gradient, matching the canvas renderer's
+            // stroke fallback (`convert::peniko_gradient`).
             GradientKind::Freeform => {
                 defs.xml.push_str(&format!(
                     "<linearGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
@@ -181,6 +200,117 @@ fn emit_gradient(gradient: &amalith_core::Gradient, defs: &mut Defs) -> String {
         }
     }
     format!("url(#{svg_id})")
+}
+
+/// `appearance.fill`'s gradient, if it's a Freeform one — the case that
+/// needs [`emit_freeform_path`]'s layered-radial composite instead of a
+/// single `url(#...)` reference (Freeform is only meaningful on a fill;
+/// see [`emit_gradient`]'s stroke fallback).
+fn freeform_fill<'d>(
+    appearance: &Appearance,
+    document: &'d Document,
+) -> Option<&'d amalith_core::Gradient> {
+    match appearance.fill {
+        Paint::Gradient(id) => document
+            .gradient(id)
+            .filter(|g| g.kind == GradientKind::Freeform),
+        _ => None,
+    }
+}
+
+/// The points' average colour, opacity folded in — the flat backstop a
+/// freeform fill shows where no point reaches (matches
+/// `canvas.rs::paint_freeform_fill`'s backstop exactly).
+fn average_point_color(points: &[amalith_core::FreeformPoint]) -> Color {
+    let n = points.len().max(1) as f32;
+    let mut sum = [0.0f32; 4];
+    for p in points {
+        let c = p.effective_color();
+        sum[0] += c.r;
+        sum[1] += c.g;
+        sum[2] += c.b;
+        sum[3] += c.a;
+    }
+    Color::rgba(sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n)
+}
+
+/// SVG element id for one point of a pooled freeform gradient
+/// (`grad-<uuid>-<point index>`) — distinct from [`gradient_svg_id`]'s
+/// plain `grad-<uuid>` (used by [`emit_gradient`]'s stroke fallback), so
+/// the two never collide in the same `<defs>`.
+fn freeform_point_svg_id(gradient_id: amalith_core::GradientId, index: usize) -> String {
+    format!("{}-{index}", gradient_svg_id(gradient_id))
+}
+
+/// Emits one freeform-filled shape as the same layered-radial composite
+/// the canvas renderer paints (`canvas.rs::paint_freeform_fill`): a flat
+/// backstop (the points' average colour) under one soft radial gradient
+/// per point — opaque at the point, fading to transparent by its spread —
+/// stacked with plain source-over blending, which is exactly what a
+/// sequence of sibling SVG elements already does. Each layer fills `d`
+/// directly rather than through a separate clip: since every layer uses
+/// the shape's own path data, SVG's fill rule already keeps each one
+/// inside the shape, with no clip element needed.
+///
+/// The object's own opacity applies once, to the whole stack, via the
+/// wrapping `<g>` — putting it on every layer individually would blend it
+/// in repeatedly instead of once over the flattened result. The stroke
+/// (if any) draws last, on top, through the ordinary solid/gradient path
+/// (freeform gradients don't apply to strokes — see [`emit_gradient`]).
+fn emit_freeform_path(
+    d: &str,
+    extra_g_attrs: &str,
+    appearance: &Appearance,
+    gradient: &amalith_core::Gradient,
+    document: &Document,
+    defs: &mut Defs,
+    out: &mut String,
+) {
+    let opacity_attr = if appearance.opacity != 1.0 {
+        format!(" opacity=\"{}\"", appearance.opacity.clamp(0.0, 1.0))
+    } else {
+        String::new()
+    };
+    out.push_str(&format!("<g{extra_g_attrs}{opacity_attr}>"));
+    if gradient.points.is_empty() {
+        // No points at all (an edited-down-to-nothing or hand-crafted
+        // gradient): nothing to paint, matching the canvas renderer's
+        // early return.
+    } else {
+        let backstop = average_point_color(&gradient.points);
+        out.push_str(&format!(
+            "<path d=\"{d}\" fill=\"{}\" fill-opacity=\"{}\"/>",
+            hex_color(backstop),
+            backstop.a.clamp(0.0, 1.0)
+        ));
+        for (i, p) in gradient.points.iter().enumerate() {
+            let svg_id = freeform_point_svg_id(gradient.id, i);
+            if defs.seen.insert(svg_id.clone()) {
+                let c = p.effective_color();
+                let outer = (p.spread * 2.2).max(0.02);
+                let (cx, cy) = (p.pos[0], p.pos[1]);
+                let solid = hex_color(c);
+                defs.xml.push_str(&format!(
+                    "<radialGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
+                     cx=\"{cx}\" cy=\"{cy}\" r=\"{outer}\" fx=\"{cx}\" fy=\"{cy}\">\
+                     <stop offset=\"0\" stop-color=\"{solid}\" stop-opacity=\"{}\"/>\
+                     <stop offset=\"1\" stop-color=\"{solid}\" stop-opacity=\"0\"/>\
+                     </radialGradient>",
+                    c.a.clamp(0.0, 1.0),
+                ));
+            }
+            out.push_str(&format!("<path d=\"{d}\" fill=\"url(#{svg_id})\"/>"));
+        }
+    }
+    // Stroke only — a freeform *fill* never touches the stroke.
+    if appearance.stroke.is_visible() {
+        let mut stroke_only = *appearance;
+        stroke_only.fill = Paint::None;
+        stroke_only.opacity = 1.0;
+        let attrs = paint_attrs(&stroke_only, document, defs);
+        out.push_str(&format!("<path d=\"{d}\"{attrs} />"));
+    }
+    out.push_str("</g>");
 }
 
 /// The `fill`/`stroke`/`stroke-width`/`opacity` attribute string for `appearance`,

@@ -109,6 +109,47 @@ mod tests {
     }
 
     #[test]
+    fn svg_export_emits_a_layered_radial_composite_for_freeform_fill() {
+        let mut document = Document::new("SVG freeform");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+
+        let gid = GradientId::new();
+        document.add_gradient(Gradient::freeform(gid));
+
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+        );
+        object.appearance.fill = Paint::Gradient(gid);
+        let object_id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[object_id]).expect("svg");
+        // One <radialGradient> per default point, each with its own id...
+        let n = Gradient::default_points().len();
+        for i in 0..n {
+            assert!(
+                svg.contains(&format!("id=\"grad-{}-{i}\"", gid.as_uuid())),
+                "missing point {i}'s radial gradient def: {svg}"
+            );
+            assert!(
+                svg.contains(&format!("url(#grad-{}-{i})", gid.as_uuid())),
+                "missing point {i}'s <path> reference: {svg}"
+            );
+        }
+        // ...plus a flat backstop fill layered underneath them, and no
+        // reference to the plain single-gradient placeholder id.
+        assert!(svg.contains("fill-opacity"), "{svg}");
+        assert!(
+            !svg.contains(&format!("url(#grad-{})\"", gid.as_uuid())),
+            "a freeform fill should never reference the bare placeholder id: {svg}"
+        );
+    }
+
+    #[test]
     fn roundtrip_artboard_layer_rect_move() {
         // Mirrors the brief's Milestone 0.1 flow, exercised at the
         // document/command layer instead of through UI: create doc, add a
