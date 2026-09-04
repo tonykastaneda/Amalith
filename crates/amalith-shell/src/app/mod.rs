@@ -272,6 +272,9 @@ enum Drag {
     ColorScrub { channel: u8, track: Rect },
     /// Color panel: dragging the hue spectrum bar.
     ColorSpectrum { track: Rect },
+    /// Gradient panel: dragging stop `index` along the ramp `bar` (screen
+    /// px). Releasing with the pointer well below the bar deletes the stop.
+    GradientStop { index: usize, bar: Rect },
     /// Moving the colour-picker dialog by its title bar.
     MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.
@@ -775,6 +778,8 @@ struct App {
     gradient_target: Option<amalith_core::GradientId>,
     /// Which slot (fill / stroke) `gradient_target` lives on.
     gradient_slot: panels::PaintSlot,
+    /// The Gradient panel's currently selected stop index.
+    gradient_stop: usize,
     /// The colour picker is retargeted to a gradient stop: `Some(stop index)`.
     picker_gradient_stop: Option<usize>,
     /// Align panel: what to align to, and the key object (thicker outline).
@@ -972,6 +977,7 @@ impl App {
             picker_artboard: false,
             gradient_target: None,
             gradient_slot: panels::PaintSlot::Fill,
+            gradient_stop: 0,
             picker_gradient_stop: None,
             align_to: amalith_commands::AlignTo::Selection,
             key_object: None,
@@ -1339,11 +1345,16 @@ impl App {
                         fill: Some(pk.color()),
                     });
                 }
+            } else if self.picker_gradient_stop.is_some() {
+                if let Some(pk) = self.picker {
+                    self.apply_picker_to_stop(pk.color());
+                }
             } else {
                 self.apply_picker_color();
             }
         }
         self.picker_artboard = false;
+        self.picker_gradient_stop = None;
         self.picker = None;
         self.dock.remove(PanelId("picker"));
         let dead: Vec<WindowId> = self
@@ -4647,6 +4658,7 @@ impl App {
             key_object: self.key_object,
             shape_dialog: None,
             export: None,
+            gradient: self.gradient_ctx(),
         }
     }
 
@@ -5908,11 +5920,12 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 10] = [
+const WINDOW_PANELS: [(&str, &str); 11] = [
     ("align", "Align"),
     ("artboards", "Artboards"),
     ("character", "Character"),
     ("color", "Color"),
+    ("gradient", "Gradient"),
     ("layers", "Layers"),
     ("paragraph", "Paragraph"),
     ("pathfinder", "Pathfinder"),

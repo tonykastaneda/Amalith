@@ -97,6 +97,8 @@ pub(in crate::app) fn paint_main(
     artboard_edit: Option<(panels::transform::ABField, &str)>,
     artboard_link: bool,
     artboard_fill_menu: bool,
+    // Gradient panel: target gradient clone + selected stop.
+    gradient: Option<(amalith_core::Gradient, usize)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -354,6 +356,7 @@ pub(in crate::app) fn paint_main(
                 key_object,
                 shape_dialog: None,
                 export: None,
+                gradient: gradient.clone(),
             };
             for area in &laid.areas {
                 if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {

@@ -137,6 +137,9 @@ impl App {
         } else if dy.abs() > 0.5 {
             if let Some(field) = self.xform_field_at_pointer() {
                 self.nudge_xform(field, if dy > 0.0 { 1.0 } else { -1.0 });
+            } else if let Some(field) = self.gradient_field_at_pointer() {
+                let dir = if dy > 0.0 { 1.0 } else { -1.0 };
+                self.gradient_step(field, dir * crate::panels::gradient::step_of(field));
             } else {
                 self.doc.view.pan += Vec2::new(dx, dy);
             }

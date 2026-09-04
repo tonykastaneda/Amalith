@@ -147,6 +147,13 @@ impl App {
                 }
             }
             panels::Action::ApplyGradientPaint => self.apply_gradient_paint(),
+            panels::Action::GradientKind(kind) => self.gradient_set_kind(kind),
+            panels::Action::GradientAddStop { offset } => self.gradient_add_stop(offset),
+            panels::Action::GradientSelectStop { index, .. } => {
+                self.gradient_select_stop(index, double)
+            }
+            panels::Action::GradientStep(field, delta) => self.gradient_step(field, delta),
+            panels::Action::GradientStopPicker => self.gradient_stop_picker(),
             panels::Action::SwapPaints => {
                 std::mem::swap(&mut self.doc.fill, &mut self.doc.stroke);
                 if !self.doc.selection.is_empty() {
@@ -703,6 +710,51 @@ impl App {
             }
             let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
             return panels::transform::field_at(pbody, self.pointer);
+        }
+        None
+    }
+
+    /// The Gradient-panel numeric under the pointer, for scroll-to-nudge.
+    pub(in crate::app) fn gradient_field_at_pointer(&mut self) -> Option<panels::gradient::GradField> {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return None;
+        }
+        let kind = self.target_gradient().map(|(_, g)| g.kind);
+        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
+            [RailSide::Left, RailSide::Right]
+                .iter()
+                .flat_map(|&side| {
+                    let rail = self.dock.rail(side);
+                    if rail.is_empty() {
+                        return Vec::new();
+                    }
+                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                    let rect = rail_rect_for(side, rail.width as f64, w, h);
+                    build_rail_layout(rail, &self.theme, &mut self.text, rect).areas
+                })
+                .collect()
+        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
+            self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })
+        }) {
+            self.floating_layout(fid).areas
+        } else {
+            return None;
+        };
+        for area in &areas {
+            if !area.body.contains(self.pointer) {
+                continue;
+            }
+            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
+                continue;
+            };
+            if pid.0 != "gradient" {
+                continue;
+            }
+            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
+            return panels::gradient::field_at(pbody, self.pointer, kind);
         }
         None
     }

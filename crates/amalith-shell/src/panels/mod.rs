@@ -9,6 +9,7 @@
 mod artboards;
 pub mod character;
 pub mod color;
+pub mod gradient;
 pub(crate) mod layers;
 mod swatches;
 pub mod tools;
@@ -146,6 +147,10 @@ pub struct Ctx<'a> {
     /// The Export for Screens dialog + caret-blink phase, when the
     /// `export-screens` float-only panel is being drawn / hit-tested.
     pub export: Option<(&'a crate::export::ExportForScreens, bool)>,
+    /// The gradient the Gradient panel edits (a clone of the pooled
+    /// target), plus the selected stop index. `None` when the selection
+    /// has no gradient paint.
+    pub gradient: Option<(amalith_core::Gradient, usize)>,
 }
 
 /// The primitive tool a `shapedlg.*` panel id stands for.
@@ -276,6 +281,20 @@ pub enum Action {
     /// mint a fresh linear one. The App resolves the target objects and
     /// opens the Gradient panel.
     ApplyGradientPaint,
+    // --- Gradient panel ---
+    /// Set the target gradient's type (or apply a fresh one of that type
+    /// when the active slot isn't a gradient yet).
+    GradientKind(amalith_core::GradientKind),
+    /// Select stop `index`; `bar` is the ramp rect so a press can arm a
+    /// stop drag. Double-click opens the colour picker for the stop.
+    GradientSelectStop { index: usize, bar: Rect },
+    /// Add a stop at slider position `offset` (colour sampled from the ramp).
+    GradientAddStop { offset: f32 },
+    /// Nudge a gradient numeric (angle / aspect / selected stop location /
+    /// opacity) by `delta`.
+    GradientStep(gradient::GradField, f64),
+    /// Open the colour picker retargeted at the selected stop.
+    GradientStopPicker,
     /// An item from a panel's hamburger flyout (`id` is panel-defined).
     PanelMenu {
         panel: PanelId,
@@ -360,6 +379,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         "swatches" => swatches::paint(scene, text, body, ctx),
         "character" => character::paint(scene, text, body, ctx),
         "color" => color::paint(scene, text, body, ctx),
+        "gradient" => gradient::paint(scene, text, body, ctx),
         "transform" => transform::paint(scene, text, body, ctx),
         "pathfinder" => pathfinder::paint(scene, text, body, ctx),
         "align" => align::paint(scene, text, body, ctx),
@@ -395,6 +415,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
         "color" => color::hit(body, local, ctx),
+        "gradient" => gradient::hit(body, local, ctx),
         "transform" => transform::hit(body, local, ctx),
         "pathfinder" => pathfinder::hit(body, local, ctx),
         "align" => align::hit(body, local, ctx),
@@ -453,6 +474,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
         "artboards" | "swatches" => 132.0,
         "color" => color::NATURAL_H,
+        "gradient" => gradient::NATURAL_H,
         "transform" => transform::natural_height(),
         "pathfinder" => pathfinder::natural_height(),
         "align" => align::natural_height(),
@@ -475,6 +497,7 @@ fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
         "character" => character::natural_height(),
         "tools" => tools::natural_height(width),
         "color" => color::NATURAL_H,
+        "gradient" => gradient::NATURAL_H,
         "transform" => transform::natural_height(),
         "pathfinder" => pathfinder::natural_height(),
         "align" => align::natural_height(),
@@ -546,6 +569,7 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {
         "tools" => tools::tip(body, local, ctx),
         "color" => color::tip(body, local, ctx).map(str::to_string),
+        "gradient" => gradient::tip(body, local, ctx).map(str::to_string),
         "picker" => Some("Color Picker".into()),
         "character" => character::tip(body, local, ctx).map(str::to_string),
         "transform" => transform::tip(body, local, ctx).map(str::to_string),

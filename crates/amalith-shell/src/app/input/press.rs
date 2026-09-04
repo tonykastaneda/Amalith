@@ -530,6 +530,7 @@ impl App {
                                         key_object: self.key_object,
                                         shape_dialog: None,
                                         export: None,
+                                        gradient: self.gradient_ctx(),
                                     };
                                     panels::hit(pid, pbody, self.pointer, &ctx)
                                 };
@@ -1255,6 +1256,7 @@ impl App {
                                     key_object: self.key_object,
                                     shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
                                     export: self.export.as_ref().map(|d| (d, false)),
+                                    gradient: self.gradient_ctx(),
                                 };
                                 panels::hit(pid, body, self.pointer, &ctx)
                             };
@@ -1263,7 +1265,16 @@ impl App {
                             let arm_drag = !double
                                 && pid == PanelId("layers")
                                 && matches!(action, panels::Action::Select(_));
+                            let grad_stop_drag = match action {
+                                panels::Action::GradientSelectStop { index, bar } if !double => {
+                                    Some((index, bar))
+                                }
+                                _ => None,
+                            };
                             self.apply_panel_action(action, double);
+                            if let Some((index, bar)) = grad_stop_drag {
+                                self.drag = Drag::GradientStop { index, bar };
+                            }
                             if spawn {
                                 self.spawn_picker_window(event_loop);
                             }

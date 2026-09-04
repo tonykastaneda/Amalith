@@ -212,6 +212,17 @@ impl App {
                 self.set_color_spectrum(t);
                 self.drag = Drag::ColorSpectrum { track };
             }
+            Drag::GradientStop { index, bar } => {
+                let (index, bar) = (*index, *bar);
+                let off = ((self.pointer.x - bar.x0) / bar.width()).clamp(0.0, 1.0) as f32;
+                self.gradient_move_stop(index, off);
+                // The stop may have been reordered; keep dragging the one
+                // that's now selected.
+                self.drag = Drag::GradientStop {
+                    index: self.gradient_stop,
+                    bar,
+                };
+            }
             Drag::LayerDrag { body, press, moved } => {
                 let (body, press, was_moved) = (*body, *press, *moved);
                 let far = (self.pointer - press).hypot() > 4.0;
@@ -547,6 +558,12 @@ impl App {
             Drag::ColorScrub { .. } | Drag::ColorSpectrum { .. } => {
                 if let Some(c) = self.active_paint().color() {
                     self.push_recent(c);
+                }
+            }
+            Drag::GradientStop { index, bar } => {
+                // Released well below the ramp = "drag off to delete".
+                if self.pointer.y > bar.y1 + crate::panels::gradient::REMOVE_DROP {
+                    self.gradient_remove_stop(index);
                 }
             }
             Drag::LayerDrag { body, moved, .. } => {
