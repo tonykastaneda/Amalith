@@ -381,6 +381,7 @@ impl App {
         let ab_edit = self.artboard_edit.clone();
         let (ab_link, ab_fill_menu) = (self.artboard_link, self.artboard_fill_menu);
         let grad_ctx = self.gradient_ctx();
+        let grad_annot = self.gradient_annot();
         let stroke_style_shown = self.stroke_style_repr();
         let panel_text_style = self.active_text_style();
         let panel_text_align = self.active_text_align();
@@ -502,6 +503,7 @@ impl App {
                 ab_link,
                 ab_fill_menu,
                 grad_ctx.clone(),
+                grad_annot.clone(),
             ),
             Role::Floating(fid) => {
                 let laid = self.floating_layout(fid);

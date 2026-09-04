@@ -223,6 +223,12 @@ impl App {
                     bar,
                 };
             }
+            Drag::GradientAxis { object, start_doc } => {
+                let (object, start_doc) = (*object, *start_doc);
+                let cur = self.doc_point(self.pointer);
+                self.gradient_axis_to(object, start_doc, cur);
+                self.drag = Drag::GradientAxis { object, start_doc };
+            }
             Drag::LayerDrag { body, press, moved } => {
                 let (body, press, was_moved) = (*body, *press, *moved);
                 let far = (self.pointer - press).hypot() > 4.0;
@@ -566,6 +572,12 @@ impl App {
                     self.gradient_remove_stop(index);
                 }
             }
+            Drag::GradientAxis { object, start_doc } => {
+                // A plain click (no real drag) still applied a default
+                // axis in `begin_gradient_drag`; a drag committed live.
+                let cur = self.doc_point(self.pointer);
+                self.gradient_axis_to(object, start_doc, cur);
+            }
             Drag::LayerDrag { body, moved, .. } => {
                 if moved {
                     let ids = crate::panels::layers::order_front_to_back(
@@ -730,6 +742,7 @@ impl App {
                         | Tool::Hand
                         | Tool::Zoom
                         | Tool::Eyedropper
+                        | Tool::Gradient
                         | Tool::Rotate => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {

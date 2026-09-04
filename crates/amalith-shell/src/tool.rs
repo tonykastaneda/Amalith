@@ -18,11 +18,12 @@ pub enum Tool {
     Hand,
     Zoom,
     Eyedropper,
+    Gradient,
     Rotate,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 15] = [
+    pub const ALL: [Tool; 16] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -37,6 +38,7 @@ impl Tool {
         Tool::Hand,
         Tool::Zoom,
         Tool::Eyedropper,
+        Tool::Gradient,
         Tool::Rotate,
     ];
 
@@ -64,6 +66,7 @@ impl Tool {
             Tool::Hand => "Hand",
             Tool::Zoom => "Zoom",
             Tool::Eyedropper => "Eyedropper",
+            Tool::Gradient => "Gradient",
             Tool::Rotate => "Rotate",
         }
     }
@@ -82,6 +85,7 @@ impl Tool {
             Tool::Hand => "H",
             Tool::Zoom => "Z",
             Tool::Eyedropper => "I",
+            Tool::Gradient => "G",
             Tool::Rotate => "R",
             _ => "",
         }
@@ -103,6 +107,7 @@ impl Tool {
             Tool::Hand => Icon::Hand,
             Tool::Zoom => Icon::Zoom,
             Tool::Eyedropper => Icon::Eyedropper,
+            Tool::Gradient => Icon::Gradient,
             Tool::Rotate => Icon::Rotate,
         }
     }

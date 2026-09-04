@@ -129,6 +129,7 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Hand => KeyChord::plain(KeyH),
         Tool::Zoom => KeyChord::plain(KeyZ),
         Tool::Eyedropper => KeyChord::plain(KeyI),
+        Tool::Gradient => KeyChord::plain(KeyG),
         Tool::Rotate => KeyChord::plain(KeyR),
         Tool::RoundedRect | Tool::Polygon | Tool::Star => return None,
     })

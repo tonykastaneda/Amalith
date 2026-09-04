@@ -53,6 +53,7 @@ pub enum Icon {
     Hand,
     Zoom,
     Eyedropper,
+    Gradient,
     Rotate,
 }
 
@@ -68,7 +69,8 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Star => STAR_SVG,
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
-        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Rotate => "",
+        Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
+        | Icon::Rotate => "",
     }
 }
 
@@ -92,6 +94,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Eyedropper {
         draw_eyedropper_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Gradient {
+        draw_gradient_glyph(scene, box_, color);
         return;
     }
     if icon == Icon::Rotate {
@@ -130,6 +136,34 @@ fn draw_rotate_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     head.line_to(p - perp * aw);
     head.close_path();
     scene.fill(Fill::NonZero, ID, color, None, &head);
+}
+
+/// A rounded square with a left→right light-to-dark ramp — the Gradient tool.
+fn draw_gradient_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let r = Rect::new(
+        box_.x0 + w * 0.16,
+        box_.y0 + h * 0.20,
+        box_.x1 - w * 0.16,
+        box_.y1 - h * 0.20,
+    );
+    let n = (r.width().ceil() as i64).max(1);
+    for i in 0..n {
+        let t = i as f64 / n as f64;
+        // Fade the tint from ~15% to full so it reads as a ramp even
+        // when `color` is a flat panel ink.
+        let a = 0.18 + t * 0.82;
+        let x = r.x0 + i as f64;
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            color.with_alpha(a as f32),
+            None,
+            &Rect::new(x, r.y0, x + 1.0, r.y1),
+        );
+    }
+    scene.stroke(&Stroke::new((w * 0.08).max(1.2)), ID, color, None, &r);
 }
 
 /// A pipette — bulb top-right, tip bottom-left — the Eyedropper tool.

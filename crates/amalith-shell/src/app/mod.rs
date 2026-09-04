@@ -275,6 +275,10 @@ enum Drag {
     /// Gradient panel: dragging stop `index` along the ramp `bar` (screen
     /// px). Releasing with the pointer well below the bar deletes the stop.
     GradientStop { index: usize, bar: Rect },
+    /// Gradient tool: dragging the gradient axis on `object`. `start_doc`
+    /// is where the press landed (document space); the current pointer is
+    /// the other end.
+    GradientAxis { object: ObjectId, start_doc: Point },
     /// Moving the colour-picker dialog by its title bar.
     MovePicker { offset: Point },
     /// Direct Selection: dragging the selected path anchors.

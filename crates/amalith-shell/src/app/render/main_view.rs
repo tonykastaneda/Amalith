@@ -99,6 +99,8 @@ pub(in crate::app) fn paint_main(
     artboard_fill_menu: bool,
     // Gradient panel: target gradient clone + selected stop.
     gradient: Option<(amalith_core::Gradient, usize)>,
+    // Gradient tool: the on-canvas axis annotator (document space).
+    gradient_annot: Option<crate::app::gradient::GradientAnnot>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -156,6 +158,51 @@ pub(in crate::app) fn paint_main(
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
         scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &m);
+    }
+
+    // Gradient tool annotator: the axis line with a hollow diamond at the
+    // start, an open square at the end, and a dot per stop along it.
+    if let Some(annot) = &gradient_annot {
+        let vt = view.to_screen();
+        let a = vt * annot.start;
+        let b = vt * annot.end;
+        let ink = Color::WHITE;
+        let halo = Color::from_rgb8(0x10, 0x10, 0x10).with_alpha(0.55);
+        scene.stroke(&Stroke::new(3.0), ID, halo, None, &vello::kurbo::Line::new(a, b));
+        scene.stroke(&Stroke::new(1.25), ID, ink, None, &vello::kurbo::Line::new(a, b));
+
+        let dir = b - a;
+        let len = dir.hypot().max(1e-6);
+        let u = dir / len;
+
+        // Stop dots.
+        for (off, c) in &annot.stops {
+            let p = a + u * (len * *off as f64);
+            let dot = vello::kurbo::Circle::new(p, 4.5);
+            scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &dot);
+            scene.stroke(&Stroke::new(1.25), ID, ink, None, &dot);
+        }
+
+        // Start: hollow diamond.
+        let d = 6.0;
+        let mut dia = BezPath::new();
+        dia.move_to((a.x, a.y - d));
+        dia.line_to((a.x + d, a.y));
+        dia.line_to((a.x, a.y + d));
+        dia.line_to((a.x - d, a.y));
+        dia.close_path();
+        scene.stroke(&Stroke::new(3.0), ID, halo, None, &dia);
+        scene.stroke(&Stroke::new(1.5), ID, ink, None, &dia);
+
+        // End: open square (radial gets a ring instead).
+        if annot.kind == amalith_core::GradientKind::Radial {
+            let ring = vello::kurbo::Circle::new(a, len);
+            scene.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.8), None, &ring);
+        }
+        let s = 5.0;
+        let sq = Rect::new(b.x - s, b.y - s, b.x + s, b.y + s);
+        scene.stroke(&Stroke::new(3.0), ID, halo, None, &sq);
+        scene.stroke(&Stroke::new(1.5), ID, ink, None, &sq);
     }
 
     // Clip masks are otherwise invisible — outline them in the accent

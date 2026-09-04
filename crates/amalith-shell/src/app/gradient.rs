@@ -10,7 +10,28 @@ use super::*;
 use amalith_commands::GradientRef;
 use amalith_core::{Gradient, GradientId, GradientKind, Paint};
 
+/// The on-canvas gradient annotator to draw for the Gradient tool: the
+/// axis endpoints in **document space** plus enough of the gradient to
+/// paint the handle dots. `main_view` maps it to the screen.
+#[derive(Clone)]
+pub(in crate::app) struct GradientAnnot {
+    pub start: Point,
+    pub end: Point,
+    pub kind: GradientKind,
+    pub stops: Vec<(f32, amalith_core::Color)>,
+}
+
 impl App {
+    /// The paint on `slot` for object `id` (fill or stroke).
+    fn obj_slot_paint(doc: &Document, id: ObjectId, stroke: bool) -> Option<Paint> {
+        let o = doc.object(id)?;
+        Some(if stroke {
+            o.appearance.stroke
+        } else {
+            o.appearance.fill
+        })
+    }
+
     /// The paint currently on the active slot — selection's if there is
     /// one, else the "next object" paint.
     fn slot_paint(&self, slot: panels::PaintSlot) -> Paint {
@@ -298,5 +319,130 @@ impl App {
             .editor
             .execute(Command::EditGradient { id, gradient: g });
         self.gradient_target = Some(id);
+    }
+
+    // ---- Gradient tool (G) -----------------------------------------
+
+    /// Map a document-space point into `id`'s bounding-box unit space
+    /// (`0..1` across `own_local_bounds`) — the space gradient geometry is
+    /// stored in.
+    fn gradient_unit_of(&self, id: ObjectId, dp: Point) -> Option<[f64; 2]> {
+        let doc = self.doc.editor.document();
+        let b = doc.object(id)?.kind.own_local_bounds()?;
+        let inv = doc.world_transform(id).inverse();
+        let lp = inv * amalith_core::Point::new(dp.x, dp.y);
+        Some([
+            (lp.x - b.x0) / b.width().max(1e-6),
+            (lp.y - b.y0) / b.height().max(1e-6),
+        ])
+    }
+
+    /// Gradient tool press: pick the object (selection first, else topmost
+    /// under the cursor), make sure it carries a gradient on the active
+    /// slot, and arm the axis drag.
+    pub(in crate::app) fn begin_gradient_drag(&mut self, dp: Point) {
+        let stroke = self.active_slot == panels::PaintSlot::Stroke;
+        let vis = self.visible_doc_rect();
+        let target = {
+            let doc = self.doc.editor.document();
+            self.doc
+                .selection
+                .iter()
+                .copied()
+                .find(|id| {
+                    doc.object(*id)
+                        .and_then(|o| o.kind.own_local_bounds())
+                        .is_some()
+                })
+                .or_else(|| crate::select::topmost_selectable_at(doc, dp, vis))
+        };
+        let Some(id) = target else {
+            return;
+        };
+
+        let existing = Self::obj_slot_paint(self.doc.editor.document(), id, stroke)
+            .and_then(|p| p.gradient_id());
+        match existing {
+            Some(gid) => self.gradient_target = Some(gid),
+            None => {
+                let outcome = self.doc.editor.execute(Command::ApplyGradient {
+                    objects: vec![id],
+                    stroke,
+                    source: GradientRef::New(GradientKind::Linear),
+                });
+                if let Ok(CommandOutcome::Gradient(gid)) = outcome {
+                    self.gradient_target = Some(gid);
+                }
+            }
+        }
+        self.gradient_slot = self.active_slot;
+        self.gradient_stop = 0;
+        self.doc.selection = vec![id];
+        self.ensure_panel("gradient");
+        self.drag = Drag::GradientAxis {
+            object: id,
+            start_doc: dp,
+        };
+        self.gradient_axis_to(id, dp, dp);
+        self.request_main_redraw();
+    }
+
+    /// Live axis drag: set the target gradient's `start` / `end` from the
+    /// press point and the current pointer (both document space).
+    pub(in crate::app) fn gradient_axis_to(&mut self, id: ObjectId, start: Point, cur: Point) {
+        let (Some(su), Some(eu)) = (
+            self.gradient_unit_of(id, start),
+            self.gradient_unit_of(id, cur),
+        ) else {
+            return;
+        };
+        let Some((gid, mut g)) = self.target_gradient() else {
+            return;
+        };
+        g.start = su;
+        // Never a zero-length axis (undefined gradient direction).
+        g.end = if (eu[0] - su[0]).abs() < 1e-4 && (eu[1] - su[1]).abs() < 1e-4 {
+            [su[0] + 1e-3, su[1]]
+        } else {
+            eu
+        };
+        let _ = self
+            .doc
+            .editor
+            .execute(Command::EditGradient { id: gid, gradient: g });
+        self.gradient_target = Some(gid);
+        self.request_main_redraw();
+    }
+
+    /// The annotator to overlay while the Gradient tool is active and a
+    /// gradient-painted object is selected.
+    pub(in crate::app) fn gradient_annot(&self) -> Option<GradientAnnot> {
+        if self.active_tool != Tool::Gradient {
+            return None;
+        }
+        let stroke = self.active_slot == panels::PaintSlot::Stroke;
+        let doc = self.doc.editor.document();
+        let id = self.doc.selection.iter().copied().find(|id| {
+            Self::obj_slot_paint(doc, *id, stroke)
+                .and_then(|p| p.gradient_id())
+                .is_some()
+        })?;
+        let obj = doc.object(id)?;
+        let gid = Self::obj_slot_paint(doc, id, stroke)?.gradient_id()?;
+        let g = doc.gradient(gid)?;
+        let b = obj.kind.own_local_bounds()?;
+        let wt = doc.world_transform(id);
+        let map = |u: [f64; 2]| {
+            let lp =
+                amalith_core::Point::new(b.x0 + u[0] * b.width(), b.y0 + u[1] * b.height());
+            let wp = wt * lp;
+            Point::new(wp.x, wp.y)
+        };
+        Some(GradientAnnot {
+            start: map(g.start),
+            end: map(g.end),
+            kind: g.kind,
+            stops: g.stops.iter().map(|s| (s.offset, s.color)).collect(),
+        })
     }
 }

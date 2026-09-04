@@ -605,6 +605,12 @@ impl App {
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
+                // Gradient tool: drag the gradient axis on the object under
+                // the cursor (applies a linear gradient first if it has none).
+                if self.active_tool == Tool::Gradient {
+                    self.begin_gradient_drag(dp);
+                    return;
+                }
 
                 // Ruler strip → drag out a new guide.
                 if let Some(orient) = self.ruler_strip_at(self.pointer) {
