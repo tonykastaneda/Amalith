@@ -13,6 +13,7 @@ use super::super::{opt_bar_rect, App, APP_BAR_H, OPT_BAR_H};
 impl App {
     pub(in crate::app) fn on_pinch(&mut self, delta: f64) {
         self.doc.view.zoom_at(1.0 + delta, self.pointer);
+        self.request_main_redraw();
     }
 
     pub(in crate::app) fn on_wheel(&mut self, delta: MouseScrollDelta) {
@@ -137,5 +138,9 @@ impl App {
         } else {
             self.doc.view.pan += Vec2::new(dx, dy);
         }
+        // Canvas pan / zoom is on-demand: the drawn-cursor tools happen to
+        // repaint via `on_cursor_move`, but the plain-crosshair ones (e.g.
+        // the Artboard tool) don't, so ask explicitly.
+        self.request_main_redraw();
     }
 }
