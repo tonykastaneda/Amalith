@@ -269,6 +269,10 @@ impl Document {
         self.assets.iter().find(|a| a.id == id)
     }
 
+    pub fn asset_mut(&mut self, id: AssetId) -> Option<&mut Asset> {
+        self.assets.iter_mut().find(|a| a.id == id)
+    }
+
     pub fn insert_asset(&mut self, asset: Asset, index: usize) {
         let i = index.min(self.assets.len());
         self.assets.insert(i, asset);
@@ -277,6 +281,17 @@ impl Document {
     pub fn remove_asset(&mut self, id: AssetId) -> Option<(Asset, usize)> {
         let i = self.assets.iter().position(|a| a.id == id)?;
         Some((self.assets.remove(i), i))
+    }
+
+    /// Every object (arbitrary order) whose image references `asset` — used
+    /// for "Go to Link" and to filter a Links-panel-style listing to only
+    /// assets actually placed somewhere, not orphaned ones.
+    pub fn objects_using_asset(&self, asset: AssetId) -> Vec<ObjectId> {
+        self.objects
+            .values()
+            .filter(|o| matches!(&o.kind, ObjectKind::Image(img) if img.asset == asset))
+            .map(|o| o.id)
+            .collect()
     }
 
     pub fn swatches(&self) -> &[Swatch] {

@@ -17,7 +17,21 @@ pub enum AssetSource {
     /// A path outside the `.amalith` container (relative or absolute); the
     /// document does not own these bytes and must re-resolve the path on
     /// load, matching Illustrator's "Linked" file behavior.
-    Linked { path: String },
+    Linked {
+        path: String,
+        /// The linked file's mtime (Unix seconds) and byte size, captured
+        /// when linked or last updated — compared against the live file
+        /// to tell a Links panel's "Modified" status from "OK" (this
+        /// crate never reads the filesystem itself; a caller with fs
+        /// access captures these and passes them in). `None` for an
+        /// asset saved before this existed, or if the stamp couldn't be
+        /// read at link time — either way it just reads as "OK" until an
+        /// actual mismatch is ever recorded.
+        #[serde(default)]
+        modified: Option<i64>,
+        #[serde(default)]
+        size: Option<u64>,
+    },
     /// A path *inside* the `.amalith` container (e.g. `images/photo-001.png`),
     /// copied in at embed time. `amalith-io` owns reading/writing the bytes
     /// at this container path; the document model only tracks the pointer.
@@ -35,17 +49,22 @@ pub struct Asset {
 }
 
 impl Asset {
+    /// `modified`/`size` are the linked file's stamp at link time, if the
+    /// caller could read it (this crate has no filesystem access of its
+    /// own — see [`AssetSource::Linked`]).
     pub fn linked(
         id: AssetId,
         name: impl Into<String>,
         kind: AssetKind,
         path: impl Into<String>,
+        modified: Option<i64>,
+        size: Option<u64>,
     ) -> Self {
         Self {
             id,
             name: name.into(),
             kind,
-            source: AssetSource::Linked { path: path.into() },
+            source: AssetSource::Linked { path: path.into(), modified, size },
         }
     }
 
@@ -67,5 +86,9 @@ impl Asset {
 
     pub fn is_embedded(&self) -> bool {
         matches!(self.source, AssetSource::Embedded { .. })
+    }
+
+    pub fn is_linked(&self) -> bool {
+        matches!(self.source, AssetSource::Linked { .. })
     }
 }

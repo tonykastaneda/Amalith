@@ -6,8 +6,9 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, GuideId, Color, Gradient, GradientId, GradientKind, GuideOrient, LayerId,
-    ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect, StrokeStyle, TextData, Unit, Vec2,
+    Affine, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
+    GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect, StrokeStyle,
+    TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -119,7 +120,12 @@ pub enum Command {
     /// `path` is the source file for a linked asset, or the container path
     /// for an embedded one (`embedded: true`). `bounds` is the image's
     /// local box (typically `0,0,px_w,px_h`); `transform` puts that box
-    /// in the parent's space. The original file is never moved.
+    /// in the parent's space. The original file is never moved. `modified`/
+    /// `size` are the source file's stamp at place time, for a linked
+    /// asset (this crate never touches the filesystem itself — the caller
+    /// already has to read the file to get its pixel dimensions, so it
+    /// reads this stamp at the same time; `None` for an embedded asset, or
+    /// if the stamp couldn't be read).
     CreateImage {
         layer: LayerId,
         path: String,
@@ -127,6 +133,8 @@ pub enum Command {
         transform: Affine,
         name: Option<String>,
         embedded: bool,
+        modified: Option<i64>,
+        size: Option<u64>,
     },
     /// Creates a text object as the top-most child of `layer`, with
     /// `transform` placing its anchor in document space.
@@ -364,6 +372,14 @@ pub enum Command {
     SetLocked {
         objects: Vec<ObjectId>,
         locked: bool,
+    },
+    /// Relink / Embed / Unembed / Update Link, whichever produced `source`
+    /// (the shell decides which — see `Edit::SetAssetSource`). Moving any
+    /// bytes between the asset store and disk is the caller's job; this
+    /// only swaps the asset's source pointer.
+    SetAssetSource {
+        id: AssetId,
+        source: AssetSource,
     },
     /// Pathfinder boolean on `objects` (paint order back â front).
     Pathfinder {

@@ -11,6 +11,7 @@ pub mod character;
 pub mod color;
 pub mod gradient;
 pub(crate) mod layers;
+pub(crate) mod links;
 mod swatches;
 pub mod tools;
 pub mod transform;
@@ -21,7 +22,8 @@ pub mod paragraph;
 use std::collections::HashSet;
 
 use amalith_core::{
-    Appearance, ArtboardId, Color as CoreColor, Document, LayerId, ObjectId, Paint, RefPoint,
+    Appearance, ArtboardId, AssetId, Color as CoreColor, Document, LayerId, ObjectId, Paint,
+    RefPoint,
 };
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -126,6 +128,10 @@ pub struct Ctx<'a> {
     /// The drop line sits at the top of that row; when `into` is set the row
     /// itself (a group / layer) is outlined as the drop container instead.
     pub layer_drop: Option<(i64, bool)>,
+    /// Links panel: wheel-scroll offset of the row list, px.
+    pub links_scroll: f64,
+    /// Links panel: the highlighted asset row.
+    pub selected_asset: Option<AssetId>,
     /// Color panel: RGB / HSB / CMYK slider set.
     pub color_mode: ColorSpace,
     /// Color panel: the loaded ICC CMYK profile, if any — used for real
@@ -340,6 +346,20 @@ pub enum Action {
     BeginAlignSpacingEdit,
     /// Options-bar Align To dropdown, anchored at the button rect.
     OpenAlignToMenu(Rect),
+    /// Context bar "Embed" button — copy a Linked image's bytes into the
+    /// document's own asset store and switch its source to Embedded.
+    EmbedAsset(AssetId),
+    // --- Links panel ---
+    /// A row was clicked — just highlights it.
+    SelectAsset(AssetId),
+    /// Footer "Go to Link": select the objects placing this asset and
+    /// fit the view to them.
+    GoToLinkAsset(AssetId),
+    /// Footer "Relink": file-picker a replacement for a Linked asset.
+    RelinkAsset(AssetId),
+    /// Footer "Update Link": re-stamp a Linked asset from disk and
+    /// invalidate its decoded cache.
+    UpdateLinkAsset(AssetId),
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
@@ -361,6 +381,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
         "color" => color::menu(ctx),
         "transform" => transform::menu(ctx),
         "align" => align::menu(ctx),
+        "links" => links::menu(ctx),
         _ => Vec::new(),
     }
 }
@@ -386,11 +407,18 @@ pub fn layers_content_height(
     layers::content_height(doc, expanded, query)
 }
 
+/// Full content height of the Links panel for the given document state —
+/// the shell's wheel handler uses it to size the scroll range.
+pub fn links_content_height(doc: &Document) -> f64 {
+    links::content_height(doc)
+}
+
 /// Draw panel `id`'s body into `body`.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect, ctx: &Ctx) {
     match id.0 {
         "tools" => tools::paint(scene, text, body, ctx),
         "layers" => layers::paint(scene, text, body, ctx),
+        "links" => links::paint(scene, text, body, ctx),
         "artboards" => artboards::paint(scene, text, body, ctx),
         "swatches" => swatches::paint(scene, text, body, ctx),
         "character" => character::paint(scene, text, body, ctx),
@@ -427,6 +455,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     match id.0 {
         "tools" => tools::hit(body, local, ctx),
         "layers" => layers::hit(body, local, ctx),
+        "links" => links::hit(body, local, ctx),
         "artboards" => artboards::hit(body, local, ctx),
         "swatches" => swatches::hit(body, local, ctx),
         "character" => character::hit(body, local, ctx),
@@ -488,6 +517,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "character" => character::natural_height(),
         "tools" => tools::natural_height(width),
         "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
+        "links" => ROW_H * 2.0 + FOOTER_H,
         "artboards" | "swatches" => 132.0,
         "color" => color::NATURAL_H,
         "gradient" => gradient::NATURAL_H,

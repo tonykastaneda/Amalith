@@ -541,6 +541,8 @@ impl Editor {
                 transform,
                 name,
                 embedded,
+                modified,
+                size,
             } => {
                 let asset_id = AssetId::new();
                 let file_name = std::path::Path::new(&path)
@@ -550,7 +552,7 @@ impl Editor {
                 let asset = if embedded {
                     Asset::embedded(asset_id, file_name, AssetKind::Image, path)
                 } else {
-                    Asset::linked(asset_id, file_name, AssetKind::Image, path)
+                    Asset::linked(asset_id, file_name, AssetKind::Image, path, modified, size)
                 };
                 let mut object = Object::new(
                     ObjectId::new(),
@@ -1180,6 +1182,7 @@ impl Editor {
                 .into_iter()
                 .map(|id| Edit::SetLocked { id, locked })
                 .collect(),
+            Command::SetAssetSource { id, source } => vec![Edit::SetAssetSource { id, source }],
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
             Command::Align {

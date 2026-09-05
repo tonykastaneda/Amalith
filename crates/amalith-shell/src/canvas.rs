@@ -33,6 +33,11 @@ pub const ZOOM_MAX: f64 = 256.0;
 /// white artboard.
 const OUTLINE_INK: Color = Color::from_rgb8(0x20, 0x20, 0x20);
 
+/// Crossed-box contour drawn over every *Linked* image (never an Embedded
+/// one) so which is which reads at a glance right on the canvas, not just
+/// in the Links panel — the app's default accent blue.
+const LINKED_INK: Color = Color::from_rgb8(0x3b, 0x9b, 0xff);
+
 impl Default for CanvasView {
     fn default() -> Self {
         Self {
@@ -1430,24 +1435,7 @@ fn paint_object(
             if outline {
                 // Wireframe: a crossed box, like Illustrator.
                 if let Some(b) = obj.kind.own_local_bounds() {
-                    let r = convert::rect(b);
-                    let quad = [
-                        Point::new(r.x0, r.y0),
-                        Point::new(r.x1, r.y0),
-                        Point::new(r.x1, r.y1),
-                        Point::new(r.x0, r.y1),
-                    ]
-                    .map(|p| m * p);
-                    let mut bp = BezPath::new();
-                    bp.move_to(quad[0]);
-                    for p in &quad[1..] {
-                        bp.line_to(*p);
-                    }
-                    bp.close_path();
-                    bp.move_to(quad[0]);
-                    bp.line_to(quad[2]);
-                    bp.move_to(quad[1]);
-                    bp.line_to(quad[3]);
+                    let bp = crossed_box_path(convert::rect(b), m);
                     scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, OUTLINE_INK, None, &bp);
                 }
                 return;
@@ -1470,6 +1458,15 @@ fn paint_object(
                     &r,
                 );
             }
+            // A Linked image always gets a crossed-box contour on top of
+            // its pixels — an Embedded one gets none (⇐ the user's own
+            // "linked draws a blue X, embedded doesn't" ask).
+            if doc.asset(img.asset).is_some_and(|a| a.is_linked()) {
+                if let Some(b) = obj.kind.own_local_bounds() {
+                    let bp = crossed_box_path(convert::rect(b), m);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, LINKED_INK, None, &bp);
+                }
+            }
         }
         other => {
             if let Some(b) = other.own_local_bounds() {
@@ -1487,6 +1484,30 @@ fn paint_object(
 
 fn overlaps(a: Rect, b: Rect) -> bool {
     a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
+}
+
+/// A box with both diagonals, in screen space (`local_rect` transformed by
+/// `m`) — Illustrator's own Outline-mode image wireframe, and (unlike
+/// Illustrator) also a Linked image's always-on canvas contour.
+fn crossed_box_path(local_rect: Rect, m: Affine) -> BezPath {
+    let quad = [
+        Point::new(local_rect.x0, local_rect.y0),
+        Point::new(local_rect.x1, local_rect.y0),
+        Point::new(local_rect.x1, local_rect.y1),
+        Point::new(local_rect.x0, local_rect.y1),
+    ]
+    .map(|p| m * p);
+    let mut bp = BezPath::new();
+    bp.move_to(quad[0]);
+    for p in &quad[1..] {
+        bp.line_to(*p);
+    }
+    bp.close_path();
+    bp.move_to(quad[0]);
+    bp.line_to(quad[2]);
+    bp.move_to(quad[1]);
+    bp.line_to(quad[3]);
+    bp
 }
 
 /// Draw a raster so `img`'s pixel box fills `local_bounds` under `m`.
@@ -1578,6 +1599,63 @@ pub fn raster_dimensions(path: &std::path::Path) -> Option<(u32, u32)> {
         .ok()?
         .into_dimensions()
         .ok()
+}
+
+/// A linked file's mtime (Unix seconds) and byte size, for a Links-panel-
+/// style "Modified" check (⇐ `amalith_core::AssetSource::Linked`'s own
+/// stamp). `(None, None)` if the file can't be stat'd right now — that's
+/// not itself a "Missing" verdict (the caller checking status separately
+/// distinguishes "file gone" from "stamp just wasn't captured").
+pub fn file_stamp(path: &std::path::Path) -> (Option<i64>, Option<u64>) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (None, None);
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    (modified, Some(meta.len()))
+}
+
+/// A Links-panel-style status for one asset (⇐ Illustrator's Links panel
+/// row icon: a plain link, a broken-link warning, or a "changed since
+/// linked" warning).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkStatus {
+    /// Embedded — there's no external file to go missing or change.
+    Embedded,
+    /// Linked, and the file's on disk with its last-known stamp intact.
+    Ok,
+    /// Linked, the file's on disk, but its mtime/size no longer match what
+    /// was captured at link/last-update time.
+    Modified,
+    /// Linked, but the file can't be found at that path at all.
+    Missing,
+}
+
+/// `source`'s current status — stats the file for a `Linked` asset (a
+/// real, if cheap, filesystem call; call this from a panel/menu action,
+/// not a per-frame render path).
+pub fn link_status(source: &amalith_core::AssetSource) -> LinkStatus {
+    let amalith_core::AssetSource::Linked { path, modified, size } = source else {
+        return LinkStatus::Embedded;
+    };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return LinkStatus::Missing;
+    };
+    let live_modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    let stamped = modified.is_some() || size.is_some();
+    let matches = *modified == live_modified && *size == Some(meta.len());
+    if stamped && !matches {
+        LinkStatus::Modified
+    } else {
+        LinkStatus::Ok
+    }
 }
 
 /// Header-only dimensions of encoded bytes.

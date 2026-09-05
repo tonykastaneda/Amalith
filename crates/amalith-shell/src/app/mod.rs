@@ -646,6 +646,8 @@ struct Doc {
     expanded_groups: std::collections::HashSet<ObjectId>,
     selected_artboard: Option<ArtboardId>,
     selected_layer: Option<LayerId>,
+    /// Links panel: the currently highlighted asset row.
+    selected_asset: Option<amalith_core::AssetId>,
     /// The artboard the user last clicked inside (any tool). Targets
     /// artboard-relative Paste in Front / Back.
     current_artboard: Option<ArtboardId>,
@@ -680,6 +682,7 @@ impl Doc {
             expanded_groups: std::collections::HashSet::new(),
             selected_artboard: None,
             selected_layer: None,
+            selected_asset: None,
             current_artboard: None,
             clip_artboard: None,
             last_svg: None,
@@ -1412,6 +1415,8 @@ impl App {
                 &self.doc.expanded_groups,
                 &self.layer_query,
             )
+        } else if id == PanelId("links") {
+            panels::links_content_height(self.doc.editor.document())
         } else {
             panels::max_scroll(id, body.width(), body.height()) + body.height()
         }
@@ -2517,6 +2522,15 @@ impl App {
             .map(|o| o.appearance)
     }
 
+    /// The single selected object's asset, when it's a Linked image — for
+    /// the context bar's "Embed" button.
+    fn embed_target(&self) -> Option<amalith_core::AssetId> {
+        let &[id] = self.doc.selection.as_slice() else { return None };
+        let doc = self.doc.editor.document();
+        let amalith_core::ObjectKind::Image(img) = &doc.object(id)?.kind else { return None };
+        doc.asset(img.asset)?.is_linked().then_some(img.asset)
+    }
+
     /// Frontmost selected object (last in layer stacking). Illustrator uses
     /// this as the default key object when Align To Key Object is chosen
     /// without a click.
@@ -3414,6 +3428,26 @@ impl App {
                     self.add_doc(doc);
                 }
                 recent::push(path);
+                // A moved/deleted linked file otherwise fails silently —
+                // the image just never renders, with no indication why.
+                // Surface it once, right after Open (see the Links panel
+                // for which one and a Relink action).
+                let missing = self
+                    .doc
+                    .editor
+                    .document()
+                    .assets()
+                    .iter()
+                    .filter(|a| canvas::link_status(&a.source) == canvas::LinkStatus::Missing)
+                    .count();
+                if missing > 0 {
+                    self.doc.io_error = Some(if missing == 1 {
+                        "1 linked file could not be found.".to_string()
+                    } else {
+                        format!("{missing} linked files could not be found.")
+                    });
+                    self.request_main_redraw();
+                }
             }
             Err(err) => {
                 self.doc.io_error = Some(format!("Open failed: {err}"));
@@ -3505,6 +3539,7 @@ impl App {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned());
         let src = path.to_string_lossy().into_owned();
+        let (modified, size) = canvas::file_stamp(path);
         let cmd = Command::CreateImage {
             layer,
             path: src.clone(),
@@ -3512,6 +3547,8 @@ impl App {
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
             name,
             embedded: false,
+            modified,
+            size,
         };
         match self.doc.editor.execute(cmd) {
             Ok(CommandOutcome::Object(id)) => {
@@ -3532,6 +3569,154 @@ impl App {
             _ => {}
         }
         self.request_main_redraw();
+    }
+
+    /// Forces the next `warm_images` tick to re-decode `asset` from
+    /// scratch — needed after Relink or Update Link change what its
+    /// current path/bytes actually resolve to. `stale_key` is the path/
+    /// container_path whose cached decode (if any) is no longer
+    /// trustworthy — only meaningful for Update Link (same path, changed
+    /// file content); a fresh Relink path was never cached under this
+    /// asset id to begin with.
+    fn invalidate_image(&mut self, asset: AssetId, stale_key: Option<&str>) {
+        self.image_cache.remove(&asset);
+        self.image_lod.remove(&asset);
+        self.lod_inflight.remove(&asset);
+        if let Some(key) = stale_key {
+            self.decoded_by_path.remove(key);
+        }
+        self.request_main_redraw();
+    }
+
+    /// Links panel ▸ Relink: point a Linked asset at a different file.
+    /// No-op for an Embedded asset (Unembed first) or if the dialog's
+    /// cancelled.
+    fn relink_asset(&mut self, id: AssetId) {
+        if !self.doc.editor.document().asset(id).is_some_and(|a| a.is_linked()) {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter(
+                "Images",
+                &["png", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "gif", "webp", "bmp"],
+            )
+            .pick_file()
+        else {
+            return;
+        };
+        let (modified, size) = canvas::file_stamp(&path);
+        let source = amalith_core::AssetSource::Linked {
+            path: path.to_string_lossy().into_owned(),
+            modified,
+            size,
+        };
+        if self.doc.editor.execute(Command::SetAssetSource { id, source }).is_ok() {
+            self.invalidate_image(id, None);
+        }
+    }
+
+    /// Links panel / context bar ▸ Embed: copy a Linked asset's current
+    /// file bytes into the document so it no longer depends on the
+    /// external path. No-op if it's already Embedded, or the file can't
+    /// be read. The decoded image itself doesn't change (same bytes,
+    /// just relocated), so no cache invalidation is needed.
+    fn embed_asset(&mut self, id: AssetId) {
+        let Some(asset) = self.doc.editor.document().asset(id).cloned() else {
+            return;
+        };
+        let amalith_core::AssetSource::Linked { path, .. } = &asset.source else {
+            return;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            self.doc.io_error = Some(format!("Could not read {path} to embed it."));
+            self.request_main_redraw();
+            return;
+        };
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png");
+        let container = format!("images/{}-{id}.{ext}", asset.name);
+        self.doc.asset_store.insert(&container, bytes);
+        let source = amalith_core::AssetSource::Embedded { container_path: container };
+        let _ = self.doc.editor.execute(Command::SetAssetSource { id, source });
+        self.request_main_redraw();
+    }
+
+    /// Links panel ▸ Unembed: write an Embedded asset's bytes out to a
+    /// file the user picks, then point it at that path as a Linked asset
+    /// instead. No-op if it's already Linked, or the dialog's cancelled.
+    fn unembed_asset(&mut self, id: AssetId) {
+        let Some(asset) = self.doc.editor.document().asset(id).cloned() else {
+            return;
+        };
+        let amalith_core::AssetSource::Embedded { container_path } = &asset.source else {
+            return;
+        };
+        let Some(bytes) = self.doc.asset_store.get(container_path).map(<[u8]>::to_vec) else {
+            return;
+        };
+        let ext = std::path::Path::new(container_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png");
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(format!("{}.{ext}", asset.name))
+            .save_file()
+        else {
+            return;
+        };
+        if let Err(err) = std::fs::write(&path, &bytes) {
+            self.doc.io_error = Some(format!("Could not write {}: {err}", path.display()));
+            self.request_main_redraw();
+            return;
+        }
+        let (modified, size) = canvas::file_stamp(&path);
+        let source = amalith_core::AssetSource::Linked {
+            path: path.to_string_lossy().into_owned(),
+            modified,
+            size,
+        };
+        let _ = self.doc.editor.execute(Command::SetAssetSource { id, source });
+        self.request_main_redraw();
+    }
+
+    /// Links panel ▸ Update Link: re-stamps a still-Linked asset after its
+    /// file changed on disk, and forces a redecode so the canvas actually
+    /// shows the new content. No-op if it's now missing entirely (Relink
+    /// instead) or already Embedded.
+    fn update_linked_asset(&mut self, id: AssetId) {
+        let Some(path) = self.doc.editor.document().asset(id).and_then(|a| match &a.source {
+            amalith_core::AssetSource::Linked { path, .. } => Some(path.clone()),
+            amalith_core::AssetSource::Embedded { .. } => None,
+        }) else {
+            return;
+        };
+        let (modified, size) = canvas::file_stamp(std::path::Path::new(&path));
+        if modified.is_none() && size.is_none() {
+            return;
+        }
+        let source = amalith_core::AssetSource::Linked { path: path.clone(), modified, size };
+        if self.doc.editor.execute(Command::SetAssetSource { id, source }).is_ok() {
+            self.invalidate_image(id, Some(&path));
+        }
+    }
+
+    /// Links panel footer "Go to Link": select every object placing this
+    /// asset and fit the view to their combined bounds.
+    fn go_to_link(&mut self, id: AssetId) {
+        let doc = self.doc.editor.document();
+        let objects = doc.objects_using_asset(id);
+        let Some(bounds) = objects
+            .iter()
+            .filter_map(|&o| doc.bounds_of(o))
+            .reduce(|a, b| a.union(b))
+        else {
+            return;
+        };
+        self.doc.selection = objects;
+        self.doc.anchor_sel.clear();
+        self.fit_view_to(bounds);
     }
 
     /// Drop a raster onto the document at the pointer.
@@ -3573,6 +3758,8 @@ impl App {
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
             name: Some(stem.to_string()),
             embedded: true,
+            modified: None,
+            size: None,
         };
         match self.doc.editor.execute(cmd) {
             Ok(CommandOutcome::Object(id)) => {
@@ -3731,7 +3918,7 @@ impl App {
                 continue;
             }
             match &a.source {
-                amalith_core::AssetSource::Linked { path } => {
+                amalith_core::AssetSource::Linked { path, .. } => {
                     linked.push((a.id, path.clone()));
                 }
                 amalith_core::AssetSource::Embedded { container_path } => {
@@ -4331,6 +4518,7 @@ impl App {
             artboard_edit: None,
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
+            embed_target: None,
         }
     }
 
@@ -4382,6 +4570,7 @@ impl App {
             artboard_edit: self.artboard_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
+            embed_target: self.embed_target(),
         }
     }
 
@@ -5143,6 +5332,8 @@ impl App {
             layer_search_focused: self.layer_search_focused,
             layer_scroll: self.panel_scroll_of(PanelId("layers")),
             layer_drop: None,
+            links_scroll: self.panel_scroll_of(PanelId("links")),
+            selected_asset: self.doc.selected_asset,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
             recent: &self.recent_colors,
@@ -5195,6 +5386,8 @@ impl App {
             layer_search_focused: self.layer_search_focused,
             layer_scroll: self.panel_scroll_of(PanelId("layers")),
             layer_drop,
+            links_scroll: self.panel_scroll_of(PanelId("links")),
+            selected_asset: self.doc.selected_asset,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
             recent: &self.recent_colors,
@@ -5893,14 +6086,14 @@ impl App {
             .docked(Side::Left)
             .into_iter()
             .filter(|&m| m != dragging)
-            .map(|m| self.dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .map(|m| self.dock.master(m).map(layout::dock_width).unwrap_or(0.0))
             .collect();
         let right: Vec<f64> = self
             .dock
             .docked(Side::Right)
             .into_iter()
             .filter(|&m| m != dragging)
-            .map(|m| self.dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .map(|m| self.dock.master(m).map(layout::dock_width).unwrap_or(0.0))
             .collect();
         let dock_target = (local.y >= 0.0 && local.y < h)
             .then(|| layout::resolve_dock_target(local.x, w, &left, &right))
@@ -6795,10 +6988,10 @@ fn docked_master_rect(dock: &DockModel, id: u64, w: f64, h: f64) -> Rect {
     let widths: Vec<f64> = dock
         .docked(side)
         .iter()
-        .map(|&mid| dock.master(mid).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+        .map(|&mid| dock.master(mid).map(layout::dock_width).unwrap_or(0.0))
         .collect();
     let off = layout::dock_offset(&widths, idx);
-    let mw = m.rect[2] as f64;
+    let mw = layout::dock_width(m);
     let top = APP_BAR_H + OPT_BAR_H;
     match side {
         Side::Left => Rect::new(off, top, off + mw, h),
@@ -6810,6 +7003,7 @@ fn tab_label(panel: PanelId) -> String {
     match panel.0 {
         "tools" => "Tools",
         "layers" => "Layers",
+        "links" => "Links",
         "artboards" => "Artboards",
         "swatches" => "Swatches",
         "character" => "Character",
@@ -6873,13 +7067,14 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 }
 
 /// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 11] = [
+const WINDOW_PANELS: [(&str, &str); 12] = [
     ("align", "Align"),
     ("artboards", "Artboards"),
     ("character", "Character"),
     ("color", "Color"),
     ("gradient", "Gradient"),
     ("layers", "Layers"),
+    ("links", "Links"),
     ("paragraph", "Paragraph"),
     ("pathfinder", "Pathfinder"),
     ("swatches", "Swatches"),

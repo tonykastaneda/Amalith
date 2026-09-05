@@ -28,6 +28,8 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         "gradient" => "M2 4H16V14H2Z",
         // Three stacked layers.
         "layers" => "M2 6L9 2L16 6L9 10Z M2 10L9 14L16 10 M2 13L9 17L16 13",
+        // Three overlapping chain links, in a diagonal run.
+        "links" => "M2 5H8V9H2Z M6 9H12V13H6Z M10 4H16V8H10Z",
         "paragraph" => "M2 4H16 M2 7H12 M2 10H16 M2 13H12 M2 16H9",
         // Overlapping shapes with their shared region emphasized below.
         "pathfinder" => "M2 2H11V11H2Z M7 7H16V16H7Z",
@@ -81,6 +83,7 @@ mod tests {
             "color",
             "gradient",
             "layers",
+            "links",
             "paragraph",
             "pathfinder",
             "swatches",

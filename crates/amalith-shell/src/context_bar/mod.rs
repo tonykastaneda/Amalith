@@ -30,6 +30,7 @@ mod align;
 mod anchor;
 pub(crate) mod artboard;
 mod character;
+mod embed;
 mod fill_stroke;
 mod opacity;
 mod status;
@@ -84,6 +85,9 @@ pub struct Ctx<'a> {
     pub artboard_edit: Option<(crate::panels::transform::ABField, &'a str)>,
     pub artboard_link: bool,
     pub artboard_fill_menu: bool,
+    /// The single selected object's asset, when it's a Linked image —
+    /// flips the `embed` segment's "Embed" button on.
+    pub embed_target: Option<amalith_core::AssetId>,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -99,6 +103,7 @@ pub enum SegKind {
     Xform,
     Align,
     Artboard,
+    Embed,
 }
 
 struct Segment {
@@ -122,6 +127,7 @@ const SEGMENTS: &[Segment] = &[
     fill_stroke::SEGMENT,
     stroke::SEGMENT,
     opacity::SEGMENT,
+    embed::SEGMENT,
 ];
 
 /// Lay the applicable segments out along `bar`, dropping any that would

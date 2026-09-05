@@ -51,6 +51,7 @@ pub(in crate::app) fn paint_main(
     renaming: Option<(panels::RenameId, &str)>,
     selected_layer: Option<LayerId>,
     selected_artboard: Option<ArtboardId>,
+    selected_asset: Option<AssetId>,
     active_artboard: Option<ArtboardId>,
     tab_labels: &[String],
     active_tab: usize,
@@ -546,6 +547,8 @@ pub(in crate::app) fn paint_main(
         layer_search_focused,
         layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
         layer_drop,
+        links_scroll: panel_scroll.get(&PanelId("links")).copied().unwrap_or(0.0),
+        selected_asset,
         color_mode,
         cmyk_profile,
         recent,
@@ -563,7 +566,7 @@ pub(in crate::app) fn paint_main(
     };
     // Captured while walking the docked masters below, painted last (on
     // top of everything) once we know the open row's real screen rect.
-    let mut open_flyout: Option<(Rect, PanelId)> = None;
+    let mut open_flyout: Option<(Rect, PanelId, Side)> = None;
     for side in [Side::Left, Side::Right] {
         for mid in dock.docked(side) {
             let Some(master) = dock.master(mid) else { continue };
@@ -599,7 +602,7 @@ pub(in crate::app) fn paint_main(
             if let Some((fm, fg, fi)) = stack_flyout {
                 if fm == mid {
                     if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {
-                        open_flyout = Some((row.rect, row.panel));
+                        open_flyout = Some((row.rect, row.panel, side));
                     }
                 }
             }
@@ -647,8 +650,8 @@ pub(in crate::app) fn paint_main(
             }
         }
     }
-    if let Some((row, pid)) = open_flyout {
-        let bounds = layout::flyout_rect(row, Rect::new(0.0, 0.0, width, height));
+    if let Some((row, pid, side)) = open_flyout {
+        let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
         let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
         let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
         chrome::paint_flyout_chrome(scene, bounds, header, close, &tab_label(pid), theme, text);
@@ -661,7 +664,7 @@ pub(in crate::app) fn paint_main(
         let widths: Vec<f64> = dock
             .docked(side)
             .iter()
-            .map(|&m| dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .map(|&m| dock.master(m).map(layout::dock_width).unwrap_or(0.0))
             .collect();
         let off = layout::dock_offset(&widths, index);
         let x = match side {
@@ -705,6 +708,15 @@ pub(in crate::app) fn paint_main(
         artboard_edit,
         artboard_link,
         artboard_fill_menu,
+        embed_target: match selection {
+            [id] => match doc.object(*id).map(|o| &o.kind) {
+                Some(amalith_core::ObjectKind::Image(img)) => {
+                    doc.asset(img.asset).filter(|a| a.is_linked()).map(|_| img.asset)
+                }
+                _ => None,
+            },
+            _ => None,
+        },
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
     // The Stroke flyout is painted by the overlay pass (after the rulers)

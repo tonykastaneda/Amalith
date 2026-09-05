@@ -398,8 +398,22 @@ impl App {
                             };
                         }
                     }
+                } else if panel.0 == "links" {
+                    if let Some(asset_id) = self.doc.selected_asset {
+                        match id {
+                            "embed" => self.embed_asset(asset_id),
+                            "unembed" => self.unembed_asset(asset_id),
+                            _ => {}
+                        }
+                    }
                 }
             }
+            panels::Action::SelectAsset(id) => {
+                self.doc.selected_asset = Some(id);
+            }
+            panels::Action::GoToLinkAsset(id) => self.go_to_link(id),
+            panels::Action::RelinkAsset(id) => self.relink_asset(id),
+            panels::Action::UpdateLinkAsset(id) => self.update_linked_asset(id),
             panels::Action::SetXformRef(rp) => {
                 self.xform_ref = rp;
             }
@@ -517,6 +531,7 @@ impl App {
                 self.set_color_spectrum(t);
                 self.drag = Drag::ColorSpectrum { track };
             }
+            panels::Action::EmbedAsset(id) => self.embed_asset(id),
         }
         self.request_main_redraw();
     }

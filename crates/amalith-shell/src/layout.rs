@@ -18,6 +18,27 @@ pub const TOOLS_MIN_W: f64 = 48.0;
 /// Below this width a master's Stack-mode rows drop their labels (⇐
 /// `COMPACT_BREAKPOINT`).
 pub const COMPACT_BREAKPOINT: f64 = 240.0;
+/// The rail width a compact (icon-only) Stack-mode master actually
+/// occupies on screen — same floor as [`TOOLS_MIN_W`], the other
+/// icon-only rail. `Master::rect[2]` can sit anywhere in
+/// `[MASTER_MIN_W, COMPACT_BREAKPOINT)` and still trigger compact display
+/// (an icon row needs far less room than `MASTER_MIN_W` allows), so
+/// without this the rail kept its old, wider stored width and just left
+/// the extra space blank beside the icon. `rect[2]` itself is never
+/// touched — this only changes what [`dock_width`] reports, so toggling
+/// back to Tabs restores the width the user last set.
+pub const COMPACT_RAIL_W: f64 = TOOLS_MIN_W;
+
+/// `m`'s effective width for rail-stacking / dock-offset math — its
+/// stored width, unless it would render compact (see [`COMPACT_RAIL_W`]).
+pub fn dock_width(m: &Master) -> f64 {
+    let raw = m.rect[2] as f64;
+    if !m.is_tools() && m.layout == MasterLayout::Stack && raw < COMPACT_BREAKPOINT {
+        COMPACT_RAIL_W
+    } else {
+        raw
+    }
+}
 /// Edge band, from the viewport's left/right edge, that always docks
 /// regardless of what's under the cursor (⇐ `DOCK_EDGE`).
 pub const DOCK_EDGE: f64 = 36.0;
@@ -443,6 +464,27 @@ pub fn flyout_rect(row: Rect, viewport: Rect) -> Rect {
     Rect::new(left, top, left + FLYOUT_W, top + FLYOUT_H)
 }
 
+/// Where a docked Master's Stack-mode row flyout should sit: always out
+/// past every rail on `row`'s side, into the canvas — never `row.x1 + 10`
+/// (that only clears `row`'s own Master, and lands on top of the next
+/// docked Master's tab strip when more than one is stacked on that side).
+/// `canvas` is the canvas viewport's `(x0, x1)` span (`App::canvas_x_span`)
+/// — the true boundary past every docked rail on either side.
+pub fn docked_flyout_rect(row: Rect, side: Side, canvas: (f64, f64), viewport: Rect) -> Rect {
+    let (canvas_x0, canvas_x1) = canvas;
+    let left = match side {
+        Side::Left => canvas_x0 + 10.0,
+        Side::Right => canvas_x1 - FLYOUT_W - 10.0,
+    }
+    .clamp(canvas_x0 + 8.0, (canvas_x1 - FLYOUT_W - 8.0).max(canvas_x0 + 8.0));
+    let mut top = row.y0;
+    if top + FLYOUT_H > viewport.y1 - 12.0 {
+        top = (viewport.y1 - FLYOUT_H - 12.0).max(viewport.y0 + 8.0);
+    }
+    top = top.max(viewport.y0 + 8.0);
+    Rect::new(left, top, left + FLYOUT_W, top + FLYOUT_H)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,5 +714,49 @@ mod tests {
         let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
         let f = flyout_rect(row, viewport);
         assert!(f.y1 <= viewport.y1 - 12.0 + 1e-9);
+    }
+
+    #[test]
+    fn docked_flyout_rect_opens_past_every_left_rail_not_beside_its_own_row() {
+        // Two Left-docked masters stacked side by side; a Stack row's
+        // flyout in the first one has `row.x1` sitting at the seam with
+        // the second master — exactly where the old row-relative
+        // `flyout_rect` would (wrongly) open it, on top of that second
+        // master's tab strip instead of out past it, into the canvas.
+        let row = Rect::new(0.0, 100.0, 160.0, 134.0);
+        let canvas = (360.0, 1000.0); // canvas starts past both rails
+        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let f = docked_flyout_rect(row, Side::Left, canvas, viewport);
+        assert_eq!(f.x0, canvas.0 + 10.0);
+    }
+
+    #[test]
+    fn docked_flyout_rect_opens_left_from_a_right_docked_rail() {
+        let row = Rect::new(840.0, 100.0, 1000.0, 134.0);
+        let canvas = (0.0, 640.0);
+        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let f = docked_flyout_rect(row, Side::Right, canvas, viewport);
+        assert_eq!(f.x1, canvas.1 - 10.0);
+    }
+
+    #[test]
+    fn dock_width_clamps_a_compact_stack_master_to_the_rail_floor() {
+        // Below `COMPACT_BREAKPOINT` but well above `COMPACT_RAIL_W` — the
+        // exact gap that used to leave a compact (icon-only) rail sitting
+        // in a much wider, mostly-empty column.
+        let mut m = master(MasterLayout::Stack, vec![vec![A]]);
+        m.rect[2] = 200.0;
+        assert_eq!(dock_width(&m), COMPACT_RAIL_W);
+    }
+
+    #[test]
+    fn dock_width_leaves_a_wide_stack_or_any_tabs_master_alone() {
+        let mut wide = master(MasterLayout::Stack, vec![vec![A]]);
+        wide.rect[2] = 300.0;
+        assert_eq!(dock_width(&wide), 300.0);
+
+        let mut tabs = master(MasterLayout::Tabs, vec![vec![A]]);
+        tabs.rect[2] = 200.0;
+        assert_eq!(dock_width(&tabs), 200.0);
     }
 }

@@ -255,6 +255,8 @@ mod tests {
                 transform: Affine::translate((10.0, 20.0)),
                 name: Some("photo".into()),
                 embedded: false,
+                modified: None,
+                size: None,
             })
             .unwrap()
         else {
@@ -270,7 +272,7 @@ mod tests {
         assert_eq!(editor.document().assets()[0].kind, AssetKind::Image);
         assert!(matches!(
             &editor.document().assets()[0].source,
-            AssetSource::Linked { path } if path == "/tmp/photo.png"
+            AssetSource::Linked { path, .. } if path == "/tmp/photo.png"
         ));
         assert_eq!(editor.document().bounds_of(id), Some(Rect::new(10.0, 20.0, 210.0, 120.0)));
 
@@ -281,6 +283,66 @@ mod tests {
         editor.redo().unwrap();
         assert!(editor.document().object(id).is_some());
         assert_eq!(editor.document().assets().len(), 1);
+    }
+
+    #[test]
+    fn set_asset_source_relinks_and_undoes_back_to_the_old_source() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(obj_id) = editor
+            .execute(Command::CreateImage {
+                layer,
+                path: "/tmp/photo.png".into(),
+                bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
+                transform: Affine::IDENTITY,
+                name: Some("photo".into()),
+                embedded: false,
+                modified: Some(100),
+                size: Some(10),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let asset_id = editor.document().assets()[0].id;
+
+        // Go to Link / "which objects use this asset" — the Links panel's
+        // own basis for filtering to only placed assets.
+        assert_eq!(editor.document().objects_using_asset(asset_id), vec![obj_id]);
+
+        editor
+            .execute(Command::SetAssetSource {
+                id: asset_id,
+                source: AssetSource::Linked {
+                    path: "/tmp/photo-relinked.png".into(),
+                    modified: Some(200),
+                    size: Some(20),
+                },
+            })
+            .unwrap();
+        assert!(matches!(
+            &editor.document().asset(asset_id).unwrap().source,
+            AssetSource::Linked { path, modified: Some(200), size: Some(20) }
+                if path == "/tmp/photo-relinked.png"
+        ));
+
+        editor.undo().unwrap();
+        assert!(matches!(
+            &editor.document().asset(asset_id).unwrap().source,
+            AssetSource::Linked { path, modified: Some(100), size: Some(10) }
+                if path == "/tmp/photo.png"
+        ));
+
+        editor.redo().unwrap();
+        assert!(matches!(
+            &editor.document().asset(asset_id).unwrap().source,
+            AssetSource::Linked { path, .. } if path == "/tmp/photo-relinked.png"
+        ));
     }
 
     #[test]

@@ -16,8 +16,8 @@
 //! repr diffs rather than replaying the action that caused them.
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Asset, AssetId, Color, Document, DocumentError, Gradient,
-    GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind,
+    Affine, Artboard, ArtboardId, Asset, AssetId, AssetSource, Color, Document, DocumentError,
+    Gradient, GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind,
     ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
 };
 
@@ -120,6 +120,17 @@ pub(crate) enum Edit {
     },
     RemoveAsset {
         id: AssetId,
+    },
+    /// Swaps an existing asset's `source` in place — Relink, Embed,
+    /// Unembed, and Update Link (re-stamping a still-linked asset) all
+    /// compile to this. Moving any bytes between the document's asset
+    /// store and disk (writing an unembedded file out, reading a
+    /// to-be-embedded one in) is the caller's job, same as `Place`
+    /// already does outside the undo system — this only ever swaps the
+    /// pointer.
+    SetAssetSource {
+        id: AssetId,
+        source: AssetSource,
     },
     SetClip {
         group: ObjectId,
@@ -342,6 +353,11 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .remove_asset(id)
                 .ok_or(DocumentError::AssetNotFound(id))?;
             Ok((Edit::InsertAsset { asset, index }, None))
+        }
+        Edit::SetAssetSource { id, source } => {
+            let asset = doc.asset_mut(id).ok_or(DocumentError::AssetNotFound(id))?;
+            let old = std::mem::replace(&mut asset.source, source);
+            Ok((Edit::SetAssetSource { id, source: old }, None))
         }
         Edit::SetClip { group, clip } => {
             let object = doc.object_mut(group).ok_or(CommandError::ObjectNotFound(group))?;
