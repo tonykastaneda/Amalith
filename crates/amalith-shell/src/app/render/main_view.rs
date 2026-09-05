@@ -581,6 +581,9 @@ pub(in crate::app) fn paint_main(
                 // (the colour picker, a shape dialog, Export for Screens
                 // never dock — see `App::is_float_only`).
                 false,
+                // Always a real on-screen frame, never `natural_height`'s
+                // probe — the last group fills down to the rail's bottom.
+                true,
             );
             let this_masters_open_row = stack_flyout.filter(|(fm, ..)| *fm == mid).map(|(_, fg, fi)| (fg, fi));
             chrome::paint_master(

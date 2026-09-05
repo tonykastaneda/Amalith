@@ -163,7 +163,7 @@ fn paint_group_handle(scene: &mut Scene, handle: Rect, theme: &Theme) {
     let c = handle.center();
     // As thin as the active-tab underline (2px) — this is a grip line,
     // not a button.
-    let (w, h) = ((handle.width() * 0.36).clamp(24.0, 160.0), 2.5);
+    let (w, h) = ((handle.width() * 0.18).clamp(20.0, 80.0), 2.5);
     let pill = Rect::new(c.x - w * 0.5, c.y - h * 0.5, c.x + w * 0.5, c.y + h * 0.5).to_rounded_rect(h * 0.5);
     scene.fill(Fill::NonZero, ID, theme.accent, None, &pill);
 }
@@ -357,7 +357,7 @@ mod tests {
         let mut text = TextContext::new();
         for layout in [MasterLayout::Stack, MasterLayout::Tabs] {
             let m = master(layout, vec![vec![PanelId("a"), PanelId("b")], vec![PanelId("c")]]);
-            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
             let mut scene = Scene::new();
             paint_master(
                 &mut scene,
@@ -377,7 +377,7 @@ mod tests {
     fn paint_master_compact_mode_doesnt_panic() {
         let mut text = TextContext::new();
         let m = master(MasterLayout::Stack, vec![vec![PanelId("a")]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80, false, true);
         assert!(frame.compact);
         let mut scene = Scene::new();
         paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, false);
@@ -387,7 +387,7 @@ mod tests {
     fn paint_master_bespoke_mode_doesnt_panic() {
         let mut text = TextContext::new();
         let m = master(MasterLayout::Tabs, vec![vec![PanelId("picker")]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true, true);
         let mut scene = Scene::new();
         paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, true);
     }

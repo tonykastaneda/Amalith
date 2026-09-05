@@ -5788,7 +5788,12 @@ impl App {
         };
         let theme = self.theme.clone();
         let bespoke = self.is_float_only(id);
-        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p), bespoke)
+        // `fill_last: true` — this is always a real on-screen frame
+        // (paint, press, or a drop-target hit-test), never
+        // `natural_height`'s own probe, so the last group should fill
+        // down to `bounds`'s real bottom edge whether `id` is docked or
+        // (resized taller than its content by hand) floating.
+        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p), bespoke, true)
     }
 
     /// A docked master's rect *within the main window* (local coordinates)

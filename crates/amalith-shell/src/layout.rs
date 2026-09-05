@@ -122,12 +122,24 @@ impl Default for GroupArea {
 /// dialog, Export for Screens — see `App::is_float_only`): no master
 /// header, no group handle, no content-resize grip — its one tab strip
 /// is the only chrome, filling the window down to its bottom edge.
+///
+/// `fill_last` — true for every real layout (paint, hit-test, drag), false
+/// only for `natural_height`'s own probe (see there): the last group's
+/// content pane stretches to fill `bounds` all the way down, so it's
+/// always flush with the bottom of whatever window it's in — a docked
+/// master's rail, *or* a floating one the user resized taller than its
+/// content by hand (floating windows auto-fit their natural height, but
+/// nothing stops the user from dragging the OS window's own edge past
+/// that). Never shrinks it below its own natural/pinned height though: if
+/// everything's too tall to fit, the whole Master scrolls
+/// (`Master::scroll`) rather than clipping the last group away.
 pub fn layout_master(
     master: &Master,
     bounds: Rect,
     theme: &Theme,
     tab_width: &mut dyn FnMut(PanelId) -> f64,
     bespoke: bool,
+    fill_last: bool,
 ) -> MasterFrame {
     let header_h = if bespoke { 0.0 } else { HEADER_H };
     let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, (bounds.y0 + header_h).min(bounds.y1));
@@ -162,6 +174,7 @@ pub fn layout_master(
                     area.tabs.push(TabRect { panel, rect: Rect::new(x, area.tab_strip.y0, x + w, strip_y1) });
                     x += w;
                 }
+                let stretch_last = !bespoke && fill_last && i + 1 == master.groups.len();
                 let content_h = if bespoke {
                     // Fills whatever's left in the fixed window — no
                     // resize grip, nothing to clamp against.
@@ -177,12 +190,21 @@ pub fn layout_master(
                         .map_or(crate::dock::TAB_CONTENT_DEFAULT_H as f64, |&p| {
                             crate::panels::min_body_height(p, body.width())
                         });
-                    g.content_h
+                    let pinned = g
+                        .content_h
                         .map_or(natural, |h| h as f64)
-                        .clamp(TAB_CONTENT_MIN_H as f64, TAB_CONTENT_MAX_H as f64)
+                        .clamp(TAB_CONTENT_MIN_H as f64, TAB_CONTENT_MAX_H as f64);
+                    if stretch_last {
+                        pinned.max(body.y1 - strip_y1)
+                    } else {
+                        pinned
+                    }
                 };
                 area.content = Rect::new(body.x0, strip_y1, body.x1, strip_y1 + content_h);
-                area.resize_handle = if bespoke {
+                area.resize_handle = if bespoke || stretch_last {
+                    // Nothing below it to negotiate space with — dragging
+                    // a handle that just snaps back to filling the rest
+                    // of the Master would be a dead control.
                     Rect::ZERO
                 } else {
                     Rect::new(body.x0, area.content.y1, body.x1, area.content.y1 + 6.0)
@@ -191,7 +213,7 @@ pub fn layout_master(
                     body.x0,
                     y,
                     body.x1,
-                    if bespoke { area.content.y1 } else { area.resize_handle.y1 },
+                    if bespoke || stretch_last { area.content.y1 } else { area.resize_handle.y1 },
                 );
                 y = area.bounds.y1;
             }
@@ -231,7 +253,10 @@ pub fn natural_height(
     bespoke: bool,
 ) -> f64 {
     let probe = Rect::new(0.0, 0.0, width, f64::MAX / 2.0);
-    layout_master(master, probe, theme, tab_width, bespoke).content_bottom
+    // `fill_last: false` — this probe wants the true unstretched natural
+    // sum; stretching the last group into a near-infinite probe height
+    // would defeat the whole point.
+    layout_master(master, probe, theme, tab_width, bespoke, false).content_bottom
 }
 
 /// Where dragging a panel over an already-laid-out master's body would
@@ -455,7 +480,7 @@ mod tests {
     #[test]
     fn stack_mode_stacks_one_row_per_panel_across_every_group() {
         let m = master(MasterLayout::Stack, vec![vec![A, B], vec![C]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
         assert_eq!(frame.groups.len(), 2);
         assert_eq!(frame.groups[0].rows.len(), 2);
         assert_eq!(frame.groups[1].rows.len(), 1);
@@ -467,9 +492,13 @@ mod tests {
 
     #[test]
     fn tabs_mode_reserves_a_strip_then_a_clamped_content_pane() {
+        // `fill_last: false` — this test is about the plain clamp-to-MAX
+        // and resize-handle mechanics, deliberately isolated from the
+        // separate last-group-stretch behavior (its one group would
+        // otherwise always count as "last").
         let mut m = master(MasterLayout::Tabs, vec![vec![A, B]]);
         m.groups[0].content_h = Some(999_999.0); // clamps down to MAX
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, false);
         let g = &frame.groups[0];
         assert_eq!(g.tabs.len(), 2);
         assert_eq!(g.tabs[0].rect.x0, 0.0);
@@ -484,11 +513,46 @@ mod tests {
     }
 
     #[test]
+    fn the_last_groups_content_stretches_to_the_masters_own_bottom_edge() {
+        // Docked or floating doesn't matter — what matters is `fill_last`
+        // (true for every real on-screen frame; see its own doc comment).
+        let m = master(MasterLayout::Tabs, vec![vec![A], vec![B]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 900.0), &theme(), &mut w80, false, true);
+        // The first (non-last) group keeps its ordinary natural height...
+        assert!(frame.groups[0].content.height() < 200.0);
+        // ...but the last one reaches all the way down to the bottom of
+        // the Master's own bounds, with no resize grip to fight it.
+        assert_eq!(frame.groups[1].content.y1, 900.0);
+        assert_eq!(frame.groups[1].resize_handle, Rect::ZERO);
+    }
+
+    #[test]
+    fn stretching_the_last_group_never_shrinks_it_below_its_natural_height() {
+        // The window is shorter than everything needs — the Master
+        // should scroll (elsewhere), not clip the last group smaller
+        // than its own natural content height.
+        let m = master(MasterLayout::Tabs, vec![vec![A]]);
+        let short = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 60.0), &theme(), &mut w80, false, true);
+        assert!((short.groups[0].content.height() - TAB_CONTENT_MIN_H as f64).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fill_last_false_is_the_unstretched_natural_size_natural_height_needs() {
+        // `natural_height`'s own probe must see the true, unstretched sum
+        // — otherwise a giant probe rect would stretch the last group
+        // toward infinity and defeat the whole point.
+        let m = master(MasterLayout::Tabs, vec![vec![A]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 900.0), &theme(), &mut w80, false, false);
+        assert!(frame.groups[0].content.height() < 200.0);
+        assert_ne!(frame.groups[0].resize_handle, Rect::ZERO);
+    }
+
+    #[test]
     fn bespoke_master_has_no_header_or_group_handle_and_content_fills_the_rest() {
         // The colour picker / a shape dialog / Export for Screens: a
         // fixed-size window whose only chrome is its one tab strip.
         let m = master(MasterLayout::Tabs, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true, true);
         assert_eq!(frame.header.height(), 0.0);
         assert_eq!(frame.groups[0].handle.height(), 0.0);
         assert_eq!(frame.groups[0].resize_handle.height(), 0.0);
@@ -508,8 +572,8 @@ mod tests {
     #[test]
     fn compact_flips_once_width_drops_below_the_breakpoint() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let wide = layout_master(&m, Rect::new(0.0, 0.0, 300.0, 400.0), &theme(), &mut w80, false);
-        let narrow = layout_master(&m, Rect::new(0.0, 0.0, 200.0, 400.0), &theme(), &mut w80, false);
+        let wide = layout_master(&m, Rect::new(0.0, 0.0, 300.0, 400.0), &theme(), &mut w80, false, true);
+        let narrow = layout_master(&m, Rect::new(0.0, 0.0, 200.0, 400.0), &theme(), &mut w80, false, true);
         assert!(!wide.compact);
         assert!(narrow.compact);
     }
@@ -517,7 +581,7 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_over_a_tab_strip_inserts_at_the_nearest_gap() {
         let m = master(MasterLayout::Tabs, vec![vec![A, B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
         let strip_y = frame.groups[0].tab_strip.center().y;
         assert_eq!(
             hit_test_panel_drop(&frame, Point::new(10.0, strip_y)),
@@ -532,7 +596,7 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_outside_every_group_but_inside_the_body_makes_a_new_group() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
         let below_everything = Point::new(10.0, frame.body.y1 - 1.0);
         assert_eq!(
             hit_test_panel_drop(&frame, below_everything),
@@ -543,7 +607,7 @@ mod tests {
     #[test]
     fn hit_test_group_drop_skips_the_dragged_group_itself() {
         let m = master(MasterLayout::Stack, vec![vec![A], vec![B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
         let own_row = frame.groups[0].rows[0].rect.center();
         // Dragging group 0 itself over its own row must not "merge into
         // itself" — it should fall through to a sibling-position result.
