@@ -421,10 +421,16 @@ impl DockModel {
         self.reflow_dock_indices(side);
     }
 
-    /// Merges `source`'s groups onto the end of `target`'s, then drops
-    /// `source` (⇐ `mergeMasters`). Refuses if either is a Tools master,
-    /// they're the same master, or either id doesn't resolve.
-    pub fn merge_masters(&mut self, source: u64, target: u64) -> bool {
+    /// Merges `source`'s entire group list into `target`'s as one
+    /// contiguous block inserted at `at` (clamped to `target`'s group
+    /// count — pass `usize::MAX`, or any index at least that count, to
+    /// always append at the end), then drops `source` (⇐ `mergeMasters`
+    /// with a live placeholder position — the reference doesn't
+    /// special-case a multi-group source, so neither does this: the
+    /// whole block lands together, docked or floating target either
+    /// way). Refuses if either is a Tools master, they're the same
+    /// master, or either id doesn't resolve.
+    pub fn merge_masters(&mut self, source: u64, target: u64, at: usize) -> bool {
         if source == target {
             return false;
         }
@@ -440,7 +446,8 @@ impl DockModel {
         let removed = self.masters.remove(pos);
         let side = removed.dock.map(|(s, _)| s);
         if let Some(t) = self.master_mut(target) {
-            t.groups.extend(removed.groups);
+            let at = at.min(t.groups.len());
+            t.groups.splice(at..at, removed.groups);
         } else {
             // Target vanished between the checks above and here — put
             // the groups back rather than lose them.
@@ -672,10 +679,21 @@ mod tests {
         let mut d = DockModel::new();
         let target = d.spawn_master(vec![vec![A]], rect());
         let source = d.spawn_master(vec![vec![B], vec![C]], rect());
-        assert!(d.merge_masters(source, target));
+        assert!(d.merge_masters(source, target, usize::MAX));
         assert!(d.master(source).is_none());
         let groups: Vec<_> = d.master(target).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
         assert_eq!(groups, vec![vec![A], vec![B], vec![C]]);
+    }
+
+    #[test]
+    fn merge_masters_inserts_the_whole_source_group_list_at_a_position() {
+        let mut d = DockModel::new();
+        let target = d.spawn_master(vec![vec![A], vec![D]], rect());
+        let source = d.spawn_master(vec![vec![B], vec![C]], rect());
+        assert!(d.merge_masters(source, target, 1));
+        assert!(d.master(source).is_none());
+        let groups: Vec<_> = d.master(target).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
+        assert_eq!(groups, vec![vec![A], vec![B], vec![C], vec![D]]);
     }
 
     #[test]
@@ -683,8 +701,8 @@ mod tests {
         let mut d = DockModel::new();
         let normal = d.spawn_master(vec![vec![A]], rect());
         let tools = d.spawn_tools_master(rect());
-        assert!(!d.merge_masters(tools, normal));
-        assert!(!d.merge_masters(normal, tools));
+        assert!(!d.merge_masters(tools, normal, 0));
+        assert!(!d.merge_masters(normal, tools, 0));
         assert!(d.master(tools).is_some());
         assert!(d.master(normal).is_some());
     }

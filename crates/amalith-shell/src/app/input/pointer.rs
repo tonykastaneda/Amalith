@@ -573,12 +573,13 @@ impl App {
                 m.rect[0] = new_pos.x as f32;
                 m.rect[1] = new_pos.y as f32;
             }
-            let (dock, merge) = self.resolve_master_drop(global, master);
-            if dock != self.master_dock_preview || merge != self.master_merge_preview {
+            let (dock, group_drop) = self.resolve_master_drop(global, master);
+            if dock != self.master_dock_preview || group_drop != self.group_drop_preview {
                 self.master_dock_preview = dock;
-                let old = self.master_merge_preview;
-                self.master_merge_preview = merge;
-                for cand in [old, merge].into_iter().flatten() {
+                let old = self.group_drop_preview.as_ref().map(|(m, _)| *m);
+                let new = group_drop.as_ref().map(|(m, _)| *m);
+                self.group_drop_preview = group_drop;
+                for cand in [old, new].into_iter().flatten() {
                     if let Some(w) = self.floating_window(cand) {
                         w.request_redraw();
                     }
@@ -1212,9 +1213,34 @@ impl App {
             }
             Drag::MovingMaster { master, .. } => {
                 let dock = self.master_dock_preview.take();
-                let merge = self.master_merge_preview.take();
-                if let Some(target) = merge {
-                    if self.dock.merge_masters(master, target) {
+                let group_drop = self.group_drop_preview.take();
+                if let Some((target, drop)) = group_drop {
+                    // A single-Group Master behaves exactly like dragging
+                    // that Group directly (merge its panels into an
+                    // existing group's tabs, or land as a new sibling at
+                    // a position); a multi-Group Master has no single
+                    // group whose panels it'd make sense to merge into,
+                    // so its whole group list moves as one contiguous
+                    // block to that same position instead (⇐ the
+                    // reference's `mergeMasters` with a live placeholder
+                    // position — it doesn't special-case a multi-group
+                    // source either).
+                    let single_group = self.dock.master(master).is_some_and(|m| m.groups.len() == 1);
+                    let moved = if single_group {
+                        match drop {
+                            GroupDrop::MergeInto { group } => {
+                                self.dock.merge_groups((master, 0), (target, group), usize::MAX)
+                            }
+                            GroupDrop::NewSibling { at } => self.dock.move_group((master, 0), target, at),
+                        }
+                    } else {
+                        let at = match drop {
+                            GroupDrop::MergeInto { group } => group,
+                            GroupDrop::NewSibling { at } => at,
+                        };
+                        self.dock.merge_masters(master, target, at)
+                    };
+                    if moved {
                         if let Some((wid, _)) =
                             self.hosts.iter().find(|(_, h)| matches!(h.role, Role::Floating(f) if f == master))
                         {

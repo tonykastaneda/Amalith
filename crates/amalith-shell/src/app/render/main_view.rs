@@ -42,7 +42,6 @@ pub(in crate::app) fn paint_main(
     width: f64,
     height: f64,
     master_dock_preview: Option<(Side, usize)>,
-    master_merge_preview: Option<u64>,
     group_drop_preview: Option<&(u64, GroupDrop)>,
     panel_drop_preview: Option<&(u64, PanelDrop)>,
     status: Option<&str>,
@@ -636,9 +635,6 @@ pub(in crate::app) fn paint_main(
             };
             scene.fill(Fill::NonZero, ID, theme.splitter, None, &edge_rect);
 
-            if master_merge_preview == Some(mid) {
-                chrome::paint_master_merge_highlight(scene, rect, theme);
-            }
             if let Some((pm, pd)) = panel_drop_preview {
                 if *pm == mid {
                     chrome::paint_panel_drop(scene, &frame, pd, theme);

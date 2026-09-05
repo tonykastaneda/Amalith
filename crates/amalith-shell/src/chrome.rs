@@ -253,12 +253,6 @@ pub fn paint_group_drop(scene: &mut Scene, frame: &MasterFrame, drop: &GroupDrop
     }
 }
 
-/// Outline shown around a whole Master while another Master is being
-/// dragged over its body (⇐ `.master.drop-target`).
-pub fn paint_master_merge_highlight(scene: &mut Scene, bounds: Rect, theme: &Theme) {
-    scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &bounds.inset(-1.0));
-}
-
 /// The docking insertion line at the viewport edge/seam (⇐ `#dock-insert`).
 pub fn paint_dock_insert(scene: &mut Scene, viewport_h: f64, x: f64, theme: &Theme) {
     let r = Rect::new(x - 2.0, 0.0, x + 2.0, viewport_h);

@@ -1018,12 +1018,13 @@ struct App {
     /// Live drop cue while dragging a whole Group over a Master's body.
     group_drop_preview: Option<(u64, GroupDrop)>,
     /// Live dock-edge/seam target while dragging a Master (⇐
-    /// `resolveDockTarget` + `showDockPreview`).
+    /// `resolveDockTarget` + `showDockPreview`). A merge-into-another-
+    /// master's-body target instead lives in `group_drop_preview` (⇐
+    /// `drag.dockTarget` vs. `drag.mergeTarget`) — the whole-master case
+    /// shares `group_drop_preview` with a live group/panel drag rather
+    /// than a separate field, since both resolve through the same
+    /// position-aware hit-test.
     master_dock_preview: Option<(Side, usize)>,
-    /// Live merge target while dragging one Master over another's body —
-    /// mutually exclusive with `master_dock_preview` (⇐ `drag.mergeTarget`
-    /// vs. `drag.dockTarget`).
-    master_merge_preview: Option<u64>,
     /// Set by cursor-move handling (no `event_loop` in scope there) so the
     /// window-event dispatch can spawn the OS window a still-docked
     /// Master needs the moment it's dragged past the undock threshold.
@@ -1225,7 +1226,6 @@ impl App {
             panel_drop_preview: None,
             group_drop_preview: None,
             master_dock_preview: None,
-            master_merge_preview: None,
             pending_master_undock: None,
             pending_group_live_detach: None,
             pending_panel_live_detach: None,
@@ -5869,10 +5869,21 @@ impl App {
 
     /// Where dragging Master `dragging`'s cursor position would land: a
     /// dock edge/seam (`Some(dock), None`), a merge into another master's
-    /// body (`None, Some(merge)`), or neither (stays floating) — ⇐
-    /// `onPointerMove`'s master branch (`resolveDockTarget` +
-    /// `masterUnderPointer`, preferring the dock edge over a merge there).
-    fn resolve_master_drop(&mut self, global: Point, dragging: u64) -> (Option<(Side, usize)>, Option<u64>) {
+    /// body at a specific position (`None, Some(hit)`), or neither (stays
+    /// floating) — ⇐ `onPointerMove`'s master branch (`resolveDockTarget`
+    /// + `masterUnderPointer`, preferring the dock edge/seam over a merge
+    /// there — matching the reference, a seam is only the thin ±10px band
+    /// right at an already-docked master's own edge, so a docked target's
+    /// *interior* is just as much a merge target as a floating one's).
+    /// Whole-master merge shares `resolve_group_drop`'s exact hit-test —
+    /// the reference doesn't special-case a multi-group source either, so
+    /// neither does this (see `merge_masters`/`GroupDrop`'s handling on
+    /// release for how a multi- vs single-group source differs there).
+    fn resolve_master_drop(
+        &mut self,
+        global: Point,
+        dragging: u64,
+    ) -> (Option<(Side, usize)>, Option<(u64, GroupDrop)>) {
         let Some((w, h)) = self.main_logical_size() else {
             return (None, None);
         };
@@ -5896,34 +5907,32 @@ impl App {
             .flatten()
             .map(|(s, i, _)| (s, i));
         let pure_edge = local.y >= 0.0 && local.y < h && layout::is_pure_dock_edge(local.x, w);
-        if !pure_edge {
-            if let Some(merge) = self.master_under_global_cursor(global, dragging) {
-                if !self.is_float_only(dragging) {
-                    return (None, Some(merge));
-                }
+        if !pure_edge && !self.is_float_only(dragging) {
+            if let Some(hit) = self.resolve_group_drop(global, (dragging, 0)) {
+                return (None, Some(hit));
             }
         }
         (dock_target, None)
     }
 
     /// Where dragging Group `source` (`(master, group index)`) over
-    /// another Master's body — or back over its own siblings — would land
-    /// (⇐ `updateDropTarget`'s group branch).
+    /// another Master's body would land (⇐ `updateDropTarget`'s group
+    /// branch). Always some *other* Master (`master_under_global_cursor`
+    /// excludes `source.0`) — a live-dragged group's own window is glued
+    /// to the cursor (`new_pos = global - grab`), so the cursor sits over
+    /// its own rect for the entire drag; treating that as a valid target
+    /// (an earlier "or back over its own siblings" case, from before
+    /// dragging was made live) meant this could never actually resolve to
+    /// anywhere else.
     fn resolve_group_drop(&mut self, global: Point, source: (u64, usize)) -> Option<(u64, GroupDrop)> {
-        let over_source = self.master_screen_rect(source.0).is_some_and(|r| r.contains(global));
-        let target = if over_source {
-            source.0
-        } else {
-            self.master_under_global_cursor(global, source.0)?
-        };
+        let target = self.master_under_global_cursor(global, source.0)?;
         if self.is_float_only(target) {
             return None;
         }
         let rect = self.master_screen_rect(target)?;
         let frame = self.build_master_frame(target, Rect::new(0.0, 0.0, rect.width(), rect.height()));
         let local = global - Point::new(rect.x0, rect.y0).to_vec2();
-        let dragging_idx = if target == source.0 { source.1 } else { usize::MAX };
-        layout::hit_test_group_drop(&frame, dragging_idx, local).map(|d| (target, d))
+        layout::hit_test_group_drop(&frame, usize::MAX, local).map(|d| (target, d))
     }
 
     /// Where dragging Panel `panel` over any Master's body — other than
@@ -6418,7 +6427,7 @@ impl ApplicationHandler for App {
                         // nothing is lost — or just docks it there outright
                         // if nothing else is.
                         if let Some(&right) = self.dock.docked(Side::Right).first() {
-                            if !self.dock.merge_masters(fid, right) {
+                            if !self.dock.merge_masters(fid, right, usize::MAX) {
                                 self.dock.dock_master(fid, Side::Right, 0);
                             }
                         } else {

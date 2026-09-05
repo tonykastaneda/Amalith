@@ -457,7 +457,6 @@ impl App {
                 wl,
                 hl,
                 self.master_dock_preview,
-                self.master_merge_preview,
                 self.group_drop_preview.as_ref(),
                 self.panel_drop_preview.as_ref(),
                 status_text.as_deref(),
@@ -538,9 +537,6 @@ impl App {
                         this_masters_open_row,
                         bespoke,
                     );
-                    if self.master_merge_preview == Some(fid) {
-                        chrome::paint_master_merge_highlight(&mut self.content, rect, &self.theme);
-                    }
                     if let Some((pm, pd)) = self.panel_drop_preview.as_ref().filter(|(m, _)| *m == fid) {
                         let _ = pm;
                         chrome::paint_panel_drop(&mut self.content, &frame, pd, &self.theme);
