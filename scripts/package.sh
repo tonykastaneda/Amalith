@@ -4,7 +4,7 @@
 #
 #   dist/mac/             — Amalith.app + Amalith.dmg
 #   dist/windows/         — Amalith.exe + its icon and README
-#   dist/linux/           — AppImage, tar.gz, deb, rpm, Arch and Flatpak files
+#   dist/linux/           — AppImage, tar.gz, deb, rpm and Arch files
 #
 # Run from anywhere:  ./scripts/package.sh
 #

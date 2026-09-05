@@ -33,7 +33,7 @@ if [ "${#missing[@]}" -ne 0 ]; then
 fi
 
 rm -rf "$out"
-mkdir -p "$out/arch" "$out/flatpak"
+mkdir -p "$out/arch"
 
 echo "==> cargo build --release"
 cargo build --release -p amalith-shell
@@ -159,30 +159,6 @@ package() {
   install -Dm644 "\$srcdir/amalith-\$pkgver-x86_64/$APP_ID.png" \
     "\$pkgdir/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
 }
-EOF
-
-# Flatpak manifest ------------------------------------------------------------
-cat > "$out/flatpak/$APP_ID.yml" <<EOF
-app-id: $APP_ID
-runtime: org.freedesktop.Platform
-runtime-version: '24.08'
-sdk: org.freedesktop.Sdk
-command: $APP
-finish-args:
-  - --device=dri
-  - --share=ipc
-  - --socket=fallback-x11
-  - --socket=wayland
-modules:
-  - name: amalith
-    buildsystem: simple
-    build-commands:
-      - install -Dm755 amalith-$VERSION-x86_64/$APP /app/bin/$APP
-      - install -Dm644 amalith-$VERSION-x86_64/$APP_ID.desktop /app/share/applications/$APP_ID.desktop
-      - install -Dm644 amalith-$VERSION-x86_64/$APP_ID.png /app/share/icons/hicolor/512x512/apps/$APP_ID.png
-    sources:
-      - type: archive
-        path: ../amalith-$VERSION-x86_64.tar.gz
 EOF
 
 echo
