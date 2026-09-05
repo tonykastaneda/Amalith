@@ -13,7 +13,7 @@ use super::*;
 /// keyboard handler, so the menu text is a label only there.)
 pub(in crate::app) struct NativeMenu {
     items: Vec<(muda::MenuId, MenuAction)>,
-    /// Panels-menu checkmarks, keyed by panel id, updated as panels
+    /// Windows-menu checkmarks, keyed by panel id, updated as panels
     /// open/close.
     window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
     /// View ▸ Guides checkmarks — (show-guides, lock-guides).
@@ -36,6 +36,7 @@ impl NativeMenu {
     pub(in crate::app) fn build(
         window: &Window,
         scripts: &crate::scripts::ScriptsConfig,
+        workspaces: &crate::workspaces::Store,
         guides_hidden: bool,
         guides_locked: bool,
         outline: bool,
@@ -247,17 +248,35 @@ impl NativeMenu {
         )
         .expect("view menu");
 
+        // Windows ▸ Workspace: one checked item per saved workspace (the
+        // built-in "Essentials Classic" first), then Reset / New / Manage.
+        let workspace_names = workspaces.names();
+        let workspace_checks: Vec<CheckMenuItem> = workspace_names
+            .iter()
+            .map(|name| CheckMenuItem::new(name, true, *name == workspaces.active, None))
+            .collect();
+        let reset_workspace_i = MenuItem::new(format!("Reset {}", workspaces.active), true, None);
+        let new_workspace_i = MenuItem::new("New Workspace…", true, None);
+        let manage_workspaces_i = MenuItem::new("Manage Workspaces…", true, None);
+        let workspace_sep = sep();
+        let mut workspace_refs: Vec<&dyn muda::IsMenuItem> =
+            workspace_checks.iter().map(|i| i as &dyn muda::IsMenuItem).collect();
+        workspace_refs.push(&workspace_sep);
+        workspace_refs.push(&reset_workspace_i);
+        workspace_refs.push(&new_workspace_i);
+        workspace_refs.push(&manage_workspaces_i);
+        let workspace_menu = Submenu::with_items("Workspace", true, &workspace_refs).expect("workspace menu");
+
         let window_checks: Vec<(&'static str, CheckMenuItem)> = WINDOW_PANELS
             .iter()
             .map(|(id, label)| (*id, CheckMenuItem::new(*label, true, false, None)))
             .collect();
-        let window_refs: Vec<&dyn muda::IsMenuItem> = window_checks
-            .iter()
-            .map(|(_, i)| i as &dyn muda::IsMenuItem)
-            .collect();
-        // "Window" is a name AppKit reserves for its own window menu, so
-        // call ours "Panels".
-        let panels_menu = Submenu::with_items("Panels", true, &window_refs).expect("panels menu");
+        let windows_sep = sep();
+        let mut window_refs: Vec<&dyn muda::IsMenuItem> = vec![&workspace_menu, &windows_sep];
+        window_refs.extend(window_checks.iter().map(|(_, i)| i as &dyn muda::IsMenuItem));
+        // "Window" (singular) is a name AppKit reserves for its own window
+        // menu; "Windows" (plural) sidesteps that collision.
+        let panels_menu = Submenu::with_items("Windows", true, &window_refs).expect("windows menu");
 
         // A menu literally titled "Help" gets AppKit's search field for
         // free on macOS; on Windows it's just the one link.
@@ -354,6 +373,12 @@ impl NativeMenu {
         for (id, item) in &window_checks {
             items.push((item.id().clone(), MenuAction::TogglePanel(id)));
         }
+        for (name, item) in workspace_names.iter().zip(&workspace_checks) {
+            items.push((item.id().clone(), MenuAction::PickWorkspace(name.clone())));
+        }
+        items.push((reset_workspace_i.id().clone(), MenuAction::ResetWorkspace));
+        items.push((new_workspace_i.id().clone(), MenuAction::NewWorkspace));
+        items.push((manage_workspaces_i.id().clone(), MenuAction::ManageWorkspaces));
         items.push((quit_i.id().clone(), MenuAction::Quit));
         Self {
             items,

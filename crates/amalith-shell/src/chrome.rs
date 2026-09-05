@@ -281,7 +281,7 @@ pub fn paint_flyout_chrome(scene: &mut Scene, bounds: Rect, header: Rect, close:
 }
 
 /// A close ("×") glyph centered in `r`, arm half-length `a`.
-fn paint_x(scene: &mut Scene, r: Rect, color: vello::peniko::Color, a: f64) {
+pub(crate) fn paint_x(scene: &mut Scene, r: Rect, color: vello::peniko::Color, a: f64) {
     let c = r.center();
     let stroke = Stroke::new(1.4);
     scene.stroke(&stroke, ID, color, None, &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)));

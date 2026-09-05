@@ -50,7 +50,7 @@ pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, colormanage, context_bar, convert, home, icons, layout, panels,
     picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel, textedit,
-    workspace, Theme,
+    workspace, workspace_dialog, workspaces, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -463,8 +463,16 @@ enum MenuAction {
     RemoveScriptsFolder,
     /// Run the user script at this path.
     RunScript(std::path::PathBuf),
-    /// Window menu: show/hide the panel with this id.
+    /// Windows menu: show/hide the panel with this id.
     TogglePanel(&'static str),
+    /// Windows ▸ Workspace: switch to the named workspace.
+    PickWorkspace(String),
+    /// Windows ▸ Workspace ▸ Reset <name>.
+    ResetWorkspace,
+    /// Windows ▸ Workspace ▸ New Workspace…
+    NewWorkspace,
+    /// Windows ▸ Workspace ▸ Manage Workspaces…
+    ManageWorkspaces,
 }
 
 /// The canvas right-click menu: a hand-drawn popover anchored at `origin`
@@ -738,6 +746,13 @@ struct App {
     content: Scene,
     text: TextContext,
     dock: DockModel,
+    /// Named workspace layouts (Windows ▸ Workspace) — which one is
+    /// active, plus every one the user has saved.
+    workspaces: workspaces::Store,
+    /// Windows ▸ Workspace ▸ New Workspace… naming prompt, while open.
+    workspace_prompt: Option<workspace_dialog::NamePrompt>,
+    /// Windows ▸ Workspace ▸ Manage Workspaces…, while open.
+    manage_workspaces: bool,
     /// The live (active-tab) document state. Inactive tabs are parked in
     /// `tabs`; switching swaps this with `tabs[active]`.
     doc: Doc,
@@ -1017,30 +1032,23 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        // Default "Essentials Classic" layout, then overlay whatever the
-        // last session (or a picked workspace) saved.
+        // The active named workspace's layout, then overlay whatever the
+        // last session actually left on screen (transient, tracked
+        // separately from any saved workspace — see `workspace.rs`).
+        let workspaces = workspaces::load();
         let mut dock = DockModel::new();
-        let tools = dock.spawn_tools_master([40.0, 40.0, 80.0, 400.0]);
-        dock.dock_master(tools, Side::Left, 0);
-        let right = dock.spawn_master(
-            vec![
-                vec![PanelId("color"), PanelId("transform"), PanelId("pathfinder"), PanelId("align")],
-                vec![PanelId("character"), PanelId("paragraph")],
-                vec![PanelId("layers"), PanelId("artboards")],
-            ],
-            [0.0, 40.0, 320.0, 600.0],
-        );
-        dock.dock_master(right, Side::Right, 0);
-        let mut rulers = false;
-        let mut guides_hidden = false;
-        let mut guides_locked = false;
+        let base = workspaces.layout_of(&workspaces.active);
+        base.apply_to(&mut dock);
+        let mut rulers = base.rulers;
+        let mut guides_hidden = base.guides_hidden;
+        let mut guides_locked = base.guides_locked;
         if let Some(saved) = workspace::load() {
             saved.apply_to(&mut dock);
-            dock.ensure_next_id();
             rulers = saved.rulers;
             guides_hidden = saved.guides_hidden;
             guides_locked = saved.guides_locked;
         }
+        dock.ensure_next_id();
         Self {
             context: RenderContext::new(),
             export_renderer: None,
@@ -1050,6 +1058,9 @@ impl App {
             content: Scene::new(),
             text: TextContext::new(),
             dock,
+            workspaces,
+            workspace_prompt: None,
+            manage_workspaces: false,
             doc: Doc::new(Editor::new(sample::document())),
             tabs: vec![Doc::placeholder()],
             active: 0,
@@ -1215,8 +1226,9 @@ impl App {
         }
     }
 
-    /// Rebuild the native menu bar — used when the Scripts submenu's
-    /// contents change (folder added / removed).
+    /// Rebuild the native menu bar — used when the Scripts submenu's or
+    /// the Workspace submenu's contents change (folder/workspace added,
+    /// removed, or switched).
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn rebuild_native_menu(&mut self) {
         let Some(wid) = self.main_id else { return };
@@ -1226,6 +1238,7 @@ impl App {
         let m = NativeMenu::build(
             &host.window,
             &self.scripts,
+            &self.workspaces,
             self.guides_hidden,
             self.guides_locked,
             self.outline_mode,
@@ -1244,6 +1257,51 @@ impl App {
             self.guides_hidden,
             self.guides_locked,
         ));
+    }
+
+    /// Windows ▸ Workspace: replace the live docked layout with `name`'s
+    /// saved one and make it the active workspace. Only docked masters
+    /// are touched (see `workspace::Layout::apply_to`) — any floating
+    /// panel windows already open are left alone. Also used by "Reset
+    /// <name>", which just re-applies the currently active workspace,
+    /// discarding whatever live tweaks were made since picking it.
+    fn apply_workspace(&mut self, name: &str) {
+        let layout = self.workspaces.layout_of(name);
+        layout.apply_to(&mut self.dock);
+        self.dock.ensure_next_id();
+        self.rulers = layout.rulers;
+        self.guides_hidden = layout.guides_hidden;
+        self.guides_locked = layout.guides_locked;
+        self.workspaces.active = name.to_string();
+        workspaces::save(&self.workspaces);
+        self.save_layout();
+        self.stack_flyout = None;
+        self.rebuild_native_menu();
+        self.request_main_redraw();
+    }
+
+    /// Windows ▸ Workspace ▸ New Workspace…: save the current live layout
+    /// under `name` and make it active. A blank name or the reserved
+    /// built-in name is silently ignored (see `workspaces::Store::upsert`).
+    fn save_new_workspace(&mut self, name: String) {
+        let layout = workspace::Layout::capture(&self.dock, self.rulers, self.guides_hidden, self.guides_locked);
+        self.workspaces.upsert(name, layout);
+        workspaces::save(&self.workspaces);
+        self.rebuild_native_menu();
+    }
+
+    /// Windows ▸ Workspace ▸ Manage Workspaces…: delete a saved workspace.
+    /// Falls back to Essentials Classic if it was the active one.
+    fn remove_workspace(&mut self, name: &str) {
+        let was_active = self.workspaces.active == name;
+        self.workspaces.remove(name);
+        workspaces::save(&self.workspaces);
+        if was_active {
+            let active = self.workspaces.active.clone();
+            self.apply_workspace(&active);
+        } else {
+            self.rebuild_native_menu();
+        }
     }
 
     /// Stored scroll offset for a panel (0 if none). Clamped to the live
@@ -2191,6 +2249,47 @@ impl App {
         true
     }
 
+    /// A key while the New Workspace naming prompt is open. Mirrors
+    /// [`Self::rename_key`]: Enter saves, Escape cancels, Backspace trims,
+    /// printable characters extend the buffer.
+    fn workspace_prompt_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.workspace_prompt.is_none() || !event.state.is_pressed() {
+            return self.workspace_prompt.is_some();
+        }
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                if let Some(p) = self.workspace_prompt.take() {
+                    self.save_new_workspace(p.buf);
+                }
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.workspace_prompt = None;
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some(p) = &mut self.workspace_prompt {
+                    p.fresh = false;
+                    p.buf.pop();
+                }
+                self.request_main_redraw();
+            }
+            _ => {
+                if let (Some(p), Some(txt)) = (&mut self.workspace_prompt, event.text.as_ref()) {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if p.fresh {
+                            p.buf.clear();
+                            p.fresh = false;
+                        }
+                        p.buf.push(ch);
+                    }
+                    self.request_main_redraw();
+                }
+            }
+        }
+        true
+    }
+
     /// Keyboard while the Layers search field has focus. Mirrors
     /// [`Self::rename_key`]: printable chars extend the query, Backspace
     /// trims it, Enter / Escape blur the field (Escape on an empty query
@@ -2830,6 +2929,19 @@ impl App {
             MenuAction::SelectNextBelow => self.select_next_z(-1),
             MenuAction::SelectSame(kind) => self.select_same(kind),
             MenuAction::TogglePanel(id) => self.toggle_panel(id),
+            MenuAction::PickWorkspace(name) => self.apply_workspace(&name),
+            MenuAction::ResetWorkspace => {
+                let active = self.workspaces.active.clone();
+                self.apply_workspace(&active);
+            }
+            MenuAction::NewWorkspace => {
+                self.workspace_prompt = Some(workspace_dialog::NamePrompt::new());
+                self.request_main_redraw();
+            }
+            MenuAction::ManageWorkspaces => {
+                self.manage_workspaces = true;
+                self.request_main_redraw();
+            }
             MenuAction::BringForward => self.restack(1),
             MenuAction::BringToFront => self.restack_extreme(true),
             MenuAction::SendBackward => self.restack(-1),
@@ -6056,6 +6168,7 @@ impl ApplicationHandler for App {
             let m = NativeMenu::build(
                 &self.hosts[&wid].window,
                 &self.scripts,
+                &self.workspaces,
                 self.guides_hidden,
                 self.guides_locked,
                 self.outline_mode,

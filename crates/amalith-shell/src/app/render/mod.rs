@@ -798,6 +798,20 @@ impl App {
             if let Some(a) = &mut self.about {
                 a.paint(&mut self.content, &mut self.text, wl, hl);
             }
+            if let Some(p) = &self.workspace_prompt {
+                workspace_dialog::paint(&mut self.content, &mut self.text, Rect::new(0.0, 0.0, wl, hl), p, &self.theme);
+            }
+            if self.manage_workspaces {
+                let names: Vec<String> =
+                    self.workspaces.custom.iter().map(|w| w.name.clone()).collect();
+                workspace_dialog::paint_manage(
+                    &mut self.content,
+                    &mut self.text,
+                    Rect::new(0.0, 0.0, wl, hl),
+                    &names,
+                    &self.theme,
+                );
+            }
             if let Some(pr) = &mut self.prefs {
                 pr.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
             }

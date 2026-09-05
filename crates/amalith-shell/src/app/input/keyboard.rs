@@ -226,6 +226,11 @@ impl App {
             self.newdoc_key(&event);
             return;
         }
+        // The New Workspace naming prompt takes every key while open.
+        if self.workspace_prompt.is_some() {
+            self.workspace_prompt_key(&event);
+            return;
+        }
         // The Home screen swallows tool keys, but lets ⌘-shortcuts
         // (⌘N, ⌘O, …) through to their handlers below.
         if self.home.is_some() && !self.cmd_down {
@@ -268,6 +273,15 @@ impl App {
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
             {
                 self.panel_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
+        if self.manage_workspaces {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.manage_workspaces = false;
                 self.request_main_redraw();
             }
             return;

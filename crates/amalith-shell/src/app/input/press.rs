@@ -419,6 +419,42 @@ impl App {
                     return;
                 }
 
+                // Windows ▸ Workspace ▸ New Workspace… modal.
+                if self.workspace_prompt.is_some() {
+                    match workspace_dialog::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
+                        workspace_dialog::Hit::Backdrop | workspace_dialog::Hit::Cancel => {
+                            self.workspace_prompt = None;
+                        }
+                        workspace_dialog::Hit::Ok => {
+                            if let Some(p) = self.workspace_prompt.take() {
+                                self.save_new_workspace(p.buf);
+                            }
+                        }
+                        workspace_dialog::Hit::Field | workspace_dialog::Hit::None => {}
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
+                // Windows ▸ Workspace ▸ Manage Workspaces… modal.
+                if self.manage_workspaces {
+                    let names: Vec<String> =
+                        self.workspaces.custom.iter().map(|w| w.name.clone()).collect();
+                    match workspace_dialog::manage_hit(Rect::new(0.0, 0.0, w, h), &names, self.pointer) {
+                        workspace_dialog::ManageHit::Backdrop | workspace_dialog::ManageHit::Done => {
+                            self.manage_workspaces = false;
+                        }
+                        workspace_dialog::ManageHit::Delete(i) => {
+                            if let Some(name) = names.get(i) {
+                                self.remove_workspace(&name.clone());
+                            }
+                        }
+                        workspace_dialog::ManageHit::None => {}
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // The New Document modal is, well, modal.
                 if let Some(form) = &self.newdoc {
                     let lay = newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll);

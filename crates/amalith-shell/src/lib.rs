@@ -68,6 +68,8 @@ pub mod thread;
 pub mod theme;
 pub mod tool;
 pub mod workspace;
+pub mod workspace_dialog;
+pub mod workspaces;
 
 pub use dock::{DockModel, Group, Master, MasterKind, MasterLayout, PanelId, Side, ToolsDensity};
 pub use layout::{GroupArea, GroupDrop, MasterFrame, PanelDrop, PanelRow, TabRect};
