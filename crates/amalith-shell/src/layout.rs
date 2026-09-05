@@ -116,13 +116,21 @@ impl Default for GroupArea {
 /// or scales groups to fit — that's `App`'s job (scroll a docked column,
 /// or resize a floating window's OS-level height to match — see
 /// `natural_height`).
+///
+/// `bespoke` is true for the handful of panels that always float alone
+/// in their own small, fixed-size window (the colour picker, a shape
+/// dialog, Export for Screens — see `App::is_float_only`): no master
+/// header, no group handle, no content-resize grip — its one tab strip
+/// is the only chrome, filling the window down to its bottom edge.
 pub fn layout_master(
     master: &Master,
     bounds: Rect,
     theme: &Theme,
     tab_width: &mut dyn FnMut(PanelId) -> f64,
+    bespoke: bool,
 ) -> MasterFrame {
-    let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, (bounds.y0 + HEADER_H).min(bounds.y1));
+    let header_h = if bespoke { 0.0 } else { HEADER_H };
+    let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, (bounds.y0 + header_h).min(bounds.y1));
     let close = Rect::new(header.x0, header.y0, header.x0 + 26.0, header.y1);
     let chevron = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
     let body = Rect::new(bounds.x0, header.y1, bounds.x1, bounds.y1);
@@ -131,7 +139,8 @@ pub fn layout_master(
     let mut groups = Vec::with_capacity(master.groups.len());
     let mut y = body.y0;
     for (i, g) in master.groups.iter().enumerate() {
-        let handle = Rect::new(body.x0, y, body.x1, (y + GROUP_HANDLE_H).min(body.y1));
+        let handle_h = if bespoke { 0.0 } else { GROUP_HANDLE_H };
+        let handle = Rect::new(body.x0, y, body.x1, (y + handle_h).min(body.y1));
         let mut area = GroupArea { index: i, handle, active: g.active, ..GroupArea::default() };
         match master.layout {
             MasterLayout::Stack => {
@@ -153,23 +162,38 @@ pub fn layout_master(
                     area.tabs.push(TabRect { panel, rect: Rect::new(x, area.tab_strip.y0, x + w, strip_y1) });
                     x += w;
                 }
-                // Spawns at the active panel's own natural content height —
-                // the user only pins an explicit height once they've
-                // actually dragged the resize grip (`g.content_h`).
-                let natural = g
-                    .panels
-                    .get(g.active)
-                    .map_or(crate::dock::TAB_CONTENT_DEFAULT_H as f64, |&p| {
-                        crate::panels::min_body_height(p, body.width())
-                    });
-                let content_h = g
-                    .content_h
-                    .map_or(natural, |h| h as f64)
-                    .clamp(TAB_CONTENT_MIN_H as f64, TAB_CONTENT_MAX_H as f64);
+                let content_h = if bespoke {
+                    // Fills whatever's left in the fixed window — no
+                    // resize grip, nothing to clamp against.
+                    (body.y1 - strip_y1).max(0.0)
+                } else {
+                    // Spawns at the active panel's own natural content
+                    // height — the user only pins an explicit height
+                    // once they've actually dragged the resize grip
+                    // (`g.content_h`).
+                    let natural = g
+                        .panels
+                        .get(g.active)
+                        .map_or(crate::dock::TAB_CONTENT_DEFAULT_H as f64, |&p| {
+                            crate::panels::min_body_height(p, body.width())
+                        });
+                    g.content_h
+                        .map_or(natural, |h| h as f64)
+                        .clamp(TAB_CONTENT_MIN_H as f64, TAB_CONTENT_MAX_H as f64)
+                };
                 area.content = Rect::new(body.x0, strip_y1, body.x1, strip_y1 + content_h);
-                area.resize_handle = Rect::new(body.x0, area.content.y1, body.x1, area.content.y1 + 6.0);
-                area.bounds = Rect::new(body.x0, y, body.x1, area.resize_handle.y1);
-                y = area.resize_handle.y1;
+                area.resize_handle = if bespoke {
+                    Rect::ZERO
+                } else {
+                    Rect::new(body.x0, area.content.y1, body.x1, area.content.y1 + 6.0)
+                };
+                area.bounds = Rect::new(
+                    body.x0,
+                    y,
+                    body.x1,
+                    if bespoke { area.content.y1 } else { area.resize_handle.y1 },
+                );
+                y = area.bounds.y1;
             }
         }
         groups.push(area);
@@ -204,9 +228,10 @@ pub fn natural_height(
     width: f64,
     theme: &Theme,
     tab_width: &mut dyn FnMut(PanelId) -> f64,
+    bespoke: bool,
 ) -> f64 {
     let probe = Rect::new(0.0, 0.0, width, f64::MAX / 2.0);
-    layout_master(master, probe, theme, tab_width).content_bottom
+    layout_master(master, probe, theme, tab_width, bespoke).content_bottom
 }
 
 /// Where dragging a panel over an already-laid-out master's body would
@@ -430,7 +455,7 @@ mod tests {
     #[test]
     fn stack_mode_stacks_one_row_per_panel_across_every_group() {
         let m = master(MasterLayout::Stack, vec![vec![A, B], vec![C]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
         assert_eq!(frame.groups.len(), 2);
         assert_eq!(frame.groups[0].rows.len(), 2);
         assert_eq!(frame.groups[1].rows.len(), 1);
@@ -444,7 +469,7 @@ mod tests {
     fn tabs_mode_reserves_a_strip_then_a_clamped_content_pane() {
         let mut m = master(MasterLayout::Tabs, vec![vec![A, B]]);
         m.groups[0].content_h = Some(999_999.0); // clamps down to MAX
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
         let g = &frame.groups[0];
         assert_eq!(g.tabs.len(), 2);
         assert_eq!(g.tabs[0].rect.x0, 0.0);
@@ -459,17 +484,32 @@ mod tests {
     }
 
     #[test]
+    fn bespoke_master_has_no_header_or_group_handle_and_content_fills_the_rest() {
+        // The colour picker / a shape dialog / Export for Screens: a
+        // fixed-size window whose only chrome is its one tab strip.
+        let m = master(MasterLayout::Tabs, vec![vec![A]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true);
+        assert_eq!(frame.header.height(), 0.0);
+        assert_eq!(frame.groups[0].handle.height(), 0.0);
+        assert_eq!(frame.groups[0].resize_handle.height(), 0.0);
+        // Tab strip starts right at the window's own top edge…
+        assert_eq!(frame.groups[0].tab_strip.y0, 0.0);
+        // …and content fills everything below it down to the bottom.
+        assert_eq!(frame.groups[0].content.y1, 200.0);
+    }
+
+    #[test]
     fn natural_height_matches_the_body_bottom_a_giant_probe_rect_produces() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let h = natural_height(&m, 280.0, &theme(), &mut w80);
+        let h = natural_height(&m, 280.0, &theme(), &mut w80, false);
         assert_eq!(h, HEADER_H + GROUP_HANDLE_H + STACK_ROW_H);
     }
 
     #[test]
     fn compact_flips_once_width_drops_below_the_breakpoint() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let wide = layout_master(&m, Rect::new(0.0, 0.0, 300.0, 400.0), &theme(), &mut w80);
-        let narrow = layout_master(&m, Rect::new(0.0, 0.0, 200.0, 400.0), &theme(), &mut w80);
+        let wide = layout_master(&m, Rect::new(0.0, 0.0, 300.0, 400.0), &theme(), &mut w80, false);
+        let narrow = layout_master(&m, Rect::new(0.0, 0.0, 200.0, 400.0), &theme(), &mut w80, false);
         assert!(!wide.compact);
         assert!(narrow.compact);
     }
@@ -477,7 +517,7 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_over_a_tab_strip_inserts_at_the_nearest_gap() {
         let m = master(MasterLayout::Tabs, vec![vec![A, B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
         let strip_y = frame.groups[0].tab_strip.center().y;
         assert_eq!(
             hit_test_panel_drop(&frame, Point::new(10.0, strip_y)),
@@ -492,7 +532,7 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_outside_every_group_but_inside_the_body_makes_a_new_group() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
         let below_everything = Point::new(10.0, frame.body.y1 - 1.0);
         assert_eq!(
             hit_test_panel_drop(&frame, below_everything),
@@ -503,7 +543,7 @@ mod tests {
     #[test]
     fn hit_test_group_drop_skips_the_dragged_group_itself() {
         let m = master(MasterLayout::Stack, vec![vec![A], vec![B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
         let own_row = frame.groups[0].rows[0].rect.center();
         // Dragging group 0 itself over its own row must not "merge into
         // itself" — it should fall through to a sibling-position result.

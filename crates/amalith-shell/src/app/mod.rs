@@ -48,9 +48,9 @@ pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
-    about, appicon, chrome, colormanage, context_bar, convert, home, icons, layout, panels,
-    picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel, textedit,
-    workspace, workspace_dialog, workspaces, Theme,
+    about, appicon, chrome, colormanage, confirm_close, context_bar, convert, home, icons, layout,
+    panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel,
+    textedit, workspace, workspace_dialog, workspaces, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -475,6 +475,38 @@ enum MenuAction {
     ManageWorkspaces,
 }
 
+/// What closing tab `tab` (in a [`ConfirmClose`] prompt) resolves into
+/// once its unsaved changes are dealt with.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CloseIntent {
+    /// Just this one tab.
+    Tab,
+    /// Every tab — after this one, the next dirty tab (if any) gets its
+    /// own prompt in turn.
+    AllTabs,
+    /// Quitting the app outright — same "one at a time" continuation as
+    /// [`CloseIntent::AllTabs`], ending in `pending_quit` once every tab
+    /// is resolved.
+    Quit,
+}
+
+/// An open "unsaved changes" prompt (Save / Don't Save / Cancel) — blocks
+/// everything else while shown, same modal precedence tier as the New
+/// Document dialog / About panel. `tab` is the specific tab this prompt's
+/// buttons act on; for [`CloseIntent::AllTabs`]/[`CloseIntent::Quit`], one
+/// dirty tab is confirmed at a time (see `App::resolve_confirm_close`).
+struct ConfirmClose {
+    intent: CloseIntent,
+    tab: usize,
+}
+
+/// Which button the user picked on the unsaved-changes prompt.
+enum ConfirmChoice {
+    Save,
+    DontSave,
+    Cancel,
+}
+
 /// The canvas right-click menu: a hand-drawn popover anchored at `origin`
 /// (screen px). Rows are plain actions or separators — the vocabulary
 /// grows as more of the canvas gets contextual commands.
@@ -667,6 +699,34 @@ impl Doc {
     fn placeholder() -> Self {
         Self::new(Editor::new(amalith_core::Document::new("Untitled")))
     }
+
+    /// Writes this document to disk — `file_path` if it has one and
+    /// `save_as` is false, otherwise a Save dialog. A free function on
+    /// `Doc` itself (not `App::save_document`) so it works uniformly on
+    /// any tab, not just whichever one happens to be active (see
+    /// `App::save_tab`, used to save a *background* tab from the
+    /// unsaved-changes prompt without disturbing which tab is on screen).
+    /// No-op if the dialog is cancelled.
+    fn save(&mut self, save_as: bool) {
+        let path = if save_as { None } else { self.file_path.clone() }.or_else(|| {
+            rfd::FileDialog::new()
+                .add_filter("Amalith document", &["amalith"])
+                .set_file_name("Untitled.amalith")
+                .save_file()
+        });
+        let Some(path) = path else {
+            return;
+        };
+        match amalith_io::save(self.editor.document(), &self.asset_store, &path) {
+            Ok(()) => {
+                recent::push(&path);
+                self.file_path = Some(path);
+                self.io_error = None;
+                self.editor.mark_clean();
+            }
+            Err(err) => self.io_error = Some(format!("Save failed: {err}")),
+        }
+    }
 }
 
 /// What the pointer shows over the main window.
@@ -740,6 +800,10 @@ struct App {
     export_renderer: Option<Renderer>,
     hosts: HashMap<WindowId, WindowHost>,
     main_id: Option<WindowId>,
+    /// The main window's remembered size (from the active workspace, or
+    /// the last-session `layout.json` override), consumed once at
+    /// creation in `resumed`. `None` falls back to a hardcoded default.
+    pending_window_size: Option<(f32, f32)>,
     scene: Scene,
     /// Chrome is drawn here in logical units, then appended to `scene`
     /// scaled by the DPI factor.
@@ -753,6 +817,15 @@ struct App {
     workspace_prompt: Option<workspace_dialog::NamePrompt>,
     /// Windows ▸ Workspace ▸ Manage Workspaces…, while open.
     manage_workspaces: bool,
+    /// The unsaved-changes prompt, while a tab/all-tabs close or a quit
+    /// is waiting on the user to pick Save / Don't Save / Cancel.
+    confirm_close: Option<ConfirmClose>,
+    /// Set once every dirty tab a quit was waiting on has been resolved —
+    /// `about_to_wait`/`WindowEvent::CloseRequested` call
+    /// `event_loop.exit()` when they see this, since whatever resolved
+    /// the last prompt (a press or a keystroke) doesn't itself hold an
+    /// `ActiveEventLoop` handle to call it directly.
+    pending_quit: bool,
     /// The live (active-tab) document state. Inactive tabs are parked in
     /// `tabs`; switching swaps this with `tabs[active]`.
     doc: Doc,
@@ -1042,11 +1115,13 @@ impl App {
         let mut rulers = base.rulers;
         let mut guides_hidden = base.guides_hidden;
         let mut guides_locked = base.guides_locked;
+        let mut window_size = base.window_size;
         if let Some(saved) = workspace::load() {
             saved.apply_to(&mut dock);
             rulers = saved.rulers;
             guides_hidden = saved.guides_hidden;
             guides_locked = saved.guides_locked;
+            window_size = saved.window_size.or(window_size);
         }
         dock.ensure_next_id();
         Self {
@@ -1054,6 +1129,7 @@ impl App {
             export_renderer: None,
             hosts: HashMap::new(),
             main_id: None,
+            pending_window_size: window_size,
             scene: Scene::new(),
             content: Scene::new(),
             text: TextContext::new(),
@@ -1061,6 +1137,8 @@ impl App {
             workspaces,
             workspace_prompt: None,
             manage_workspaces: false,
+            confirm_close: None,
+            pending_quit: false,
             doc: Doc::new(Editor::new(sample::document())),
             tabs: vec![Doc::placeholder()],
             active: 0,
@@ -1249,13 +1327,16 @@ impl App {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     fn rebuild_native_menu(&mut self) {}
 
-    /// Persist the current dock arrangement + view toggles to `layout.json`.
+    /// Persist the current dock arrangement + view toggles + main window
+    /// size to `layout.json`.
     fn save_layout(&self) {
+        let window_size = self.main_logical_size().map(|(w, h)| (w as f32, h as f32));
         workspace::save(&workspace::Layout::capture(
             &self.dock,
             self.rulers,
             self.guides_hidden,
             self.guides_locked,
+            window_size,
         ));
     }
 
@@ -1272,6 +1353,11 @@ impl App {
         self.rulers = layout.rulers;
         self.guides_hidden = layout.guides_hidden;
         self.guides_locked = layout.guides_locked;
+        if let Some((w, h)) = layout.window_size {
+            if let Some(win) = self.main_window() {
+                let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
+            }
+        }
         self.workspaces.active = name.to_string();
         workspaces::save(&self.workspaces);
         self.save_layout();
@@ -1284,7 +1370,14 @@ impl App {
     /// under `name` and make it active. A blank name or the reserved
     /// built-in name is silently ignored (see `workspaces::Store::upsert`).
     fn save_new_workspace(&mut self, name: String) {
-        let layout = workspace::Layout::capture(&self.dock, self.rulers, self.guides_hidden, self.guides_locked);
+        let window_size = self.main_logical_size().map(|(w, h)| (w as f32, h as f32));
+        let layout = workspace::Layout::capture(
+            &self.dock,
+            self.rulers,
+            self.guides_hidden,
+            self.guides_locked,
+            window_size,
+        );
         self.workspaces.upsert(name, layout);
         workspaces::save(&self.workspaces);
         self.rebuild_native_menu();
@@ -1437,6 +1530,95 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Tab `i`'s unsaved-changes state — the active tab's real content
+    /// lives in `self.doc`, not `self.tabs[self.active]` (see `Doc`'s own
+    /// docs), so this can't just index into `tabs` uniformly.
+    fn is_tab_dirty(&self, i: usize) -> bool {
+        if i == self.active {
+            self.doc.editor.is_dirty()
+        } else {
+            self.tabs.get(i).is_some_and(|d| d.editor.is_dirty())
+        }
+    }
+
+    /// Tab `i`'s document title, for the unsaved-changes prompt.
+    fn tab_title(&self, i: usize) -> String {
+        let doc = if i == self.active {
+            self.doc.editor.document()
+        } else {
+            self.tabs[i].editor.document()
+        };
+        doc.metadata.title.clone().unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    /// The lowest-indexed tab with unsaved changes, if any.
+    fn first_dirty_tab(&self) -> Option<usize> {
+        (0..self.tabs.len()).find(|&i| self.is_tab_dirty(i))
+    }
+
+    /// Close tab `i`, prompting first if it has unsaved changes.
+    fn request_close_tab(&mut self, i: usize) {
+        if self.is_tab_dirty(i) {
+            self.confirm_close = Some(ConfirmClose { intent: CloseIntent::Tab, tab: i });
+            self.request_main_redraw();
+        } else {
+            self.close_tab(i);
+        }
+    }
+
+    /// Close every tab, prompting for each unsaved one in turn.
+    fn request_close_all_tabs(&mut self) {
+        if let Some(tab) = self.first_dirty_tab() {
+            self.confirm_close = Some(ConfirmClose { intent: CloseIntent::AllTabs, tab });
+            self.request_main_redraw();
+        } else {
+            self.close_all_tabs();
+        }
+    }
+
+    /// Quit the app outright, prompting for each unsaved tab in turn
+    /// first. Doesn't call `event_loop.exit()` itself — see
+    /// `pending_quit`.
+    fn request_quit(&mut self) {
+        if let Some(tab) = self.first_dirty_tab() {
+            self.confirm_close = Some(ConfirmClose { intent: CloseIntent::Quit, tab });
+            self.request_main_redraw();
+        } else {
+            self.pending_quit = true;
+        }
+    }
+
+    /// Resolves the current unsaved-changes prompt: saves (or discards, or
+    /// aborts the whole close/quit) tab `cc.tab`, then either stops (a
+    /// single tab) or moves on to the next dirty tab (Close All / Quit).
+    fn resolve_confirm_close(&mut self, choice: ConfirmChoice) {
+        let Some(cc) = self.confirm_close.take() else {
+            return;
+        };
+        match choice {
+            ConfirmChoice::Cancel => {
+                self.request_main_redraw();
+                return;
+            }
+            ConfirmChoice::Save => {
+                self.save_tab(cc.tab, false);
+                if self.is_tab_dirty(cc.tab) {
+                    // The save dialog was cancelled, or the save failed —
+                    // abort the whole close/quit; the user can retry.
+                    self.request_main_redraw();
+                    return;
+                }
+            }
+            ConfirmChoice::DontSave => {}
+        }
+        self.close_tab(cc.tab);
+        match cc.intent {
+            CloseIntent::Tab => {}
+            CloseIntent::AllTabs => self.request_close_all_tabs(),
+            CloseIntent::Quit => self.request_quit(),
+        }
+    }
+
     /// Display label for tab `i`: `Name* @ zoom% (Color/Preview)`.
     fn tab_label(&self, i: usize) -> String {
         let d = if i == self.active {
@@ -1450,7 +1632,7 @@ impl App {
         let (editor, zoom) = d;
         let doc = editor.document();
         let name = doc.metadata.title.as_deref().unwrap_or("Untitled");
-        let dirty = if editor.can_undo() { "*" } else { "" };
+        let dirty = if editor.is_dirty() { "*" } else { "" };
         let color = match doc.settings.color_mode {
             amalith_core::ColorMode::Cmyk => "CMYK",
             amalith_core::ColorMode::Rgb => "RGB",
@@ -2861,8 +3043,8 @@ impl App {
             }
             MenuAction::New => self.open_new_doc(),
             MenuAction::Open => self.open_document(),
-            MenuAction::Close => self.close_tab(self.active),
-            MenuAction::CloseAll => self.close_all_tabs(),
+            MenuAction::Close => self.request_close_tab(self.active),
+            MenuAction::CloseAll => self.request_close_all_tabs(),
             MenuAction::Revert => self.revert_document(),
             MenuAction::Save => self.save_document(false),
             MenuAction::SaveAs => self.save_document(true),
@@ -3243,24 +3425,22 @@ impl App {
     /// ⌘S / ⌘⇧S — write the document to its `.amalith` file, prompting for
     /// a path when there isn't one yet or `save_as` forces it.
     fn save_document(&mut self, save_as: bool) {
-        let path = if save_as { None } else { self.doc.file_path.clone() }.or_else(|| {
-            rfd::FileDialog::new()
-                .add_filter("Amalith document", &["amalith"])
-                .set_file_name("Untitled.amalith")
-                .save_file()
-        });
-        let Some(path) = path else {
-            return;
-        };
-        match amalith_io::save(self.doc.editor.document(), &self.doc.asset_store, &path) {
-            Ok(()) => {
-                recent::push(&path);
-                self.doc.file_path = Some(path);
-                self.doc.io_error = None;
-            }
-            Err(err) => self.doc.io_error = Some(format!("Save failed: {err}")),
-        }
+        self.doc.save(save_as);
         self.request_main_redraw();
+    }
+
+    /// Saves tab `i` — the active tab (via `save_document`) or, without
+    /// disturbing which tab is on screen, a background one. Used by the
+    /// unsaved-changes prompt's Save button, which must not silently
+    /// switch tabs out from under the user just to save a different one
+    /// they're closing.
+    fn save_tab(&mut self, i: usize, save_as: bool) {
+        if i == self.active {
+            self.save_document(save_as);
+        } else if let Some(doc) = self.tabs.get_mut(i) {
+            doc.save(save_as);
+            self.request_main_redraw();
+        }
     }
 
     /// ⌘⇧I — pick an `.svg` file and paste its shapes into the document.
@@ -5450,6 +5630,9 @@ impl App {
             && self.ruler_menu.is_none()
             && self.ctx_menu.is_none()
             && self.palette.is_none()
+            && self.workspace_prompt.is_none()
+            && !self.manage_workspaces
+            && self.confirm_close.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -5604,7 +5787,8 @@ impl App {
             return MasterFrame::default();
         };
         let theme = self.theme.clone();
-        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p))
+        let bespoke = self.is_float_only(id);
+        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p), bespoke)
     }
 
     /// A docked master's rect *within the main window* (local coordinates)
@@ -5775,10 +5959,11 @@ impl App {
         }
         let width = m.rect[2] as f64;
         let theme = self.theme.clone();
+        let bespoke = self.is_float_only(master);
         let h = if m.is_tools() {
             layout::HEADER_H + panels::tools::natural_height(width)
         } else {
-            layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p))
+            layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p), bespoke)
         };
         if let Some(f) = self.dock.master_mut(master) {
             f.rect[3] = h as f32;
@@ -6009,8 +6194,7 @@ impl ApplicationHandler for App {
                 .unwrap_or_default();
             for action in actions {
                 if matches!(action, MenuAction::Quit) {
-                    // `exiting` saves the layout on the way out.
-                    event_loop.exit();
+                    self.request_quit();
                     continue;
                 }
                 self.run_menu_action(action);
@@ -6022,6 +6206,13 @@ impl ApplicationHandler for App {
         }
         #[cfg(target_os = "macos")]
         self.drain_mac_drops();
+        // `exiting` saves the layout on the way out. Checked centrally
+        // (rather than calling `event_loop.exit()` at every place that can
+        // resolve the last unsaved-changes prompt) since some of those —
+        // a keystroke, a press — don't hold an `ActiveEventLoop` handle.
+        if self.pending_quit {
+            event_loop.exit();
+        }
         self.drain_lod();
         if std::mem::take(&mut self.pending_export) {
             self.spawn_export_dialog(event_loop);
@@ -6139,10 +6330,14 @@ impl ApplicationHandler for App {
             names.dedup();
             self.font_families = names;
         }
+        let (win_w, win_h) = self
+            .pending_window_size
+            .map(|(w, h)| (w as f64, h as f64))
+            .unwrap_or((1280.0, 800.0));
         let attrs = Window::default_attributes()
             .with_title("Amalith Ver. Alpha")
             .with_window_icon(appicon::window_icon())
-            .with_inner_size(LogicalSize::new(1280.0, 800.0));
+            .with_inner_size(LogicalSize::new(win_w, win_h));
         #[cfg(target_os = "macos")]
         let attrs = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -6207,7 +6402,10 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => {
                 self.focused.remove(&id);
                 if Some(id) == self.main_id {
-                    event_loop.exit();
+                    self.request_quit();
+                    if self.pending_quit {
+                        event_loop.exit();
+                    }
                 } else if let Some(host) = self.hosts.remove(&id) {
                     if let Role::Floating(fid) = host.role {
                         // Closing a Master's OS window folds its groups

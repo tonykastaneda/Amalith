@@ -15,7 +15,7 @@
 //!    `Document`'s internal fields change shape, the on-disk schema
 //!    doesn't silently change with it — `DocumentManifest` is the explicit,
 //!    versioned contract external tools/plugins read.
-use amalith_core::{Artboard, Asset, Gradient, LayerId, Metadata, Object, Settings, Swatch};
+use amalith_core::{Artboard, Asset, Gradient, Guide, LayerId, Metadata, Object, Settings, Swatch};
 use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
@@ -37,6 +37,10 @@ pub(crate) struct DocumentManifest {
     /// written before gradients existed still load.
     #[serde(default)]
     pub gradients: Vec<Gradient>,
+    /// Ruler guides. `#[serde(default)]` so containers written before
+    /// guides were persisted still load (they just come back with none).
+    #[serde(default)]
+    pub guides: Vec<Guide>,
     pub assets: Vec<Asset>,
     pub layers: Vec<LayerManifest>,
 }

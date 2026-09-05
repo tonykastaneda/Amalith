@@ -526,6 +526,7 @@ impl App {
                     self.content.fill(Fill::NonZero, ID, self.theme.panel_bg, None, &rect);
                     let this_masters_open_row =
                         self.stack_flyout.filter(|(fm, ..)| *fm == fid).map(|(_, fg, fi)| (fg, fi));
+                    let bespoke = self.is_float_only(fid);
                     chrome::paint_master(
                         &mut self.content,
                         &frame,
@@ -535,6 +536,7 @@ impl App {
                         &tab_label,
                         &panels::has_menu,
                         this_masters_open_row,
+                        bespoke,
                     );
                     if self.master_merge_preview == Some(fid) {
                         chrome::paint_master_merge_highlight(&mut self.content, rect, &self.theme);
@@ -817,6 +819,19 @@ impl App {
             }
             if let Some(pal) = &mut self.palette {
                 pal.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
+            }
+            // Topmost of every modal above — it can interrupt any of them
+            // (e.g. quitting while the Preferences panel happens to be
+            // open).
+            if let Some(cc) = &self.confirm_close {
+                let name = self.tab_title(cc.tab);
+                confirm_close::paint(
+                    &mut self.content,
+                    &mut self.text,
+                    Rect::new(0.0, 0.0, wl, hl),
+                    &name,
+                    &self.theme,
+                );
             }
         }
         if self.panel_menu.as_ref().is_some_and(|m| m.win == id) {

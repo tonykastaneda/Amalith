@@ -1,8 +1,9 @@
 //! Workspace-layout persistence.
 //!
 //! A snapshot of the dock arrangement (every *docked* Master, its groups,
-//! panels, and display mode) plus a couple of view toggles, written to
-//! `layout.json` next to `settings.txt` and restored on launch.
+//! panels, and display mode), a couple of view toggles, and the main
+//! window's own size, written to `layout.json` next to `settings.txt` and
+//! restored on launch.
 //!
 //! Docked masters only, same as before this rewrite — a floating Master
 //! is a real OS window with no launch-time equivalent to spawn it back
@@ -32,16 +33,29 @@ pub struct Layout {
     /// Guides locked (View ▸ Lock Guides, ⌘⌥;).
     #[serde(default)]
     pub guides_locked: bool,
+    /// The main window's own size, logical px. `None` for a layout saved
+    /// before this existed, or the built-in Essentials Classic (which has
+    /// no opinion on window size) — `App::resumed` falls back to a
+    /// reasonable default either way.
+    #[serde(default)]
+    pub window_size: Option<(f32, f32)>,
 }
 
 impl Layout {
     /// Capture the current shell layout.
-    pub fn capture(dock: &DockModel, rulers: bool, guides_hidden: bool, guides_locked: bool) -> Self {
+    pub fn capture(
+        dock: &DockModel,
+        rulers: bool,
+        guides_hidden: bool,
+        guides_locked: bool,
+        window_size: Option<(f32, f32)>,
+    ) -> Self {
         Self {
             masters: dock.masters.iter().filter(|m| m.dock.is_some()).cloned().collect(),
             rulers,
             guides_hidden,
             guides_locked,
+            window_size,
         }
     }
 

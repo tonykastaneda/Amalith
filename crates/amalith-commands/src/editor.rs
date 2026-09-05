@@ -267,6 +267,21 @@ impl Editor {
         self.history.can_redo()
     }
 
+    /// True once the live document has diverged from the last save (or,
+    /// having never been saved this session, from how `clear_history`
+    /// last left it) — the real "unsaved changes" signal, unlike
+    /// [`Self::can_undo`] (which just means *some* undo exists, forever,
+    /// even right after saving).
+    pub fn is_dirty(&self) -> bool {
+        self.history.is_dirty()
+    }
+
+    /// Marks the document's current state as matching what's on disk —
+    /// call this right after a successful save.
+    pub fn mark_clean(&mut self) {
+        self.history.mark_clean();
+    }
+
     /// Executes `command`, recording it so it can be undone.
     pub fn execute(&mut self, command: Command) -> Result<CommandOutcome, CommandError> {
         // `Paste` can create several new top-level roots, which the single

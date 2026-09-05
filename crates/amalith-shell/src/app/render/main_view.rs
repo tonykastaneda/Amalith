@@ -569,12 +569,31 @@ pub(in crate::app) fn paint_main(
         for mid in dock.docked(side) {
             let Some(master) = dock.master(mid) else { continue };
             let rect = docked_master_rect(dock, mid, width, height);
-            let frame = layout::layout_master(master, rect, theme, &mut |p| {
-                text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                    + chrome::PANEL_TAB_CLOSE_W
-            });
+            let frame = layout::layout_master(
+                master,
+                rect,
+                theme,
+                &mut |p| {
+                    text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                        + chrome::PANEL_TAB_CLOSE_W
+                },
+                // Docked masters are never the bespoke float-alone kind
+                // (the colour picker, a shape dialog, Export for Screens
+                // never dock — see `App::is_float_only`).
+                false,
+            );
             let this_masters_open_row = stack_flyout.filter(|(fm, ..)| *fm == mid).map(|(_, fg, fi)| (fg, fi));
-            chrome::paint_master(scene, &frame, master, theme, text, &tab_label, &panels::has_menu, this_masters_open_row);
+            chrome::paint_master(
+                scene,
+                &frame,
+                master,
+                theme,
+                text,
+                &tab_label,
+                &panels::has_menu,
+                this_masters_open_row,
+                false,
+            );
             if let Some((fm, fg, fi)) = stack_flyout {
                 if fm == mid {
                     if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {

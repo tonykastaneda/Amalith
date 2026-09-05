@@ -28,9 +28,10 @@ pub use svg::{export_svg, import_svg, ImportedSvg, SvgError};
 mod tests {
     use super::*;
     use amalith_core::{
-        Affine, Artboard, ArtboardId, Color, Document, Gradient, GradientId, Layer, LayerId, Object,
-        ObjectId, ObjectKind, ObjectParent, Paint, Rect, Swatch, Vec2,
+        Affine, Artboard, ArtboardId, Color, Document, Gradient, GradientId, Guide, GuideOrient,
+        Layer, LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, Rect, Swatch, Vec2,
     };
+    use std::io::{Read, Write};
     use tempfile::tempdir;
 
     #[test]
@@ -280,5 +281,56 @@ mod tests {
         );
         let _ = loaded.assets()[0].id; // sanity: id survived
         assert_eq!(loaded.assets()[0].id, asset_id);
+    }
+
+    #[test]
+    fn roundtrip_preserves_guides_in_order() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("with-guides.amalith");
+
+        let mut document = Document::new("With guides");
+        document.insert_guide(Guide::new(GuideOrient::Horizontal, 200.0), 0);
+        document.insert_guide(Guide::new(GuideOrient::Vertical, 400.0), 1);
+
+        save(&document, &AssetStore::new(), &path).unwrap();
+        let (loaded, _assets) = load(&path).unwrap();
+
+        assert_eq!(loaded.guides().len(), 2);
+        assert_eq!(loaded.guides()[0].orient, GuideOrient::Horizontal);
+        assert_eq!(loaded.guides()[0].pos, 200.0);
+        assert_eq!(loaded.guides()[1].orient, GuideOrient::Vertical);
+        assert_eq!(loaded.guides()[1].pos, 400.0);
+    }
+
+    #[test]
+    fn a_manifest_written_before_guides_existed_still_loads_with_none() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("no-guides-field.amalith");
+        let document = Document::new("Old format");
+        save(&document, &AssetStore::new(), &path).unwrap();
+
+        // Rewrite document.json dropping the "guides" key entirely, as an
+        // older build's file would have — `#[serde(default)]` must still
+        // load it rather than erroring.
+        let bytes = std::fs::read(&path).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut manifest_text = String::new();
+        zip.by_name("document.json")
+            .unwrap()
+            .read_to_string(&mut manifest_text)
+            .unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&manifest_text).unwrap();
+        value.as_object_mut().unwrap().remove("guides");
+        let rewritten = serde_json::to_vec(&value).unwrap();
+
+        let out = std::fs::File::create(&path).unwrap();
+        let mut writer = zip::ZipWriter::new(out);
+        let options = zip::write::SimpleFileOptions::default();
+        writer.start_file("document.json", options).unwrap();
+        writer.write_all(&rewritten).unwrap();
+        writer.finish().unwrap();
+
+        let (loaded, _assets) = load(&path).unwrap();
+        assert!(loaded.guides().is_empty());
     }
 }

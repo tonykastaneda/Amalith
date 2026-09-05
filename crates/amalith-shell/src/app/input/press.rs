@@ -73,6 +73,7 @@ impl App {
                 return true;
             }
             if !g.tabs.is_empty() && g.tab_strip.contains(self.pointer) {
+                let bespoke = self.is_float_only(master);
                 let burger = chrome::panel_menu_rect(g.tab_strip, &self.theme);
                 let active_panel = g.tabs.get(g.active).map(|t| t.panel);
                 if active_panel.is_some_and(panels::has_menu) && burger.contains(self.pointer) {
@@ -81,7 +82,8 @@ impl App {
                     }
                     return true;
                 }
-                if let Some(tab) = g.tabs.iter().position(|t| t.rect.contains(self.pointer)) {
+                let tab_hit = g.tabs.iter().position(|t| t.rect.contains(self.pointer));
+                if let Some(tab) = tab_hit {
                     let t = &g.tabs[tab];
                     let pid = t.panel;
                     if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
@@ -95,8 +97,23 @@ impl App {
                             gg.active = tab;
                         }
                     }
+                }
+                if bespoke {
+                    // This window's only chrome is its tab strip (no
+                    // master header, so no header drag-move either) —
+                    // dragging anywhere on it just moves the window;
+                    // there's nothing to detach or re-dock (⇐
+                    // `layout::layout_master`'s `bespoke` flag).
+                    let grab = self.pointer - Point::new(frame.bounds.x0, frame.bounds.y0);
+                    self.drag = Drag::PendingMasterMove {
+                        master,
+                        press: self.pointer,
+                        grab,
+                        was_docked: None,
+                    };
+                } else if let Some(tab) = tab_hit {
                     self.drag = Drag::PendingPanelDrag {
-                        panel: pid,
+                        panel: g.tabs[tab].panel,
                         press: self.pointer,
                     };
                 }
@@ -395,6 +412,26 @@ impl App {
                     return;
                 };
 
+                // The unsaved-changes prompt is modal while open — it
+                // takes precedence over everything, including About/
+                // NewDoc/Home, since it can be triggered while any of
+                // those happen to already be showing (e.g. quitting).
+                if self.confirm_close.is_some() {
+                    match confirm_close::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
+                        confirm_close::Hit::Backdrop | confirm_close::Hit::Cancel => {
+                            self.resolve_confirm_close(ConfirmChoice::Cancel);
+                        }
+                        confirm_close::Hit::DontSave => {
+                            self.resolve_confirm_close(ConfirmChoice::DontSave);
+                        }
+                        confirm_close::Hit::Save => {
+                            self.resolve_confirm_close(ConfirmChoice::Save);
+                        }
+                        confirm_close::Hit::None => {}
+                    }
+                    return;
+                }
+
                 // The About panel is modal — it captures every press.
                 if self.about.is_some() {
                     let hit = self
@@ -584,7 +621,7 @@ impl App {
                             layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
                         {
                             if close.contains(self.pointer) {
-                                self.close_tab(i);
+                                self.request_close_tab(i);
                                 return;
                             }
                             if whole.contains(self.pointer) {
@@ -1294,28 +1331,33 @@ impl App {
                 // A floating Master's own left/right edge resizes it too
                 // (it's the same width control a docked one has, just
                 // drawn at the window's own edge instead of the rail's
-                // inner one).
-                let left_edge = Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1);
-                let right_edge = Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1);
-                if left_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
-                    let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
-                    self.drag = Drag::MasterWidth {
-                        master: fid,
-                        edge: ResizeEdge::Left,
-                        start_w,
-                        start_x: self.pointer.x,
-                    };
-                    return;
-                }
-                if right_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
-                    let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
-                    self.drag = Drag::MasterWidth {
-                        master: fid,
-                        edge: ResizeEdge::Right,
-                        start_w,
-                        start_x: self.pointer.x,
-                    };
-                    return;
+                // inner one) — except the handful of panels that always
+                // float alone in a small, fixed-size window (the colour
+                // picker, a shape dialog, Export for Screens): those never
+                // resize at all.
+                if !self.is_float_only(fid) {
+                    let left_edge = Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1);
+                    let right_edge = Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1);
+                    if left_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                        let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
+                        self.drag = Drag::MasterWidth {
+                            master: fid,
+                            edge: ResizeEdge::Left,
+                            start_w,
+                            start_x: self.pointer.x,
+                        };
+                        return;
+                    }
+                    if right_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                        let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
+                        self.drag = Drag::MasterWidth {
+                            master: fid,
+                            edge: ResizeEdge::Right,
+                            start_w,
+                            start_x: self.pointer.x,
+                        };
+                        return;
+                    }
                 }
                 let frame = self.build_master_frame(fid, rect);
                 self.handle_master_press(event_loop, id, fid, &frame, double);

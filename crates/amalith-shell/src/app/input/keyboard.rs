@@ -12,10 +12,24 @@ use crate::dock::PanelId;
 use crate::textedit;
 use crate::tool::Tool;
 
-use super::super::{App, Drag, PastePlace};
+use super::super::{App, ConfirmChoice, Drag, PastePlace};
 
 impl App {
     pub(in crate::app) fn on_key(&mut self, event: KeyEvent) {
+        // The unsaved-changes prompt takes every key while open — Escape
+        // cancels, Enter/Return does the default (rightmost) action, Save.
+        if self.confirm_close.is_some() {
+            if event.state.is_pressed() {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::Escape) => self.resolve_confirm_close(ConfirmChoice::Cancel),
+                    PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                        self.resolve_confirm_close(ConfirmChoice::Save)
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
         // The command palette (⌘K) swallows every key while open.
         if self.palette.is_some() {
             if !event.state.is_pressed() {
@@ -526,7 +540,7 @@ impl App {
                     KeyCode::KeyI if self.shift_down => self.import_svg(),
                     // ⌘⌥E — Export for Screens.
                     KeyCode::KeyE if self.alt_down => self.request_export_dialog(),
-                    KeyCode::KeyW => self.close_tab(self.active),
+                    KeyCode::KeyW => self.request_close_tab(self.active),
                     // ⌘R — show / hide the canvas rulers.
                     KeyCode::KeyR if !self.shift_down => {
                         self.rulers = !self.rulers;

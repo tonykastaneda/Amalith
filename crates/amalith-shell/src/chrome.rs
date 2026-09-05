@@ -45,6 +45,11 @@ pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
 /// A Master's header never carries a title — only its × and chevron.
 /// `label`/`show_menu` are for its panels' own tab captions and
 /// hamburgers, not the Master itself.
+/// `bespoke` is true for the handful of panels that always float alone
+/// in their own small, fixed-size window (the colour picker, a shape
+/// dialog, Export for Screens — see `App::is_float_only`): no master
+/// header (no ×, no chevron), no group handle — its one tab strip is the
+/// only chrome, and it's the only thing dragging it can move.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_master(
     scene: &mut Scene,
@@ -55,21 +60,26 @@ pub fn paint_master(
     label: &dyn Fn(PanelId) -> String,
     show_menu: &dyn Fn(PanelId) -> bool,
     open_flyout: Option<(usize, usize)>,
+    bespoke: bool,
 ) {
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &frame.bounds);
 
-    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &frame.header);
-    paint_x(scene, frame.close, theme.text_dim, 3.5);
-    let chevron_state = if master.is_tools() {
-        master.tools_density == crate::dock::ToolsDensity::Grid1x
-    } else {
-        master.layout == MasterLayout::Tabs
-    };
-    paint_chevrons(scene, frame.chevron, theme.text_dim, chevron_state);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &frame.header);
+    if !bespoke {
+        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &frame.header);
+        paint_x(scene, frame.close, theme.text_dim, 3.5);
+        let chevron_state = if master.is_tools() {
+            master.tools_density == crate::dock::ToolsDensity::Grid1x
+        } else {
+            master.layout == MasterLayout::Tabs
+        };
+        paint_chevrons(scene, frame.chevron, theme.text_dim, chevron_state);
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &frame.header);
+    }
 
     for g in &frame.groups {
-        paint_group_handle(scene, g.handle, theme);
+        if !bespoke {
+            paint_group_handle(scene, g.handle, theme);
+        }
 
         match master.layout {
             MasterLayout::Stack => {
@@ -347,7 +357,7 @@ mod tests {
         let mut text = TextContext::new();
         for layout in [MasterLayout::Stack, MasterLayout::Tabs] {
             let m = master(layout, vec![vec![PanelId("a"), PanelId("b")], vec![PanelId("c")]]);
-            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false);
             let mut scene = Scene::new();
             paint_master(
                 &mut scene,
@@ -358,6 +368,7 @@ mod tests {
                 &|p| p.0.to_string(),
                 &|_| false,
                 Some((0, 0)),
+                false,
             );
         }
     }
@@ -366,10 +377,19 @@ mod tests {
     fn paint_master_compact_mode_doesnt_panic() {
         let mut text = TextContext::new();
         let m = master(MasterLayout::Stack, vec![vec![PanelId("a")]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80, false);
         assert!(frame.compact);
         let mut scene = Scene::new();
-        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None);
+        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, false);
+    }
+
+    #[test]
+    fn paint_master_bespoke_mode_doesnt_panic() {
+        let mut text = TextContext::new();
+        let m = master(MasterLayout::Tabs, vec![vec![PanelId("picker")]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true);
+        let mut scene = Scene::new();
+        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, true);
     }
 
     #[test]

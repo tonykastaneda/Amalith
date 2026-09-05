@@ -31,6 +31,7 @@ pub fn save(
         artboards: document.artboards().to_vec(),
         swatches: document.swatches().to_vec(),
         gradients: document.gradients().to_vec(),
+        guides: document.guides().to_vec(),
         assets: document.assets().to_vec(),
         layers: document
             .layers()
@@ -93,6 +94,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
     }
     for gradient in manifest.gradients {
         document.add_gradient(gradient);
+    }
+    for guide in manifest.guides {
+        let index = document.guides().len();
+        document.insert_guide(guide, index);
     }
     for asset in manifest.assets {
         document.add_asset(asset);

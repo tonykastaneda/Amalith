@@ -32,7 +32,7 @@ pub fn essentials_classic() -> Layout {
         [0.0, 40.0, 320.0, 600.0],
     );
     dock.dock_master(right, Side::Right, 0);
-    Layout::capture(&dock, false, false, false)
+    Layout::capture(&dock, false, false, false, None)
 }
 
 /// One user-saved workspace.
