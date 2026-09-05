@@ -41,7 +41,10 @@ pub(in crate::app) fn paint_main(
     marquee: Option<Rect>,
     width: f64,
     height: f64,
-    redock_preview: Option<&(RailSide, DropTarget)>,
+    master_dock_preview: Option<(Side, usize)>,
+    master_merge_preview: Option<u64>,
+    group_drop_preview: Option<&(u64, GroupDrop)>,
+    panel_drop_preview: Option<&(u64, PanelDrop)>,
     status: Option<&str>,
     expanded: &std::collections::HashSet<ObjectId>,
     cur_weight: f64,
@@ -104,8 +107,14 @@ pub(in crate::app) fn paint_main(
     gradient_edit: Option<(panels::gradient::GradField, &str)>,
     // Gradient tool: the on-canvas axis annotator (document space).
     gradient_annot: Option<crate::app::gradient::GradientAnnot>,
-    // Which rail icon-strip row (if any) has its flyout open.
-    flyout_icon: Option<(RailSide, usize, usize)>,
+    // Stack-mode row highlight — the FAB delete target / flyout source.
+    // (The flyout preview itself isn't painted yet — see the open TODO in
+    // `render/mod.rs`.)
+    // A Stack-mode row's open flyout preview: (master, group, index). Only
+    // meaningful when `master` is docked in *this* window — a floating
+    // one's flyout is painted by `render/mod.rs`'s own `Role::Floating`
+    // branch instead.
+    stack_flyout: Option<(u64, usize, usize)>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -115,17 +124,17 @@ pub(in crate::app) fn paint_main(
         &Rect::new(0.0, 0.0, width, height),
     );
 
-    // Canvas fills the gap between whatever rails are present.
-    let left_x = if dock.left.is_empty() {
-        0.0
-    } else {
-        rail_rect_for(RailSide::Left, &dock.left, width, height).x1
-    };
-    let right_x = if dock.right.is_empty() {
-        width
-    } else {
-        rail_rect_for(RailSide::Right, &dock.right, width, height).x0
-    };
+    // Canvas fills the gap between whatever Masters are docked.
+    let left_x = dock
+        .docked(Side::Left)
+        .last()
+        .map(|&mid| docked_master_rect(dock, mid, width, height).x1)
+        .unwrap_or(0.0);
+    let right_x = dock
+        .docked(Side::Right)
+        .last()
+        .map(|&mid| docked_master_rect(dock, mid, width, height).x0)
+        .unwrap_or(width);
     // Full canvas region between the rails; the rulers (when on) sit in a
     // strip along its top / left, and content is inset to match
     // `App::canvas_viewport`.
@@ -511,97 +520,137 @@ pub(in crate::app) fn paint_main(
         }
     }
 
-    for side in [RailSide::Left, RailSide::Right] {
-        let rail = dock.rail(side);
-        let is_preview_target = redock_preview.is_some_and(|(s, _)| *s == side);
-        if rail.is_empty() && !is_preview_target {
-            continue;
-        }
-        let rect = rail_rect_for(side, rail, width, height);
-        let laid = build_rail_layout_with_flyout(rail, side, rect, flyout_icon, theme, text);
-        if !rail.is_empty() {
-            if let Some(col) = laid.icon_col {
-                chrome::paint_icon_col(
-                    scene,
-                    col,
-                    &laid.icon_rects,
-                    flyout_icon.filter(|(s, ..)| *s == side).map(|(_, c, r)| (c, r)),
-                    theme,
-                    text,
-                    &tab_label,
-                );
+    let ctx = panels::Ctx {
+        theme,
+        doc,
+        selection,
+        active_tool,
+        pointer,
+        representative,
+        fill_mixed,
+        stroke_mixed,
+        active_slot,
+        picker,
+        cur_fill,
+        cur_stroke,
+        shape_tool,
+        expanded,
+        renaming,
+        selected_layer,
+        selected_artboard,
+        text_style: text_style.clone(),
+        text_align,
+        text_paragraph,
+        text_editing,
+        font_families,
+        layer_query,
+        layer_search_focused,
+        layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
+        layer_drop,
+        color_mode,
+        cmyk_profile,
+        recent,
+        xform_ref,
+        xform_constrain,
+        xform_edit,
+        align_to,
+        align_spacing,
+        align_spacing_edit,
+        key_object,
+        shape_dialog: None,
+        export: None,
+        gradient: gradient.clone(),
+        gradient_edit,
+    };
+    // Captured while walking the docked masters below, painted last (on
+    // top of everything) once we know the open row's real screen rect.
+    let mut open_flyout: Option<(Rect, PanelId)> = None;
+    for side in [Side::Left, Side::Right] {
+        for mid in dock.docked(side) {
+            let Some(master) = dock.master(mid) else { continue };
+            let rect = docked_master_rect(dock, mid, width, height);
+            let frame = layout::layout_master(master, rect, theme, &mut |p| {
+                text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+                    + chrome::PANEL_TAB_CLOSE_W
+            });
+            let this_masters_open_row = stack_flyout.filter(|(fm, ..)| *fm == mid).map(|(_, fg, fi)| (fg, fi));
+            chrome::paint_master(scene, &frame, master, theme, text, &tab_label, &panels::has_menu, this_masters_open_row);
+            if let Some((fm, fg, fi)) = stack_flyout {
+                if fm == mid {
+                    if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {
+                        open_flyout = Some((row.rect, row.panel));
+                    }
+                }
             }
-            chrome::paint(scene, &laid, theme, text, true, &tab_label);
-            let ctx = panels::Ctx {
-                theme,
-                doc,
-                selection,
-                active_tool,
-                pointer,
-                representative,
-                fill_mixed,
-                stroke_mixed,
-                active_slot,
-                picker,
-                cur_fill,
-                cur_stroke,
-                shape_tool,
-                expanded,
-                renaming,
-                selected_layer,
-                selected_artboard,
-                text_style: text_style.clone(),
-                text_align,
-                text_paragraph,
-                text_editing,
-                font_families,
-                layer_query,
-                layer_search_focused,
-                layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
-                layer_drop,
-                color_mode,
-                cmyk_profile,
-                recent,
-                xform_ref,
-                xform_constrain,
-                xform_edit,
-                align_to,
-                align_spacing,
-                align_spacing_edit,
-                key_object,
-                shape_dialog: None,
-                export: None,
-                gradient: gradient.clone(),
-                gradient_edit,
-            };
-            for area in &laid.areas {
-                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                    // Clip to the real body so a panel shorter than its
-                    // content spills nothing past the splitter; the panel
-                    // itself is drawn into a body slid up by its scroll.
+            if master.is_tools() {
+                if frame.body.height() > 0.0 {
+                    scene.push_clip_layer(Fill::NonZero, ID, &frame.body);
+                    panels::tools::paint(scene, text, frame.body, &ctx);
+                    scene.pop_layer();
+                }
+            } else {
+                for g in &frame.groups {
+                    if g.content.height() <= 0.0 {
+                        continue;
+                    }
+                    let Some(pid) = master.group(g.index).and_then(|gg| gg.panels.get(gg.active).copied()) else {
+                        continue;
+                    };
                     let (pbody, scroll) = panels::scrolled_body(
                         pid,
-                        area.body,
+                        g.content,
                         panel_scroll.get(&pid).copied().unwrap_or(0.0),
                     );
-                    scene.push_clip_layer(Fill::NonZero, ID, &area.body);
+                    scene.push_clip_layer(Fill::NonZero, ID, &g.content);
                     panels::paint(scene, text, pid, pbody, &ctx);
-                    panels::paint_scrollbar(scene, area.body, pid, scroll, theme);
+                    panels::paint_scrollbar(scene, g.content, pid, scroll, theme);
                     scene.pop_layer();
                 }
             }
-            // Bar on the canvas-facing edge — the whole-rail resize handle.
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                theme.splitter,
-                None,
-                &rail_edge_bar(side, rect),
-            );
+            // Bar on the canvas-facing edge — the whole-Master resize handle.
+            let edge_rect = match side {
+                Side::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
+                Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
+            };
+            scene.fill(Fill::NonZero, ID, theme.splitter, None, &edge_rect);
+
+            if master_merge_preview == Some(mid) {
+                chrome::paint_master_merge_highlight(scene, rect, theme);
+            }
+            if let Some((pm, pd)) = panel_drop_preview {
+                if *pm == mid {
+                    chrome::paint_panel_drop(scene, &frame, pd, theme);
+                }
+            }
+            if let Some((gm, gd)) = group_drop_preview {
+                if *gm == mid {
+                    chrome::paint_group_drop(scene, &frame, gd, theme);
+                }
+            }
         }
-        if let Some((_, target)) = redock_preview.filter(|(s, _)| *s == side) {
-            chrome::paint_drop(scene, target, &laid, rect, theme);
-        }
+    }
+    if let Some((row, pid)) = open_flyout {
+        let bounds = layout::flyout_rect(row, Rect::new(0.0, 0.0, width, height));
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
+        let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+        chrome::paint_flyout_chrome(scene, bounds, header, close, &tab_label(pid), theme, text);
+        let body = Rect::new(bounds.x0 + 8.0, header.y1 + 8.0, bounds.x1 - 8.0, bounds.y1 - 8.0);
+        scene.push_clip_layer(Fill::NonZero, ID, &body);
+        panels::paint(scene, text, pid, body, &ctx);
+        scene.pop_layer();
+    }
+    if let Some((side, index)) = master_dock_preview {
+        let widths: Vec<f64> = dock
+            .docked(side)
+            .iter()
+            .map(|&m| dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .collect();
+        let off = layout::dock_offset(&widths, index);
+        let x = match side {
+            Side::Left => off,
+            Side::Right => width - off,
+        };
+        chrome::paint_dock_insert(scene, height, x, theme);
     }
 
     // Context / control bar — a strip of self-contained segments; which

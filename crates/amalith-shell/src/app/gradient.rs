@@ -205,14 +205,18 @@ impl App {
         if self.dock.contains(pid) {
             return;
         }
-        let path = self.dock.right.any_tab_path().unwrap_or_default();
-        self.dock.rail_mut(RailSide::Right).dock(
-            pid,
-            DropTarget::Tab {
-                path,
-                index: usize::MAX,
-            },
-        );
+        if let Some(&right) = self.dock.docked(Side::Right).first() {
+            if let Some(m) = self.dock.master_mut(right) {
+                if let Some(g) = m.groups.last_mut() {
+                    g.panels.push(pid);
+                } else {
+                    m.groups.push(Group::new(0, vec![pid]));
+                }
+            }
+        } else {
+            let id = self.dock.spawn_master(vec![vec![pid]], [40.0, 40.0, 320.0, 400.0]);
+            self.dock.dock_master(id, Side::Right, 0);
+        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);

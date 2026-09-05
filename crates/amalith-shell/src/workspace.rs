@@ -1,28 +1,28 @@
 //! Workspace-layout persistence.
 //!
-//! A snapshot of the dock arrangement (the left / right rails and their
-//! widths, which panels are open, how they're split and tabbed) plus a
-//! couple of view toggles, written to `layout.json` next to
-//! `settings.txt` and restored on launch.
+//! A snapshot of the dock arrangement (every *docked* Master, its groups,
+//! panels, and display mode) plus a couple of view toggles, written to
+//! `layout.json` next to `settings.txt` and restored on launch.
 //!
-//! Rails only for now — floating panel windows are not part of the
-//! snapshot. Detached panels fold back into the right rail on quit, so
-//! nothing is lost.
+//! Docked masters only, same as before this rewrite — a floating Master
+//! is a real OS window with no launch-time equivalent to spawn it back
+//! into, so it isn't part of the snapshot (nothing is lost: closing one
+//! folds its groups back into whatever's docked right — see
+//! `WindowEvent::CloseRequested` — well before the app would ever quit
+//! with one still open).
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dock::{DockModel, Rail};
+use crate::dock::{DockModel, Master};
 
 /// The persisted layout. `#[serde(default)]` on every field so a file
 /// written by an older build (or a hand-edited one) still loads.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Layout {
     #[serde(default)]
-    pub left: Rail,
-    #[serde(default)]
-    pub right: Rail,
+    pub masters: Vec<Master>,
     /// Canvas rulers (⌘R).
     #[serde(default)]
     pub rulers: bool,
@@ -38,18 +38,22 @@ impl Layout {
     /// Capture the current shell layout.
     pub fn capture(dock: &DockModel, rulers: bool, guides_hidden: bool, guides_locked: bool) -> Self {
         Self {
-            left: dock.left.clone(),
-            right: dock.right.clone(),
+            masters: dock.masters.iter().filter(|m| m.dock.is_some()).cloned().collect(),
             rulers,
             guides_hidden,
             guides_locked,
         }
     }
 
-    /// Apply this snapshot to `dock`'s rails (floating groups untouched).
+    /// Apply this snapshot to `dock`'s docked masters (any floating ones
+    /// `dock` already had — there shouldn't be any this early — are left
+    /// alone). A layout with no masters at all (an empty/corrupt file)
+    /// leaves whatever `dock` already had, rather than wiping it out.
     pub fn apply_to(&self, dock: &mut DockModel) {
-        dock.left = self.left.clone();
-        dock.right = self.right.clone();
+        if !self.masters.is_empty() {
+            dock.masters.retain(|m| m.dock.is_none());
+            dock.masters.extend(self.masters.iter().cloned());
+        }
     }
 }
 

@@ -456,7 +456,10 @@ impl App {
                 self.marquee,
                 wl,
                 hl,
-                self.redock_preview.as_ref(),
+                self.master_dock_preview,
+                self.master_merge_preview,
+                self.group_drop_preview.as_ref(),
+                self.panel_drop_preview.as_ref(),
                 status_text.as_deref(),
                 &self.doc.expanded_groups,
                 self.doc.stroke_w,
@@ -510,54 +513,42 @@ impl App {
                 grad_ctx.clone(),
                 grad_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
                 grad_annot.clone(),
-                self.flyout_icon,
+                self.stack_flyout,
             ),
             Role::Floating(fid) => {
-                // Collapsed to an icon (states 4/6): the OS window itself
-                // has been shrunk to fit a persistent header plus one
-                // icon row per tab — paint just that, there's no
-                // tree/tabs body to lay out at that size.
-                let collapsed_icon_w = self.dock.floating(fid).and_then(|f| f.icon_w);
-                if let Some(icon_w) = collapsed_icon_w {
-                    let node = self.dock.floating(fid).map(|f| f.node.clone());
-                    if let Some(node) = node {
-                        let tab_count = match &node {
-                            Node::Tabs { panels, .. } => panels.len(),
-                            Node::Split { .. } => 1,
-                        };
-                        let rect = Rect::new(0.0, 0.0, wl, hl);
-                        let (header, rows) =
-                            layout::floating_collapsed_rows(rect, tab_count, self.theme.group_title_h);
-                        let labeled = icon_w as f64 >= layout::ICON_LABEL_THRESHOLD;
-                        chrome::paint_floating_collapsed(
-                            &mut self.content,
-                            header,
-                            &rows,
-                            &node,
-                            labeled,
-                            &self.theme,
-                            &mut self.text,
-                            &tab_label,
-                        );
-                    }
-                } else {
-                let laid = self.floating_layout(fid);
-                let exists = self.dock.floating(fid).is_some();
+                let exists = self.dock.master(fid).is_some();
                 if exists {
-                    // Same tab strip (with ×) and frame as a docked panel
-                    // — plus its own collapse chevron now (a detached
-                    // panel is its own one-group "column" and, per
-                    // Illustrator, still gets the control).
-                    self.content
-                        .fill(Fill::NonZero, ID, self.theme.panel_bg, None, &Rect::new(0.0, 0.0, wl, hl));
-                    chrome::paint(&mut self.content, &laid, &self.theme, &mut self.text, true, &tab_label);
-                    let area = laid.areas.first();
-                    let pid = area.and_then(|a| a.tabs.get(a.active).map(|t| t.panel));
-                    if let (Some(area), Some(pid)) = (area, pid) {
-                        let clip_body = area.body;
-                        let (body, scroll) =
-                            panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid));
-                        let caret_blink = self.text_blink_on();
+                    let rect = Rect::new(0.0, 0.0, wl, hl);
+                    let frame = self.build_master_frame(fid, rect);
+                    let Some(master) = self.dock.master(fid).cloned() else {
+                        return;
+                    };
+                    self.content.fill(Fill::NonZero, ID, self.theme.panel_bg, None, &rect);
+                    let this_masters_open_row =
+                        self.stack_flyout.filter(|(fm, ..)| *fm == fid).map(|(_, fg, fi)| (fg, fi));
+                    chrome::paint_master(
+                        &mut self.content,
+                        &frame,
+                        &master,
+                        &self.theme,
+                        &mut self.text,
+                        &tab_label,
+                        &panels::has_menu,
+                        this_masters_open_row,
+                    );
+                    if self.master_merge_preview == Some(fid) {
+                        chrome::paint_master_merge_highlight(&mut self.content, rect, &self.theme);
+                    }
+                    if let Some((pm, pd)) = self.panel_drop_preview.as_ref().filter(|(m, _)| *m == fid) {
+                        let _ = pm;
+                        chrome::paint_panel_drop(&mut self.content, &frame, pd, &self.theme);
+                    }
+                    if let Some((gm, gd)) = self.group_drop_preview.as_ref().filter(|(m, _)| *m == fid) {
+                        let _ = gm;
+                        chrome::paint_group_drop(&mut self.content, &frame, gd, &self.theme);
+                    }
+                    let caret_blink = self.text_blink_on();
+                    if master.is_tools() {
                         let ctx = panels::Ctx {
                             theme: &self.theme,
                             doc: self.doc.editor.document(),
@@ -573,10 +564,7 @@ impl App {
                             cur_stroke: self.doc.stroke,
                             shape_tool: self.last_shape_tool,
                             expanded: &self.doc.expanded_groups,
-                            renaming: self
-                                .doc.rename
-                                .as_ref()
-                                .map(|r| (r.target, r.buf.as_str())),
+                            renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                             selected_layer: self.doc.selected_layer,
                             selected_artboard: self.doc.selected_artboard,
                             text_style: panel_text_style.clone(),
@@ -587,47 +575,153 @@ impl App {
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
                             layer_scroll: self.panel_scroll_of(PanelId("layers")),
-                            layer_drop: if pid == PanelId("layers") {
-                                self.layer_drop.map(|(_, _, row, into)| (row, into))
-                            } else {
-                                None
-                            },
+                            layer_drop: None,
                             color_mode: self.color_mode,
                             cmyk_profile: self.cmyk_profile.as_ref(),
                             recent: &self.recent_colors,
                             xform_ref: self.xform_ref,
                             xform_constrain: self.xform_constrain,
-                            xform_edit: self
-                                .xform_edit
-                                .as_ref()
-                                .map(|(f, s, _)| (*f, s.as_str())),
+                            xform_edit: self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             align_to: self.align_to,
                             align_spacing: self.align_spacing,
-                            align_spacing_edit: self
-                                .align_spacing_edit
-                                .as_ref()
-                                .map(|(s, _)| s.as_str()),
+                            align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
                             key_object: self.key_object,
-                            shape_dialog: self
-                                .shape_dialog
-                                .as_ref()
-                                .map(|d| (d, caret_blink)),
+                            shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                             export: self.export.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
-                        self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
-                        panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
-                        panels::paint_scrollbar(
-                            &mut self.content,
-                            clip_body,
-                            pid,
-                            scroll,
-                            &self.theme,
-                        );
-                        self.content.pop_layer();
+                        if frame.body.height() > 0.0 {
+                            self.content.push_clip_layer(Fill::NonZero, ID, &frame.body);
+                            panels::tools::paint(&mut self.content, &mut self.text, frame.body, &ctx);
+                            self.content.pop_layer();
+                        }
+                    } else {
+                        for g in &frame.groups {
+                            if g.content.height() <= 0.0 {
+                                continue;
+                            }
+                            let Some(pid) = master.group(g.index).and_then(|gg| gg.panels.get(gg.active).copied())
+                            else {
+                                continue;
+                            };
+                            let clip_body = g.content;
+                            let (body, scroll) = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid));
+                            let ctx = panels::Ctx {
+                                theme: &self.theme,
+                                doc: self.doc.editor.document(),
+                                selection: &self.doc.selection,
+                                active_tool: self.active_tool,
+                                pointer: self.pointer,
+                                representative,
+                                fill_mixed,
+                                stroke_mixed,
+                                active_slot: self.active_slot,
+                                picker: self.picker,
+                                cur_fill: self.doc.fill,
+                                cur_stroke: self.doc.stroke,
+                                shape_tool: self.last_shape_tool,
+                                expanded: &self.doc.expanded_groups,
+                                renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
+                                selected_layer: self.doc.selected_layer,
+                                selected_artboard: self.doc.selected_artboard,
+                                text_style: panel_text_style.clone(),
+                                text_align: panel_text_align,
+                                text_paragraph: panel_text_paragraph,
+                                text_editing: panel_text_editing,
+                                font_families: &self.font_families,
+                                layer_query: &self.layer_query,
+                                layer_search_focused: self.layer_search_focused,
+                                layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                                layer_drop: if pid == PanelId("layers") {
+                                    self.layer_drop.map(|(_, _, row, into)| (row, into))
+                                } else {
+                                    None
+                                },
+                                color_mode: self.color_mode,
+                                cmyk_profile: self.cmyk_profile.as_ref(),
+                                recent: &self.recent_colors,
+                                xform_ref: self.xform_ref,
+                                xform_constrain: self.xform_constrain,
+                                xform_edit: self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                                align_to: self.align_to,
+                                align_spacing: self.align_spacing,
+                                align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+                                key_object: self.key_object,
+                                shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
+                                export: self.export.as_ref().map(|d| (d, caret_blink)),
+                                gradient: self.gradient_ctx(),
+                                gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                            };
+                            self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
+                            panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
+                            panels::paint_scrollbar(&mut self.content, clip_body, pid, scroll, &self.theme);
+                            self.content.pop_layer();
+                        }
                     }
-                }
+                    if let Some((fm, fg, fi)) = self.stack_flyout.filter(|(m, ..)| *m == fid) {
+                        if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {
+                            let (row_rect, pid) = (row.rect, row.panel);
+                            let bounds = layout::flyout_rect(row_rect, Rect::new(0.0, 0.0, wl, hl));
+                            let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
+                            let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+                            chrome::paint_flyout_chrome(
+                                &mut self.content,
+                                bounds,
+                                header,
+                                close,
+                                &tab_label(pid),
+                                &self.theme,
+                                &mut self.text,
+                            );
+                            let body = Rect::new(bounds.x0 + 8.0, header.y1 + 8.0, bounds.x1 - 8.0, bounds.y1 - 8.0);
+                            let ctx = panels::Ctx {
+                                theme: &self.theme,
+                                doc: self.doc.editor.document(),
+                                selection: &self.doc.selection,
+                                active_tool: self.active_tool,
+                                pointer: self.pointer,
+                                representative,
+                                fill_mixed,
+                                stroke_mixed,
+                                active_slot: self.active_slot,
+                                picker: self.picker,
+                                cur_fill: self.doc.fill,
+                                cur_stroke: self.doc.stroke,
+                                shape_tool: self.last_shape_tool,
+                                expanded: &self.doc.expanded_groups,
+                                renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
+                                selected_layer: self.doc.selected_layer,
+                                selected_artboard: self.doc.selected_artboard,
+                                text_style: panel_text_style.clone(),
+                                text_align: panel_text_align,
+                                text_paragraph: panel_text_paragraph,
+                                text_editing: panel_text_editing,
+                                font_families: &self.font_families,
+                                layer_query: &self.layer_query,
+                                layer_search_focused: self.layer_search_focused,
+                                layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                                layer_drop: None,
+                                color_mode: self.color_mode,
+                                cmyk_profile: self.cmyk_profile.as_ref(),
+                                recent: &self.recent_colors,
+                                xform_ref: self.xform_ref,
+                                xform_constrain: self.xform_constrain,
+                                xform_edit: self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                                align_to: self.align_to,
+                                align_spacing: self.align_spacing,
+                                align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+                                key_object: self.key_object,
+                                shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
+                                export: self.export.as_ref().map(|d| (d, caret_blink)),
+                                gradient: self.gradient_ctx(),
+                                gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                            };
+                            self.content.push_clip_layer(Fill::NonZero, ID, &body);
+                            panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
+                            self.content.pop_layer();
+                        }
+                    }
                 }
             }
         }

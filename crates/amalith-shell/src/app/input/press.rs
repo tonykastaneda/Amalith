@@ -5,6 +5,174 @@
 use super::super::*;
 
 impl App {
+    /// Handles a press anywhere within Master `master`'s own already-laid
+    /// -out `frame` — header close/chevron/drag, every Group's plain
+    /// handle, Stack-mode rows, Tabs-mode tab strip + content, and the
+    /// content-resize grip. `frame`'s rects are in the same coordinate
+    /// space as `self.pointer` already (a docked master's frame is built
+    /// from its real main-window-local rect; a floating one's from its
+    /// own window's `(0,0)`-based rect), so this one routine serves both.
+    /// Returns `true` if the press was actually consumed.
+    fn handle_master_press(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        host: WindowId,
+        master: u64,
+        frame: &MasterFrame,
+        double: bool,
+    ) -> bool {
+        if frame.header.contains(self.pointer) {
+            if frame.close.contains(self.pointer) {
+                self.close_master(master);
+                return true;
+            }
+            if frame.chevron.contains(self.pointer) {
+                self.toggle_master_layout(master);
+                return true;
+            }
+            let was_docked = self.dock.master(master).and_then(|m| m.dock);
+            let grab = self.pointer - Point::new(frame.bounds.x0, frame.bounds.y0);
+            self.drag = Drag::PendingMasterMove {
+                master,
+                press: self.pointer,
+                grab,
+                was_docked,
+            };
+            return true;
+        }
+        if self.dock.master(master).is_some_and(Master::is_tools) {
+            if frame.body.contains(self.pointer) {
+                let pid = PanelId("tools");
+                let action = {
+                    let ctx = self.panel_press_ctx(None);
+                    panels::hit(pid, frame.body, self.pointer, &ctx)
+                };
+                if action == panels::Action::ShapeSlot {
+                    let anchor = panels::tools::shape_slot_rect(frame.body);
+                    self.shape_press = Some((Instant::now(), anchor));
+                } else {
+                    let spawn = double && matches!(action, panels::Action::OpenPicker(_));
+                    let grad_drag = gradient_drag_for(&action, double);
+                    self.apply_panel_action(action, double);
+                    if spawn {
+                        self.spawn_picker_window(event_loop);
+                    }
+                    if let Some(d) = grad_drag {
+                        self.drag = d;
+                    }
+                }
+            }
+            return true;
+        }
+        for g in &frame.groups {
+            if g.handle.contains(self.pointer) {
+                self.drag = Drag::PendingGroupDrag {
+                    source: (master, g.index),
+                    press: self.pointer,
+                };
+                return true;
+            }
+            if !g.tabs.is_empty() && g.tab_strip.contains(self.pointer) {
+                let burger = chrome::panel_menu_rect(g.tab_strip, &self.theme);
+                let active_panel = g.tabs.get(g.active).map(|t| t.panel);
+                if active_panel.is_some_and(panels::has_menu) && burger.contains(self.pointer) {
+                    if let Some(pid) = active_panel {
+                        self.toggle_panel_menu(pid, burger, host);
+                    }
+                    return true;
+                }
+                if let Some(tab) = g.tabs.iter().position(|t| t.rect.contains(self.pointer)) {
+                    let t = &g.tabs[tab];
+                    let pid = t.panel;
+                    if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
+                        let floating_arg =
+                            self.dock.master(master).is_some_and(|m| m.dock.is_none()).then_some(master);
+                        self.close_panel_tab(pid, floating_arg);
+                        return true;
+                    }
+                    if let Some(m) = self.dock.master_mut(master) {
+                        if let Some(gg) = m.group_mut(g.index) {
+                            gg.active = tab;
+                        }
+                    }
+                    self.drag = Drag::PendingPanelDrag {
+                        panel: pid,
+                        press: self.pointer,
+                    };
+                }
+                return true;
+            }
+            for row in &g.rows {
+                if row.rect.contains(self.pointer) {
+                    self.drag = Drag::PendingPanelDrag {
+                        panel: row.panel,
+                        press: self.pointer,
+                    };
+                    return true;
+                }
+            }
+            if g.content.height() > 0.0 && g.content.contains(self.pointer) {
+                let Some(pid) = self
+                    .dock
+                    .master(master)
+                    .and_then(|m| m.group(g.index))
+                    .and_then(|gg| gg.panels.get(gg.active).copied())
+                else {
+                    return true;
+                };
+                let pbody = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid)).0;
+                let layer_drop = if pid == PanelId("layers") {
+                    self.layer_drop.map(|(_, _, row, into)| (row, into))
+                } else {
+                    None
+                };
+                let action = {
+                    let ctx = self.panel_press_ctx(layer_drop);
+                    panels::hit(pid, pbody, self.pointer, &ctx)
+                };
+                if action == panels::Action::ShapeSlot {
+                    let anchor = panels::tools::shape_slot_rect(pbody);
+                    self.shape_press = Some((Instant::now(), anchor));
+                } else {
+                    let spawn = double && matches!(action, panels::Action::OpenPicker(_));
+                    let arm_drag = !double && pid == PanelId("layers") && matches!(action, panels::Action::Select(_));
+                    let grad_drag = gradient_drag_for(&action, double);
+                    self.apply_panel_action(action, double);
+                    if spawn {
+                        self.spawn_picker_window(event_loop);
+                    }
+                    if arm_drag {
+                        self.drag = Drag::LayerDrag {
+                            body: pbody,
+                            press: self.pointer,
+                            moved: false,
+                        };
+                    }
+                    if let Some(d) = grad_drag {
+                        self.drag = d;
+                    }
+                }
+                return true;
+            }
+            if g.resize_handle.height() > 0.0 && g.resize_handle.contains(self.pointer) {
+                let start_h = self
+                    .dock
+                    .master(master)
+                    .and_then(|m| m.group(g.index))
+                    .and_then(|gg| gg.content_h)
+                    .unwrap_or(crate::dock::TAB_CONTENT_DEFAULT_H);
+                self.drag = Drag::GroupContentResize {
+                    master,
+                    group: g.index,
+                    start_h,
+                    start_y: self.pointer.y,
+                };
+                return true;
+            }
+        }
+        false
+    }
+
     pub(in crate::app) fn on_press(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -207,6 +375,19 @@ impl App {
         // double-click that's about to start one).
         if self.doc.rename.is_some() && !double {
             self.commit_rename();
+        }
+        // An open Stack-mode flyout closes only via its own × or by
+        // re-clicking the row that opened it (that toggle lives in
+        // `handle_master_press`/`toggle_stack_flyout`) — clicking
+        // elsewhere, including the canvas, leaves it open.
+        if let Some((bounds, close)) = self.stack_flyout_hit_rects(id) {
+            if close.contains(self.pointer) {
+                self.dismiss_flyout();
+                return;
+            }
+            if bounds.contains(self.pointer) {
+                return;
+            }
         }
         match role {
             Role::Main => {
@@ -415,266 +596,41 @@ impl App {
                     return;
                 }
 
-                for side in [RailSide::Left, RailSide::Right] {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        continue;
-                    }
-                    let rect = rail_rect_for(side, rail, w, h);
-                    // The rail's inner edge widens the whole rail — check it
-                    // first, since its grab zone spills onto the canvas.
-                    // Skipped when every column is iconized: the rail is
-                    // pinned to the icon strip's width in that state (see
-                    // `rail_effective_width`), so there is no docked tree
-                    // to resize — dragging here would silently stash a new
-                    // `rail.width` with no visible effect, only to snap the
-                    // rail to some size the user never saw while expanding
-                    // a column later. Widening a fully-collapsed dock back
-                    // out is the separate, not-yet-built icon+label mode.
-                    if rail.tree.is_some()
-                        && rail_edge_bar(side, rect)
-                            .inflate(GRAB_SLOP + 1.0, 0.0)
-                            .contains(self.pointer)
-                    {
-                        self.drag = Drag::RailWidth { side };
-                        return;
-                    }
-                    // A side's open flyout can spill past the rail's own
-                    // rect onto the canvas (it sits between the icon strip
-                    // and the canvas, not squeezed inside the rail width),
-                    // so a pointer outside `rect` still needs this side's
-                    // (flyout-aware) layout built before being ruled out.
-                    let has_open_flyout = self.flyout_icon.is_some_and(|(s, ..)| s == side);
-                    if !rect.contains(self.pointer) && !has_open_flyout {
-                        continue;
-                    }
-                    let laid = build_rail_layout_with_flyout(
-                        rail,
-                        side,
-                        rect,
-                        self.flyout_icon,
-                        &self.theme,
-                        &mut self.text,
-                    );
-                    if let Some(col) = laid.icon_col {
-                        if icon_col_edge_bar(side, col)
-                            .inflate(GRAB_SLOP, 0.0)
-                            .contains(self.pointer)
-                        {
-                            self.drag = Drag::IconColWidth { side };
-                            return;
-                        }
-                    }
-                    if let Some(ir) = laid.icon_rects.iter().find(|ir| ir.rect.contains(self.pointer)) {
-                        // A click opens/switches the flyout; a drag tears
-                        // the whole group off into a floating window (see
-                        // `Drag::PendingIconTearoff` / `tear_off_icon_group`).
-                        self.drag = Drag::PendingIconTearoff {
-                            side,
-                            column: ir.column,
-                            group: ir.group,
-                            tab: ir.tab,
-                            press: self.pointer,
-                        };
-                        return;
-                    }
-                    if let Some(sp) = laid
-                        .splitters
-                        .iter()
-                        .find(|s| s.rect.inflate(GRAB_SLOP, GRAB_SLOP).contains(self.pointer))
-                    {
-                        self.drag = Drag::Splitter {
-                            side,
-                            path: sp.path.clone(),
-                            gap: sp.index,
-                        };
-                        return;
-                    }
-                    for area in &laid.areas {
-                        if area.title_bar.contains(self.pointer) {
-                            let close = chrome::group_close_rect(area.title_bar, &self.theme);
-                            if close.contains(self.pointer) {
-                                if area.is_flyout {
-                                    if let Some((_, column, group)) = self.flyout_icon {
-                                        self.close_icon_group(side, column, group);
-                                    }
-                                } else {
-                                    self.close_group(side, &area.path);
-                                }
-                                return;
-                            }
-                            let collapse_shown = area.is_flyout || chrome::is_column_top(area, &laid.areas);
-                            if collapse_shown {
-                                let collapse = chrome::collapse_rect(area.title_bar, &self.theme);
-                                if collapse.contains(self.pointer) {
-                                    if area.is_flyout {
-                                        if let Some((_, column, _)) = self.flyout_icon {
-                                            self.expand_column(side, column);
-                                        }
-                                    } else {
-                                        self.collapse_column(side, &area.path);
-                                    }
-                                    return;
-                                }
-                            }
-                            // Anything else on the title bar: press-drag
-                            // tears the *whole group* off into a floating
-                            // window (a flyout has no real tree position
-                            // to detach from, so it's skipped here — drag
-                            // its icon row instead, same as any other).
-                            if !area.is_flyout {
-                                self.drag = Drag::PendingGroupTearoff {
-                                    side,
-                                    path: area.path.clone(),
-                                    press: self.pointer,
-                                };
-                            }
-                            return;
-                        }
-                        if area.tab_strip.contains(self.pointer) {
-                            let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
-                            if area.show_menu && burger.contains(self.pointer) {
-                                if let Some(pid) =
-                                    area.tabs.get(area.active).map(|t| t.panel)
-                                {
-                                    self.toggle_panel_menu(pid, burger, id);
-                                }
-                                return;
-                            }
-                            if let Some(tab) =
-                                area.tabs.iter().position(|t| t.rect.contains(self.pointer))
-                            {
-                                let trect = area.tabs[tab].rect;
-                                let pid = area.tabs[tab].panel;
-                                if chrome::panel_tab_close_rect(trect).contains(self.pointer) {
-                                    self.close_panel_tab(pid, None);
-                                    return;
-                                }
-                                self.drag = Drag::PendingTearoff {
-                                    side,
-                                    panel: pid,
-                                    path: area.path.clone(),
-                                    tab,
-                                    press: self.pointer,
-                                };
-                            }
-                            return;
-                        }
-                        if area.body.contains(self.pointer) {
-                            if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                                let pbody = panels::scrolled_body(
-                                    pid,
-                                    area.body,
-                                    self.panel_scroll_of(pid),
-                                )
-                                .0;
-                                let rep = self.representative();
-                                let action = {
-                                    let ctx = panels::Ctx {
-                                        theme: &self.theme,
-                                        doc: self.doc.editor.document(),
-                                        selection: &self.doc.selection,
-                                        active_tool: self.active_tool,
-                                        pointer: self.pointer,
-                                        representative: rep,
-                                        fill_mixed: false,
-                                        stroke_mixed: false,
-                                        active_slot: self.active_slot,
-                                        picker: self.picker,
-                                        cur_fill: self.doc.fill,
-                                        cur_stroke: self.doc.stroke,
-                                        shape_tool: self.last_shape_tool,
-                                        expanded: &self.doc.expanded_groups,
-                                        renaming: self
-                                            .doc.rename
-                                            .as_ref()
-                                            .map(|r| (r.target, r.buf.as_str())),
-                                        selected_layer: self.doc.selected_layer,
-                                        selected_artboard: self.doc.selected_artboard,
-                                        text_style: self.active_text_style(),
-                                        text_align: self.active_text_align(),
-                                        text_paragraph: self.active_text_paragraph(),
-                                        text_editing: self.text_edit.is_some(),
-                                        font_families: &self.font_families,
-                                        layer_query: &self.layer_query,
-                                        layer_search_focused: self.layer_search_focused,
-                        layer_scroll: self.panel_scroll_of(PanelId("layers")),
-                        layer_drop: None,
-                                        color_mode: self.color_mode,
-                                        cmyk_profile: self.cmyk_profile.as_ref(),
-                                        recent: &self.recent_colors,
-                                        xform_ref: self.xform_ref,
-                                        xform_constrain: self.xform_constrain,
-                                        xform_edit: self
-                                            .xform_edit
-                                            .as_ref()
-                                            .map(|(f, s, _)| (*f, s.as_str())),
-                                        align_to: self.align_to,
-                                        align_spacing: self.align_spacing,
-                                        align_spacing_edit: self
-                                            .align_spacing_edit
-                                            .as_ref()
-                                            .map(|(s, _)| s.as_str()),
-                                        key_object: self.key_object,
-                                        shape_dialog: None,
-                                        export: None,
-                                        gradient: self.gradient_ctx(),
-                                        gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
-                                    };
-                                    panels::hit(pid, pbody, self.pointer, &ctx)
-                                };
-                                if action == panels::Action::ShapeSlot {
-                                    // Start a press: a hold opens the
-                                    // flyout, a quick release re-picks
-                                    // the last shape tool.
-                                    let anchor =
-                                        panels::tools::shape_slot_rect(pbody);
-                                    self.shape_press = Some((Instant::now(), anchor));
-                                } else {
-                                    let spawn =
-                                        double && matches!(action, panels::Action::OpenPicker(_));
-                                    // Pressing an object row also arms a
-                                    // drag-reorder (the click already
-                                    // selected it).
-                                    let arm_drag = !double
-                                        && pid == PanelId("layers")
-                                        && matches!(action, panels::Action::Select(_));
-                                    let grad_drag = gradient_drag_for(&action, double);
-                                    self.apply_panel_action(action, double);
-                                    if spawn {
-                                        self.spawn_picker_window(event_loop);
-                                    }
-                                    if arm_drag {
-                                        self.drag = Drag::LayerDrag {
-                                            body: pbody,
-                                            press: self.pointer,
-                                            moved: false,
-                                        };
-                                    }
-                                    if let Some(d) = grad_drag {
-                                        self.drag = d;
-                                    }
-                                }
-                            }
-                            return;
-                        }
-                    }
-                    // Nothing on this side's rail (or flyout) matched. A
-                    // flyout that reached here only because it spills past
-                    // the rail's own rect onto the canvas means the click
-                    // was really meant for whatever's underneath —
-                    // dismiss it and let the click fall through instead of
-                    // swallowing it; otherwise keep the usual behaviour of
-                    // a rail dead-zone click doing nothing further.
-                    if has_open_flyout {
-                        self.dismiss_flyout();
+                for side in [Side::Left, Side::Right] {
+                    for mid in self.dock.docked(side) {
+                        let rect = self.docked_master_rect(mid, w, h);
                         if !rect.contains(self.pointer) {
                             continue;
                         }
+                        // The canvas-facing inner edge resizes this
+                        // Master's width — same grab zone a rail's own
+                        // edge used to have.
+                        let edge_rect = match side {
+                            Side::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
+                            Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
+                        };
+                        if edge_rect.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                            let edge = match side {
+                                Side::Left => ResizeEdge::Right,
+                                Side::Right => ResizeEdge::Left,
+                            };
+                            let start_w = self.dock.master(mid).map(|m| m.rect[2]).unwrap_or(0.0);
+                            self.drag = Drag::MasterWidth {
+                                master: mid,
+                                edge,
+                                start_w,
+                                start_x: self.pointer.x,
+                            };
+                            return;
+                        }
+                        let frame = self.build_master_frame(mid, rect);
+                        self.handle_master_press(event_loop, id, mid, &frame, double);
+                        // A dead-zone click inside this Master's own rect
+                        // that matched nothing specific still belongs to
+                        // it, not the canvas underneath.
+                        return;
                     }
-                    return;
                 }
-                // Not on a rail.
                 if self.space_down && self.cmd_down {
                     // Illustrator scrubby zoom — anchored at the press.
                     self.drag = Drag::ScrubZoom {
@@ -1293,195 +1249,40 @@ impl App {
                 self.request_main_redraw();
             }
             Role::Floating(fid) => {
-                // Collapsed to an icon (states 4/6): a persistent header
-                // (close × / expand ») plus one row per tab, same
-                // geometry the renderer uses (`floating_collapsed_rows`).
-                if let Some(node) = self.dock.floating(fid).filter(|f| f.icon_w.is_some()).map(|f| f.node.clone()) {
-                    let tab_count = match &node {
-                        Node::Tabs { panels, .. } => panels.len(),
-                        Node::Split { .. } => 1,
+                let sz = self.floating_window(fid).map(|w| w.inner_size()).unwrap_or_default();
+                let (wl, hl) = (
+                    (sz.width as f64 / self.scale).max(1.0),
+                    (sz.height as f64 / self.scale).max(1.0),
+                );
+                let rect = Rect::new(0.0, 0.0, wl, hl);
+                // A floating Master's own left/right edge resizes it too
+                // (it's the same width control a docked one has, just
+                // drawn at the window's own edge instead of the rail's
+                // inner one).
+                let left_edge = Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1);
+                let right_edge = Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1);
+                if left_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                    let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
+                    self.drag = Drag::MasterWidth {
+                        master: fid,
+                        edge: ResizeEdge::Left,
+                        start_w,
+                        start_x: self.pointer.x,
                     };
-                    let sz = self.floating_window(fid).map(|w| w.inner_size()).unwrap_or_default();
-                    let (wl, hl) = (
-                        (sz.width as f64 / self.scale).max(1.0),
-                        (sz.height as f64 / self.scale).max(1.0),
-                    );
-                    let rect = Rect::new(0.0, 0.0, wl, hl);
-                    let (header, rows) =
-                        layout::floating_collapsed_rows(rect, tab_count, self.theme.group_title_h);
-                    if header.contains(self.pointer) {
-                        if chrome::group_close_rect(header, &self.theme).contains(self.pointer) {
-                            self.close_floating(fid);
-                            return;
-                        }
-                        if chrome::collapse_rect(header, &self.theme).contains(self.pointer) {
-                            self.expand_floating(fid);
-                            return;
-                        }
-                        // Anything else on the header drags the still-
-                        // collapsed window, same as the open state's title
-                        // bar — it stays repositionable while shrunk.
-                        self.drag = Drag::PendingFloatMove {
-                            id: fid,
-                            tab: 0,
-                            press: self.pointer,
-                        };
-                        return;
-                    }
-                    // A specific tab's row: activate it, then expand —
-                    // there's no separate "preview" step worth having for
-                    // an already-standalone window, unlike a rail's icon
-                    // strip flyout.
-                    if let Some(tab) = rows.iter().position(|r| r.contains(self.pointer)) {
-                        if let Some(f) = self.dock.floating_mut(fid) {
-                            if let Node::Tabs { active, panels } = &mut f.node {
-                                if tab < panels.len() {
-                                    *active = tab;
-                                }
-                            }
-                        }
-                    }
-                    self.expand_floating(fid);
                     return;
                 }
-                let laid = self.floating_layout(fid);
-                for area in &laid.areas {
-                    if area.title_bar.contains(self.pointer) {
-                        let close = chrome::group_close_rect(area.title_bar, &self.theme);
-                        if close.contains(self.pointer) {
-                            self.close_floating(fid);
-                            return;
-                        }
-                        // A floating window is its own column of exactly
-                        // one — it always owns the collapse control,
-                        // unlike an attached group which only gets it at
-                        // the top of a stack.
-                        let collapse = chrome::collapse_rect(area.title_bar, &self.theme);
-                        if collapse.contains(self.pointer) {
-                            self.collapse_floating(fid);
-                            return;
-                        }
-                        // Anything else on the title bar drags the whole
-                        // window — the tab strip below it still does the
-                        // same for now too (unchanged), so existing
-                        // muscle memory keeps working.
-                        self.drag = Drag::PendingFloatMove {
-                            id: fid,
-                            tab: area.active,
-                            press: self.pointer,
-                        };
-                        return;
-                    }
-                    if area.tab_strip.contains(self.pointer) {
-                        let burger = chrome::panel_menu_rect(area.tab_strip, &self.theme);
-                        if area.show_menu && burger.contains(self.pointer) {
-                            if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                                self.toggle_panel_menu(pid, burger, id);
-                            }
-                            return;
-                        }
-                        let tab = area
-                            .tabs
-                            .iter()
-                            .position(|t| t.rect.contains(self.pointer))
-                            .unwrap_or(0);
-                        if let Some(t) = area.tabs.get(tab) {
-                            if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
-                                let pid = t.panel;
-                                self.close_panel_tab(pid, Some(fid));
-                                return;
-                            }
-                        }
-                        self.drag = Drag::PendingFloatMove {
-                            id: fid,
-                            tab,
-                            press: self.pointer,
-                        };
-                        return;
-                    }
-                    if area.body.contains(self.pointer) {
-                        if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                            let rep = self.representative();
-                            let body =
-                                panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
-                            let action = {
-                                let ctx = panels::Ctx {
-                                    theme: &self.theme,
-                                    doc: self.doc.editor.document(),
-                                    selection: &self.doc.selection,
-                                    active_tool: self.active_tool,
-                                    pointer: self.pointer,
-                                    representative: rep,
-                                    fill_mixed: false,
-                                    stroke_mixed: false,
-                                    active_slot: self.active_slot,
-                                    picker: self.picker,
-                                    cur_fill: self.doc.fill,
-                                    cur_stroke: self.doc.stroke,
-                                    shape_tool: self.last_shape_tool,
-                                    expanded: &self.doc.expanded_groups,
-                                    renaming: self
-                                        .doc.rename
-                                        .as_ref()
-                                        .map(|r| (r.target, r.buf.as_str())),
-                                    selected_layer: self.doc.selected_layer,
-                                    selected_artboard: self.doc.selected_artboard,
-                                    text_style: self.active_text_style(),
-                                    text_align: self.active_text_align(),
-                                    text_paragraph: self.active_text_paragraph(),
-                                    text_editing: self.text_edit.is_some(),
-                                    font_families: &self.font_families,
-                                    layer_query: &self.layer_query,
-                                    layer_search_focused: self.layer_search_focused,
-                        layer_scroll: self.panel_scroll_of(PanelId("layers")),
-                        layer_drop: None,
-                                    color_mode: self.color_mode,
-                                    cmyk_profile: self.cmyk_profile.as_ref(),
-                                    recent: &self.recent_colors,
-                                    xform_ref: self.xform_ref,
-                                    xform_constrain: self.xform_constrain,
-                                    xform_edit: self
-                                        .xform_edit
-                                        .as_ref()
-                                        .map(|(f, s, _)| (*f, s.as_str())),
-                                    align_to: self.align_to,
-                                    align_spacing: self.align_spacing,
-                                    align_spacing_edit: self
-                                        .align_spacing_edit
-                                        .as_ref()
-                                        .map(|(s, _)| s.as_str()),
-                                    key_object: self.key_object,
-                                    shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
-                                    export: self.export.as_ref().map(|d| (d, false)),
-                                    gradient: self.gradient_ctx(),
-                                    gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
-                                };
-                                panels::hit(pid, body, self.pointer, &ctx)
-                            };
-                            let spawn =
-                                double && matches!(action, panels::Action::OpenPicker(_));
-                            let arm_drag = !double
-                                && pid == PanelId("layers")
-                                && matches!(action, panels::Action::Select(_));
-                            let grad_drag = gradient_drag_for(&action, double);
-                            self.apply_panel_action(action, double);
-                            if let Some(d) = grad_drag {
-                                self.drag = d;
-                            }
-                            if spawn {
-                                self.spawn_picker_window(event_loop);
-                            }
-                            if arm_drag {
-                                self.drag = Drag::LayerDrag {
-                                    body,
-                                    press: self.pointer,
-                                    moved: false,
-                                };
-                            }
-                        }
-                        return;
-                    }
+                if right_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                    let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
+                    self.drag = Drag::MasterWidth {
+                        master: fid,
+                        edge: ResizeEdge::Right,
+                        start_w,
+                        start_x: self.pointer.x,
+                    };
+                    return;
                 }
+                let frame = self.build_master_frame(fid, rect);
+                self.handle_master_press(event_loop, id, fid, &frame, double);
             }
         }
     }

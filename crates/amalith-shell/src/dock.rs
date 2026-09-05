@@ -1,17 +1,20 @@
-//! The dock model: a pure layout tree, no rendering, no windowing.
+//! The dock model: a pure data model, no rendering, no windowing.
 //!
-//! This is the replicable core of the panel system. It knows nothing about
-//! Artboards or Layers — only opaque [`PanelId`]s. The shell renders it and
-//! spawns OS windows for its [`DockModel::floating`] groups; this module
-//! just answers "where does everything sit" and "if I drop here, what
-//! happens".
+//! Ported 1:1 off a working HTML/CSS/JS reference the user built
+//! (`amalith-panelSys/{index.html,styles.css,app.js}`) after every attempt
+//! to build this from written descriptions or mockups got corrected — see
+//! that file's `app.js` for the source of truth this mirrors. Doc comments
+//! below name the JS function each Rust one replaces, so the mapping stays
+//! traceable.
 //!
-//! Layout is one tree of [`Node`]s per surface: a [`Rail`] on each side of
-//! the document window, plus one tree per detached [`Floating`] group.
-//! Splits carry child weights; tab groups carry an active index. Every
-//! mutation is a small, testable operation.
-
-use std::collections::VecDeque;
+//! The hierarchy is flat at every level, unlike the tree this replaced:
+//! **Master → Group → Panel**. A [`Master`] is one on-screen unit (docked
+//! to a rail edge or floating as its own OS window — the same thing
+//! either way, just an `Option<(Side, index)>`); it holds an ordered list
+//! of [`Group`]s. A `Group` holds an ordered list of opaque [`PanelId`]s
+//! with one active tab. There is no recursive splitting *inside* a
+//! master's body — the only side-by-side arrangement is multiple Masters
+//! docked at the same edge (see [`DockModel::dock_master`]).
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -36,1103 +39,583 @@ impl<'de> Deserialize<'de> for PanelId {
     }
 }
 
-/// A node in a dock tree.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Node {
-    /// A row (`Horizontal`) or column (`Vertical`) of children, each with a
-    /// weight; weights are normalized on read, so any positive values work.
-    Split { axis: Axis, children: Vec<Child> },
-    /// A tab group: one or more panels, one shown at a time.
-    Tabs { panels: Vec<PanelId>, active: usize },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Child {
-    pub node: Node,
-    /// Relative size along the parent split's axis. Only ratios matter.
-    pub weight: f32,
-}
-
+/// Which rail edge a [`Master`] is docked to. The prototype never docks
+/// top/bottom, only left/right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-/// Where in a surface's tree a drag would land.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum DropTarget {
-    /// Add the dragged panel as a tab of the group at `path`.
-    Tab { path: NodePath, index: usize },
-    /// Split the node at `path`, placing the dragged panel on `side`.
-    Split { path: NodePath, side: Side },
-    /// Nothing under the cursor — the panel floats.
-    Float,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     Left,
     Right,
-    Top,
-    Bottom,
 }
 
-impl Side {
-    fn axis(self) -> Axis {
-        match self {
-            Side::Left | Side::Right => Axis::Horizontal,
-            Side::Top | Side::Bottom => Axis::Vertical,
-        }
-    }
-    fn is_leading(self) -> bool {
-        matches!(self, Side::Left | Side::Top)
-    }
+/// A Master's display mode — the header's chevron toggles this (⇐
+/// `toggleMasterLayout`/`setMasterLayout`). Meaningless for
+/// [`MasterKind::Tools`], which has its own [`ToolsDensity`] instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum MasterLayout {
+    /// Every panel in every group shown as a flat clickable row (icon +
+    /// label); a click opens a flyout preview, a press-and-hold drags it.
+    Stack,
+    /// Each group shows its own tab strip and one active panel's body —
+    /// closest to what a docked panel looked like before this rewrite.
+    Tabs,
 }
 
-/// A path from a tree root to a node: the child index at each level.
-/// Empty path == the root itself.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub struct NodePath(pub Vec<usize>);
+/// Three panels keep their own bespoke behavior outside this model
+/// entirely (Color Picker, Shape Dialogs — see `App::picker` /
+/// `App::shape_dialog`, neither lives in `DockModel`). Tools is the one
+/// bespoke *Master* kind: a plain icon grid, no groups, never merges with
+/// another master (⇐ `createToolsMaster`, the `dataset.kind === "tools"`
+/// checks throughout `app.js`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum MasterKind {
+    Normal,
+    Tools,
+}
 
-/// A detached group living in its own OS window. The shell keeps a
-/// `id -> winit WindowId` map alongside; the model itself never touches
-/// windowing.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Floating {
-    /// Stable within a `DockModel` for the life of the group.
+/// A Tools master's own grid density toggle (⇐ `setToolsLayout`'s
+/// `"grid-2x15"` / `"grid-1x30"`). Meaningless for [`MasterKind::Normal`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ToolsDensity {
+    Grid2x,
+    Grid1x,
+}
+
+/// One tab group: an ordered list of panels sharing one tab strip, one
+/// active at a time. Groups never nest and never split — a Master's
+/// `groups` list is the only structure above this.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Group {
     pub id: u64,
-    pub node: Node,
-    /// Top-left + size of the OS window, in virtual-desktop logical points:
-    /// `[x, y, w, h]`.
-    pub rect: [f32; 4],
-    /// Set while this floating panel is collapsed to an icon (Illustrator
-    /// states "Collapsed Icon + Title [Detached]" / "Collapse Icon Only
-    /// [Detached]") — the width the OS window has actually been shrunk
-    /// to, icon+title at or above `layout::ICON_LABEL_THRESHOLD`, icon
-    /// only below. A floating group here is always a single panel (this
-    /// app has no floating-group stacking yet), so unlike a rail's icon
-    /// strip there's only ever one row — no `IconColumn`/rows needed.
-    pub icon_w: Option<f32>,
-    /// The OS window size to restore on expand — captured the moment the
-    /// collapse chevron shrinks it, since after that `rect`'s own size
-    /// tracks the shrunk icon window instead.
-    pub expanded_size: Option<[f32; 2]>,
-}
-
-impl Floating {
-    /// Shrinks this floating panel to its icon-strip size (Illustrator's
-    /// "Collapse to Icons" for a detached panel), remembering the size to
-    /// restore on [`Self::expand`]. Every tab gets its own icon row (not
-    /// just the active one — matching a docked column's icon strip), plus
-    /// a persistent header row above them with its own close/expand
-    /// controls, so a fully collapsed group is never left with no visible
-    /// way back to full size. Returns the `[w, h]` the caller should
-    /// resize the actual OS window to, or `None` if already collapsed.
-    pub fn collapse(&mut self) -> Option<[f32; 2]> {
-        if self.icon_w.is_some() {
-            return None;
-        }
-        self.expanded_size = Some([self.rect[2], self.rect[3]]);
-        let rows = match &self.node {
-            Node::Tabs { panels, .. } => panels.len().max(1),
-            Node::Split { .. } => 1,
-        } as f32;
-        // Matches layout::ICON_COL_W / ICON_ROW_H and theme::group_title_h
-        // — bare literals here rather than imports, to avoid a dock <->
-        // layout <-> theme cycle; all three describe the same
-        // "header + one row per tab" geometry the icon strip itself uses.
-        const HEADER_H: f32 = 20.0;
-        const ROW_H: f32 = 30.0;
-        let size = [112.0_f32, HEADER_H + ROW_H * rows];
-        self.icon_w = Some(size[0]);
-        self.rect[2] = size[0];
-        self.rect[3] = size[1];
-        Some(size)
-    }
-
-    /// Restores this floating panel to the size it had before collapsing.
-    /// Returns that `[w, h]`, or `None` if it wasn't collapsed.
-    pub fn expand(&mut self) -> Option<[f32; 2]> {
-        let size = self.expanded_size.take()?;
-        self.icon_w = None;
-        self.rect[2] = size[0];
-        self.rect[3] = size[1];
-        Some(size)
-    }
-}
-
-/// Which edge of the document window a rail sits on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RailSide {
-    Left,
-    Right,
-}
-
-/// Default rail width, logical points.
-pub const RAIL_DEFAULT_W: f32 = 320.0;
-
-/// Assumed splitter thickness when the model reasons about column pixel
-/// widths (the renderer's exact value comes from the theme).
-const SPLIT_GAP: f32 = 6.0;
-
-/// One tab group collapsed to an icon-strip entry (Illustrator's
-/// "Collapse to Icons") — collapsing applies to a whole dock *column* at
-/// once, matching Illustrator (a "column" being either the rail's entire
-/// tree, or — when the rail holds several docked side by side — one
-/// top-level horizontal-split child of it). The column's original
-/// sub-tree is kept verbatim, weights and internal groups included, so
-/// expanding restores it exactly; it's just not part of `tree` while
-/// collapsed, so it never competes with the rest of the rail's split
-/// weights for space — the icon strip is a fixed-width column of its own.
-/// Each `Tabs` group nested inside still gets its own icon row (see
-/// [`Self::rows`]) even though the whole column collapses/expands as one
-/// unit — clicking one row only ever *previews* that group in a flyout,
-/// it doesn't pull it back into the tree by itself.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct IconColumn {
-    pub node: Node,
-}
-
-/// One icon in a collapsed column's strip: `panel`'s own icon row, tagged
-/// with which of the column's original `Tabs` groups it came from
-/// (`group`, indexing [`IconColumn::groups`] — a single `Rail::expand`
-/// call restores the whole group's group's column together) and its
-/// index within that group's own tab list (`tab`). Illustrator gives
-/// every *tab* in a collapsed group its own icon, not just the group's
-/// active one — a 3-tab "Pathfinder / Transform / Align" group collapses
-/// to three icons, not one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct IconPanelRow {
-    pub group: usize,
-    pub tab: usize,
-    pub panel: PanelId,
-    /// Whether `panel` is currently `group`'s active tab — the strip
-    /// highlights this one, matching whichever tab a click elsewhere on
-    /// the group would currently show.
-    pub active: bool,
-    /// True for a group's first tab — tells the renderer to leave extra
-    /// space above this row, so a column's original groups still read as
-    /// separate clusters once collapsed, not one flat list.
-    pub group_start: bool,
-}
-
-impl IconColumn {
-    /// Every `Tabs` group nested in this column, top-to-bottom, as
-    /// `(panels, active)` — what a flyout needs to reconstruct one
-    /// group's full tab strip. Use [`Self::icon_rows`] for what the icon
-    /// strip itself draws (one row per *tab*, not per group).
-    pub fn groups(&self) -> Vec<(Vec<PanelId>, usize)> {
-        let mut out = Vec::new();
-        fn walk(n: &Node, out: &mut Vec<(Vec<PanelId>, usize)>) {
-            match n {
-                Node::Tabs { panels, active } => out.push((panels.clone(), *active)),
-                Node::Split { children, .. } => {
-                    for c in children {
-                        walk(&c.node, out);
-                    }
-                }
-            }
-        }
-        walk(&self.node, &mut out);
-        out
-    }
-
-    /// Every panel in this column, top-to-bottom, one icon row each — see
-    /// [`IconPanelRow`].
-    pub fn icon_rows(&self) -> Vec<IconPanelRow> {
-        let mut out = Vec::new();
-        for (gi, (panels, active)) in self.groups().into_iter().enumerate() {
-            for (ti, panel) in panels.into_iter().enumerate() {
-                out.push(IconPanelRow {
-                    group: gi,
-                    tab: ti,
-                    panel,
-                    active: ti == active,
-                    group_start: ti == 0,
-                });
-            }
-        }
-        out
-    }
-
-    /// Sets group `group`'s active tab to `tab` — walked in the same
-    /// order as [`Self::groups`]/[`Self::icon_rows`]. Called when a click
-    /// lands on a specific tab's icon row, so the flyout that opens (and
-    /// the strip's own highlighted icon) reflects the one actually
-    /// clicked, not whichever was active when the column collapsed.
-    /// `false` if `group` is out of range.
-    pub fn set_active(&mut self, group: usize, tab: usize) -> bool {
-        fn walk(n: &mut Node, remaining: &mut usize, tab: usize) -> bool {
-            match n {
-                Node::Tabs { active, .. } => {
-                    if *remaining == 0 {
-                        *active = tab;
-                        return true;
-                    }
-                    *remaining -= 1;
-                    false
-                }
-                Node::Split { children, .. } => {
-                    for c in children {
-                        if walk(&mut c.node, remaining, tab) {
-                            return true;
-                        }
-                    }
-                    false
-                }
-            }
-        }
-        let mut remaining = group;
-        walk(&mut self.node, &mut remaining, tab)
-    }
-}
-
-/// One docked column: a single [`Node`] tree (or empty) plus how wide the
-/// whole rail is. All the tree mechanics live here so every rail — left,
-/// right, and any future one — behaves identically.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Rail {
-    pub tree: Option<Node>,
-    /// Rail width in logical points; the user drags the rail's inner edge
-    /// to change it.
-    pub width: f32,
-    /// Groups collapsed to icons, in the order they stack in the icon
-    /// strip. Old saved layouts have no such field, hence the default.
+    pub panels: Vec<PanelId>,
+    pub active: usize,
+    /// Tabs-mode content pane height, logical px — `None` means "not
+    /// pinned yet", so it spawns at the active panel's own natural content
+    /// height instead of a fixed default. Drag-resizable (⇐ the
+    /// prototype's `.tab-content-resize` handle, `setupTabContentResize`);
+    /// once dragged, the user's explicit height sticks regardless of which
+    /// tab is active. Ignored entirely in [`MasterLayout::Stack`].
     #[serde(default)]
-    pub icons: Vec<IconColumn>,
-    /// Width of the icon strip itself, when `icons` is non-empty — the
-    /// user drags its own inner edge to change it, independent of `width`.
-    /// Matches Illustrator: an icon column has no separate on/off toggle
-    /// for showing labels, dragging it below a threshold just hides them
-    /// (see `layout::ICON_LABEL_THRESHOLD`). Old saved layouts have no
-    /// such field, hence the default (kept in sync with
-    /// `layout::ICON_COL_W`, the labeled width every icon strip starts
-    /// at).
-    #[serde(default = "default_icon_col_w")]
-    pub icon_col_w: f32,
+    pub content_h: Option<f32>,
 }
 
-fn default_icon_col_w() -> f32 {
-    112.0
-}
-
-impl Default for Rail {
-    fn default() -> Self {
-        Self {
-            tree: None,
-            width: RAIL_DEFAULT_W,
-            icons: Vec::new(),
-            icon_col_w: default_icon_col_w(),
-        }
-    }
-}
-
-impl Rail {
-    pub fn with(node: Node) -> Self {
-        Self {
-            tree: Some(node),
-            width: RAIL_DEFAULT_W,
-            icon_col_w: default_icon_col_w(),
-            icons: Vec::new(),
-        }
+impl Group {
+    pub fn new(id: u64, panels: Vec<PanelId>) -> Self {
+        Self { id, panels, active: 0, content_h: None }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tree.is_none() && self.icons.is_empty()
+        self.panels.is_empty()
+    }
+}
+
+/// Tabs-mode content pane bounds, logical px (⇐ `TAB_CONTENT_MIN_H` /
+/// `TAB_CONTENT_MAX_H` / `TAB_CONTENT_DEFAULT_H`).
+pub const TAB_CONTENT_MIN_H: f32 = 80.0;
+pub const TAB_CONTENT_MAX_H: f32 = 480.0;
+pub const TAB_CONTENT_DEFAULT_H: f32 = 160.0;
+
+/// One Master Group: an on-screen unit that is either docked to a rail
+/// edge or floating as its own OS window — the *same* entity either way
+/// (⇐ every `.master` div in the prototype, toggled by `dataset.dock`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Master {
+    pub id: u64,
+    pub kind: MasterKind,
+    pub layout: MasterLayout,
+    #[serde(default)]
+    pub tools_density: ToolsDensity,
+    pub groups: Vec<Group>,
+    /// `Some((side, index))` while docked; `index` is this master's
+    /// position among every other master docked to the same `side` (⇐
+    /// `dataset.dock` + `dataset.dockIndex`, kept in step by
+    /// [`DockModel::dock_master`]/[`DockModel::undock`]).
+    pub dock: Option<(Side, usize)>,
+    /// `[x, y, w, h]` in logical points. While docked, only `w` is
+    /// meaningful (height is however tall the rail's edge is; `x`/`y` are
+    /// computed fresh from the docked order every layout, not stored) —
+    /// `x`/`y` still hold the last floating position so un-docking drops
+    /// it back where it last floated free, matching `undock`'s behavior
+    /// of leaving `style.left`/`style.top` alone until the next drag.
+    pub rect: [f32; 4],
+    /// Scroll offset for a *docked* master whose groups overflow the
+    /// available height (⇐ CSS `overflow-y: auto` on `.master.docked
+    /// .master-body` — there are no inter-group splitters in this model,
+    /// a docked column just scrolls instead of everything shrinking to
+    /// fit).
+    #[serde(default)]
+    pub scroll: f32,
+}
+
+impl Default for ToolsDensity {
+    fn default() -> Self {
+        ToolsDensity::Grid2x
+    }
+}
+
+impl Master {
+    fn new(id: u64, kind: MasterKind, groups: Vec<Group>, rect: [f32; 4]) -> Self {
+        Self {
+            id,
+            kind,
+            layout: MasterLayout::Tabs,
+            tools_density: ToolsDensity::Grid2x,
+            groups,
+            dock: None,
+            rect,
+            scroll: 0.0,
+        }
     }
 
-    /// The node reached by `path` from this rail's root, if any.
-    pub fn node_at(&self, path: &NodePath) -> Option<&Node> {
-        self.tree.as_ref().and_then(|t| node_at(t, path))
+    pub fn is_tools(&self) -> bool {
+        self.kind == MasterKind::Tools
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !self.is_tools() && self.groups.iter().all(Group::is_empty)
     }
 
     pub fn panels(&self) -> Vec<PanelId> {
-        let mut out = Vec::new();
-        if let Some(t) = &self.tree {
-            collect(t, &mut out);
-        }
-        for c in &self.icons {
-            collect(&c.node, &mut out);
-        }
-        out
+        self.groups.iter().flat_map(|g| g.panels.iter().copied()).collect()
     }
 
-    /// Removes `panel`, pruning empty tab groups and collapsing single-child
-    /// splits; empties the rail if that was the last panel. If a whole
-    /// column disappears, the rail shrinks by that column's width so the
-    /// survivors keep their size. Also checks the icon strip — a panel
-    /// collapsed to an icon is just as much "in this rail" as one in the
-    /// tree, and re-docking it (the Window menu's toggle logic assumes
-    /// `panels()`/`remove` agree on that) would otherwise leave a stale
-    /// duplicate behind in `icons`.
-    pub fn remove(&mut self, panel: PanelId) -> bool {
-        if let Some(ci) = self.icons.iter().position(|c| {
-            let mut v = Vec::new();
-            collect(&c.node, &mut v);
-            v.contains(&panel)
-        }) {
-            let hit = remove_in(&mut self.icons[ci].node, panel);
-            if node_is_empty(&self.icons[ci].node) {
-                self.icons.remove(ci);
-            }
-            return hit;
-        }
-        let Some(t) = &mut self.tree else {
-            return false;
-        };
-
-        // Column pixel widths + which one holds `panel`, before removal.
-        let cols_before: Option<(Vec<f32>, usize)> = match &*t {
-            Node::Split {
-                axis: Axis::Horizontal,
-                children,
-            } if children.len() >= 2 => {
-                let wsum: f32 = children
-                    .iter()
-                    .map(|c| c.weight.max(0.0))
-                    .sum::<f32>()
-                    .max(1e-3);
-                let avail =
-                    (self.width - SPLIT_GAP * (children.len() as f32 - 1.0)).max(1.0);
-                let px: Vec<f32> = children
-                    .iter()
-                    .map(|c| avail * c.weight.max(0.0) / wsum)
-                    .collect();
-                children
-                    .iter()
-                    .position(|c| {
-                        let mut v = Vec::new();
-                        collect(&c.node, &mut v);
-                        v.contains(&panel)
-                    })
-                    .map(|i| (px, i))
-            }
-            _ => None,
-        };
-
-        let hit = remove_in(t, panel);
-        if node_is_empty(t) {
-            self.tree = None;
-        }
-
-        if hit {
-            if let Some((px, removed_i)) = cols_before {
-                let n_surv = px.len() - 1;
-                let surviving: f32 = px
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| *i != removed_i)
-                    .map(|(_, v)| *v)
-                    .sum();
-                match &self.tree {
-                    Some(Node::Split {
-                        axis: Axis::Horizontal,
-                        children,
-                    }) if children.len() == n_surv && n_surv >= 2 => {
-                        self.width = surviving + SPLIT_GAP * (n_surv as f32 - 1.0);
-                    }
-                    Some(_) if n_surv == 1 => self.width = surviving,
-                    _ => {}
-                }
-            }
-        }
-        hit
+    pub fn group(&self, idx: usize) -> Option<&Group> {
+        self.groups.get(idx)
     }
 
-    /// Applies a resolved drop of `panel` onto this rail. `Float` is a
-    /// no-op here (the caller detaches instead).
-    pub fn dock(&mut self, panel: PanelId, target: DropTarget) {
-        self.remove(panel);
-        match target {
-            DropTarget::Float => {}
-            DropTarget::Tab { path, index } => {
-                let Some(t) = &mut self.tree else {
-                    self.tree = Some(Node::Tabs {
-                        panels: vec![panel],
-                        active: 0,
-                    });
-                    return;
-                };
-                if let Some(Node::Tabs { panels, active }) = node_at_mut(t, &path) {
-                    let i = index.min(panels.len());
-                    panels.insert(i, panel);
-                    *active = i;
-                }
-            }
-            DropTarget::Split { path, side } => {
-                let Some(t) = self.tree.take() else {
-                    self.tree = Some(Node::Tabs {
-                        panels: vec![panel],
-                        active: 0,
-                    });
-                    return;
-                };
-                self.tree = Some(split_at(t, &path, side, panel));
-            }
-        }
+    pub fn group_mut(&mut self, idx: usize) -> Option<&mut Group> {
+        self.groups.get_mut(idx)
     }
 
-    /// Make tab `index` active in the tab group at `path`. `true` if `path`
-    /// pointed at a tab group.
-    pub fn activate_tab(&mut self, path: &NodePath, index: usize) -> bool {
-        let Some(t) = &mut self.tree else {
-            return false;
-        };
-        if let Some(Node::Tabs { panels, active }) = node_at_mut(t, path) {
-            if !panels.is_empty() {
-                *active = index.min(panels.len() - 1);
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Move the boundary after child `gap` of the split at `path` so child
-    /// `gap` takes `frac` (clamped 5%–95%) of that pair's combined span;
-    /// their weight sum is preserved so other children hold their size.
-    pub fn set_boundary(&mut self, path: &NodePath, gap: usize, frac: f32) -> bool {
-        let Some(t) = &mut self.tree else {
-            return false;
-        };
-        let Some(Node::Split { children, .. }) = node_at_mut(t, path) else {
-            return false;
-        };
-        if gap + 1 >= children.len() {
-            return false;
-        }
-        let frac = frac.clamp(0.05, 0.95);
-        let pair = children[gap].weight.max(0.0) + children[gap + 1].weight.max(0.0);
-        let pair = if pair <= 0.0 { 2.0 } else { pair };
-        children[gap].weight = pair * frac;
-        children[gap + 1].weight = pair * (1.0 - frac);
-        true
-    }
-
-    /// Set the rail's width, feeding the whole change to one edge column so
-    /// the others keep their pixel size.
-    ///
-    /// If the rail's top node is a horizontal split of two-or-more columns,
-    /// every column but the one on the resized edge is pinned to its
-    /// current width and the edge column absorbs the delta. `edge_is_last`
-    /// says which column touches the moving edge (the right rail resizes
-    /// from its left edge → first column; the left rail from its right edge
-    /// → last column). `gap` is the splitter thickness. With a single
-    /// column or a vertical stack this is just a width change.
-    pub fn set_width_absorbing(&mut self, new_w: f32, gap: f32, edge_is_last: bool) {
-        let old_w = self.width;
-        self.width = new_w.max(1.0);
-
-        let Some(Node::Split {
-            axis: Axis::Horizontal,
-            children,
-        }) = &mut self.tree
-        else {
-            return;
-        };
-        let n = children.len();
-        if n < 2 {
-            return;
-        }
-        let wsum: f32 = children.iter().map(|c| c.weight.max(0.0)).sum();
-        if wsum <= 0.0 {
-            return;
-        }
-        let strut = gap * (n as f32 - 1.0);
-        let old_avail = (old_w - strut).max(1.0);
-        let new_avail = (new_w - strut).max(1.0);
-
-        let px: Vec<f32> = children
-            .iter()
-            .map(|c| old_avail * c.weight.max(0.0) / wsum)
-            .collect();
-        let absorb = if edge_is_last { n - 1 } else { 0 };
-        let pinned: f32 = px
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != absorb)
-            .map(|(_, v)| *v)
-            .sum();
-        let absorb_px = (new_avail - pinned).max(48.0);
-
-        // Weights become target pixel widths; layout then reproduces them.
-        for (i, c) in children.iter_mut().enumerate() {
-            c.weight = if i == absorb { absorb_px } else { px[i] };
-        }
-    }
-
-    /// First tab group a breadth-first walk finds — a fallback drop spot.
-    pub fn any_tab_path(&self) -> Option<NodePath> {
-        let t = self.tree.as_ref()?;
-        walk(t)
-            .into_iter()
-            .find_map(|(path, node)| matches!(node, Node::Tabs { .. }).then_some(path))
-    }
-
-    /// Path to the tab group currently holding `panel`.
-    pub fn path_of(&self, panel: PanelId) -> Option<NodePath> {
-        let t = self.tree.as_ref()?;
-        walk(t).into_iter().find_map(|(path, node)| match node {
-            Node::Tabs { panels, .. } if panels.contains(&panel) => Some(path),
-            _ => None,
+    /// Index of the group holding `panel`, and `panel`'s index within it.
+    pub fn locate(&self, panel: PanelId) -> Option<(usize, usize)> {
+        self.groups.iter().enumerate().find_map(|(gi, g)| {
+            g.panels.iter().position(|&p| p == panel).map(|pi| (gi, pi))
         })
-    }
-
-    fn tab_len(&self, path: &NodePath) -> Option<usize> {
-        let t = self.tree.as_ref()?;
-        walk(t).into_iter().find_map(|(p, node)| {
-            (&p == path).then_some(node).and_then(|n| match n {
-                Node::Tabs { panels, .. } => Some(panels.len()),
-                _ => None,
-            })
-        })
-    }
-
-    /// Collapses a whole dock *column* to an icon strip — Illustrator's
-    /// granularity: `path` addresses any node within the column (usually
-    /// the tab group whose own « was clicked), and this walks up to that
-    /// column's top-level boundary before collapsing. A "column" is one
-    /// top-level child of the tree when the tree is a horizontal split of
-    /// several docked side by side (`path`'s first index picks which);
-    /// otherwise (a single column, or one already-vertical stack of
-    /// groups) it's the whole tree. The column's sub-tree is pulled out
-    /// verbatim (pruning empty splits behind it, the same bookkeeping
-    /// `remove` already does for each panel) and appended to `icons`, so
-    /// expanding can restore its internal groups and weights exactly.
-    /// `false` if `path` doesn't resolve to anything, or the column turns
-    /// out to hold no panels at all.
-    pub fn collapse(&mut self, path: &NodePath) -> bool {
-        let Some(root) = &self.tree else {
-            return false;
-        };
-        let node = match root {
-            Node::Split {
-                axis: Axis::Horizontal,
-                children,
-            } => match path.0.first().and_then(|&i| children.get(i)) {
-                Some(child) => child.node.clone(),
-                None => return false,
-            },
-            other => other.clone(),
-        };
-        let mut panels = Vec::new();
-        collect(&node, &mut panels);
-        if panels.is_empty() {
-            return false;
-        }
-        for p in panels {
-            self.remove(p);
-        }
-        self.icons.push(IconColumn { node });
-        true
-    }
-
-    /// Expands icon-strip column `index` back into the tree, as a new
-    /// bottom split of the rail — its own column, with its original
-    /// internal groups and vertical-split weights intact, not merged into
-    /// an existing tab group. `false` if `index` is out of range.
-    pub fn expand(&mut self, index: usize) -> bool {
-        if index >= self.icons.len() {
-            return false;
-        }
-        let column = self.icons.remove(index);
-        let mut panels = Vec::new();
-        collect(&column.node, &mut panels);
-        let Some(&first) = panels.first() else {
-            return true; // an empty column: nothing to put back.
-        };
-        // Dock `first` alone to get a fresh bottom split (reusing `dock`'s
-        // existing split/graft logic), then graft the column's real,
-        // possibly multi-group sub-tree in over that single-tab
-        // placeholder once we know exactly where it landed.
-        self.dock(
-            first,
-            DropTarget::Split {
-                path: NodePath(Vec::new()),
-                side: Side::Bottom,
-            },
-        );
-        if let Some(path) = self.path_of(first) {
-            if let Some(t) = &mut self.tree {
-                if let Some(slot) = node_at_mut(t, &path) {
-                    *slot = column.node;
-                }
-            }
-        }
-        true
-    }
-
-    /// Pulls just *one* group out of a collapsed column's icon strip —
-    /// Illustrator lets you tear a group straight off its icon, not only
-    /// after expanding the whole column back to the dock. Returns that
-    /// group's own `Node::Tabs` (for `DockModel::float_node`), pruning it
-    /// out of the column (and dropping the column entirely if that was
-    /// its last group) while leaving every other collapsed group in this
-    /// or any other column untouched. `None` if `column`/`group` don't
-    /// resolve to anything.
-    pub fn detach_icon_group(&mut self, column: usize, group: usize) -> Option<Node> {
-        let col = self.icons.get_mut(column)?;
-        let (panels, active) = col.groups().into_iter().nth(group)?;
-        for &p in &panels {
-            remove_in(&mut col.node, p);
-        }
-        if node_is_empty(&col.node) {
-            self.icons.remove(column);
-        }
-        Some(Node::Tabs { panels, active })
-    }
-
-    /// Pulls a whole *docked* group out at once — Illustrator's own
-    /// title-bar drag: grabbing a group (any group, not just the top of
-    /// its column) and dragging it detaches every tab it holds together,
-    /// not one at a time. Returns that group's `Node::Tabs` (for
-    /// `DockModel::float_node`); `None` if `path` doesn't resolve to a
-    /// `Tabs` node. Reuses `remove` per panel rather than splicing the
-    /// tree directly, so the same column-width-absorption bookkeeping a
-    /// panel-by-panel removal already gets (see `remove`) applies here
-    /// too.
-    pub fn detach_group(&mut self, path: &NodePath) -> Option<Node> {
-        let Node::Tabs { panels, active } = self.node_at(path)?.clone() else {
-            return None;
-        };
-        for &p in &panels {
-            self.remove(p);
-        }
-        Some(Node::Tabs { panels, active })
     }
 }
 
-/// The whole panel layout: a rail on each side of the canvas, plus any
-/// detached groups.
-#[derive(Clone, Debug, PartialEq)]
+/// The whole panel layout: every [`Master`], in z-order (later = drawn on
+/// top / brought-to-front last, ⇐ `bringToFront`'s implicit DOM order).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockModel {
-    pub left: Rail,
-    pub right: Rail,
-    pub floating: Vec<Floating>,
+    pub masters: Vec<Master>,
     next_id: u64,
 }
 
+impl Default for DockModel {
+    fn default() -> Self {
+        Self { masters: Vec::new(), next_id: 1 }
+    }
+}
+
 impl DockModel {
-    /// New model with `right` populating the right rail and an empty left.
-    pub fn new(right: Node) -> Self {
-        Self {
-            left: Rail::default(),
-            right: Rail::with(right),
-            floating: Vec::new(),
-            next_id: 1,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn rail(&self, side: RailSide) -> &Rail {
-        match side {
-            RailSide::Left => &self.left,
-            RailSide::Right => &self.right,
-        }
+    fn alloc_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 
-    pub fn rail_mut(&mut self, side: RailSide) -> &mut Rail {
-        match side {
-            RailSide::Left => &mut self.left,
-            RailSide::Right => &mut self.right,
+    /// Bumps the id allocator past every id already in use (masters and
+    /// their groups) — call after replacing `masters` wholesale from a
+    /// saved layout, or new ones spawned afterward could collide with
+    /// ones that were just loaded.
+    pub fn ensure_next_id(&mut self) {
+        let max = self
+            .masters
+            .iter()
+            .flat_map(|m| std::iter::once(m.id).chain(m.groups.iter().map(|g| g.id)))
+            .max()
+            .unwrap_or(0);
+        self.next_id = self.next_id.max(max + 1);
+    }
+
+    /// Spawns a new floating Normal master holding `groups` at `rect`.
+    /// Every group is given a fresh id. Returns the new master's id.
+    pub fn spawn_master(&mut self, panel_groups: Vec<Vec<PanelId>>, rect: [f32; 4]) -> u64 {
+        let mid = self.alloc_id();
+        let groups = panel_groups
+            .into_iter()
+            .map(|panels| {
+                let gid = self.alloc_id();
+                Group::new(gid, panels)
+            })
+            .collect();
+        self.masters.push(Master::new(mid, MasterKind::Normal, groups, rect));
+        mid
+    }
+
+    /// Places `panel` alone in its own floating Normal master at `rect` —
+    /// used for the handful of panels that always live in their own
+    /// single-panel window (the colour picker, a shape dialog, Export for
+    /// Screens; see `App::is_float_only`). If it already floats alone,
+    /// that master is reused and repositioned; if it's placed elsewhere,
+    /// it's pulled out first; otherwise a fresh master is spawned.
+    pub fn float_alone(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
+        if let Some(m) = self
+            .masters
+            .iter_mut()
+            .find(|m| m.dock.is_none() && m.panels().as_slice() == [panel])
+        {
+            m.rect = rect;
+            return m.id;
         }
+        if self.contains(panel) {
+            self.remove(panel);
+        }
+        self.spawn_master(vec![vec![panel]], rect)
+    }
+
+    /// The master currently holding `panel`, if any (⇐ the old
+    /// `floating_id_of` — these single-purpose panels never dock, so
+    /// there's no docked/floating distinction left to make here).
+    pub fn floating_id_of(&self, panel: PanelId) -> Option<u64> {
+        self.locate(panel).map(|(m, ..)| m)
+    }
+
+    /// Spawns a new floating Tools master (⇐ `createToolsMaster`) — no
+    /// groups; the panel content lives entirely in `panels::tools`,
+    /// rendered straight from the master's kind.
+    pub fn spawn_tools_master(&mut self, rect: [f32; 4]) -> u64 {
+        let mid = self.alloc_id();
+        self.masters.push(Master::new(mid, MasterKind::Tools, Vec::new(), rect));
+        mid
+    }
+
+    pub fn master(&self, id: u64) -> Option<&Master> {
+        self.masters.iter().find(|m| m.id == id)
+    }
+
+    pub fn master_mut(&mut self, id: u64) -> Option<&mut Master> {
+        self.masters.iter_mut().find(|m| m.id == id)
     }
 
     /// Every panel placed anywhere, in an arbitrary but stable order.
     pub fn panels(&self) -> Vec<PanelId> {
-        let mut out = self.left.panels();
-        out.extend(self.right.panels());
-        for f in &self.floating {
-            collect(&f.node, &mut out);
-        }
-        out
+        self.masters.iter().flat_map(Master::panels).collect()
     }
 
     pub fn contains(&self, panel: PanelId) -> bool {
-        self.panels().contains(&panel)
+        self.masters.iter().any(|m| m.panels().contains(&panel))
     }
 
-    /// Removes `panel` from wherever it sits — either rail or a floating
-    /// group (empty floating groups are dropped).
+    /// The master (and, within it, group/panel index) currently holding
+    /// `panel`, if any.
+    pub fn locate(&self, panel: PanelId) -> Option<(u64, usize, usize)> {
+        self.masters.iter().find_map(|m| m.locate(panel).map(|(g, p)| (m.id, g, p)))
+    }
+
+    /// Removes `panel` from wherever it sits, pruning empty groups/masters
+    /// per [`Self::prune_empty`]. `true` if it was actually found.
     pub fn remove(&mut self, panel: PanelId) -> bool {
-        let mut removed = self.left.remove(panel);
-        removed |= self.right.remove(panel);
-        self.floating.retain_mut(|f| {
-            let hit = remove_in(&mut f.node, panel);
-            removed |= hit;
-            !node_is_empty(&f.node)
-        });
-        removed
+        let Some((mid, gi, _)) = self.locate(panel) else {
+            return false;
+        };
+        if let Some(m) = self.master_mut(mid) {
+            if let Some(g) = m.group_mut(gi) {
+                g.panels.retain(|&p| p != panel);
+                g.active = g.active.min(g.panels.len().saturating_sub(1));
+            }
+        }
+        self.prune_empty(mid);
+        true
     }
 
-    /// Detaches `panel` into a new single-tab floating group at `rect`.
-    /// Returns the new group's id, or `None` if the panel wasn't placed.
-    pub fn detach(&mut self, panel: PanelId, rect: [f32; 4]) -> Option<u64> {
-        if !self.contains(panel) {
+    /// Drops empty groups from `master`, then the master itself if it has
+    /// none left — except a *docked* master, which always keeps one empty
+    /// group so the column shell stays put for panels to be dropped back
+    /// into (⇐ `pruneEmpty`'s "Keep at least one empty group inside a
+    /// docked master" / "Docked masters always remain as masters" rules).
+    /// A Tools master is never pruned this way — it has no groups to
+    /// begin with.
+    pub fn prune_empty(&mut self, master: u64) {
+        let Some(m) = self.master_mut(master) else { return };
+        if m.is_tools() {
+            return;
+        }
+        m.groups.retain(|g| !g.is_empty());
+        if m.groups.is_empty() {
+            // No exception for a docked master — there is no such thing
+            // as an empty Master, docked or floating. Removing it
+            // re-flows whatever else shares its side.
+            self.remove_master(master);
+        }
+    }
+
+    /// Runs [`Self::prune_empty`] over every master — none of them may
+    /// ever sit empty, docked or floating; call this as a blanket safety
+    /// net after any drag-commit, so the invariant holds even from a
+    /// mutation path that doesn't already prune the specific master(s)
+    /// it touched.
+    pub fn prune_all_empty(&mut self) {
+        let ids: Vec<u64> = self.masters.iter().map(|m| m.id).collect();
+        for id in ids {
+            self.prune_empty(id);
+        }
+    }
+
+    /// Removes a master outright (its window should close) and re-flows
+    /// whatever else was docked to its side, if it was docked.
+    pub fn remove_master(&mut self, id: u64) {
+        let side = self.master(id).and_then(|m| m.dock).map(|(s, _)| s);
+        self.masters.retain(|m| m.id != id);
+        if let Some(side) = side {
+            self.reflow_dock_indices(side);
+        }
+    }
+
+    /// Every master docked to `side`, in dock order (⇐ `getDocked`).
+    pub fn docked(&self, side: Side) -> Vec<u64> {
+        let mut v: Vec<&Master> = self
+            .masters
+            .iter()
+            .filter(|m| m.dock.is_some_and(|(s, _)| s == side))
+            .collect();
+        v.sort_by_key(|m| m.dock.unwrap().1);
+        v.into_iter().map(|m| m.id).collect()
+    }
+
+    fn reflow_dock_indices(&mut self, side: Side) {
+        let ids = self.docked(side);
+        for (i, id) in ids.into_iter().enumerate() {
+            if let Some(m) = self.master_mut(id) {
+                m.dock = Some((side, i));
+            }
+        }
+    }
+
+    /// Docks `id` to `side` at position `index` among the masters already
+    /// there, shifting them up (⇐ `dockMaster`). If `id` was docked
+    /// elsewhere, that side is re-flowed too.
+    pub fn dock_master(&mut self, id: u64, side: Side, index: usize) {
+        let prev_side = self.master(id).and_then(|m| m.dock).map(|(s, _)| s);
+
+        let mut list: Vec<u64> = self.docked(side).into_iter().filter(|&x| x != id).collect();
+        let at = index.min(list.len());
+        list.insert(at, id);
+        for (i, mid) in list.into_iter().enumerate() {
+            if let Some(m) = self.master_mut(mid) {
+                m.dock = Some((side, i));
+            }
+        }
+
+        if let Some(prev) = prev_side {
+            if prev != side {
+                self.reflow_dock_indices(prev);
+            }
+        }
+    }
+
+    /// Un-docks `id`, leaving it floating at its current `rect` (⇐
+    /// `undock`), and re-flows whatever else was on that side.
+    pub fn undock(&mut self, id: u64) {
+        let Some(side) = self.master(id).and_then(|m| m.dock).map(|(s, _)| s) else {
+            return;
+        };
+        if let Some(m) = self.master_mut(id) {
+            m.dock = None;
+        }
+        self.reflow_dock_indices(side);
+    }
+
+    /// Merges `source`'s groups onto the end of `target`'s, then drops
+    /// `source` (⇐ `mergeMasters`). Refuses if either is a Tools master,
+    /// they're the same master, or either id doesn't resolve.
+    pub fn merge_masters(&mut self, source: u64, target: u64) -> bool {
+        if source == target {
+            return false;
+        }
+        let (Some(s), Some(_)) = (self.master(source), self.master(target)) else {
+            return false;
+        };
+        if s.is_tools() || self.master(target).is_some_and(Master::is_tools) {
+            return false;
+        }
+        let Some(pos) = self.masters.iter().position(|m| m.id == source) else {
+            return false;
+        };
+        let removed = self.masters.remove(pos);
+        let side = removed.dock.map(|(s, _)| s);
+        if let Some(t) = self.master_mut(target) {
+            t.groups.extend(removed.groups);
+        } else {
+            // Target vanished between the checks above and here — put
+            // the groups back rather than lose them.
+            self.masters.push(removed);
+            return false;
+        }
+        if let Some(side) = side {
+            self.reflow_dock_indices(side);
+        }
+        true
+    }
+
+    /// Merges `source_group`'s panels into `dest_group`'s panel list at
+    /// `at` (clamped to the list length), then drops the now-empty source
+    /// group (⇐ `mergeGroups`, which always respects the drop
+    /// placeholder's exact position rather than just appending).
+    pub fn merge_groups(
+        &mut self,
+        source: (u64, usize),
+        dest: (u64, usize),
+        at: usize,
+    ) -> bool {
+        if source.0 == dest.0 && source.1 == dest.1 {
+            return false;
+        }
+        let Some(mut panels) = self
+            .master(source.0)
+            .and_then(|m| m.group(source.1))
+            .map(|g| g.panels.clone())
+        else {
+            return false;
+        };
+        if panels.is_empty() {
+            return false;
+        }
+        let Some(dest_m) = self.master_mut(dest.0) else { return false };
+        let Some(dest_g) = dest_m.group_mut(dest.1) else { return false };
+        let at = at.min(dest_g.panels.len());
+        for (offset, p) in panels.drain(..).enumerate() {
+            dest_g.panels.insert(at + offset, p);
+        }
+
+        if let Some(m) = self.master_mut(source.0) {
+            if let Some(g) = m.group_mut(source.1) {
+                g.panels.clear();
+            }
+        }
+        self.prune_empty(source.0);
+        true
+    }
+
+    /// Moves `source_group` out of its master and into `dest_master`'s
+    /// group list at `at`, as a new sibling group (⇐ the group drag's
+    /// `"into-master"` mode). Prunes the source master if that leaves it
+    /// empty.
+    pub fn move_group(&mut self, source: (u64, usize), dest_master: u64, at: usize) -> bool {
+        if source.0 == dest_master {
+            // Reorder within the same master.
+            let Some(m) = self.master_mut(source.0) else { return false };
+            if source.1 >= m.groups.len() {
+                return false;
+            }
+            let g = m.groups.remove(source.1);
+            let at = at.min(m.groups.len());
+            m.groups.insert(at, g);
+            return true;
+        }
+        let Some(m) = self.master_mut(source.0) else { return false };
+        if source.1 >= m.groups.len() {
+            return false;
+        }
+        let g = m.groups.remove(source.1);
+        let Some(dest) = self.master_mut(dest_master) else {
+            // Destination vanished — put it back.
+            if let Some(m) = self.master_mut(source.0) {
+                m.groups.insert(source.1.min(m.groups.len()), g);
+            }
+            return false;
+        };
+        let at = at.min(dest.groups.len());
+        dest.groups.insert(at, g);
+        self.prune_empty(source.0);
+        true
+    }
+
+    /// Pulls group `at` out of `master` into its own brand-new floating
+    /// Normal master at `rect` (⇐ `detachGroup`). `None` if `master`/`at`
+    /// don't resolve. Prunes `master` if that was its last group.
+    pub fn detach_group(&mut self, master: u64, at: usize, rect: [f32; 4]) -> Option<u64> {
+        let m = self.master_mut(master)?;
+        if at >= m.groups.len() {
             return None;
         }
+        // The new Master keeps whichever display mode the group was
+        // pulled out of — detaching from a Tabs-mode master lands as a
+        // Tabs-mode master, from Stack as Stack.
+        let layout = m.layout;
+        let g = m.groups.remove(at);
+        self.prune_empty(master);
+        let nid = self.alloc_id();
+        let mut new_master = Master::new(nid, MasterKind::Normal, vec![g], rect);
+        new_master.layout = layout;
+        self.masters.push(new_master);
+        Some(nid)
+    }
+
+    /// Pulls `panel` out from wherever it sits and wraps it in a fresh
+    /// group inside a brand-new floating Normal master at `rect` (⇐
+    /// `detachPanel`). `false` if `panel` wasn't placed. The new Master
+    /// keeps the layout mode `panel` was detached from (a tab stays a
+    /// tab, a Stack row stays a Stack row).
+    pub fn detach_panel(&mut self, panel: PanelId, rect: [f32; 4]) -> Option<u64> {
+        let Some((old_mid, ..)) = self.locate(panel) else {
+            return None;
+        };
+        let layout = self.master(old_mid).map(|m| m.layout).unwrap_or(MasterLayout::Stack);
         self.remove(panel);
-        Some(self.push_floating(panel, rect))
+        let gid = self.alloc_id();
+        let nid = self.alloc_id();
+        let mut new_master = Master::new(nid, MasterKind::Normal, vec![Group::new(gid, vec![panel])], rect);
+        new_master.layout = layout;
+        self.masters.push(new_master);
+        Some(nid)
     }
 
-    /// Place `panel` in its own floating group at `rect`. If it already
-    /// floats alone, that group is reused and moved. If it is docked (or
-    /// tabbed with others), it is torn out. If it isn't placed yet, a new
-    /// group is spawned.
-    pub fn float_alone(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
-        if let Some(f) = self.floating.iter_mut().find(|f| match &f.node {
-            Node::Tabs { panels, .. } => panels.as_slice() == [panel],
-            _ => false,
-        }) {
-            f.rect = rect;
-            return f.id;
+    /// Moves `panel` into `dest`'s group at `dest_group`, inserted at
+    /// panel index `at` (⇐ the panel drag's `"into-group"` mode). Prunes
+    /// the panel's old spot if it leaves a group/master empty.
+    pub fn move_panel_into_group(&mut self, panel: PanelId, dest: (u64, usize), at: usize) -> bool {
+        let Some((old_mid, old_gi, _)) = self.locate(panel) else { return false };
+        if old_mid == dest.0 && old_gi == dest.1 {
+            // Reorder within the same group.
+            let Some(m) = self.master_mut(old_mid) else { return false };
+            let Some(g) = m.group_mut(old_gi) else { return false };
+            let Some(from) = g.panels.iter().position(|&p| p == panel) else { return false };
+            g.panels.remove(from);
+            let at = at.min(g.panels.len());
+            g.panels.insert(at, panel);
+            return true;
         }
-        if self.contains(panel) {
-            return self.detach(panel, rect).expect("panel was contained");
-        }
-        self.push_floating(panel, rect)
-    }
-
-    /// The floating group currently holding `panel`, if any.
-    pub fn floating_id_of(&self, panel: PanelId) -> Option<u64> {
-        self.floating.iter().find_map(|f| {
-            let mut ids = Vec::new();
-            collect(&f.node, &mut ids);
-            ids.contains(&panel).then_some(f.id)
-        })
-    }
-
-    fn push_floating(&mut self, panel: PanelId, rect: [f32; 4]) -> u64 {
-        self.float_node(
-            Node::Tabs {
-                panels: vec![panel],
-                active: 0,
-            },
-            rect,
-        )
-    }
-
-    /// Places an already-built `node` — usually a whole multi-tab group
-    /// pulled out of a collapsed column's icon strip via
-    /// `Rail::detach_icon_group` — into its own new floating window at
-    /// `rect`. Unlike `push_floating`/`detach`/`float_alone`, which only
-    /// ever start a single-panel group, this keeps the group's tabs (and
-    /// which one was active) together, matching what tearing a *group*
-    /// off a dock in Illustrator does.
-    pub fn float_node(&mut self, node: Node, rect: [f32; 4]) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.floating.push(Floating {
-            id,
-            node,
-            rect,
-            icon_w: None,
-            expanded_size: None,
-        });
-        id
-    }
-
-    pub fn floating(&self, id: u64) -> Option<&Floating> {
-        self.floating.iter().find(|f| f.id == id)
-    }
-
-    pub fn floating_mut(&mut self, id: u64) -> Option<&mut Floating> {
-        self.floating.iter_mut().find(|f| f.id == id)
-    }
-
-    /// Removes and returns the floating group `id`.
-    pub fn remove_floating(&mut self, id: u64) -> Option<Floating> {
-        let i = self.floating.iter().position(|f| f.id == id)?;
-        Some(self.floating.remove(i))
-    }
-
-    /// Docks floating group `id` into the `side` rail: its active panel
-    /// lands at `target`, siblings tab in beside it. Returns the re-docked
-    /// panels; empty if `id` is unknown or `target` is `Float`.
-    pub fn redock(&mut self, id: u64, side: RailSide, target: DropTarget) -> Vec<PanelId> {
-        if matches!(target, DropTarget::Float) {
-            return Vec::new();
-        }
-        let Some(f) = self.remove_floating(id) else {
-            return Vec::new();
+        // `remove` prunes the panel's old (now possibly empty) group,
+        // which can shift every later group in that same master down by
+        // one — resolve `dest`'s *stable* group id before removing, then
+        // re-find wherever it landed afterward, rather than trusting the
+        // index to still mean the same thing.
+        let Some(dest_group_id) = self.master(dest.0).and_then(|m| m.group(dest.1)).map(|g| g.id) else {
+            return false;
         };
-        // Width the group had while floating. It's used only when this
-        // dock ADDS a column — stacking a panel onto an existing column
-        // just adopts that column's width for visual consistency.
-        let float_w = f.rect[2].max(1.0);
-        let adds_column = matches!(target, DropTarget::Split { .. });
-        let mut panels = Vec::new();
-        collect(&f.node, &mut panels);
-        if let Node::Tabs { active, .. } = &f.node {
-            if *active < panels.len() {
-                panels.swap(0, *active);
-            }
-        }
-        let rail = self.rail_mut(side);
+        self.remove(panel);
+        let Some(m) = self.master_mut(dest.0) else { return false };
+        let Some(gi) = m.groups.iter().position(|g| g.id == dest_group_id) else { return false };
+        let g = &mut m.groups[gi];
+        let at = at.min(g.panels.len());
+        g.panels.insert(at, panel);
+        g.active = at;
+        true
+    }
 
-        // Pixel widths of the columns already in the rail, before docking.
-        let existing_px: Vec<f32> = match &rail.tree {
-            Some(Node::Split {
-                axis: Axis::Horizontal,
-                children,
-            }) if !children.is_empty() => {
-                let wsum: f32 = children
-                    .iter()
-                    .map(|c| c.weight.max(0.0))
-                    .sum::<f32>()
-                    .max(1e-3);
-                let avail = (rail.width - SPLIT_GAP * (children.len() as f32 - 1.0)).max(1.0);
-                children
-                    .iter()
-                    .map(|c| (avail * c.weight.max(0.0) / wsum).max(48.0))
-                    .collect()
-            }
-            Some(_) => vec![rail.width.max(48.0)],
-            None => Vec::new(),
+    /// Moves `panel` out of wherever it sits and into `dest_master`'s
+    /// body as a brand-new group at position `at` (⇐ the panel drag's
+    /// `"new-group"` mode).
+    pub fn move_panel_new_group(&mut self, panel: PanelId, dest_master: u64, at: usize) -> bool {
+        if !self.contains(panel) {
+            return false;
+        }
+        self.remove(panel);
+        let Some(len) = self.master(dest_master).map(|m| m.groups.len()) else {
+            return false;
         };
-
-        let mut it = panels.iter().copied();
-        if let Some(first) = it.next() {
-            rail.dock(first, target);
-        }
-        for p in it {
-            if let Some(path) = rail.path_of(panels[0]) {
-                let len = rail.tab_len(&path).unwrap_or(0);
-                rail.dock(p, DropTarget::Tab { path, index: len });
-            }
-        }
-
-        if existing_px.is_empty() {
-            // First panel in a previously-empty rail — take its own width.
-            rail.width = float_w;
-        } else if adds_column {
-            // New column: it gets `float_w`, every existing column keeps
-            // its pixel width, and the rail grows to fit.
-            if let Some(Node::Split {
-                axis: Axis::Horizontal,
-                children,
-            }) = &mut rail.tree
-            {
-                if children.len() == existing_px.len() + 1 {
-                    let n = children.len();
-                    let new_idx = children
-                        .iter()
-                        .position(|c| {
-                            let mut v = Vec::new();
-                            collect(&c.node, &mut v);
-                            v.contains(&panels[0])
-                        })
-                        .unwrap_or(n - 1);
-                    let mut old = existing_px.iter().copied();
-                    for (i, c) in children.iter_mut().enumerate() {
-                        c.weight = if i == new_idx {
-                            float_w
-                        } else {
-                            old.next().unwrap_or(48.0)
-                        };
-                    }
-                    rail.width =
-                        float_w + existing_px.iter().sum::<f32>() + SPLIT_GAP * (n as f32 - 1.0);
-                }
-            }
-        }
-        // Stacking onto an existing column: nothing to do — the panel
-        // adopts that column's width and the rail width is unchanged.
-
-        panels
+        let at = at.min(len);
+        let gid = self.alloc_id();
+        let Some(m) = self.master_mut(dest_master) else { return false };
+        m.groups.insert(at, Group::new(gid, vec![panel]));
+        true
     }
-
-    /// Round-trip for workspace persistence lives in the app for now; the
-    /// tree derives `serde` when that crate is added.
-    #[doc(hidden)]
-    pub fn _assert_shape(&self) {}
-}
-
-fn collect(node: &Node, out: &mut Vec<PanelId>) {
-    match node {
-        Node::Tabs { panels, .. } => out.extend(panels.iter().copied()),
-        Node::Split { children, .. } => {
-            for c in children {
-                collect(&c.node, out);
-            }
-        }
-    }
-}
-
-fn node_is_empty(node: &Node) -> bool {
-    match node {
-        Node::Tabs { panels, .. } => panels.is_empty(),
-        Node::Split { children, .. } => children.is_empty(),
-    }
-}
-
-/// Removes `panel` from `node`'s subtree and normalizes: drop empty tab
-/// groups, and replace a split that has one child left with that child.
-fn remove_in(node: &mut Node, panel: PanelId) -> bool {
-    match node {
-        Node::Tabs { panels, active } => {
-            if let Some(pos) = panels.iter().position(|p| *p == panel) {
-                panels.remove(pos);
-                *active = (*active).min(panels.len().saturating_sub(1));
-                true
-            } else {
-                false
-            }
-        }
-        Node::Split { children, .. } => {
-            let mut hit = false;
-            for c in children.iter_mut() {
-                hit |= remove_in(&mut c.node, panel);
-            }
-            children.retain(|c| !node_is_empty(&c.node));
-            if children.len() == 1 {
-                let only = children.remove(0).node;
-                *node = only;
-            }
-            hit
-        }
-    }
-}
-
-fn node_at_mut<'a>(node: &'a mut Node, path: &NodePath) -> Option<&'a mut Node> {
-    let mut cur = node;
-    for &i in &path.0 {
-        match cur {
-            Node::Split { children, .. } => cur = &mut children.get_mut(i)?.node,
-            Node::Tabs { .. } => return None,
-        }
-    }
-    Some(cur)
-}
-
-fn node_at<'a>(node: &'a Node, path: &NodePath) -> Option<&'a Node> {
-    let mut cur = node;
-    for &i in &path.0 {
-        match cur {
-            Node::Split { children, .. } => cur = &children.get(i)?.node,
-            Node::Tabs { .. } => return None,
-        }
-    }
-    Some(cur)
-}
-
-impl Node {
-    /// Shortest height (logical px) this subtree can take before a panel's
-    /// content is clipped. `panel_min(id, width)` is a panel's natural body
-    /// height; `strip_h` the tab strip; `gap` the splitter thickness;
-    /// `width` the space available across the subtree.
-    pub fn min_height(
-        &self,
-        width: f64,
-        strip_h: f64,
-        gap: f64,
-        panel_min: &dyn Fn(PanelId, f64) -> f64,
-    ) -> f64 {
-        match self {
-            Node::Tabs { panels, active } => {
-                let body = panels
-                    .get(*active)
-                    .map_or(0.0, |p| panel_min(*p, (width - 2.0).max(0.0)));
-                strip_h + body
-            }
-            Node::Split { axis, children } => match axis {
-                Axis::Vertical => {
-                    let inner = children
-                        .iter()
-                        .map(|c| c.node.min_height(width, strip_h, gap, panel_min))
-                        .sum::<f64>();
-                    inner + gap * children.len().saturating_sub(1) as f64
-                }
-                Axis::Horizontal => children
-                    .iter()
-                    .map(|c| c.node.min_height(width, strip_h, gap, panel_min))
-                    .fold(0.0, f64::max),
-            },
-        }
-    }
-}
-
-/// Splits the node reached by `path` (from `root`), inserting `panel` on
-/// `side`. If the target's parent split already runs on the needed axis,
-/// the new tab group is spliced in as a sibling instead of nesting.
-fn split_at(mut root: Node, path: &NodePath, side: Side, panel: PanelId) -> Node {
-    let new_tab = Node::Tabs {
-        panels: vec![panel],
-        active: 0,
-    };
-    if path.0.is_empty() {
-        return wrap_split(root, new_tab, side);
-    }
-    // Walk to the parent of the target.
-    let (parent_path, last) = path.0.split_at(path.0.len() - 1);
-    let last = last[0];
-    if let Some(Node::Split { axis, children }) =
-        node_at_mut(&mut root, &NodePath(parent_path.to_vec()))
-    {
-        if *axis == side.axis() {
-            let at = if side.is_leading() { last } else { last + 1 };
-            let at = at.min(children.len());
-            children.insert(
-                at,
-                Child {
-                    node: new_tab,
-                    weight: 1.0,
-                },
-            );
-            return root;
-        }
-    }
-    // Otherwise nest a fresh split around the target node.
-    if let Some(target) = node_at_mut(&mut root, path) {
-        let taken = std::mem::replace(
-            target,
-            Node::Tabs {
-                panels: vec![],
-                active: 0,
-            },
-        );
-        *target = wrap_split(taken, new_tab, side);
-    }
-    root
-}
-
-fn wrap_split(existing: Node, incoming: Node, side: Side) -> Node {
-    let (a, b) = if side.is_leading() {
-        (incoming, existing)
-    } else {
-        (existing, incoming)
-    };
-    Node::Split {
-        axis: side.axis(),
-        children: vec![
-            Child {
-                node: a,
-                weight: 1.0,
-            },
-            Child {
-                node: b,
-                weight: 1.0,
-            },
-        ],
-    }
-}
-
-/// Breadth-first walk yielding `(path, &node)` for every node in a tree.
-pub fn walk(root: &Node) -> Vec<(NodePath, &Node)> {
-    let mut out = Vec::new();
-    let mut q: VecDeque<(NodePath, &Node)> = VecDeque::new();
-    q.push_back((NodePath::default(), root));
-    while let Some((path, node)) = q.pop_front() {
-        out.push((path.clone(), node));
-        if let Node::Split { children, .. } = node {
-            for (i, c) in children.iter().enumerate() {
-                let mut p = path.clone();
-                p.0.push(i);
-                q.push_back((p, &c.node));
-            }
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -1142,598 +625,259 @@ mod tests {
     const A: PanelId = PanelId("a");
     const B: PanelId = PanelId("b");
     const C: PanelId = PanelId("c");
+    const D: PanelId = PanelId("d");
 
-    fn tabs(ids: &[PanelId]) -> Node {
-        Node::Tabs {
-            panels: ids.to_vec(),
-            active: 0,
-        }
+    fn rect() -> [f32; 4] {
+        [0.0, 0.0, 200.0, 100.0]
     }
 
     #[test]
-    fn detach_then_dock_round_trips() {
-        let mut m = DockModel::new(tabs(&[A, B]));
-        m.detach(B, [10.0, 10.0, 210.0, 310.0]);
-        assert_eq!(m.right.tree, Some(tabs(&[A])));
-        assert_eq!(m.floating.len(), 1);
-        assert_eq!(m.floating[0].node, tabs(&[B]));
-
-        // Drag B back as a tab of the right rail's group; it becomes active
-        // and the emptied floating group is torn down.
-        let id = m.floating[0].id;
-        m.redock(
-            id,
-            RailSide::Right,
-            DropTarget::Tab {
-                path: NodePath::default(),
-                index: 1,
-            },
-        );
-        assert_eq!(
-            m.right.tree,
-            Some(Node::Tabs {
-                panels: vec![A, B],
-                active: 1,
-            })
-        );
-        assert!(
-            m.floating.is_empty(),
-            "floating group torn down when emptied"
-        );
+    fn spawn_master_gives_every_group_and_the_master_itself_a_fresh_id() {
+        let mut d = DockModel::new();
+        let m1 = d.spawn_master(vec![vec![A]], rect());
+        let m2 = d.spawn_master(vec![vec![B]], rect());
+        assert_ne!(m1, m2);
+        let g1 = d.master(m1).unwrap().groups[0].id;
+        let g2 = d.master(m2).unwrap().groups[0].id;
+        assert_ne!(g1, g2);
     }
 
     #[test]
-    fn float_alone_spawns_or_reuses_a_single_tab_group() {
-        let mut m = DockModel::new(tabs(&[A]));
-        let id = m.float_alone(C, [8.0, 9.0, 200.0, 300.0]);
-        assert_eq!(m.floating_id_of(C), Some(id));
-        assert_eq!(m.floating.len(), 1);
-        assert_eq!(m.floating[0].rect, [8.0, 9.0, 200.0, 300.0]);
-
-        let again = m.float_alone(C, [40.0, 50.0, 200.0, 300.0]);
-        assert_eq!(again, id);
-        assert_eq!(m.floating.len(), 1);
-        assert_eq!(m.floating[0].rect, [40.0, 50.0, 200.0, 300.0]);
-
-        let torn = m.float_alone(A, [0.0, 0.0, 100.0, 100.0]);
-        assert_ne!(torn, id);
-        assert!(m.right.is_empty());
-        assert_eq!(m.floating.len(), 2);
+    fn dock_master_orders_by_index_and_shifts_existing_ones_up() {
+        let mut d = DockModel::new();
+        let m1 = d.spawn_master(vec![vec![A]], rect());
+        let m2 = d.spawn_master(vec![vec![B]], rect());
+        d.dock_master(m1, Side::Left, 0);
+        d.dock_master(m2, Side::Left, 0); // inserts before m1
+        assert_eq!(d.docked(Side::Left), vec![m2, m1]);
+        assert_eq!(d.master(m1).unwrap().dock, Some((Side::Left, 1)));
+        assert_eq!(d.master(m2).unwrap().dock, Some((Side::Left, 0)));
     }
 
     #[test]
-    fn collapsing_a_floating_panel_shrinks_it_and_remembers_the_old_size() {
-        let mut m = DockModel::new(tabs(&[A]));
-        let id = m.float_alone(C, [8.0, 9.0, 240.0, 400.0]);
-        let f = m.floating_mut(id).unwrap();
-        assert_eq!(f.icon_w, None);
-
-        let size = f.collapse().expect("was open, should collapse");
-        assert_eq!(f.icon_w, Some(size[0]));
-        assert_eq!(f.expanded_size, Some([240.0, 400.0]));
-        assert_eq!([f.rect[2], f.rect[3]], size, "rect tracks the shrunk size");
-        // Collapsing an already-collapsed panel is a no-op, not a second
-        // stash that would clobber the real pre-collapse size.
-        assert_eq!(f.collapse(), None);
-        assert_eq!(f.expanded_size, Some([240.0, 400.0]));
+    fn undock_reflows_the_side_it_leaves() {
+        let mut d = DockModel::new();
+        let m1 = d.spawn_master(vec![vec![A]], rect());
+        let m2 = d.spawn_master(vec![vec![B]], rect());
+        d.dock_master(m1, Side::Left, 0);
+        d.dock_master(m2, Side::Left, 1);
+        d.undock(m1);
+        assert_eq!(d.master(m1).unwrap().dock, None);
+        assert_eq!(d.docked(Side::Left), vec![m2]);
+        assert_eq!(d.master(m2).unwrap().dock, Some((Side::Left, 0)));
     }
 
     #[test]
-    fn collapsing_a_multi_tab_floating_group_leaves_room_for_every_tab() {
-        // A group torn off with several tabs together (float_node) must
-        // collapse tall enough for one icon row per tab, not squash them
-        // all into a single-row height the way an early version did.
-        let mut three = Floating {
-            id: 0,
-            node: Node::Tabs { panels: vec![A, B, C], active: 0 },
-            rect: [0.0, 0.0, 240.0, 400.0],
-            icon_w: None,
-            expanded_size: None,
-        };
-        let mut one = Floating {
-            id: 1,
-            node: Node::Tabs { panels: vec![A], active: 0 },
-            rect: [0.0, 0.0, 240.0, 400.0],
-            icon_w: None,
-            expanded_size: None,
-        };
-        let three_h = three.collapse().expect("was open")[1];
-        let one_h = one.collapse().expect("was open")[1];
-        assert!(
-            three_h > one_h,
-            "three tabs must collapse taller than a lone one ({three_h} vs {one_h})"
-        );
+    fn merge_masters_appends_groups_and_drops_the_source() {
+        let mut d = DockModel::new();
+        let target = d.spawn_master(vec![vec![A]], rect());
+        let source = d.spawn_master(vec![vec![B], vec![C]], rect());
+        assert!(d.merge_masters(source, target));
+        assert!(d.master(source).is_none());
+        let groups: Vec<_> = d.master(target).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
+        assert_eq!(groups, vec![vec![A], vec![B], vec![C]]);
     }
 
     #[test]
-    fn expanding_a_floating_panel_restores_its_pre_collapse_size() {
-        let mut m = DockModel::new(tabs(&[A]));
-        let id = m.float_alone(C, [8.0, 9.0, 240.0, 400.0]);
-        let f = m.floating_mut(id).unwrap();
-        f.collapse();
-
-        let size = f.expand().expect("was collapsed, should expand");
-        assert_eq!(size, [240.0, 400.0]);
-        assert_eq!(f.icon_w, None);
-        assert_eq!(f.expanded_size, None);
-        assert_eq!([f.rect[2], f.rect[3]], [240.0, 400.0]);
-        // Expanding an already-open panel is a no-op.
-        assert_eq!(f.expand(), None);
+    fn merge_masters_refuses_a_tools_master_on_either_side() {
+        let mut d = DockModel::new();
+        let normal = d.spawn_master(vec![vec![A]], rect());
+        let tools = d.spawn_tools_master(rect());
+        assert!(!d.merge_masters(tools, normal));
+        assert!(!d.merge_masters(normal, tools));
+        assert!(d.master(tools).is_some());
+        assert!(d.master(normal).is_some());
     }
 
     #[test]
-    fn split_on_a_bare_root_makes_a_two_child_split() {
-        let mut m = DockModel::new(tabs(&[A]));
-        m.right.dock(
-            B,
-            DropTarget::Split {
-                path: NodePath::default(),
-                side: Side::Right,
-            },
-        );
-        match m.right.tree.unwrap() {
-            Node::Split { axis, children } => {
-                assert_eq!(axis, Axis::Horizontal);
-                assert_eq!(children.len(), 2);
-                assert_eq!(children[0].node, tabs(&[A]));
-                assert_eq!(children[1].node, tabs(&[B]));
-            }
-            _ => panic!("expected a split"),
-        }
+    fn merge_groups_inserts_at_the_given_position_and_prunes_the_source() {
+        let mut d = DockModel::new();
+        let target = d.spawn_master(vec![vec![A, D]], rect());
+        let source = d.spawn_master(vec![vec![B, C]], rect());
+        assert!(d.merge_groups((source, 0), (target, 0), 1));
+        assert_eq!(d.master(target).unwrap().groups[0].panels, vec![A, B, C, D]);
+        // The source master had exactly one group, now empty — it's gone.
+        assert!(d.master(source).is_none());
     }
 
     #[test]
-    fn split_along_the_existing_axis_splices_a_sibling_instead_of_nesting() {
-        // root = [A | B]  (horizontal). Dropping C to the right of B should
-        // give [A | B | C], not [A | [B | C]].
-        let mut m = DockModel::new(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        m.right.dock(
-            C,
-            DropTarget::Split {
-                path: NodePath(vec![1]),
-                side: Side::Right,
-            },
-        );
-        match m.right.tree.unwrap() {
-            Node::Split { axis, children } => {
-                assert_eq!(axis, Axis::Horizontal);
-                assert_eq!(children.len(), 3);
-                assert_eq!(children[2].node, tabs(&[C]));
-            }
-            _ => panic!("expected a flat 3-way split"),
-        }
+    fn detach_group_pulls_just_one_group_into_its_own_new_master() {
+        let mut d = DockModel::new();
+        let orig = d.spawn_master(vec![vec![A], vec![B]], rect());
+        let nid = d.detach_group(orig, 1, rect()).unwrap();
+        assert_eq!(d.master(orig).unwrap().groups.len(), 1);
+        assert_eq!(d.master(nid).unwrap().groups[0].panels, vec![B]);
     }
 
     #[test]
-    fn removing_the_last_panel_prunes_up_to_an_empty_model() {
-        let mut m = DockModel::new(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        assert!(m.remove(A));
-        // Split collapsed to its one remaining child.
-        assert_eq!(m.right.tree, Some(tabs(&[B])));
-        assert!(m.remove(B));
-        assert_eq!(m.right.tree, None);
-        assert!(!m.remove(B), "second remove is a no-op");
+    fn detach_group_removes_the_origin_master_when_it_was_its_last_group() {
+        let mut d = DockModel::new();
+        let orig = d.spawn_master(vec![vec![A]], rect());
+        d.detach_group(orig, 0, rect()).unwrap();
+        assert!(d.master(orig).is_none());
     }
 
     #[test]
-    fn detach_hands_back_an_id_and_redock_puts_the_panel_where_asked() {
-        let mut m = DockModel::new(tabs(&[A, B, C]));
-        let id = m.detach(B, [40.0, 40.0, 220.0, 300.0]).expect("detached");
-        assert_eq!(m.floating.len(), 1);
-        assert_eq!(m.floating(id).unwrap().node, tabs(&[B]));
-
-        // Redock B by splitting the root to its left.
-        let moved = m.redock(
-            id,
-            RailSide::Right,
-            DropTarget::Split {
-                path: NodePath(vec![]),
-                side: Side::Left,
-            },
-        );
-        assert_eq!(moved, vec![B]);
-        assert!(m.floating.is_empty());
-        match m.right.tree.unwrap() {
-            Node::Split { axis, children } => {
-                assert_eq!(axis, Axis::Horizontal);
-                assert_eq!(children[0].node, tabs(&[B]));
-                assert_eq!(children[1].node, tabs(&[A, C]));
-            }
-            _ => panic!("expected a split with B on the left"),
-        }
+    fn a_docked_master_disappears_too_once_its_last_panel_is_removed() {
+        // There is no such thing as an empty Master — docked or
+        // floating, losing its last panel removes it outright.
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A]], rect());
+        d.dock_master(m, Side::Right, 0);
+        d.remove(A);
+        assert!(d.master(m).is_none());
     }
 
     #[test]
-    fn redock_with_a_float_target_is_a_no_op() {
-        let mut m = DockModel::new(tabs(&[A, B]));
-        let id = m.detach(B, [0.0; 4]).unwrap();
-        assert!(m.redock(id, RailSide::Right, DropTarget::Float).is_empty());
-        assert!(m.floating(id).is_some(), "still floating");
+    fn removing_a_docked_masters_last_panel_reflows_its_side() {
+        let mut d = DockModel::new();
+        let m1 = d.spawn_master(vec![vec![A]], rect());
+        let m2 = d.spawn_master(vec![vec![B]], rect());
+        d.dock_master(m1, Side::Right, 0);
+        d.dock_master(m2, Side::Right, 1);
+        d.remove(A);
+        assert!(d.master(m1).is_none());
+        assert_eq!(d.docked(Side::Right), vec![m2]);
+        assert_eq!(d.master(m2).unwrap().dock, Some((Side::Right, 0)));
     }
 
     #[test]
-    fn activate_tab_clamps_and_reports_hits() {
-        let mut m = DockModel::new(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B, C]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        assert!(m.right.activate_tab(&NodePath(vec![1]), 1));
-        // Out-of-range index clamps to the last tab.
-        assert!(m.right.activate_tab(&NodePath(vec![1]), 9));
-        match &m.right.tree {
-            Some(Node::Split { children, .. }) => match &children[1].node {
-                Node::Tabs { active, .. } => assert_eq!(*active, 1),
-                _ => panic!(),
-            },
-            _ => panic!(),
-        }
-        // Path lands on a split, not a tab group.
-        assert!(!m.right.activate_tab(&NodePath(vec![]), 0));
+    fn a_floating_master_disappears_once_its_last_panel_is_removed() {
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A]], rect());
+        d.remove(A);
+        assert!(d.master(m).is_none());
     }
 
     #[test]
-    fn set_boundary_reweights_one_pair_and_leaves_the_rest() {
-        let mut m = DockModel::new(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[C]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        // Drag the first boundary to the 25% mark: pair sum 2.0 -> 0.5 / 1.5.
-        assert!(m.right.set_boundary(&NodePath(vec![]), 0, 0.25));
-        match m.right.tree.unwrap() {
-            Node::Split { children, .. } => {
-                assert!((children[0].weight - 0.5).abs() < 1e-6);
-                assert!((children[1].weight - 1.5).abs() < 1e-6);
-                assert!((children[2].weight - 1.0).abs() < 1e-6);
-            }
-            _ => panic!(),
-        }
+    fn detach_panel_wraps_it_in_a_fresh_group_and_master() {
+        let mut d = DockModel::new();
+        let orig = d.spawn_master(vec![vec![A, B]], rect());
+        let nid = d.detach_panel(B, rect()).unwrap();
+        assert_eq!(d.master(orig).unwrap().groups[0].panels, vec![A]);
+        assert_eq!(d.master(nid).unwrap().groups[0].panels, vec![B]);
     }
 
     #[test]
-    fn set_width_absorbing_pins_the_other_columns() {
-        let mut rail = Rail::with(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[C]),
-                    weight: 1.0,
-                },
-            ],
-        });
-        rail.width = 300.0; // three 100px columns, no splitter gap
-                            // Widen from the left edge to 400: the first column absorbs the
-                            // whole +100; the other two stay at 100.
-        rail.set_width_absorbing(400.0, 0.0, false);
-        assert_eq!(rail.width, 400.0);
-        match rail.tree.unwrap() {
-            Node::Split { children, .. } => {
-                assert!((children[0].weight - 200.0).abs() < 1e-3);
-                assert!((children[1].weight - 100.0).abs() < 1e-3);
-                assert!((children[2].weight - 100.0).abs() < 1e-3);
-            }
-            _ => panic!("expected a horizontal split"),
-        }
+    fn detach_panel_keeps_the_source_masters_display_mode() {
+        let mut d = DockModel::new();
+        let orig = d.spawn_master(vec![vec![A, B]], rect());
+        d.master_mut(orig).unwrap().layout = MasterLayout::Tabs;
+        let nid = d.detach_panel(B, rect()).unwrap();
+        assert_eq!(d.master(nid).unwrap().layout, MasterLayout::Tabs);
+
+        // And the reverse: a Stack-mode source stays Stack.
+        let orig2 = d.spawn_master(vec![vec![C, D]], rect());
+        d.master_mut(orig2).unwrap().layout = MasterLayout::Stack;
+        let nid2 = d.detach_panel(D, rect()).unwrap();
+        assert_eq!(d.master(orig2).unwrap().layout, MasterLayout::Stack);
+        assert_eq!(d.master(nid2).unwrap().layout, MasterLayout::Stack);
     }
 
     #[test]
-    fn set_boundary_rejects_a_nonexistent_gap() {
-        let mut m = DockModel::new(tabs(&[A]));
-        assert!(!m.right.set_boundary(&NodePath(vec![]), 0, 0.5));
+    fn detach_group_keeps_the_source_masters_display_mode() {
+        let mut d = DockModel::new();
+        let orig = d.spawn_master(vec![vec![A], vec![B]], rect());
+        d.master_mut(orig).unwrap().layout = MasterLayout::Tabs;
+        let nid = d.detach_group(orig, 1, rect()).unwrap();
+        assert_eq!(d.master(nid).unwrap().layout, MasterLayout::Tabs);
     }
 
     #[test]
-    fn walk_yields_root_first_then_children() {
-        let root = Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child {
-                    node: tabs(&[A]),
-                    weight: 1.0,
-                },
-                Child {
-                    node: tabs(&[B, C]),
-                    weight: 2.0,
-                },
-            ],
-        };
-        let paths: Vec<_> = walk(&root).into_iter().map(|(p, _)| p.0).collect();
-        assert_eq!(paths, vec![vec![], vec![0], vec![1]]);
+    fn moving_a_lone_floating_masters_only_panel_into_another_group_removes_it_entirely() {
+        // The exact "single panel into a group" repro: a floating master
+        // that holds nothing but this one panel must not survive as an
+        // empty shell once it's dragged elsewhere — there is no such
+        // thing as an empty Master.
+        let mut d = DockModel::new();
+        let source = d.spawn_master(vec![vec![A]], rect());
+        let dest = d.spawn_master(vec![vec![B]], rect());
+        assert!(d.move_panel_into_group(A, (dest, 0), 1));
+        assert!(d.master(source).is_none(), "the now-empty source master must be gone");
+        assert_eq!(d.master(dest).unwrap().groups[0].panels, vec![B, A]);
     }
 
     #[test]
-    fn collapse_takes_the_whole_column_not_just_one_stacked_group() {
-        // A vertical stack of two groups is *one* column (nothing splits
-        // it horizontally into side-by-side columns) — collapsing from
-        // either group's path takes both, matching Illustrator's "collapse
-        // or expand all panel icons in a column" at once.
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B, C]), weight: 2.0 },
-            ],
-        });
-        let whole_column = r.tree.clone().unwrap();
-        assert!(r.collapse(&NodePath(vec![1])));
-        assert_eq!(r.tree, None, "the column was the rail's entire tree");
-        assert_eq!(r.icons, vec![IconColumn { node: whole_column }]);
-        // Collapsing is not just closing — every panel still counts as
-        // "in this rail" (the Window menu's toggle logic depends on this).
-        assert!(r.panels().contains(&A));
-        assert!(r.panels().contains(&B));
-        assert!(r.panels().contains(&C));
-        // Each originally-stacked group still gets its own entry.
-        assert_eq!(r.icons[0].groups(), vec![(vec![A], 0), (vec![B, C], 0)]);
-        // ...and, in the icon strip itself, every *tab* in a group gets
-        // its own icon row (three tabs total across the two groups here).
-        let icon_rows = r.icons[0].icon_rows();
-        assert_eq!(icon_rows.len(), 3);
-        assert_eq!(
-            icon_rows.iter().map(|r| (r.group, r.tab, r.panel)).collect::<Vec<_>>(),
-            vec![(0, 0, A), (1, 0, B), (1, 1, C)]
-        );
+    fn prune_all_empty_sweeps_every_master_not_just_one() {
+        let mut d = DockModel::new();
+        let a = d.spawn_master(vec![vec![A]], rect());
+        let b = d.spawn_master(vec![vec![B]], rect());
+        // Force both into the "somehow ended up with an empty group"
+        // state directly, bypassing the normal mutators, to prove the
+        // sweep — not any one mutator's own bookkeeping — is what fixes
+        // it here.
+        d.master_mut(a).unwrap().groups[0].panels.clear();
+        d.master_mut(b).unwrap().groups[0].panels.clear();
+        d.prune_all_empty();
+        assert!(d.master(a).is_none());
+        assert!(d.master(b).is_none());
     }
 
     #[test]
-    fn collapse_takes_only_the_clicked_column_when_columns_sit_side_by_side() {
-        // A horizontal split *is* multiple side-by-side columns — only the
-        // one `path` falls under collapses; the other stays fully docked.
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B, C]), weight: 1.0 },
-            ],
-        });
-        assert!(r.collapse(&NodePath(vec![1])));
-        // The split collapsed to its one remaining column, same as `remove`.
-        assert_eq!(r.tree, Some(tabs(&[A])));
-        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[B, C]) }]);
+    fn move_panel_into_group_reorders_within_the_same_group() {
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A, B, C]], rect());
+        assert!(d.move_panel_into_group(C, (m, 0), 0));
+        assert_eq!(d.master(m).unwrap().groups[0].panels, vec![C, A, B]);
     }
 
     #[test]
-    fn collapse_of_an_only_column_empties_the_tree_but_not_the_rail() {
-        let mut r = Rail::with(tabs(&[A]));
-        assert!(r.collapse(&NodePath(vec![])));
-        assert_eq!(r.tree, None);
-        assert_eq!(r.icons.len(), 1);
-        // The rail itself is not empty — it still holds a collapsed
-        // column, and must keep claiming its share of the window (an
-        // `is_empty` that only looked at `tree` would let the canvas
-        // paint over the icon strip).
-        assert!(!r.is_empty());
+    fn move_panel_into_group_moves_across_groups_and_prunes_the_old_one() {
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A], vec![B]], rect());
+        assert!(d.move_panel_into_group(A, (m, 1), 0));
+        assert_eq!(d.master(m).unwrap().groups.len(), 1);
+        assert_eq!(d.master(m).unwrap().groups[0].panels, vec![A, B]);
     }
 
     #[test]
-    fn collapse_rejects_an_empty_rail() {
-        let mut r = Rail::default();
-        assert!(!r.collapse(&NodePath(vec![])));
-        assert!(r.icons.is_empty());
+    fn move_panel_new_group_wraps_it_as_a_sibling_group_in_the_target_master() {
+        let mut d = DockModel::new();
+        let src = d.spawn_master(vec![vec![A, B]], rect());
+        let dest = d.spawn_master(vec![vec![C]], rect());
+        assert!(d.move_panel_new_group(B, dest, 1));
+        assert_eq!(d.master(src).unwrap().groups[0].panels, vec![A]);
+        let groups: Vec<_> = d.master(dest).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
+        assert_eq!(groups, vec![vec![C], vec![B]]);
     }
 
     #[test]
-    fn expand_restores_a_collapsed_column_as_its_own_bottom_split() {
-        let mut r = Rail::with(tabs(&[A]));
-        assert!(r.collapse(&NodePath(vec![])));
-        assert!(r.expand(0));
-        assert!(r.icons.is_empty());
-        assert_eq!(r.tree, Some(tabs(&[A])));
+    fn move_group_moves_a_whole_group_to_another_master_at_a_position() {
+        let mut d = DockModel::new();
+        let src = d.spawn_master(vec![vec![A], vec![B]], rect());
+        let dest = d.spawn_master(vec![vec![C]], rect());
+        assert!(d.move_group((src, 1), dest, 0));
+        assert_eq!(d.master(src).unwrap().groups.len(), 1);
+        let groups: Vec<_> = d.master(dest).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
+        assert_eq!(groups, vec![vec![B], vec![C]]);
     }
 
     #[test]
-    fn expand_restores_a_multi_group_column_with_its_internal_structure_intact() {
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child {
-                    node: Node::Split {
-                        axis: Axis::Vertical,
-                        children: vec![
-                            Child { node: tabs(&[B]), weight: 1.0 },
-                            Child {
-                                node: Node::Tabs { panels: vec![C], active: 0 },
-                                weight: 3.0,
-                            },
-                        ],
-                    },
-                    weight: 1.0,
-                },
-            ],
-        });
-        assert!(r.collapse(&NodePath(vec![1])));
-        assert!(r.expand(0));
-        // B and C are back as two separate stacked groups (not merged into
-        // one tab group), with their original 1:3 weight intact.
-        let path_b = r.path_of(B).expect("B is back in the tree");
-        let path_c = r.path_of(C).expect("C is back in the tree");
-        assert_ne!(path_b, path_c, "B and C stay separate groups");
-        let Some(Node::Split { children, .. }) = r.node_at(&NodePath(vec![path_b.0[0]])) else {
-            panic!("expected the restored column to still be a vertical split");
-        };
-        assert_eq!(children[0].weight, 1.0);
-        assert_eq!(children[1].weight, 3.0);
+    fn move_group_reorders_within_the_same_master() {
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A], vec![B], vec![C]], rect());
+        assert!(d.move_group((m, 2), m, 0));
+        let groups: Vec<_> = d.master(m).unwrap().groups.iter().map(|g| g.panels.clone()).collect();
+        assert_eq!(groups, vec![vec![C], vec![A], vec![B]]);
     }
 
     #[test]
-    fn expand_rejects_an_out_of_range_index() {
-        let mut r = Rail::with(tabs(&[A]));
-        assert!(!r.expand(0));
+    fn locate_finds_a_panel_by_master_and_group_and_slot() {
+        let mut d = DockModel::new();
+        let m = d.spawn_master(vec![vec![A], vec![B, C]], rect());
+        assert_eq!(d.locate(C), Some((m, 1, 1)));
+        assert_eq!(d.locate(D), None);
     }
 
     #[test]
-    fn detach_icon_group_pulls_just_one_group_out_of_a_multi_group_column() {
-        // A stacked column of two groups, both collapsed to one icon
-        // column (matches collapse_takes_the_whole_column_...): detaching
-        // the second group by itself must leave the first fully intact.
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B, C]), weight: 2.0 },
-            ],
-        });
-        r.collapse(&NodePath(vec![1]));
-        assert_eq!(r.icons.len(), 1);
-
-        let out = r.detach_icon_group(0, 1).expect("group 1 exists");
-        assert_eq!(out, Node::Tabs { panels: vec![B, C], active: 0 });
-        // Group 0 (A) is still there, group 1 is gone — not the whole
-        // column, just the one group.
-        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[A]) }]);
-        assert!(r.panels().contains(&A));
-        assert!(!r.panels().contains(&B));
-        assert!(!r.panels().contains(&C));
-    }
-
-    #[test]
-    fn detach_icon_group_drops_the_whole_column_once_its_last_group_leaves() {
-        let mut r = Rail::with(tabs(&[A]));
-        r.collapse(&NodePath(vec![]));
-        assert_eq!(r.icons.len(), 1);
-
-        let out = r.detach_icon_group(0, 0).expect("the only group");
-        assert_eq!(out, Node::Tabs { panels: vec![A], active: 0 });
-        assert!(r.icons.is_empty(), "an emptied column is dropped, not left as a husk");
-        assert!(r.is_empty());
-    }
-
-    #[test]
-    fn detach_icon_group_rejects_an_out_of_range_column_or_group() {
-        let mut r = Rail::with(tabs(&[A]));
-        r.collapse(&NodePath(vec![]));
-        assert!(r.detach_icon_group(1, 0).is_none());
-        assert!(r.detach_icon_group(0, 5).is_none());
-    }
-
-    #[test]
-    fn float_node_keeps_a_multi_tab_group_together_in_one_window() {
-        let mut m = DockModel::new(tabs(&[A]));
-        let node = Node::Tabs { panels: vec![B, C], active: 1 };
-        let id = m.float_node(node.clone(), [1.0, 2.0, 300.0, 400.0]);
-        assert_eq!(m.floating.len(), 1);
-        assert_eq!(m.floating[0].id, id);
-        assert_eq!(m.floating[0].node, node);
-        assert_eq!(m.floating[0].rect, [1.0, 2.0, 300.0, 400.0]);
-        assert_eq!(m.floating[0].icon_w, None);
-    }
-
-    #[test]
-    fn detach_group_pulls_a_middle_group_out_of_a_stack_intact() {
-        // A three-group stack, fully docked (not collapsed) — dragging
-        // the *middle* group's title bar must detach only that group,
-        // leaving the ones above and below it exactly where they were.
-        // (Multi-tab groups are covered by detach_icon_group's and
-        // float_node's own tests; this one is purely about position.)
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B]), weight: 1.0 },
-                Child { node: tabs(&[C]), weight: 1.0 },
-            ],
-        });
-        let out = r.detach_group(&NodePath(vec![1])).expect("middle group");
-        assert_eq!(out, Node::Tabs { panels: vec![B], active: 0 });
-        assert!(r.panels().contains(&A));
-        assert!(r.panels().contains(&C));
-        assert!(!r.panels().contains(&B));
-        // The remaining two groups collapse down to a plain two-child
-        // split, not left with a hole where the middle one was.
-        assert_eq!(
-            r.tree,
-            Some(Node::Split {
-                axis: Axis::Vertical,
-                children: vec![
-                    Child { node: tabs(&[A]), weight: 1.0 },
-                    Child { node: tabs(&[C]), weight: 1.0 },
-                ],
-            })
-        );
-    }
-
-    #[test]
-    fn detach_group_rejects_a_path_that_is_not_a_tabs_node() {
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Vertical,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B]), weight: 1.0 },
-            ],
-        });
-        // The root here is a Split, not a Tabs — not a real group.
-        assert!(r.detach_group(&NodePath(vec![])).is_none());
-        assert!(r.detach_group(&NodePath(vec![9])).is_none());
-    }
-
-    #[test]
-    fn remove_finds_a_panel_collapsed_to_an_icon() {
-        let mut r = Rail::with(Node::Split {
-            axis: Axis::Horizontal,
-            children: vec![
-                Child { node: tabs(&[A]), weight: 1.0 },
-                Child { node: tabs(&[B, C]), weight: 1.0 },
-            ],
-        });
-        r.collapse(&NodePath(vec![1]));
-        assert!(r.remove(B));
-        assert_eq!(r.icons, vec![IconColumn { node: tabs(&[C]) }]);
-        assert!(r.remove(C));
-        assert!(r.icons.is_empty(), "the emptied icon column is dropped");
-        assert!(!r.remove(C), "second remove is a no-op");
+    fn spawn_tools_master_has_no_groups_and_reports_as_tools() {
+        let mut d = DockModel::new();
+        let m = d.spawn_tools_master(rect());
+        assert!(d.master(m).unwrap().is_tools());
+        assert!(d.master(m).unwrap().groups.is_empty());
+        // A Tools master's emptiness check never fires (it never has
+        // groups to begin with) — `remove`/`prune_empty` must leave it be.
+        d.prune_empty(m);
+        assert!(d.master(m).is_some());
     }
 }

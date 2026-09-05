@@ -48,86 +48,37 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::RailWidth { side } => {
-                let side = *side;
-                let Some((w, _)) = self.main_logical_size() else {
-                    return;
+            Drag::MasterWidth { master, edge, start_w, start_x } => {
+                let (master, edge, start_w, start_x) = (*master, *edge, *start_w, *start_x);
+                let dx = (self.pointer.x - start_x) as f32;
+                let raw = match edge {
+                    ResizeEdge::Right => start_w + dx,
+                    ResizeEdge::Left => start_w - dx,
                 };
-                let raw = match side {
-                    RailSide::Left => self.pointer.x,
-                    RailSide::Right => w - self.pointer.x,
+                let min_w = if self.dock.master(master).is_some_and(Master::is_tools) {
+                    layout::TOOLS_MIN_W as f32
+                } else {
+                    layout::MASTER_MIN_W as f32
                 };
-                let clamped = raw.clamp(RAIL_MIN_W, (w * 0.7).max(RAIL_MIN_W));
-                let gap = self.theme.splitter_thickness as f32;
-                self.dock.rail_mut(side).set_width_absorbing(
-                    clamped as f32,
-                    gap,
-                    matches!(side, RailSide::Left),
-                );
-                self.request_main_redraw();
-            }
-            Drag::IconColWidth { side } => {
-                let side = *side;
-                let Some((w, _)) = self.main_logical_size() else {
-                    return;
-                };
-                // The icon strip always hugs the outer window edge (see
-                // `layout::split_icon_col`), so its width is measured from
-                // that edge, not from the rail's own inner boundary.
-                let raw = match side {
-                    RailSide::Left => self.pointer.x,
-                    RailSide::Right => w - self.pointer.x,
-                };
-                let clamped = raw.clamp(layout::ICON_COL_MIN_W, layout::ICON_COL_MAX_W);
-                self.dock.rail_mut(side).icon_col_w = clamped as f32;
-                self.request_main_redraw();
-            }
-            Drag::Splitter { side, path, gap } => {
-                let (side, path, gap) = (*side, path.clone(), *gap);
-                let Some((w, h)) = self.main_logical_size() else {
-                    return;
-                };
-                let rect = rail_rect_for(side, self.dock.rail(side), w, h);
-                let laid =
-                    build_rail_layout(self.dock.rail(side), side, &self.theme, &mut self.text, rect);
-                if let Some(sp) = laid
-                    .splitters
-                    .iter()
-                    .find(|s| s.path == path && s.index == gap)
-                {
-                    let mut frac = sp.frac_at(self.pointer);
-                    // A vertical drag must not crush either neighbour below
-                    // its active panel's own content height.
-                    if sp.axis == Axis::Vertical {
-                        if let Some(Node::Split { children, .. }) =
-                            self.dock.rail(side).node_at(&path)
-                        {
-                            if let (Some(a), Some(b)) =
-                                (children.get(gap), children.get(gap + 1))
-                            {
-                                let strip_h = self.theme.tab_strip_h;
-                                let g = self.theme.splitter_thickness;
-                                let w = sp.before.width();
-                                let min_a =
-                                    a.node.min_height(w, strip_h, g, &panels::rail_floor);
-                                let min_b =
-                                    b.node.min_height(w, strip_h, g, &panels::rail_floor);
-                                let span = sp.after.y1 - sp.before.y0;
-                                if span > 0.0 {
-                                    let lo = (min_a / span) as f32;
-                                    let hi = 1.0 - (min_b / span) as f32;
-                                    frac = if lo <= hi {
-                                        frac.clamp(lo, hi)
-                                    } else {
-                                        (lo + hi) * 0.5
-                                    };
-                                }
-                            }
-                        }
-                    }
-                    self.dock.rail_mut(side).set_boundary(&path, gap, frac);
-                    self.request_main_redraw();
+                let clamped = raw.clamp(min_w, layout::MASTER_MAX_W as f32);
+                if let Some(m) = self.dock.master_mut(master) {
+                    m.rect[2] = clamped;
                 }
+                self.sync_floating_window_height(master);
+                self.request_main_redraw();
+            }
+            Drag::GroupContentResize { master, group, start_h, start_y } => {
+                let (master, group, start_h, start_y) = (*master, *group, *start_h, *start_y);
+                let dy = (self.pointer.y - start_y) as f32;
+                let next = (start_h + dy)
+                    .clamp(crate::dock::TAB_CONTENT_MIN_H, crate::dock::TAB_CONTENT_MAX_H);
+                if let Some(m) = self.dock.master_mut(master) {
+                    if let Some(g) = m.group_mut(group) {
+                        g.content_h = Some(next);
+                    }
+                }
+                self.sync_floating_window_height(master);
+                self.request_main_redraw();
             }
             Drag::Pan { last } => {
                 let last = *last;
@@ -557,77 +508,142 @@ impl App {
                 self.update_canvas_cursor();
                 self.request_main_redraw();
             }
-            Drag::PendingTearoff { panel, press, .. } => {
+            Drag::PendingMasterMove { master, press, grab, was_docked } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let (master, grab) = (*master, *grab);
+                    if was_docked.is_some() {
+                        // event_loop isn't handed to cursor events; defer
+                        // the actual window spawn to the caller.
+                        self.pending_master_undock = Some(master);
+                    } else {
+                        self.drag = Drag::MovingMaster { master, grab };
+                    }
+                }
+            }
+            Drag::PendingGroupDrag { source, press } => {
+                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                    let (source, press) = (*source, *press);
+                    // Already the sole group of an already-floating
+                    // Master (its own window, pressed here) — nothing to
+                    // detach, just start moving that window live.
+                    let already_alone = self
+                        .dock
+                        .master(source.0)
+                        .is_some_and(|m| m.dock.is_none() && m.groups.len() == 1);
+                    if already_alone {
+                        self.drag = Drag::DraggingGroup { current: source, grab: press.to_vec2() };
+                    } else {
+                        // event_loop isn't handed to cursor events; defer
+                        // the actual live-detach spawn to the caller.
+                        self.pending_group_live_detach = Some(source);
+                    }
+                }
+            }
+            Drag::PendingPanelDrag { panel, press } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (panel, press) = (*panel, *press);
-                    // event_loop isn't handed to cursor events; defer the
-                    // actual spawn to the caller via a queued request.
-                    self.pending_tearoff = Some((panel, press));
-                }
-            }
-            Drag::PendingIconTearoff {
-                side, column, group, press, ..
-            } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
-                    let (side, column, group, press) = (*side, *column, *group, *press);
-                    self.pending_icon_tearoff = Some((side, column, group, press));
-                }
-            }
-            Drag::PendingGroupTearoff { side, path, press } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
-                    let (side, path, press) = (*side, path.clone(), *press);
-                    self.pending_group_tearoff = Some((side, path, press));
-                }
-            }
-            Drag::PendingFloatMove { id, press, .. } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
-                    let id = *id;
-                    let pos = self
-                        .dock
-                        .floating(id)
-                        .map(|f| Point::new(f.rect[0] as f64, f.rect[1] as f64))
-                        .unwrap_or(Point::ZERO);
-                    self.drag = Drag::MovingFloating {
-                        id,
-                        grab: press.to_vec2(),
-                        pos,
-                    };
+                    let already_alone = self.dock.locate(panel).is_some_and(|(mid, ..)| {
+                        self.dock.master(mid).is_some_and(|m| m.dock.is_none() && m.panels().len() == 1)
+                    });
+                    if already_alone {
+                        let master = self.dock.locate(panel).map(|(mid, ..)| mid).unwrap();
+                        self.drag = Drag::DraggingPanel { panel, master, grab: press.to_vec2() };
+                    } else {
+                        self.pending_panel_live_detach = Some(panel);
+                    }
                 }
             }
             _ => {}
         }
 
-        // Move a floating window by locking it to the cursor: the cursor's
-        // position *inside* the window, versus where it was grabbed, is the
-        // move. Both come from the same `position / scale`, so there is no
-        // scale or acceleration mismatch, and nothing reads the OS window
-        // rect back — so it can't drift or jitter.
-        if let Drag::MovingFloating { id, grab, pos } = self.drag {
-            let float_wid = self.floating_window(id).map(|w| w.id());
-            let global = if self.pointer_win == float_wid {
-                pos + self.pointer.to_vec2()
-            } else if self.pointer_win == self.main_id {
-                self.main_inner_origin() + self.pointer.to_vec2()
-            } else {
+        // Move a floating Master by locking it to the cursor: the cursor's
+        // position *inside* the window, versus where it was grabbed, is
+        // the move. Nothing reads the OS window rect back, so it can't
+        // drift or jitter (⇐ `onPointerMove`'s master branch).
+        if let Drag::MovingMaster { master, grab } = self.drag {
+            let Some(global) = self.current_global_cursor() else {
                 return;
             };
             let new_pos = global - grab;
-            self.drag = Drag::MovingFloating {
-                id,
-                grab,
-                pos: new_pos,
-            };
-            if let Some(w) = self.floating_window(id) {
+            if let Some(w) = self.floating_window(master) {
                 w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
                 w.request_redraw();
             }
-            // The colour picker and the shape dialogs are free-floating
-            // dialogs: never offer a re-dock target, so dragging one off
-            // the document window just moves it.
-            if !self.is_float_only(id) {
-                self.redock_preview = Some(self.resolve_redock(global));
-            } else {
-                self.redock_preview = None;
+            if let Some(m) = self.dock.master_mut(master) {
+                m.rect[0] = new_pos.x as f32;
+                m.rect[1] = new_pos.y as f32;
+            }
+            let (dock, merge) = self.resolve_master_drop(global, master);
+            if dock != self.master_dock_preview || merge != self.master_merge_preview {
+                self.master_dock_preview = dock;
+                let old = self.master_merge_preview;
+                self.master_merge_preview = merge;
+                for cand in [old, merge].into_iter().flatten() {
+                    if let Some(w) = self.floating_window(cand) {
+                        w.request_redraw();
+                    }
+                }
+            }
+            self.request_main_redraw();
+        }
+
+        // Dragging a Group: it's already its own (real) floating Master
+        // window by this point — move it with the cursor exactly like
+        // `MovingMaster` does, and keep computing a fine-grained
+        // merge/new-sibling preview against every *other* Master (⇐
+        // `current`, the group's own `(master, index)`, always `(_, 0)`
+        // once live-detached, since that Master then holds nothing else).
+        if let Drag::DraggingGroup { current, grab } = self.drag {
+            let Some(global) = self.current_global_cursor() else {
+                return;
+            };
+            let new_pos = global - grab;
+            if let Some(w) = self.floating_window(current.0) {
+                w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
+                w.request_redraw();
+            }
+            if let Some(m) = self.dock.master_mut(current.0) {
+                m.rect[0] = new_pos.x as f32;
+                m.rect[1] = new_pos.y as f32;
+            }
+            let next = self.resolve_group_drop(global, current);
+            if next != self.group_drop_preview {
+                let old = self.group_drop_preview.as_ref().map(|(m, _)| *m);
+                let new = next.as_ref().map(|(m, _)| *m);
+                self.group_drop_preview = next;
+                for cand in [old, new].into_iter().flatten() {
+                    if let Some(w) = self.floating_window(cand) {
+                        w.request_redraw();
+                    }
+                }
+            }
+            self.request_main_redraw();
+        }
+
+        // Same, for dragging a single Panel.
+        if let Drag::DraggingPanel { master, grab, .. } = self.drag {
+            let Some(global) = self.current_global_cursor() else {
+                return;
+            };
+            let new_pos = global - grab;
+            if let Some(w) = self.floating_window(master) {
+                w.set_outer_position(LogicalPosition::new(new_pos.x, new_pos.y));
+                w.request_redraw();
+            }
+            if let Some(m) = self.dock.master_mut(master) {
+                m.rect[0] = new_pos.x as f32;
+                m.rect[1] = new_pos.y as f32;
+            }
+            let next = self.resolve_panel_drop(global, master);
+            if next != self.panel_drop_preview {
+                let old = self.panel_drop_preview.as_ref().map(|(m, _)| *m);
+                let new = next.as_ref().map(|(m, _)| *m);
+                self.panel_drop_preview = next;
+                for cand in [old, new].into_iter().flatten() {
+                    if let Some(w) = self.floating_window(cand) {
+                        w.request_redraw();
+                    }
+                }
             }
             self.request_main_redraw();
         }
@@ -646,10 +662,10 @@ impl App {
         }
         match std::mem::take(&mut self.drag) {
             Drag::None
-            | Drag::Splitter { .. }
-            | Drag::RailWidth { .. }
-            | Drag::IconColWidth { .. }
-            | Drag::PendingGroupTearoff { .. }
+            | Drag::MasterWidth { .. }
+            | Drag::GroupContentResize { .. }
+            | Drag::PendingGroupDrag { .. }
+            | Drag::PendingMasterMove { .. }
             | Drag::Pan { .. } => {}
             // A scrubby-zoom that never moved = a click: step-zoom at the
             // point (Alt / left-drag direction = out).
@@ -1183,57 +1199,85 @@ impl App {
                 self.marquee = None;
                 self.request_main_redraw();
             }
-            Drag::PendingTearoff {
-                side, path, tab, ..
-            } => {
-                self.dock.rail_mut(side).activate_tab(&path, tab);
+            // Released before the drag threshold: a plain click. A Tabs
+            // tab already activated at press; a Stack row opens its
+            // flyout (⇐ `beginPanelPress`'s click branch).
+            Drag::PendingPanelDrag { panel, .. } => {
+                if let Some((m, g, i)) = self.dock.locate(panel) {
+                    if self.dock.master(m).is_some_and(|mm| mm.layout == MasterLayout::Stack) {
+                        self.toggle_stack_flyout(m, g, i);
+                    }
+                }
                 self.request_main_redraw();
             }
-            Drag::PendingIconTearoff {
-                side, column, group, tab, ..
-            } => {
-                // Released before the drag threshold: just a click on the
-                // icon row, same as any other — open/switch its flyout.
-                self.toggle_flyout(side, column, group, tab);
-            }
-            Drag::PendingFloatMove { id, tab, .. } => {
-                if let Some(f) = self.dock.floating_mut(id) {
-                    if let Node::Tabs { active, panels } = &mut f.node {
-                        *active = tab.min(panels.len().saturating_sub(1));
+            Drag::MovingMaster { master, .. } => {
+                let dock = self.master_dock_preview.take();
+                let merge = self.master_merge_preview.take();
+                if let Some(target) = merge {
+                    if self.dock.merge_masters(master, target) {
+                        if let Some((wid, _)) =
+                            self.hosts.iter().find(|(_, h)| matches!(h.role, Role::Floating(f) if f == master))
+                        {
+                            let wid = *wid;
+                            self.hosts.remove(&wid); // Arc<Window> drops -> closes
+                        }
+                        if let Some(w) = self.floating_window(target) {
+                            w.request_redraw();
+                        }
                     }
-                }
-                if let Some(w) = self.floating_window(id) {
-                    w.request_redraw();
-                }
-            }
-            Drag::MovingFloating { id, grab, pos } => {
-                let global_cursor = pos + grab;
-                let (side, target) = if self.is_float_only(id) {
-                    (RailSide::Right, DropTarget::Float)
-                } else {
-                    self.resolve_redock(global_cursor)
-                };
-                if matches!(target, DropTarget::Float) {
-                    if let Some(f) = self.dock.floating_mut(id) {
-                        // Keep the size the window currently has.
-                        let [_, _, w, h] = f.rect;
-                        f.rect = [pos.x as f32, pos.y as f32, w, h];
-                    }
-                    if let Some(w) = self.floating_window(id) {
-                        w.request_redraw();
-                    }
-                } else {
-                    self.dock.redock(id, side, target);
-                    if let Some((wid, _)) = self
-                        .hosts
-                        .iter()
-                        .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == id))
+                } else if let Some((side, index)) = dock {
+                    self.dock.dock_master(master, side, index);
+                    if let Some((wid, _)) =
+                        self.hosts.iter().find(|(_, h)| matches!(h.role, Role::Floating(f) if f == master))
                     {
                         let wid = *wid;
                         self.hosts.remove(&wid); // Arc<Window> drops -> closes
                     }
                 }
-                self.redock_preview = None;
+                self.reap_closed_floating_windows();
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(m) = &self.native_menu {
+                    m.sync_window(&self.dock);
+                }
+                self.request_main_redraw();
+            }
+            Drag::DraggingGroup { current, .. } => {
+                match self.group_drop_preview.take() {
+                    Some((target, GroupDrop::MergeInto { group })) => {
+                        self.dock.merge_groups(current, (target, group), usize::MAX);
+                    }
+                    Some((target, GroupDrop::NewSibling { at })) => {
+                        self.dock.move_group(current, target, at);
+                    }
+                    // No target under the cursor: it's already its own
+                    // live Master window (⇐ `detach_group_live`), so
+                    // there's nothing left to do — it just stays floating
+                    // right where it was released.
+                    None => {}
+                }
+                // The source Master may have just emptied out (its last
+                // Group left) — if it was floating, its window is now
+                // orphaned and needs closing.
+                self.reap_closed_floating_windows();
+                self.request_main_redraw();
+            }
+            Drag::DraggingPanel { panel, .. } => {
+                match self.panel_drop_preview.take() {
+                    Some((target, PanelDrop::IntoGroup { group, at })) => {
+                        self.dock.move_panel_into_group(panel, (target, group), at);
+                    }
+                    Some((target, PanelDrop::NewGroup { at })) => {
+                        self.dock.move_panel_new_group(panel, target, at);
+                    }
+                    None => {}
+                }
+                // Same as above: the panel's old Master may have just
+                // emptied out from under it.
+                self.reap_closed_floating_windows();
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                if let Some(m) = &self.native_menu {
+                    m.sync_window(&self.dock);
+                }
                 self.request_main_redraw();
             }
         }

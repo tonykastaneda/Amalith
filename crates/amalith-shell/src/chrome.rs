@@ -1,12 +1,15 @@
-//! Draws a [`Layout`] into a vello [`Scene`]: panel bodies, tab strips,
-//! tab labels, splitters, and the drop indicator.
+//! Draws a [`MasterFrame`] into a vello [`Scene`]: the Master's own
+//! header, every Group's plain handle, Stack-mode rows or Tabs-mode
+//! strip/content, and drop indicators. Ported off
+//! `amalith-panelSys/app.js`'s DOM structure — see `MasterFrame`'s own
+//! doc comments for the JS-to-Rust mapping.
 
-use vello::kurbo::{Affine, Circle, Line, Rect, Stroke};
-use vello::peniko::Fill;
+use vello::kurbo::{Affine, Line, Rect, Stroke};
+use vello::peniko::{Color, Fill};
 use vello::Scene;
 
-use crate::dock::{DropTarget, NodePath, PanelId, Side};
-use crate::layout::{IconRect, Layout, PanelArea};
+use crate::dock::{Master, MasterLayout, PanelId};
+use crate::layout::{GroupDrop, MasterFrame, PanelDrop};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
@@ -23,183 +26,258 @@ pub fn panel_tab_close_rect(tab: Rect) -> Rect {
     Rect::new(tab.x1 - PANEL_TAB_CLOSE_W, tab.y0, tab.x1, tab.y1)
 }
 
-/// The hamburger button on the right of a panel group's tab strip. Stays
-/// on the tab strip (not the title bar) — it's a per-*tab* menu (the
-/// active tab's own flyout), unlike close/collapse which act on the
-/// whole group.
+/// The hamburger button on the right of a tab strip — a per-*tab* menu
+/// (the active tab's own flyout).
 pub fn panel_menu_rect(tab_strip: Rect, theme: &Theme) -> Rect {
-    Rect::new(
-        tab_strip.x1 - theme.panel_menu_w,
-        tab_strip.y0,
-        tab_strip.x1,
-        tab_strip.y1,
-    )
+    Rect::new(tab_strip.x1 - theme.panel_menu_w, tab_strip.y0, tab_strip.x1, tab_strip.y1)
 }
 
-/// The close (×) button at the left end of a group's title bar — closes
-/// every tab the group holds (see `App::close_group`), matching
-/// Illustrator's own title bar. Distinct from a single tab's own × (see
-/// `panel_tab_close_rect`), which closes only that one tab.
-pub fn group_close_rect(title_bar: Rect, theme: &Theme) -> Rect {
-    Rect::new(title_bar.x0, title_bar.y0, title_bar.x0 + theme.group_close_w, title_bar.y1)
-}
-
-/// The collapse-to-icons («/») button at the right end of a group's title
-/// bar — shown only on the group that owns the control (see
-/// `is_column_top`), everything below it in the same column sharing that
-/// one button's effect.
-pub fn collapse_rect(title_bar: Rect, theme: &Theme) -> Rect {
-    Rect::new(title_bar.x1 - theme.panel_collapse_w, title_bar.y0, title_bar.x1, title_bar.y1)
-}
-
-/// Is `area` the topmost group in its column — the one whose strip should
-/// show the «/» button? Collapsing acts on a whole column at once (see
-/// `dock::Rail::collapse`), so only the column's top group needs the
-/// control at all; every group stacked below it shares that one button's
-/// effect instead of repeating it. "Same column" here means "some other
-/// area's horizontal span overlaps this one's and sits above it" — cheap
-/// to check directly off the already-laid-out rects, no tree walk needed.
-pub fn is_column_top(area: &PanelArea, all: &[PanelArea]) -> bool {
-    !all.iter().any(|other| {
-        other.bounds.y0 < area.bounds.y0 - 0.5
-            && other.bounds.x0 < area.bounds.x1
-            && other.bounds.x1 > area.bounds.x0
-    })
-}
-
-/// Paint every group and splitter in `layout`. `label(panel)` supplies the
-/// tab caption; `text` rasterizes it. `show_collapse`, together with
-/// [`is_column_top`], gates the «/» button on each group's title bar —
-/// callers pass `true` for both a rail (an attached group only shows it
-/// at the top of its column) and a floating window (its one group is
-/// trivially "the top of its own column", so it always qualifies).
-pub fn paint(
+/// Paint one Master: its own header (close × and a chevron — Stack⇄Tabs
+/// for a Normal master, 2×/1× grid density for a Tools master), every
+/// Group's plain handle, and each group's Stack-mode rows or Tabs-mode
+/// strip. Doesn't paint any panel's actual *content* — that's
+/// `panels::paint`'s job, into whatever rect this returns via `frame` (a
+/// Tabs group's `GroupArea::content`; Stack mode has no inline content,
+/// only the flyout does; a Tools master's grid is hosted directly in
+/// `frame.body`, painted by the caller). `show_menu(panel)` gates the
+/// hamburger per active tab; `open_flyout` marks the Stack-mode row whose
+/// flyout is open with a pushed-in look.
+/// A Master's header never carries a title — only its × and chevron.
+/// `label`/`show_menu` are for its panels' own tab captions and
+/// hamburgers, not the Master itself.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_master(
     scene: &mut Scene,
-    layout: &Layout,
+    frame: &MasterFrame,
+    master: &Master,
     theme: &Theme,
     text: &mut TextContext,
-    show_collapse: bool,
     label: &dyn Fn(PanelId) -> String,
+    show_menu: &dyn Fn(PanelId) -> bool,
+    open_flyout: Option<(usize, usize)>,
 ) {
-    for area in &layout.areas {
-        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &area.body);
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &frame.bounds);
 
-        // Title bar: the whole-group handle, fully separate from the tab
-        // strip below it — close (×) always, collapse («/») only on the
-        // group that owns the control, both live here rather than woven
-        // into per-tab chrome.
-        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &area.title_bar);
-        let close = group_close_rect(area.title_bar, theme);
-        paint_x(scene, close, theme.text_dim, 3.5);
-        if show_collapse && (area.is_flyout || is_column_top(area, &layout.areas)) {
-            let collapse = collapse_rect(area.title_bar, theme);
-            paint_chevrons(scene, collapse, theme.text_dim, !area.is_flyout);
-        }
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.title_bar);
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &frame.header);
+    paint_x(scene, frame.close, theme.text_dim, 3.5);
+    let chevron_state = if master.is_tools() {
+        master.tools_density == crate::dock::ToolsDensity::Grid1x
+    } else {
+        master.layout == MasterLayout::Tabs
+    };
+    paint_chevrons(scene, frame.chevron, theme.text_dim, chevron_state);
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &frame.header);
 
-        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &area.tab_strip);
+    for g in &frame.groups {
+        paint_group_handle(scene, g.handle, theme);
 
-        for (i, tab) in area.tabs.iter().enumerate() {
-            let active = i == area.active;
-            if active {
-                scene.fill(Fill::NonZero, ID, theme.strip_active, None, &tab.rect);
-                let u = Rect::new(tab.rect.x0, tab.rect.y1 - 2.0, tab.rect.x1, tab.rect.y1);
-                scene.fill(Fill::NonZero, ID, theme.drop_line, None, &u);
+        match master.layout {
+            MasterLayout::Stack => {
+                for (i, row) in g.rows.iter().enumerate() {
+                    // The row whose flyout is currently open reads as a
+                    // pushed-in button — darker than the surrounding
+                    // rows, no border, rather than a lifted/selected look.
+                    let is_open = open_flyout == Some((g.index, i));
+                    if is_open {
+                        scene.fill(Fill::NonZero, ID, theme.bg, None, &row.rect);
+                        let inner_shadow = Rect::new(row.rect.x0, row.rect.y0, row.rect.x1, row.rect.y0 + 2.0);
+                        scene.fill(Fill::NonZero, ID, Color::from_rgba8(0, 0, 0, 60), None, &inner_shadow);
+                    }
+                    if i > 0 {
+                        let sep = Rect::new(row.rect.x0, row.rect.y0 - 0.5, row.rect.x1, row.rect.y0 + 0.5);
+                        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
+                    }
+                    let color = if is_open { theme.text } else { theme.text_dim };
+                    let icon_box = if frame.compact {
+                        let c = row.rect.center();
+                        Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+                    } else {
+                        Rect::new(
+                            row.rect.x0 + 10.0,
+                            row.rect.y0 + (row.rect.height() - 18.0) * 0.5,
+                            row.rect.x0 + 28.0,
+                            row.rect.y0 + (row.rect.height() + 18.0) * 0.5,
+                        )
+                    };
+                    crate::panel_icon::draw(scene, row.panel, icon_box, color);
+                    if !frame.compact {
+                        let baseline = row.rect.y0 + row.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+                        text.draw(scene, &label(row.panel), TAB_TEXT_PX, color, icon_box.x1 + 8.0, baseline);
+                    }
+                }
             }
-            if i > 0 {
-                let sep = Rect::new(
-                    tab.rect.x0 - 0.5,
-                    tab.rect.y0 + 4.0,
-                    tab.rect.x0 + 0.5,
-                    tab.rect.y1 - 4.0,
-                );
-                scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
+            MasterLayout::Tabs => {
+                scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &g.tab_strip);
+                for (i, tab) in g.tabs.iter().enumerate() {
+                    let active = i == g.active;
+                    if active {
+                        scene.fill(Fill::NonZero, ID, theme.strip_active, None, &tab.rect);
+                        let u = Rect::new(tab.rect.x0, tab.rect.y1 - 2.0, tab.rect.x1, tab.rect.y1);
+                        scene.fill(Fill::NonZero, ID, theme.drop_line, None, &u);
+                    }
+                    if i > 0 {
+                        let sep = Rect::new(tab.rect.x0 - 0.5, tab.rect.y0 + 4.0, tab.rect.x0 + 0.5, tab.rect.y1 - 4.0);
+                        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
+                    }
+                    let color = if active { theme.text } else { theme.text_dim };
+                    let baseline = tab.rect.y0 + tab.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+                    text.draw(
+                        scene,
+                        &label(tab.panel),
+                        TAB_TEXT_PX,
+                        color,
+                        tab.rect.x0 + theme.tab_pad_x * PANEL_TAB_PAD_MUL,
+                        baseline,
+                    );
+                    paint_x(scene, panel_tab_close_rect(tab.rect), color, 3.5);
+                }
+                if g.tabs.get(g.active).is_some_and(|t| show_menu(t.panel)) {
+                    let menu = panel_menu_rect(g.tab_strip, theme);
+                    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &menu);
+                    paint_hamburger(scene, menu, theme.text_dim);
+                }
+                scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &g.content);
+                paint_resize_grip(scene, g.resize_handle, theme);
             }
-
-            let color = if active { theme.text } else { theme.text_dim };
-            let baseline = tab.rect.y0 + tab.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-            // Label: left-aligned.
-            text.draw(
-                scene,
-                &label(tab.panel),
-                TAB_TEXT_PX,
-                color,
-                tab.rect.x0 + theme.tab_pad_x * PANEL_TAB_PAD_MUL,
-                baseline,
-            );
-            // Close (×): right-aligned — this tab only, unlike the title
-            // bar's close which takes the whole group.
-            paint_x(scene, panel_tab_close_rect(tab.rect), color, 3.5);
         }
-
-        if area.show_menu {
-            // Hamburger: three bars on the strip's right edge. Drawn last
-            // so it sits above any tab that ran long.
-            let menu = panel_menu_rect(area.tab_strip, theme);
-            scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &menu);
-            paint_hamburger(scene, menu, theme.text_dim);
-        }
-
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &area.bounds);
-    }
-
-    for sp in &layout.splitters {
-        scene.fill(Fill::NonZero, ID, theme.splitter, None, &sp.rect);
+        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &g.bounds);
     }
 }
 
-/// Overlay the Illustrator-style blue insertion indicator for `target`.
-/// Call after [`paint`], while a drag is live.
-pub fn paint_drop(
-    scene: &mut Scene,
-    target: &DropTarget,
-    layout: &Layout,
-    root: Rect,
-    theme: &Theme,
-) {
-    match target {
-        DropTarget::Float => {}
-        DropTarget::Split { path, side } => {
-            let Some(r) = rect_for_path(path, layout, root) else {
-                return;
-            };
-            scene.fill(
-                Fill::NonZero,
-                ID,
-                theme.drop_line,
-                None,
-                &edge_line(r, *side),
-            );
-        }
-        DropTarget::Tab { path, index } => {
-            let Some(area) = layout.areas.iter().find(|a| a.path == *path) else {
-                return;
-            };
-            let x = if *index == 0 {
-                area.tab_strip.x0
-            } else if let Some(prev) = area.tabs.get(index - 1) {
-                prev.rect.x1
+/// A Group's plain drag/detach handle — tinted light blue, no close or
+/// collapse of its own (only a Master has those; see [`paint_master`]'s
+/// header). Dragging it merges into another group, becomes a new sibling
+/// group elsewhere, or detaches into its own new Master.
+fn paint_group_handle(scene: &mut Scene, handle: Rect, theme: &Theme) {
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &handle);
+    let c = handle.center();
+    // As thin as the active-tab underline (2px) — this is a grip line,
+    // not a button.
+    let (w, h) = ((handle.width() * 0.36).clamp(24.0, 160.0), 2.5);
+    let pill = Rect::new(c.x - w * 0.5, c.y - h * 0.5, c.x + w * 0.5, c.y + h * 0.5).to_rounded_rect(h * 0.5);
+    scene.fill(Fill::NonZero, ID, theme.accent, None, &pill);
+}
+
+/// The grip line at a Tabs-mode content pane's bottom edge — drag to
+/// resize (⇐ `.tab-content-resize`).
+fn paint_resize_grip(scene: &mut Scene, r: Rect, theme: &Theme) {
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &r);
+    let c = r.center();
+    scene.stroke(&Stroke::new(1.5), ID, theme.text_dim.with_alpha(0.6), None, &Line::new((c.x - 12.0, c.y), (c.x + 12.0, c.y)));
+}
+
+/// Live drop cue while dragging a panel over an already-laid-out Master
+/// (⇐ `updateDropTarget`'s panel branch: a tab-strip caret, a row-gap
+/// insertion line, or a whole-body dashed outline for "new group").
+pub fn paint_panel_drop(scene: &mut Scene, frame: &MasterFrame, drop: &PanelDrop, theme: &Theme) {
+    match *drop {
+        PanelDrop::IntoGroup { group, at } => {
+            let Some(g) = frame.groups.get(group) else { return };
+            if frame_layout(frame, group) == Some(MasterLayout::Tabs) {
+                let x = tab_gap_x(g, at);
+                let caret = Rect::new(x - 1.5, g.tab_strip.y0, x + 1.5, g.tab_strip.y1);
+                scene.fill(Fill::NonZero, ID, theme.drop_line, None, &caret);
             } else {
-                area.tabs
-                    .last()
-                    .map(|t| t.rect.x1)
-                    .unwrap_or(area.tab_strip.x0)
+                let y = row_gap_y(g, at);
+                let line = Rect::new(g.bounds.x0, y - 1.5, g.bounds.x1, y + 1.5);
+                scene.fill(Fill::NonZero, ID, theme.drop_line, None, &line);
+            }
+        }
+        PanelDrop::NewGroup { at } => {
+            let y = if at == 0 {
+                frame.body.y0
+            } else {
+                frame.groups.get(at - 1).map_or(frame.body.y1, |g| g.bounds.y1)
             };
-            let caret = Rect::new(x - 1.5, area.tab_strip.y0, x + 1.5, area.tab_strip.y1);
-            scene.fill(Fill::NonZero, ID, theme.drop_line, None, &caret);
+            let line = Rect::new(frame.body.x0, y - 1.5, frame.body.x1, y + 1.5);
+            scene.fill(Fill::NonZero, ID, theme.drop_line, None, &line);
         }
     }
 }
 
-fn rect_for_path(path: &NodePath, layout: &Layout, root: Rect) -> Option<Rect> {
-    if path.0.is_empty() {
-        return Some(root);
+// `PanelDrop::IntoGroup` doesn't carry whether the target group is in
+// Stack or Tabs mode; `paint_panel_drop` is always called against a frame
+// built from one master, which has one `MasterLayout` for every group, so
+// this just echoes that back cheaply rather than threading another
+// parameter through `layout::hit_test_panel_drop`.
+fn frame_layout(frame: &MasterFrame, group: usize) -> Option<MasterLayout> {
+    let g = frame.groups.get(group)?;
+    Some(if g.tab_strip.height() > 0.0 { MasterLayout::Tabs } else { MasterLayout::Stack })
+}
+
+fn tab_gap_x(g: &crate::layout::GroupArea, at: usize) -> f64 {
+    if at == 0 {
+        g.tab_strip.x0
+    } else {
+        g.tabs.get(at - 1).map_or(g.tab_strip.x0, |t| t.rect.x1)
     }
-    layout
-        .areas
-        .iter()
-        .find(|a| a.path == *path)
-        .map(|a| a.bounds)
+}
+
+fn row_gap_y(g: &crate::layout::GroupArea, at: usize) -> f64 {
+    if at == 0 {
+        g.handle.y1
+    } else {
+        g.rows.get(at - 1).map_or(g.handle.y1, |r| r.rect.y1)
+    }
+}
+
+/// Live drop cue while dragging a whole Group over another Master's body
+/// (⇐ `updateDropTarget`'s group branch): a dashed outline around the
+/// merge target, or an insertion line for a new sibling position.
+pub fn paint_group_drop(scene: &mut Scene, frame: &MasterFrame, drop: &GroupDrop, theme: &Theme) {
+    match *drop {
+        GroupDrop::MergeInto { group } => {
+            if let Some(g) = frame.groups.get(group) {
+                scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &g.bounds.inset(-1.0));
+            }
+        }
+        GroupDrop::NewSibling { at } => {
+            let y = if at == 0 {
+                frame.body.y0
+            } else {
+                frame.groups.get(at - 1).map_or(frame.body.y1, |g| g.bounds.y1)
+            };
+            let line = Rect::new(frame.body.x0, y - 1.5, frame.body.x1, y + 1.5);
+            scene.fill(Fill::NonZero, ID, theme.drop_line, None, &line);
+        }
+    }
+}
+
+/// Outline shown around a whole Master while another Master is being
+/// dragged over its body (⇐ `.master.drop-target`).
+pub fn paint_master_merge_highlight(scene: &mut Scene, bounds: Rect, theme: &Theme) {
+    scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &bounds.inset(-1.0));
+}
+
+/// The docking insertion line at the viewport edge/seam (⇐ `#dock-insert`).
+pub fn paint_dock_insert(scene: &mut Scene, viewport_h: f64, x: f64, theme: &Theme) {
+    let r = Rect::new(x - 2.0, 0.0, x + 2.0, viewport_h);
+    scene.fill(Fill::NonZero, ID, theme.drop_line, None, &r);
+}
+
+/// Cheap drop shadow for the flyout / a torn-loose master mid-drag: a few
+/// progressively larger, more transparent dark rects behind it. Vello has
+/// no blur primitive; this is the standard fake, and at this scale the
+/// banding isn't visible.
+pub fn paint_shadow(scene: &mut Scene, bounds: Rect) {
+    const LAYERS: [(f64, u8); 4] = [(2.0, 26), (5.0, 20), (9.0, 14), (14.0, 8)];
+    for (spread, alpha) in LAYERS {
+        let r = bounds.inflate(spread, spread);
+        scene.fill(Fill::NonZero, ID, Color::from_rgba8(0, 0, 0, alpha), None, &r);
+    }
+}
+
+/// The flyout preview beside a Stack-mode row (⇐ `#panel-flyout`): a small
+/// floating card with a header (title + close) and a body rect the caller
+/// paints the real panel content into.
+pub fn paint_flyout_chrome(scene: &mut Scene, bounds: Rect, header: Rect, close: Rect, title: &str, theme: &Theme, text: &mut TextContext) {
+    paint_shadow(scene, bounds);
+    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
+    let baseline = header.y0 + header.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
+    text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + 10.0, baseline);
+    paint_x(scene, close, theme.text_dim, 3.5);
+    scene.stroke(&Stroke::new(1.5), ID, theme.text_dim, None, &bounds);
 }
 
 /// A close ("×") glyph centered in `r`, arm half-length `a`.
@@ -217,18 +295,13 @@ fn paint_hamburger(scene: &mut Scene, r: Rect, color: vello::peniko::Color) {
     let stroke = Stroke::new(1.4);
     for i in [-1, 0, 1] {
         let y = c.y + i as f64 * gap;
-        scene.stroke(
-            &stroke,
-            ID,
-            color,
-            None,
-            &Line::new((c.x - half, y), (c.x + half, y)),
-        );
+        scene.stroke(&stroke, ID, color, None, &Line::new((c.x - half, y), (c.x + half, y)));
     }
 }
 
-/// A double-chevron glyph — `«` (`pointing_left = true`, "Collapse to
-/// Icons") or `»` (`pointing_left = false`, "Expand from Icons").
+/// A double-chevron glyph — `«` (`pointing_left = true`) or `»`
+/// (`pointing_left = false`). Toggles a Normal master between Tabs
+/// (pointing left) and Stack (pointing right) display.
 fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, pointing_left: bool) {
     let c = r.center();
     let (dx, half) = (3.0_f64, 3.5_f64);
@@ -236,175 +309,68 @@ fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, point
     let stroke = Stroke::new(1.4);
     for i in [-1.0_f64, 1.0] {
         let cx = c.x + i * dx;
-        scene.stroke(
-            &stroke,
-            ID,
-            color,
-            None,
-            &Line::new((cx + sign * half * 0.6, c.y - half), (cx - sign * half * 0.6, c.y)),
-        );
-        scene.stroke(
-            &stroke,
-            ID,
-            color,
-            None,
-            &Line::new((cx - sign * half * 0.6, c.y), (cx + sign * half * 0.6, c.y + half)),
-        );
-    }
-}
-
-/// Paints a rail's icon strip: one row per *tab* nested in a collapsed
-/// column (every tab in a group gets its own icon — see
-/// `dock::IconColumn::icon_rows` — not just the group's active one), its
-/// label (dropped once the strip is dragged narrower than
-/// [`crate::layout::ICON_LABEL_THRESHOLD`] — Illustrator has no separate
-/// on/off switch for this, just width), and a highlight both for the
-/// group's actual active tab and for whichever row's flyout is open.
-/// `label` is the same tab-caption function [`paint`] takes.
-pub fn paint_icon_col(
-    scene: &mut Scene,
-    col: Rect,
-    icon_rects: &[IconRect],
-    open: Option<(usize, usize)>,
-    theme: &Theme,
-    text: &mut TextContext,
-    label: &dyn Fn(PanelId) -> String,
-) {
-    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &col);
-    let labeled = col.width() >= crate::layout::ICON_LABEL_THRESHOLD;
-    for (i, ir) in icon_rects.iter().enumerate() {
-        // A new group's first tab (skip the very first row overall, which
-        // has no group above it to separate from): a full-width divider
-        // plus a small drag-handle, so a column of several collapsed
-        // groups still reads as distinct, individually grabbable groups
-        // rather than one flat list of icons.
-        if i > 0 && ir.tab == 0 {
-            paint_group_handle(scene, col, ir.rect.y0, theme);
-        }
-        let is_open = open == Some((ir.column, ir.group));
-        if is_open && ir.active {
-            scene.fill(Fill::NonZero, ID, theme.strip_active, None, &ir.rect);
-        }
-        // The group's actual active tab reads full-strength even when its
-        // flyout isn't open; the rest of that group's tabs (and anything
-        // in a closed group) stay dim — matching a docked tab strip's own
-        // active/inactive contrast.
-        let color = if ir.active { theme.text } else { theme.text_dim };
-        let icon_box = Rect::new(
-            ir.rect.x0 + 8.0,
-            ir.rect.y0 + (ir.rect.height() - 18.0) * 0.5,
-            ir.rect.x0 + 26.0,
-            ir.rect.y0 + (ir.rect.height() + 18.0) * 0.5,
-        );
-        let icon_box = if labeled {
-            icon_box
-        } else {
-            // Icon-only: center the glyph in the whole row instead of
-            // hugging the left edge meant for the label to follow.
-            let c = ir.rect.center();
-            Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
-        };
-        crate::panel_icon::draw(scene, ir.panel, icon_box, color);
-        if labeled {
-            let baseline = ir.rect.y0 + ir.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-            text.draw(scene, &label(ir.panel), TAB_TEXT_PX, color, icon_box.x1 + 6.0, baseline);
-        }
-    }
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &col);
-}
-
-/// The visual boundary between two collapsed groups in an icon strip: a
-/// full-width divider line plus a small centered drag-handle (a row of
-/// dots), sitting in the [`crate::layout::ICON_GROUP_GAP`] space above
-/// `group_top_y` (the first row of the group that starts here). Purely
-/// decorative — it doesn't change what's clickable, but without it nothing
-/// visually distinguishes "several separate groups" from "one flat list",
-/// especially once each is reduced to bare icons.
-fn paint_group_handle(scene: &mut Scene, col: Rect, group_top_y: f64, theme: &Theme) {
-    let gap_top = group_top_y - crate::layout::ICON_GROUP_GAP;
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        theme.border,
-        None,
-        &Rect::new(col.x0, gap_top, col.x1, gap_top + 1.0),
-    );
-    let cy = (gap_top + group_top_y) * 0.5 + 0.5;
-    let dots = 5;
-    let spacing = 5.0;
-    let cx0 = col.x0 + col.width() * 0.5 - spacing * (dots - 1) as f64 * 0.5;
-    for i in 0..dots {
-        let c = (cx0 + spacing * i as f64, cy);
-        scene.fill(Fill::NonZero, ID, theme.text_dim, None, &Circle::new(c, 1.3));
-    }
-}
-
-/// Paints a collapsed *detached* panel: a persistent header (close × and
-/// expand », always visible — a collapsed floating group must never be
-/// left with no way back, unlike a rail's icon row which can lean on its
-/// flyout) above one icon row per tab, every tab shown (not just the
-/// active one, matching a docked column's own icon strip), the active
-/// one highlighted. `header` and `rows` come from
-/// [`crate::layout::floating_collapsed_rows`].
-pub fn paint_floating_collapsed(
-    scene: &mut Scene,
-    header: Rect,
-    rows: &[Rect],
-    node: &crate::dock::Node,
-    labeled: bool,
-    theme: &Theme,
-    text: &mut TextContext,
-    label: &dyn Fn(PanelId) -> String,
-) {
-    let bottom = rows.last().map_or(header.y1, |r| r.y1);
-    let bounds = Rect::new(header.x0, header.y0, header.x1, bottom);
-    scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
-
-    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
-    paint_x(scene, group_close_rect(header, theme), theme.text_dim, 3.5);
-    paint_chevrons(scene, collapse_rect(header, theme), theme.text_dim, false);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &header);
-
-    let crate::dock::Node::Tabs { panels, active } = node else {
-        return;
-    };
-    for (i, (&r, &panel)) in rows.iter().zip(panels.iter()).enumerate() {
-        let is_active = i == *active;
-        if is_active {
-            scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r);
-        }
-        let color = if is_active { theme.text } else { theme.text_dim };
-        let icon_box = if labeled {
-            Rect::new(r.x0 + 8.0, r.y0 + (r.height() - 18.0) * 0.5, r.x0 + 26.0, r.y0 + (r.height() + 18.0) * 0.5)
-        } else {
-            let c = r.center();
-            Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
-        };
-        crate::panel_icon::draw(scene, panel, icon_box, color);
-        if labeled {
-            let baseline = r.y0 + r.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-            text.draw(scene, &label(panel), TAB_TEXT_PX, color, icon_box.x1 + 6.0, baseline);
-        }
-        let sep = Rect::new(r.x0, r.y1 - 0.5, r.x1, r.y1 + 0.5);
-        scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
-    }
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bounds);
-}
-
-fn edge_line(r: Rect, side: Side) -> Rect {
-    let t = 3.0;
-    match side {
-        Side::Left => Rect::new(r.x0, r.y0, r.x0 + t, r.y1),
-        Side::Right => Rect::new(r.x1 - t, r.y0, r.x1, r.y1),
-        Side::Top => Rect::new(r.x0, r.y0, r.x1, r.y0 + t),
-        Side::Bottom => Rect::new(r.x0, r.y1 - t, r.x1, r.y1),
+        scene.stroke(&stroke, ID, color, None, &Line::new((cx + sign * half * 0.6, c.y - half), (cx - sign * half * 0.6, c.y)));
+        scene.stroke(&stroke, ID, color, None, &Line::new((cx - sign * half * 0.6, c.y), (cx + sign * half * 0.6, c.y + half)));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dock::{Group, MasterKind};
+    use crate::layout::layout_master;
     use vello::kurbo::Rect;
+
+    fn theme() -> Theme {
+        Theme::default()
+    }
+
+    fn w80(_: PanelId) -> f64 {
+        80.0
+    }
+
+    fn master(layout: MasterLayout, groups: Vec<Vec<PanelId>>) -> Master {
+        Master {
+            id: 1,
+            kind: MasterKind::Normal,
+            layout,
+            tools_density: crate::dock::ToolsDensity::Grid2x,
+            groups: groups.into_iter().enumerate().map(|(i, p)| Group::new(i as u64, p)).collect(),
+            dock: None,
+            rect: [0.0, 0.0, 280.0, 400.0],
+            scroll: 0.0,
+        }
+    }
+
+    #[test]
+    fn paint_master_stack_and_tabs_modes_dont_panic() {
+        let mut text = TextContext::new();
+        for layout in [MasterLayout::Stack, MasterLayout::Tabs] {
+            let m = master(layout, vec![vec![PanelId("a"), PanelId("b")], vec![PanelId("c")]]);
+            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80);
+            let mut scene = Scene::new();
+            paint_master(
+                &mut scene,
+                &frame,
+                &m,
+                &theme(),
+                &mut text,
+                &|p| p.0.to_string(),
+                &|_| false,
+                Some((0, 0)),
+            );
+        }
+    }
+
+    #[test]
+    fn paint_master_compact_mode_doesnt_panic() {
+        let mut text = TextContext::new();
+        let m = master(MasterLayout::Stack, vec![vec![PanelId("a")]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80);
+        assert!(frame.compact);
+        let mut scene = Scene::new();
+        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None);
+    }
 
     #[test]
     fn hamburger_sits_on_the_right_of_the_tab_strip() {
@@ -415,65 +381,5 @@ mod tests {
         assert_eq!(m.y0, strip.y0);
         assert_eq!(m.y1, strip.y1);
         assert!((m.width() - theme.panel_menu_w).abs() < 1e-9);
-    }
-
-    fn area_at(bounds: Rect) -> PanelArea {
-        PanelArea {
-            path: NodePath(Vec::new()),
-            bounds,
-            title_bar: bounds,
-            tab_strip: bounds,
-            body: bounds,
-            tabs: Vec::new(),
-            active: 0,
-            show_menu: false,
-            is_flyout: false,
-        }
-    }
-
-    #[test]
-    fn only_the_top_of_a_stacked_column_shows_the_collapse_button() {
-        // Three groups stacked in one column (same x-range, increasing y) —
-        // matching Illustrator's own chrome, only the first should count.
-        let top = area_at(Rect::new(0.0, 0.0, 300.0, 100.0));
-        let middle = area_at(Rect::new(0.0, 100.0, 300.0, 200.0));
-        let bottom = area_at(Rect::new(0.0, 200.0, 300.0, 300.0));
-        let all = [top.clone(), middle.clone(), bottom.clone()];
-        assert!(is_column_top(&top, &all));
-        assert!(!is_column_top(&middle, &all));
-        assert!(!is_column_top(&bottom, &all));
-    }
-
-    #[test]
-    fn side_by_side_columns_each_get_their_own_top() {
-        // Two columns side by side (disjoint x-ranges) — each is its own
-        // column and each counts as its own top, independent of the other.
-        let left = area_at(Rect::new(0.0, 0.0, 150.0, 100.0));
-        let right = area_at(Rect::new(150.0, 0.0, 300.0, 100.0));
-        let all = [left.clone(), right.clone()];
-        assert!(is_column_top(&left, &all));
-        assert!(is_column_top(&right, &all));
-    }
-
-    #[test]
-    fn paint_icon_col_draws_a_group_handle_between_groups_without_panicking() {
-        // Two collapsed groups in one column — the handle/divider between
-        // them (drawn at each group's first row, skipping the very first
-        // row overall) shouldn't panic on a real IconRect list, narrow or
-        // wide (icon-only vs. labeled).
-        use crate::dock::{IconColumn, Node};
-        use crate::layout::layout_icons;
-        let icons = vec![
-            IconColumn { node: Node::Tabs { panels: vec![PanelId("swatches")], active: 0 } },
-            IconColumn { node: Node::Tabs { panels: vec![PanelId("gradient")], active: 0 } },
-        ];
-        let mut text = TextContext::new();
-        for w in [40.0, 112.0] {
-            let col = Rect::new(0.0, 0.0, w, 400.0);
-            let rects = layout_icons(&icons, col);
-            assert_eq!(rects.len(), 2, "one row per single-tab group");
-            let mut scene = Scene::new();
-            paint_icon_col(&mut scene, col, &rects, None, &Theme::default(), &mut text, &|p| p.0.to_string());
-        }
     }
 }

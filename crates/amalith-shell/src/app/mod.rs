@@ -41,11 +41,9 @@ pub(crate) use crate::anchors;
 pub(crate) use crate::canvas::{
     self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview, TextBoxPreview,
 };
-pub(crate) use crate::dock::{
-    Axis, Child, DockModel, DropTarget, Node, NodePath, PanelId, Rail, RailSide, Side,
-};
+pub(crate) use crate::dock::{DockModel, Group, Master, MasterKind, MasterLayout, PanelId, Side, ToolsDensity};
 pub(crate) use crate::handles::{self, Handle};
-pub(crate) use crate::layout::Layout;
+pub(crate) use crate::layout::{GroupDrop, MasterFrame, PanelDrop};
 pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::Tool;
@@ -81,15 +79,10 @@ const TAB_BAR_H: f64 = 29.4;
 const OPT_BAR_H: f64 = 35.0;
 /// Total fixed chrome above the canvas / below the top of the window.
 const CHROME_TOP: f64 = APP_BAR_H + TAB_BAR_H + OPT_BAR_H;
-/// When a rail is empty, the strip of canvas along that edge that still
-/// accepts a drop (creating the rail).
-const EMPTY_ZONE: f64 = 48.0;
 /// Slack around a splitter's visual gap for grabbing it.
 const GRAB_SLOP: f64 = 5.0;
 /// Visible thickness of the bar on a rail's inner edge.
 const RAIL_EDGE: f64 = 4.0;
-/// Min rail width, logical points (a narrow icon-only rail is allowed).
-const RAIL_MIN_W: f64 = 48.0;
 /// Pointer travel before a press becomes a drag.
 const DRAG_THRESHOLD: f64 = 5.0;
 /// Default size of a torn-off panel window, logical points.
@@ -115,6 +108,14 @@ enum Role {
     Floating(u64),
 }
 
+/// Which of a Master's own left/right edges is being dragged to resize it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResizeEdge {
+    Left,
+    Right,
+}
+
+
 /// One rendered window: surface, its device's vello renderer, the winit
 /// handle, and what it shows.
 struct WindowHost {
@@ -129,60 +130,66 @@ struct WindowHost {
 enum Drag {
     #[default]
     None,
-    /// Re-weighting the split at `path` in the `side` rail, boundary after
-    /// child `gap`.
-    Splitter {
-        side: RailSide,
-        path: NodePath,
-        gap: usize,
+    /// Dragging a Master's own left/right edge to resize its width —
+    /// docked or floating, both the same (⇐ `.master-resize`).
+    MasterWidth {
+        master: u64,
+        edge: ResizeEdge,
+        start_w: f32,
+        start_x: f64,
     },
-    /// Pressed a tab in the `side` rail; a click activates it, a drag tears
-    /// it off.
-    PendingTearoff {
-        side: RailSide,
-        panel: PanelId,
-        path: NodePath,
-        tab: usize,
-        press: Point,
-    },
-    /// Pressed an attached group's title bar (not its tab strip); a drag
-    /// tears the *whole group* — every tab it holds — off the dock into a
-    /// new floating window, mirroring `PendingIconTearoff` but sourced
-    /// from an already-docked/open group instead of a collapsed one. A
-    /// title-bar press that never moves is simply a no-op (there's no
-    /// tab under it to activate — unlike the tab strip, which still
-    /// handles clicks the same as always).
-    PendingGroupTearoff {
-        side: RailSide,
-        path: NodePath,
-        press: Point,
-    },
-    /// Pressed an icon-strip row; a click opens/switches that group's
-    /// flyout (see `App::toggle_flyout`), a drag tears the *whole group*
-    /// (every tab it holds, not just the one row clicked) off the icon
-    /// strip into a new floating window — Illustrator lets you detach a
-    /// group straight from its collapsed icon, not only after expanding
-    /// it back to the dock.
-    PendingIconTearoff {
-        side: RailSide,
-        column: usize,
+    /// Dragging a Tabs-mode group's content-pane bottom edge to resize its
+    /// height (⇐ `.tab-content-resize` / `setupTabContentResize`).
+    GroupContentResize {
+        master: u64,
         group: usize,
-        tab: usize,
-        press: Point,
+        start_h: f32,
+        start_y: f64,
     },
-    /// Pressed a floating window's tab strip; a click activates that tab, a
-    /// drag moves the window.
-    PendingFloatMove { id: u64, tab: usize, press: Point },
-    /// A floating window is following the cursor. `pos` is the app's
-    /// authoritative window top-left in virtual-desktop logical points;
+    /// Pressed a Master's header (not its close/chevron); a drag moves the
+    /// whole Master, undocking it first if it was docked (⇐ the
+    /// `onPointerMove` master branch's "undock once moved" step). A plain
+    /// click just re-affirms its current dock position — a no-op.
+    PendingMasterMove {
+        master: u64,
+        press: Point,
+        grab: Vec2,
+        was_docked: Option<(Side, usize)>,
+    },
+    /// A Master's own OS window is following the cursor (only reachable
+    /// once it's floating — a still-docked Master lives inside the main
+    /// window and needs `App::pending_master_undock` to spawn one first).
     /// `grab` is the constant cursor offset within it.
-    MovingFloating { id: u64, grab: Vec2, pos: Point },
-    /// Dragging a rail's inner edge to widen / narrow the whole rail.
-    RailWidth { side: RailSide },
-    /// Dragging an icon strip's own inner edge — narrower drops labels
-    /// (icon-only), wider brings them back. Independent of `RailWidth`,
-    /// which resizes the docked tree next to it, not the strip itself.
-    IconColWidth { side: RailSide },
+    MovingMaster { master: u64, grab: Vec2 },
+    /// Pressed a Group's plain handle; a drag merges it into another
+    /// group, moves it as a new sibling group into a different Master, or
+    /// (once past the threshold) detaches it live into a brand-new
+    /// Master that actually follows the cursor — unless it's already the
+    /// sole group of an already-floating Master, in which case there's
+    /// nothing to detach and this just starts moving that window.
+    PendingGroupDrag { source: (u64, usize), press: Point },
+    /// Live-dragging Group `current` (wherever it lives *right now* — for
+    /// a freshly-detached one that's `(new_master, 0)`, not its original
+    /// spot) by its own Master window, `grab` offset from the window's
+    /// origin. A fine-grained merge/new-sibling preview against every
+    /// *other* Master keeps computing each move, same as before
+    /// detaching — dropping it back into a group still merges as a
+    /// group, this only changes *when* the window appears.
+    DraggingGroup { current: (u64, usize), grab: Vec2 },
+    /// Pressed a Stack-mode panel row, or a Tabs-mode tab; a drag moves
+    /// the panel into a group (as a tab/row), makes it a new group, or
+    /// (once past the threshold) detaches it live into a brand-new
+    /// Master that follows the cursor — unless it's already the sole
+    /// content of an already-floating Master. A plain click on a Stack
+    /// row opens the flyout instead (⇐ `beginPanelPress`'s click-vs-hold
+    /// distinction — approximated here by move-threshold like every other
+    /// drag in this app, rather than a real timer).
+    PendingPanelDrag { panel: PanelId, press: Point },
+    /// Live-dragging Panel `panel` by its own (possibly freshly spawned)
+    /// Master window `master`, `grab` offset from the window's origin. A
+    /// fine-grained into-group/new-group preview against every *other*
+    /// Master keeps computing each move.
+    DraggingPanel { panel: PanelId, master: u64, grab: Vec2 },
     /// Dragging a Layers-panel row to restack / reparent the current
     /// selection. `body` is the panel's scrolled body rect (screen px) so
     /// the drop target can be recomputed as the pointer moves; the drag
@@ -837,15 +844,13 @@ struct App {
     /// `None` — the default — means every CMYK conversion in the app
     /// stays the disclosed approximation.
     cmyk_profile: Option<colormanage::CmykProfile>,
-    /// A collapsed icon's transient flyout: showing that one nested
-    /// group's full tab strip + body as an overlay next to its icons,
-    /// without disturbing the dock tree — `(side, column index into
-    /// `Rail::icons`, group index into that column's own
-    /// `IconColumn::groups`)`. Clicking any of that group's several
-    /// per-tab icon rows opens the same flyout. At most one open at a
-    /// time; clicking its own icon again, or anywhere outside it, closes
-    /// it — see `dismiss_flyout`.
-    flyout_icon: Option<(RailSide, usize, usize)>,
+    /// A Stack-mode panel row's transient preview: `(master, group,
+    /// index-in-group)` — showing that one panel's real content as an
+    /// overlay beside the row, without switching anything in the dock
+    /// model (⇐ `#panel-flyout`/`openPanelFlyout`). At most one open at a
+    /// time; clicking its own row again, its own close button, or
+    /// anywhere outside it, closes it — see `dismiss_flyout`.
+    stack_flyout: Option<(u64, usize, usize)>,
     /// Transform panel: 9-point origin, W/H lock, live numeric edit.
     xform_ref: amalith_core::RefPoint,
     xform_constrain: bool,
@@ -919,18 +924,29 @@ struct App {
     alt_down: bool,
     space_down: bool,
     drag: Drag,
-    /// Live re-dock target (which rail, and where in it) while a floating
-    /// window is over the document window.
-    redock_preview: Option<(RailSide, DropTarget)>,
-    /// Set by cursor-move handling (no `event_loop` in scope) so the
-    /// window-event dispatch can spawn the torn-off window.
-    pending_tearoff: Option<(PanelId, Point)>,
-    /// Same as `pending_tearoff`, for dragging a whole group off an
-    /// icon-strip row (see `Drag::PendingIconTearoff`).
-    pending_icon_tearoff: Option<(RailSide, usize, usize, Point)>,
-    /// Same, for dragging a whole *attached* group off its title bar (see
-    /// `Drag::PendingGroupTearoff`).
-    pending_group_tearoff: Option<(RailSide, NodePath, Point)>,
+    /// Live drop cue while dragging a panel over a Master's body — which
+    /// Master, and exactly where (⇐ `updateDropTarget`'s panel branch).
+    panel_drop_preview: Option<(u64, PanelDrop)>,
+    /// Live drop cue while dragging a whole Group over a Master's body.
+    group_drop_preview: Option<(u64, GroupDrop)>,
+    /// Live dock-edge/seam target while dragging a Master (⇐
+    /// `resolveDockTarget` + `showDockPreview`).
+    master_dock_preview: Option<(Side, usize)>,
+    /// Live merge target while dragging one Master over another's body —
+    /// mutually exclusive with `master_dock_preview` (⇐ `drag.mergeTarget`
+    /// vs. `drag.dockTarget`).
+    master_merge_preview: Option<u64>,
+    /// Set by cursor-move handling (no `event_loop` in scope there) so the
+    /// window-event dispatch can spawn the OS window a still-docked
+    /// Master needs the moment it's dragged past the undock threshold.
+    pending_master_undock: Option<u64>,
+    /// Set by cursor-move handling (no `event_loop` in scope there) for a
+    /// Group/Panel drag crossing the detach threshold *mid-drag* (⇐
+    /// `pending_master_undock`) — the new window needs to appear
+    /// immediately and keep following the cursor, matching a real tab
+    /// tear-off rather than only materializing on release.
+    pending_group_live_detach: Option<(u64, usize)>,
+    pending_panel_live_detach: Option<PanelId>,
     /// The "About Amalith" panel: a modal card centred over the main window,
     /// with live text selection. `Some` while it's showing.
     about: Option<about::About>,
@@ -1003,14 +1019,24 @@ impl App {
     fn new() -> Self {
         // Default "Essentials Classic" layout, then overlay whatever the
         // last session (or a picked workspace) saved.
-        let mut dock = DockModel::new(demo_right_dock());
-        dock.left = Rail::with(demo_left_dock());
-        dock.left.width = 80.0; // two tool columns
+        let mut dock = DockModel::new();
+        let tools = dock.spawn_tools_master([40.0, 40.0, 80.0, 400.0]);
+        dock.dock_master(tools, Side::Left, 0);
+        let right = dock.spawn_master(
+            vec![
+                vec![PanelId("color"), PanelId("transform"), PanelId("pathfinder"), PanelId("align")],
+                vec![PanelId("character"), PanelId("paragraph")],
+                vec![PanelId("layers"), PanelId("artboards")],
+            ],
+            [0.0, 40.0, 320.0, 600.0],
+        );
+        dock.dock_master(right, Side::Right, 0);
         let mut rulers = false;
         let mut guides_hidden = false;
         let mut guides_locked = false;
         if let Some(saved) = workspace::load() {
             saved.apply_to(&mut dock);
+            dock.ensure_next_id();
             rulers = saved.rulers;
             guides_hidden = saved.guides_hidden;
             guides_locked = saved.guides_locked;
@@ -1067,7 +1093,7 @@ impl App {
             picker: None,
             color_mode: panels::ColorSpace::Rgb,
             cmyk_profile: None,
-            flyout_icon: None,
+            stack_flyout: None,
             xform_ref: amalith_core::RefPoint::CENTER,
             xform_constrain: true,
             xform_edit: None,
@@ -1107,10 +1133,13 @@ impl App {
             alt_down: false,
             space_down: false,
             drag: Drag::None,
-            redock_preview: None,
-            pending_tearoff: None,
-            pending_icon_tearoff: None,
-            pending_group_tearoff: None,
+            panel_drop_preview: None,
+            group_drop_preview: None,
+            master_dock_preview: None,
+            master_merge_preview: None,
+            pending_master_undock: None,
+            pending_group_live_detach: None,
+            pending_panel_live_detach: None,
             about: None,
             cursor_mode: CanvasCursor::Default,
             focused: std::collections::HashSet::new(),
@@ -1146,6 +1175,32 @@ impl App {
             .values()
             .find(|h| matches!(h.role, Role::Floating(f) if f == id))
             .map(|h| &h.window)
+    }
+
+    /// Global (virtual-desktop) logical origin of window `wid`, whichever
+    /// role it holds — the main window (read live, like
+    /// `main_inner_origin`) or a floating one (read from
+    /// `DockModel::floating`'s own tracked `rect`, matching
+    /// `MovingFloating`'s own authoritative `pos` rather than querying the
+    /// OS back). `None` if `wid` isn't a window we own, or (for a
+    /// floating window) its dock entry is already gone.
+    ///
+    /// Exists because macOS keeps mouse-drag capture on whichever window
+    /// received the original press for the rest of that drag, even once a
+    /// *different* window (spawned mid-drag, e.g. a fresh tear-off) is
+    /// the one actually meant to be moving — `self.pointer_win` keeps
+    /// reporting the original window. `MovingFloating`'s move handler
+    /// needs that window's origin to still compute the true global
+    /// cursor position, and it isn't always `main_id`.
+    fn window_origin(&self, wid: WindowId) -> Option<Point> {
+        if Some(wid) == self.main_id {
+            return Some(self.main_inner_origin());
+        }
+        let Role::Floating(fid) = self.hosts.get(&wid)?.role else {
+            return None;
+        };
+        let f = self.dock.master(fid)?;
+        Some(Point::new(f.rect[0] as f64, f.rect[1] as f64))
     }
 
     /// Mark every open window for one repaint. Rendering is on demand — a
@@ -1215,34 +1270,34 @@ impl App {
     /// rect, if that panel's content overflows its body. Used by the wheel
     /// handler to route scroll into the panel instead of the canvas.
     fn scrollable_panel_at(&mut self, p: Point) -> Option<(PanelId, Rect)> {
-        let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
-            [RailSide::Left, RailSide::Right]
-                .iter()
-                .flat_map(|&side| {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        return Vec::new();
-                    }
-                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail, w, h);
-                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
-                })
-                .collect()
-        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
-            self.hosts.get(&wid).and_then(|h| match h.role {
+        let wid = self.pointer_win?;
+        let (master_id, bounds) = if Some(wid) == self.main_id {
+            let (w, h) = self.main_logical_size()?;
+            let mid = [Side::Left, Side::Right]
+                .into_iter()
+                .find_map(|side| self.dock.docked(side).into_iter().find(|&mid| self.docked_master_rect(mid, w, h).contains(p)))?;
+            let bounds = self.docked_master_rect(mid, w, h);
+            (mid, bounds)
+        } else {
+            let mid = self.hosts.get(&wid).and_then(|h| match h.role {
                 Role::Floating(f) => Some(f),
                 _ => None,
-            })
-        }) {
-            self.floating_layout(fid).areas
-        } else {
-            return None;
+            })?;
+            let win = self.floating_window(mid)?;
+            let sz = win.inner_size();
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
         };
-        for area in &areas {
-            if area.body.contains(p) {
-                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                    if self.panel_content_h(pid, area.body) > area.body.height() + 0.5 {
-                        return Some((pid, area.body));
+        let frame = self.build_master_frame(master_id, bounds);
+        for g in &frame.groups {
+            if g.content.contains(p) {
+                let pid = self
+                    .dock
+                    .master(master_id)
+                    .and_then(|m| m.group(g.index))
+                    .and_then(|gg| gg.panels.get(gg.active).copied());
+                if let Some(pid) = pid {
+                    if self.panel_content_h(pid, g.content) > g.content.height() + 0.5 {
+                        return Some((pid, g.content));
                     }
                 }
             }
@@ -1479,7 +1534,7 @@ impl App {
             .hosts
             .iter()
             .filter_map(|(wid, h)| match h.role {
-                Role::Floating(fid) if self.dock.floating(fid).is_none() => Some(*wid),
+                Role::Floating(fid) if self.dock.master(fid).is_none() => Some(*wid),
                 _ => None,
             })
             .collect();
@@ -4674,16 +4729,16 @@ impl App {
     /// docked rails.
     fn canvas_x_span(&self) -> (f64, f64) {
         let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-        let left = if self.dock.left.is_empty() {
-            0.0
-        } else {
-            rail_rect_for(RailSide::Left, &self.dock.left, w, h).x1
-        };
-        let right = if self.dock.right.is_empty() {
-            w
-        } else {
-            rail_rect_for(RailSide::Right, &self.dock.right, w, h).x0
-        };
+        let left_docked = self.dock.docked(Side::Left);
+        let left = left_docked
+            .last()
+            .map(|&mid| self.docked_master_rect(mid, w, h).x1)
+            .unwrap_or(0.0);
+        let right_docked = self.dock.docked(Side::Right);
+        let right = right_docked
+            .last()
+            .map(|&mid| self.docked_master_rect(mid, w, h).x0)
+            .unwrap_or(w);
         (left, right.max(left))
     }
 
@@ -4816,6 +4871,98 @@ impl App {
         }
     }
 
+    /// The real (not tooltip-stub) panel context for hit-testing a press
+    /// inside a panel's own body — shared by every Master's content pane,
+    /// docked or floating (⇐ the `panels::Ctx` literal every press
+    /// handler used to build inline, once each).
+    fn panel_press_ctx(&self, layer_drop: Option<(i64, bool)>) -> panels::Ctx<'_> {
+        panels::Ctx {
+            theme: &self.theme,
+            doc: self.doc.editor.document(),
+            selection: &self.doc.selection,
+            active_tool: self.active_tool,
+            pointer: self.pointer,
+            representative: self.representative(),
+            fill_mixed: false,
+            stroke_mixed: false,
+            active_slot: self.active_slot,
+            picker: self.picker,
+            cur_fill: self.doc.fill,
+            cur_stroke: self.doc.stroke,
+            shape_tool: self.last_shape_tool,
+            expanded: &self.doc.expanded_groups,
+            renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
+            selected_layer: self.doc.selected_layer,
+            selected_artboard: self.doc.selected_artboard,
+            text_style: self.active_text_style(),
+            text_align: self.active_text_align(),
+            text_paragraph: self.active_text_paragraph(),
+            text_editing: self.text_edit.is_some(),
+            font_families: &self.font_families,
+            layer_query: &self.layer_query,
+            layer_search_focused: self.layer_search_focused,
+            layer_scroll: self.panel_scroll_of(PanelId("layers")),
+            layer_drop,
+            color_mode: self.color_mode,
+            cmyk_profile: self.cmyk_profile.as_ref(),
+            recent: &self.recent_colors,
+            xform_ref: self.xform_ref,
+            xform_constrain: self.xform_constrain,
+            xform_edit: self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+            align_to: self.align_to,
+            align_spacing: self.align_spacing,
+            align_spacing_edit: self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+            key_object: self.key_object,
+            shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
+            export: self.export.as_ref().map(|d| (d, false)),
+            gradient: self.gradient_ctx(),
+            gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+        }
+    }
+
+    /// If the pointer currently sits over panel `want`'s own content pane
+    /// (Tabs-mode only — Stack mode has no inline content to hit), its
+    /// scrolled body rect — used by the numeric-field-under-pointer
+    /// lookups (Transform / Gradient / Align spacing) that used to walk a
+    /// rail's `PanelArea` list by hand, three times over.
+    fn active_panel_body_at_pointer(&mut self, want: &str) -> Option<Rect> {
+        let wid = self.pointer_win?;
+        let (master_id, bounds) = if Some(wid) == self.main_id {
+            let (w, h) = self.main_logical_size()?;
+            let mid = [Side::Left, Side::Right].into_iter().find_map(|side| {
+                self.dock
+                    .docked(side)
+                    .into_iter()
+                    .find(|&mid| self.docked_master_rect(mid, w, h).contains(self.pointer))
+            })?;
+            (mid, self.docked_master_rect(mid, w, h))
+        } else {
+            let mid = self.hosts.get(&wid).and_then(|h| match h.role {
+                Role::Floating(f) => Some(f),
+                _ => None,
+            })?;
+            let win = self.floating_window(mid)?;
+            let sz = win.inner_size();
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
+        };
+        let frame = self.build_master_frame(master_id, bounds);
+        for g in &frame.groups {
+            if !g.content.contains(self.pointer) {
+                continue;
+            }
+            let pid = self
+                .dock
+                .master(master_id)
+                .and_then(|m| m.group(g.index))
+                .and_then(|gg| gg.panels.get(gg.active).copied())?;
+            if pid.0 != want {
+                continue;
+            }
+            return Some(panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid)).0);
+        }
+        None
+    }
+
     /// Text for a hover tooltip over the pointer's current position, if it's
     /// resting on a labelled panel control or a tab close button.
     fn hover_tooltip(&mut self) -> Option<String> {
@@ -4840,33 +4987,29 @@ impl App {
             let cx = self.context_bar_tip_ctx();
             return context_bar::tip(opt_bar_rect(w), self.pointer, &cx);
         }
-        let areas: Vec<layout::PanelArea> = if self.pointer_win == self.main_id {
-            [RailSide::Left, RailSide::Right]
-                .iter()
-                .flat_map(|&side| {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        return Vec::new();
-                    }
-                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail, w, h);
-                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
-                })
-                .collect()
-        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
-            self.hosts.get(&wid).and_then(|h| match h.role {
+        let wid = self.pointer_win?;
+        let (master_id, bounds) = if Some(wid) == self.main_id {
+            let (w, h) = self.main_logical_size()?;
+            let mid = [Side::Left, Side::Right].into_iter().find_map(|side| {
+                self.dock
+                    .docked(side)
+                    .into_iter()
+                    .find(|&mid| self.docked_master_rect(mid, w, h).contains(self.pointer))
+            })?;
+            (mid, self.docked_master_rect(mid, w, h))
+        } else {
+            let mid = self.hosts.get(&wid).and_then(|h| match h.role {
                 Role::Floating(f) => Some(f),
                 _ => None,
-            })
-        }) {
-            self.floating_layout(fid).areas
-        } else {
-            return None;
+            })?;
+            let win = self.floating_window(mid)?;
+            let sz = win.inner_size();
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
         };
-
-        for area in &areas {
-            if area.tab_strip.contains(self.pointer) {
-                if let Some(t) = area.tabs.iter().find(|t| t.rect.contains(self.pointer)) {
+        let frame = self.build_master_frame(master_id, bounds);
+        for g in &frame.groups {
+            if g.tab_strip.contains(self.pointer) {
+                if let Some(t) = g.tabs.iter().find(|t| t.rect.contains(self.pointer)) {
                     if chrome::panel_tab_close_rect(t.rect).contains(self.pointer) {
                         return Some("Close panel".into());
                     }
@@ -4874,11 +5017,21 @@ impl App {
                 }
                 return None;
             }
-            if area.body.contains(self.pointer) {
-                if let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) {
-                    let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
+            if g.content.contains(self.pointer) {
+                let pid = self
+                    .dock
+                    .master(master_id)
+                    .and_then(|m| m.group(g.index))
+                    .and_then(|gg| gg.panels.get(gg.active).copied());
+                if let Some(pid) = pid {
+                    let pbody = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid)).0;
                     let ctx = self.tip_ctx();
                     return panels::tip(pid, pbody, self.pointer, &ctx);
+                }
+            }
+            for row in &g.rows {
+                if row.rect.contains(self.pointer) {
+                    return Some(tab_label(row.panel));
                 }
             }
         }
@@ -4910,9 +5063,7 @@ impl App {
     /// The × on a panel tab. In a rail: remove the panel. In a floating
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
-        // See the matching comment in `toggle_panel` — this can also
-        // reorder a rail's `icons` out from under a stored flyout index.
-        self.flyout_icon = None;
+        self.stack_flyout = None;
         if pid.0 == "picker" {
             self.picker = None;
         }
@@ -4933,7 +5084,7 @@ impl App {
         // that was actually its last tab.
         self.dock.remove(pid);
         if let Some(fid) = floating {
-            if self.dock.floating(fid).is_none() {
+            if self.dock.master(fid).is_none() {
                 let wid = self
                     .hosts
                     .iter()
@@ -4952,34 +5103,38 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// The title bar's × on a docked group: closes every tab it holds at
-    /// once, not just one. `path` addresses the `Tabs` node the same way
-    /// the rest of the dock does; a no-op if it doesn't resolve to one.
-    pub(in crate::app) fn close_group(&mut self, side: RailSide, path: &NodePath) {
-        let Some(Node::Tabs { panels, .. }) = self.dock.rail(side).node_at(path) else {
+    /// The Master's own × on its header: closes every panel it holds at
+    /// once, in every group (⇐ the prototype's `master-close`), or just
+    /// removes it outright for a Tools master (which holds no panels).
+    pub(in crate::app) fn close_master(&mut self, master: u64) {
+        let Some(m) = self.dock.master(master) else { return };
+        if m.is_tools() {
+            self.remove_master_and_window(master);
             return;
-        };
-        for p in panels.clone() {
-            self.close_panel_tab(p, None);
+        }
+        let floating_arg = if m.dock.is_none() { Some(master) } else { None };
+        for p in m.panels() {
+            self.close_panel_tab(p, floating_arg);
         }
     }
 
-    /// Same, for a group still collapsed to an icon strip — closes every
-    /// tab in that one group without expanding the column first.
-    pub(in crate::app) fn close_icon_group(&mut self, side: RailSide, column: usize, group: usize) {
-        let Some((panels, _)) = self
-            .dock
-            .rail(side)
-            .icons
-            .get(column)
-            .and_then(|c| c.groups().into_iter().nth(group))
-        else {
-            return;
-        };
-        for p in panels {
-            self.dock.remove(p);
+    /// Removes a master from the dock model and, if it was floating, tears
+    /// down its OS window too — the shared tail every close/detach-away
+    /// path needs.
+    fn remove_master_and_window(&mut self, id: u64) {
+        let was_docked = self.dock.master(id).is_some_and(|m| m.dock.is_some());
+        self.dock.remove_master(id);
+        if !was_docked {
+            let wid = self
+                .hosts
+                .iter()
+                .find(|(_, h)| matches!(h.role, Role::Floating(f) if f == id))
+                .map(|(k, _)| *k);
+            if let Some(wid) = wid {
+                self.hosts.remove(&wid);
+                self.focused.remove(&wid);
+            }
         }
-        self.flyout_icon = None;
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);
@@ -4987,45 +5142,38 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// The title bar's × on a *floating* group: closes the whole window
-    /// outright, all tabs at once, regardless of how many it holds —
-    /// unlike a single tab's own ×, which only removes that one panel
-    /// (see the `floating` branch of `close_panel_tab`).
-    pub(in crate::app) fn close_floating(&mut self, fid: u64) {
-        let Some(f) = self.dock.floating(fid) else {
-            return;
-        };
-        // A floating group is always a plain `Tabs` node in this app (no
-        // floating-group stacking yet — see `dock::Floating`'s docs).
-        let panels = match &f.node {
-            Node::Tabs { panels, .. } => panels.clone(),
-            Node::Split { .. } => Vec::new(),
-        };
-        let wid = self
+    /// Closes the OS window of any `Role::Floating` host whose Master no
+    /// longer exists in the dock model. `DockModel::prune_empty` (called
+    /// internally by `remove`, `detach_group`, `detach_panel`,
+    /// `move_panel_into_group`, `move_group`, …) can drop a floating
+    /// Master the instant its last panel/group leaves it, with no
+    /// `event_loop`-requiring step of its own — nothing else tears the
+    /// window down when that happens, and it's otherwise left behind as a
+    /// permanently blank, un-paintable rectangle (`render/mod.rs`'s
+    /// `Role::Floating` branch just does nothing once `dock.master(fid)`
+    /// is `None`). Call this after any drag-commit that could have
+    /// emptied a floating Master out from under it.
+    fn reap_closed_floating_windows(&mut self) {
+        // Belt-and-suspenders: a Master must never sit empty (floating)
+        // or with zero groups (docked) — sweep the whole model first so
+        // any mutation path that didn't already prune the specific
+        // master(s) it touched still can't leave one behind.
+        self.dock.prune_all_empty();
+        let dead: Vec<WindowId> = self
             .hosts
             .iter()
-            .find(|(_, h)| matches!(h.role, Role::Floating(x) if x == fid))
-            .map(|(k, _)| *k);
-        if let Some(wid) = wid {
+            .filter_map(|(wid, h)| match h.role {
+                Role::Floating(fid) if self.dock.master(fid).is_none() => Some(*wid),
+                _ => None,
+            })
+            .collect();
+        if dead.is_empty() {
+            return;
+        }
+        for wid in dead {
             self.hosts.remove(&wid);
             self.focused.remove(&wid);
         }
-        self.dock.remove_floating(fid);
-        self.flyout_icon = None;
-        for p in panels {
-            if p.0 == "picker" {
-                self.picker = None;
-            }
-            if panels::shape_dialog_tool(p).is_some() {
-                self.shape_dialog = None;
-            }
-            if p == export::EXPORT_PID {
-                self.export = None;
-            }
-            if self.panel_menu.as_ref().is_some_and(|m| m.panel == p) {
-                self.panel_menu = None;
-            }
-        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);
@@ -5033,29 +5181,29 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Window menu: show the panel (docked into the right rail) if hidden,
-    /// or remove it if shown.
+    /// Window menu: show the panel (docked into the right master) if
+    /// hidden, or remove it if shown.
     fn toggle_panel(&mut self, id: &str) {
         let pid = PanelId(match WINDOW_PANELS.iter().find(|(p, _)| *p == id) {
             Some((p, _)) => *p,
             None => return,
         });
-        // `flyout_icon` is a plain index into a rail's `icons` list, which
-        // this can reorder (removing an earlier group shifts every later
-        // one down) — safest to just drop it rather than risk it now
-        // pointing at a different group than the one the user opened.
-        self.flyout_icon = None;
+        self.stack_flyout = None;
         if self.dock.contains(pid) {
             self.dock.remove(pid);
+        } else if let Some(&right) = self.dock.docked(Side::Right).first() {
+            if let Some(m) = self.dock.master_mut(right) {
+                if let Some(g) = m.groups.last_mut() {
+                    g.panels.push(pid);
+                } else {
+                    let gid = m.groups.len() as u64; // fine: only used as a display id
+                    m.groups.push(Group::new(gid, vec![pid]));
+                }
+            }
         } else {
-            let path = self.dock.right.any_tab_path().unwrap_or_default();
-            self.dock.rail_mut(RailSide::Right).dock(
-                pid,
-                DropTarget::Tab {
-                    path,
-                    index: usize::MAX,
-                },
-            );
+            let rect = [40.0, 40.0, 320.0, 400.0];
+            let id = self.dock.spawn_master(vec![vec![pid]], rect);
+            self.dock.dock_master(id, Side::Right, 0);
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
@@ -5064,74 +5212,97 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// The « button on a tab strip: collapses that whole *column* to an
-    /// icon strip (Illustrator's granularity — every group stacked in the
-    /// same column collapses together, not just the one whose strip was
-    /// clicked; see `Rail::collapse`).
-    pub(in crate::app) fn collapse_column(&mut self, side: RailSide, path: &NodePath) {
-        if self.dock.rail_mut(side).collapse(path) {
-            if self.flyout_icon.is_some_and(|(s, ..)| s == side) {
-                self.flyout_icon = None;
+    /// The Master's own chevron: toggles a Normal master between Stack and
+    /// Tabs display, or a Tools master's grid density — see
+    /// `MasterLayout`/`ToolsDensity`.
+    pub(in crate::app) fn toggle_master_layout(&mut self, master: u64) {
+        let Some(m) = self.dock.master_mut(master) else { return };
+        match m.kind {
+            MasterKind::Tools => {
+                m.tools_density = if m.tools_density == ToolsDensity::Grid2x {
+                    ToolsDensity::Grid1x
+                } else {
+                    ToolsDensity::Grid2x
+                };
             }
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if let Some(m) = &self.native_menu {
-                m.sync_window(&self.dock);
+            MasterKind::Normal => {
+                m.layout = if m.layout == MasterLayout::Tabs {
+                    MasterLayout::Stack
+                } else {
+                    MasterLayout::Tabs
+                };
+                if m.layout == MasterLayout::Tabs {
+                    self.stack_flyout = None;
+                }
             }
-            self.request_main_redraw();
         }
+        self.sync_floating_window_height(master);
+        self.request_main_redraw();
     }
 
-    /// The » button on an open flyout: expands that whole icon-strip
-    /// column back into the tree for good (not just previewing one row —
-    /// see `toggle_flyout` for the transient click-to-preview path).
-    pub(in crate::app) fn expand_column(&mut self, side: RailSide, column: usize) {
-        if self.dock.rail_mut(side).expand(column) {
-            self.flyout_icon = None;
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            if let Some(m) = &self.native_menu {
-                m.sync_window(&self.dock);
-            }
-            self.request_main_redraw();
-        }
-    }
-
-    /// Clicking one of a group's icon rows: opens its flyout, or closes it
-    /// if that exact tab's flyout is already open showing that same tab
-    /// (Illustrator's click-to-preview, click-again-to-dismiss).
-    /// `column`/`group` address one nested group within a collapsed
-    /// column; `tab` is which of that group's own tabs was actually
-    /// clicked (a multi-tab group shows one icon row per tab). Clicking a
-    /// *different* tab of a group whose flyout is already open just
-    /// switches it to that tab and leaves the flyout open, rather than
-    /// dismissing it — only re-clicking the one already showing closes it.
-    pub(in crate::app) fn toggle_flyout(&mut self, side: RailSide, column: usize, group: usize, tab: usize) {
-        let showing_this_tab = self.flyout_icon == Some((side, column, group))
-            && self
-                .dock
-                .rail(side)
-                .icons
-                .get(column)
-                .and_then(|c| c.groups().get(group).map(|&(_, active)| active == tab))
-                .unwrap_or(false);
-        if showing_this_tab {
-            self.flyout_icon = None;
+    /// Clicking a Stack-mode panel row: opens its flyout preview, or
+    /// closes it if that exact row's flyout is already open (⇐
+    /// `openPanelFlyout`/click-to-preview, click-again-to-dismiss).
+    pub(in crate::app) fn toggle_stack_flyout(&mut self, master: u64, group: usize, index: usize) {
+        if self.stack_flyout == Some((master, group, index)) {
+            self.stack_flyout = None;
         } else {
-            if let Some(col) = self.dock.rail_mut(side).icons.get_mut(column) {
-                col.set_active(group, tab);
+            self.stack_flyout = Some((master, group, index));
+            if let Some(m) = self.dock.master_mut(master) {
+                if let Some(g) = m.group_mut(group) {
+                    g.active = index;
+                }
             }
-            self.flyout_icon = Some((side, column, group));
         }
         self.request_main_redraw();
     }
 
-    /// Closes any open flyout — a click anywhere outside it dismisses it
-    /// (called from the general press router before that click is routed
-    /// anywhere else, so the same click can still do its own thing too).
+    /// Closes any open Stack-mode flyout — a click anywhere outside it
+    /// dismisses it (called from the general press router before that
+    /// click is routed anywhere else, so the same click can still do its
+    /// own thing too).
     pub(in crate::app) fn dismiss_flyout(&mut self) {
-        if self.flyout_icon.is_some() {
-            self.flyout_icon = None;
+        if self.stack_flyout.is_some() {
+            self.stack_flyout = None;
             self.request_main_redraw();
         }
+    }
+
+    /// The open Stack-mode flyout's own on-screen `(bounds, close-button)`
+    /// rects, in `window`'s local coordinates — `None` if no flyout is
+    /// open, or `window` isn't the one it's actually showing in (a
+    /// docked source shows in the main window; a floating one in its own).
+    fn stack_flyout_hit_rects(&mut self, window: WindowId) -> Option<(Rect, Rect)> {
+        let (fm, fg, fi) = self.stack_flyout?;
+        let is_docked = self.dock.master(fm)?.dock.is_some();
+        let bounds_in_window = if is_docked {
+            if Some(window) != self.main_id {
+                return None;
+            }
+            let (w, h) = self.main_logical_size()?;
+            self.docked_master_rect(fm, w, h)
+        } else {
+            let host_wid = self.floating_window(fm)?.id();
+            if window != host_wid {
+                return None;
+            }
+            let win = self.floating_window(fm)?;
+            let sz = win.inner_size();
+            Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale)
+        };
+        let frame = self.build_master_frame(fm, bounds_in_window);
+        let row = frame.groups.get(fg)?.rows.get(fi)?.rect;
+        let (vw, vh) = if is_docked {
+            self.main_logical_size()?
+        } else {
+            let win = self.floating_window(fm)?;
+            let sz = win.inner_size();
+            (sz.width as f64 / self.scale, sz.height as f64 / self.scale)
+        };
+        let bounds = layout::flyout_rect(row, Rect::new(0.0, 0.0, vw, vh));
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
+        let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+        Some((bounds, close))
     }
 
 
@@ -5305,44 +5476,205 @@ impl App {
         Some((sz.width as f64 / self.scale, sz.height as f64 / self.scale))
     }
 
-    /// Resolve where the cursor (in global logical coords) would re-dock:
-    /// which rail, and where within it. Checks the left rail/edge, then the
-    /// right.
-    fn resolve_redock(&mut self, global_cursor: Point) -> (RailSide, DropTarget) {
-        let Some((w, h)) = self.main_logical_size() else {
-            return (RailSide::Right, DropTarget::Float);
+    /// Measures `p`'s tab width, mutating the font cache (used by
+    /// `layout::layout_master`'s `tab_width` closure everywhere a Master
+    /// is laid out).
+    fn tab_width(&mut self, p: PanelId) -> f64 {
+        self.text.measure(&tab_label(p), 12.0) + self.theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
+            + chrome::PANEL_TAB_CLOSE_W
+    }
+
+    /// `id`'s laid-out geometry within `bounds` (already positioned —
+    /// `(0,0)`-relative for a floating window's own client area, or a
+    /// docked master's own rect within the main window).
+    fn build_master_frame(&mut self, id: u64, bounds: Rect) -> MasterFrame {
+        let Some(m) = self.dock.master(id).cloned() else {
+            return MasterFrame::default();
         };
-        let local = global_cursor - self.main_inner_origin().to_vec2();
-        if !Rect::new(0.0, 0.0, w, h).contains(local) {
-            return (RailSide::Right, DropTarget::Float);
+        let theme = self.theme.clone();
+        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p))
+    }
+
+    /// A docked master's rect *within the main window* (local coordinates)
+    /// — full available height, x offset from every other master already
+    /// docked to the same side (⇐ `layoutDocks`'s offset accumulation).
+    fn docked_master_rect(&self, id: u64, w: f64, h: f64) -> Rect {
+        docked_master_rect(&self.dock, id, w, h)
+    }
+
+    /// `id`'s current on-screen rect in **global** (virtual-desktop)
+    /// logical coordinates, docked or floating — the unified replacement
+    /// for the old rail-vs-floating-window split.
+    fn master_screen_rect(&mut self, id: u64) -> Option<Rect> {
+        let m = self.dock.master(id)?;
+        if m.dock.is_some() {
+            let (w, h) = self.main_logical_size()?;
+            let local = self.docked_master_rect(id, w, h);
+            let origin = self.main_inner_origin();
+            Some(local + origin.to_vec2())
+        } else {
+            let origin = Point::new(m.rect[0] as f64, m.rect[1] as f64);
+            let win = self.floating_window(id)?;
+            let sz = win.inner_size();
+            Some(Rect::new(
+                origin.x,
+                origin.y,
+                origin.x + sz.width as f64 / self.scale,
+                origin.y + sz.height as f64 / self.scale,
+            ))
         }
-        for side in [RailSide::Left, RailSide::Right] {
-            let rail = self.dock.rail(side);
-            let rect = rail_rect_for(side, rail, w, h);
-            if rail.is_empty() {
-                let in_zone = match side {
-                    RailSide::Left => local.x <= EMPTY_ZONE,
-                    RailSide::Right => local.x >= w - EMPTY_ZONE,
-                };
-                if in_zone {
-                    let edge = match side {
-                        RailSide::Left => Side::Left,
-                        RailSide::Right => Side::Right,
-                    };
-                    return (
-                        side,
-                        DropTarget::Split {
-                            path: NodePath(Vec::new()),
-                            side: edge,
-                        },
-                    );
-                }
-            } else if rect.contains(local) {
-                let laid = build_rail_layout(rail, side, &self.theme, &mut self.text, rect);
-                return (side, layout::hit_test(&laid, rect, local, &self.theme));
+    }
+
+    /// Which other Master — docked in the main window, or floating in its
+    /// own — sits under `global`, excluding `exclude` and any float-only
+    /// dialog (colour picker / shape dialog / export). The unified
+    /// replacement for the old rail-only and floating-only merge checks
+    /// (⇐ `masterUnderPointer`/`elementFromPoint`; there's no DOM z-order
+    /// to walk since docked masters never overlap and a floating one is
+    /// its own whole OS window).
+    fn master_under_global_cursor(&mut self, global: Point, exclude: u64) -> Option<u64> {
+        let floating_ids: Vec<u64> = self
+            .dock
+            .masters
+            .iter()
+            .filter(|m| m.dock.is_none() && m.id != exclude)
+            .map(|m| m.id)
+            .collect();
+        for fid in floating_ids {
+            if self.is_float_only(fid) {
+                continue;
+            }
+            if self.master_screen_rect(fid).is_some_and(|r| r.contains(global)) {
+                return Some(fid);
             }
         }
-        (RailSide::Right, DropTarget::Float)
+        let (w, h) = self.main_logical_size()?;
+        let local = global - self.main_inner_origin().to_vec2();
+        if local.x < 0.0 || local.y < 0.0 || local.x >= w || local.y >= h {
+            return None;
+        }
+        for side in [Side::Left, Side::Right] {
+            for mid in self.dock.docked(side) {
+                if mid == exclude {
+                    continue;
+                }
+                if self.docked_master_rect(mid, w, h).contains(local) {
+                    return Some(mid);
+                }
+            }
+        }
+        None
+    }
+
+    /// Where dragging Master `dragging`'s cursor position would land: a
+    /// dock edge/seam (`Some(dock), None`), a merge into another master's
+    /// body (`None, Some(merge)`), or neither (stays floating) — ⇐
+    /// `onPointerMove`'s master branch (`resolveDockTarget` +
+    /// `masterUnderPointer`, preferring the dock edge over a merge there).
+    fn resolve_master_drop(&mut self, global: Point, dragging: u64) -> (Option<(Side, usize)>, Option<u64>) {
+        let Some((w, h)) = self.main_logical_size() else {
+            return (None, None);
+        };
+        let local = global - self.main_inner_origin().to_vec2();
+        let left: Vec<f64> = self
+            .dock
+            .docked(Side::Left)
+            .into_iter()
+            .filter(|&m| m != dragging)
+            .map(|m| self.dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .collect();
+        let right: Vec<f64> = self
+            .dock
+            .docked(Side::Right)
+            .into_iter()
+            .filter(|&m| m != dragging)
+            .map(|m| self.dock.master(m).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+            .collect();
+        let dock_target = (local.y >= 0.0 && local.y < h)
+            .then(|| layout::resolve_dock_target(local.x, w, &left, &right))
+            .flatten()
+            .map(|(s, i, _)| (s, i));
+        let pure_edge = local.y >= 0.0 && local.y < h && layout::is_pure_dock_edge(local.x, w);
+        if !pure_edge {
+            if let Some(merge) = self.master_under_global_cursor(global, dragging) {
+                if !self.is_float_only(dragging) {
+                    return (None, Some(merge));
+                }
+            }
+        }
+        (dock_target, None)
+    }
+
+    /// Where dragging Group `source` (`(master, group index)`) over
+    /// another Master's body — or back over its own siblings — would land
+    /// (⇐ `updateDropTarget`'s group branch).
+    fn resolve_group_drop(&mut self, global: Point, source: (u64, usize)) -> Option<(u64, GroupDrop)> {
+        let over_source = self.master_screen_rect(source.0).is_some_and(|r| r.contains(global));
+        let target = if over_source {
+            source.0
+        } else {
+            self.master_under_global_cursor(global, source.0)?
+        };
+        if self.is_float_only(target) {
+            return None;
+        }
+        let rect = self.master_screen_rect(target)?;
+        let frame = self.build_master_frame(target, Rect::new(0.0, 0.0, rect.width(), rect.height()));
+        let local = global - Point::new(rect.x0, rect.y0).to_vec2();
+        let dragging_idx = if target == source.0 { source.1 } else { usize::MAX };
+        layout::hit_test_group_drop(&frame, dragging_idx, local).map(|d| (target, d))
+    }
+
+    /// Where dragging Panel `panel` over any Master's body — other than
+    /// `exclude`, the one it's currently living in — would land (⇐
+    /// `updateDropTarget`'s panel branch). Excluding its own current
+    /// Master matters once a panel drag is live-detached (see
+    /// `Drag::DraggingPanel`): that Master holds nothing but this one
+    /// panel, so without the exclusion the panel would immediately try to
+    /// "drop into" the very group it's already in — at best a no-op, at
+    /// worst (landing outside that lone row) `move_panel_new_group`
+    /// pulling it out of a Master that then has nothing left and vanishes
+    /// (`prune_empty`) with nowhere for the panel to land.
+    fn resolve_panel_drop(&mut self, global: Point, exclude: u64) -> Option<(u64, PanelDrop)> {
+        let ids: Vec<u64> = self.dock.masters.iter().map(|m| m.id).collect();
+        for mid in ids {
+            if mid == exclude || self.is_float_only(mid) || self.dock.master(mid).is_some_and(Master::is_tools) {
+                continue;
+            }
+            let Some(rect) = self.master_screen_rect(mid) else { continue };
+            if !rect.contains(global) {
+                continue;
+            }
+            let frame = self.build_master_frame(mid, Rect::new(0.0, 0.0, rect.width(), rect.height()));
+            let local = global - Point::new(rect.x0, rect.y0).to_vec2();
+            return layout::hit_test_panel_drop(&frame, local).map(|d| (mid, d));
+        }
+        None
+    }
+
+    /// Recomputes a *floating* master's natural content height and resizes
+    /// its OS window to match (winit windows don't auto-size like a
+    /// `div`). A no-op for a docked master (its height is the rail's own,
+    /// and overflow scrolls instead — see `Master::scroll`).
+    fn sync_floating_window_height(&mut self, master: u64) {
+        let Some(m) = self.dock.master(master).cloned() else { return };
+        if m.dock.is_some() {
+            return;
+        }
+        let width = m.rect[2] as f64;
+        let theme = self.theme.clone();
+        let h = if m.is_tools() {
+            layout::HEADER_H + panels::tools::natural_height(width)
+        } else {
+            layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p))
+        };
+        if let Some(f) = self.dock.master_mut(master) {
+            f.rect[3] = h as f32;
+        }
+        if let Some(w) = self.floating_window(master) {
+            let _ = w.request_inner_size(LogicalSize::new(width, h));
+            w.request_redraw();
+        }
     }
 
     fn make_host(&mut self, window: Arc<Window>, role: Role) -> WindowHost {
@@ -5372,190 +5704,108 @@ impl App {
         }
     }
 
-    /// The on-screen size of `panel` while it's docked in a rail, if it is.
-    fn panel_dock_size(&mut self, panel: PanelId) -> Option<(f64, f64)> {
-        let (w, h) = self.main_logical_size()?;
-        for side in [RailSide::Left, RailSide::Right] {
-            let rail = self.dock.rail(side);
-            if rail.is_empty() {
-                continue;
-            }
-            let rect = rail_rect_for(side, rail, w, h);
-            let laid = build_rail_layout(rail, side, &self.theme, &mut self.text, rect);
-            if let Some(area) = laid
-                .areas
-                .iter()
-                .find(|a| a.tabs.iter().any(|t| t.panel == panel))
-            {
-                return Some((area.bounds.width(), area.bounds.height()));
-            }
+    /// Current global (virtual-desktop) logical cursor position — the
+    /// window `self.pointer` is local to, plus that local position.
+    fn current_global_cursor(&self) -> Option<Point> {
+        let origin = self.pointer_win.and_then(|w| self.window_origin(w))?;
+        Some(origin + self.pointer.to_vec2())
+    }
+
+    /// A reasonable window title for Master `id` — the Tools master's own
+    /// fixed name, or its first panel's label (empty if it somehow has
+    /// none).
+    fn master_title(&self, id: u64) -> String {
+        let Some(m) = self.dock.master(id) else {
+            return String::new();
+        };
+        if m.is_tools() {
+            return "Tools".to_string();
         }
-        None
+        m.panels().first().map(|&p| tab_label(p)).unwrap_or_default()
     }
 
-    /// Tear `panel` out of the main rail into a new borderless window that
-    /// starts under the cursor, and begin moving it. The window keeps the
-    /// size the panel had while docked.
-    fn tear_off(&mut self, event_loop: &ActiveEventLoop, panel: PanelId, main_local_press: Point) {
-        let global = self.main_inner_origin() + main_local_press.to_vec2();
-        let (fw, fh) = if panel.0 == "picker" {
-            (picker::W, picker::H + self.theme.tab_strip_h)
-        } else {
-            self.panel_dock_size(panel)
-                .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
-                .unwrap_or((FLOAT_W, FLOAT_H))
-        };
-        // Keep the cursor grip inside the (possibly narrow) torn-off window.
-        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
-        let pos = global - grab;
-        let id = match self
-            .dock
-            .detach(panel, [pos.x as f32, pos.y as f32, fw as f32, fh as f32])
-        {
-            Some(id) => id,
-            None => return,
-        };
-
+    /// Spawns a new borderless, always-on-top OS window for Master `id`
+    /// (already added to the dock model) — the shared window-creation tail
+    /// every "this drag just produced a brand-new Master window" path
+    /// needs. Does *not* touch `self.drag`: whether the new window should
+    /// keep following the cursor depends on whether the mouse button is
+    /// still down when this runs, which differs by caller (see
+    /// `undock_master_to_window` vs. `detach_group_to_window`/
+    /// `detach_panel_to_window`).
+    fn spawn_master_window(&mut self, event_loop: &ActiveEventLoop, id: u64, pos: Point, size: (f64, f64)) {
         let attrs = Window::default_attributes()
-            .with_title(tab_label(panel))
-            .with_decorations(false)
-            .with_resizable(panel.0 != "picker")
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-            .with_inner_size(LogicalSize::new(fw, fh))
-            .with_position(LogicalPosition::new(pos.x, pos.y));
-        let window = Arc::new(
-            event_loop
-                .create_window(attrs)
-                .expect("create float window"),
-        );
-        let wid = window.id();
-        let host = self.make_host(window.clone(), Role::Floating(id));
-        self.hosts.insert(wid, host);
-
-        self.drag = Drag::MovingFloating { id, grab, pos };
-        window.request_redraw();
-        self.request_main_redraw();
-    }
-
-    /// Tear a *whole group* off an icon-strip row — every tab it holds,
-    /// not just the one clicked — into a new floating window, same as
-    /// [`Self::tear_off`] but sourced from a collapsed column instead of
-    /// the docked tree (there's nothing to measure a prior on-screen size
-    /// from, so it starts at the plain floating default).
-    fn tear_off_icon_group(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        side: RailSide,
-        column: usize,
-        group: usize,
-        main_local_press: Point,
-    ) {
-        let Some(node) = self.dock.rail_mut(side).detach_icon_group(column, group) else {
-            return;
-        };
-        let title = match &node {
-            Node::Tabs { panels, active } => panels
-                .get(*active)
-                .or_else(|| panels.first())
-                .map(|&p| tab_label(p))
-                .unwrap_or_default(),
-            _ => String::new(),
-        };
-        self.flyout_icon = None;
-        let global = self.main_inner_origin() + main_local_press.to_vec2();
-        let (fw, fh) = (FLOAT_W, FLOAT_H);
-        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
-        let pos = global - grab;
-        let id = self
-            .dock
-            .float_node(node, [pos.x as f32, pos.y as f32, fw as f32, fh as f32]);
-
-        let attrs = Window::default_attributes()
-            .with_title(title)
+            .with_title(self.master_title(id))
             .with_decorations(false)
             .with_resizable(true)
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-            .with_inner_size(LogicalSize::new(fw, fh))
+            .with_inner_size(LogicalSize::new(size.0, size.1))
             .with_position(LogicalPosition::new(pos.x, pos.y));
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
-                .expect("create float window"),
+                .expect("create master window"),
         );
         let wid = window.id();
         let host = self.make_host(window.clone(), Role::Floating(id));
         self.hosts.insert(wid, host);
-
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_window(&self.dock);
         }
-        self.drag = Drag::MovingFloating { id, grab, pos };
         window.request_redraw();
         self.request_main_redraw();
     }
 
-    /// Tear a *whole group* off its title bar — every tab it holds, not
-    /// just one — into a new floating window. Same idea as
-    /// [`Self::tear_off_icon_group`], sourced from an already-docked/open
-    /// group instead of a collapsed one, so (unlike that one) there's a
-    /// real on-screen size to carry over.
-    fn tear_off_group(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        side: RailSide,
-        path: &NodePath,
-        main_local_press: Point,
-    ) {
-        // Measure the group's on-screen size *before* detaching it — once
-        // gone from the rail there's nothing left in the docked layout to
-        // measure.
-        let peek_panel = match self.dock.rail(side).node_at(path) {
-            Some(Node::Tabs { panels, active }) => panels.get(*active).or_else(|| panels.first()).copied(),
-            _ => None,
-        };
-        let (fw, fh) = peek_panel
-            .and_then(|p| self.panel_dock_size(p))
-            .map(|(w, h)| (w.max(RAIL_MIN_W), h.clamp(160.0, 1200.0)))
-            .unwrap_or((FLOAT_W, FLOAT_H));
-        let Some(node) = self.dock.rail_mut(side).detach_group(path) else {
+    /// A still-docked Master crossed the undock threshold *mid-drag* (the
+    /// mouse button is still down here — this runs from `CursorMoved`) —
+    /// pull it out of the dock at its current on-screen position, give it
+    /// its own window, and keep the drag going in that new window (⇐ the
+    /// prototype's "undock once moved" step, which only has to re-parent
+    /// a `div`; we need an actual OS window).
+    fn undock_master_to_window(&mut self, event_loop: &ActiveEventLoop, master: u64, grab: Vec2) {
+        let Some(rect) = self.master_screen_rect(master) else {
             return;
         };
-        let Node::Tabs { panels, active } = &node else {
-            return;
-        };
-        let title = panels.get(*active).or_else(|| panels.first()).map(|&p| tab_label(p)).unwrap_or_default();
-        self.flyout_icon = None;
-        let global = self.main_inner_origin() + main_local_press.to_vec2();
-        let grab = Vec2::new(TEAROFF_GRAB.x.min(fw - 12.0).max(12.0), TEAROFF_GRAB.y);
-        let pos = global - grab;
-        let id = self
-            .dock
-            .float_node(node, [pos.x as f32, pos.y as f32, fw as f32, fh as f32]);
-
-        let attrs = Window::default_attributes()
-            .with_title(title)
-            .with_decorations(false)
-            .with_resizable(true)
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-            .with_inner_size(LogicalSize::new(fw, fh))
-            .with_position(LogicalPosition::new(pos.x, pos.y));
-        let window = Arc::new(
-            event_loop
-                .create_window(attrs)
-                .expect("create float window"),
-        );
-        let wid = window.id();
-        let host = self.make_host(window.clone(), Role::Floating(id));
-        self.hosts.insert(wid, host);
-
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(m) = &self.native_menu {
-            m.sync_window(&self.dock);
+        self.dock.undock(master);
+        if let Some(m) = self.dock.master_mut(master) {
+            m.rect[0] = rect.x0 as f32;
+            m.rect[1] = rect.y0 as f32;
         }
-        self.drag = Drag::MovingFloating { id, grab, pos };
-        window.request_redraw();
-        self.request_main_redraw();
+        self.spawn_master_window(event_loop, master, Point::new(rect.x0, rect.y0), (rect.width(), rect.height()));
+        self.drag = Drag::MovingMaster { master, grab };
+    }
+
+    /// A Group drag crosses the detach threshold *mid-drag* (mouse still
+    /// down — this runs from `CursorMoved`) — pull it into a brand-new
+    /// floating Master immediately and keep the drag going, following the
+    /// cursor in that new window (⇐ `undock_master_to_window`, same idea
+    /// for one Group instead of a whole Master — this is what makes
+    /// tearing a Group or Panel out feel live instead of only appearing
+    /// once you let go).
+    fn detach_group_live(&mut self, event_loop: &ActiveEventLoop, master: u64, group: usize) {
+        let global = self.current_global_cursor().unwrap_or(self.pointer);
+        let grab = Vec2::new(TEAROFF_GRAB.x.min(FLOAT_W - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let pos = global - grab;
+        let rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+        let Some(id) = self.dock.detach_group(master, group, rect) else {
+            return;
+        };
+        self.spawn_master_window(event_loop, id, pos, (FLOAT_W, FLOAT_H));
+        self.drag = Drag::DraggingGroup { current: (id, 0), grab };
+    }
+
+    /// Same as `detach_group_live`, for a Panel (⇐ `detachPanel`, but live
+    /// instead of only on release).
+    fn detach_panel_live(&mut self, event_loop: &ActiveEventLoop, panel: PanelId) {
+        let global = self.current_global_cursor().unwrap_or(self.pointer);
+        let grab = Vec2::new(TEAROFF_GRAB.x.min(FLOAT_W - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let pos = global - grab;
+        let rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+        let Some(id) = self.dock.detach_panel(panel, rect) else {
+            return;
+        };
+        self.spawn_master_window(event_loop, id, pos, (FLOAT_W, FLOAT_H));
+        self.drag = Drag::DraggingPanel { panel, master: id, grab };
     }
 
     /// Open the colour picker as its own non-resizable floating window,
@@ -5574,7 +5824,7 @@ impl App {
         let rect = [pos.x as f32, pos.y as f32, fw as f32, fh as f32];
 
         if let Some(fid) = self.dock.floating_id_of(pid) {
-            if let Some(f) = self.dock.floating_mut(fid) {
+            if let Some(f) = self.dock.master_mut(fid) {
                 f.rect = rect;
             }
             if let Some(w) = self.floating_window(fid) {
@@ -5622,68 +5872,6 @@ impl App {
             self.request_main_redraw();
         }
     }
-
-    fn floating_layout(&mut self, id: u64) -> Layout {
-        let Some(f) = self.dock.floating(id) else {
-            return Layout::default();
-        };
-        let node = f.node.clone();
-        let sz = self
-            .floating_window(id)
-            .map(|w| w.inner_size())
-            .unwrap_or_default();
-        let (wl, hl) = (
-            (sz.width as f64 / self.scale).max(1.0),
-            (sz.height as f64 / self.scale).max(1.0),
-        );
-        let theme = self.theme.clone();
-        layout::layout(
-            &node,
-            Rect::new(0.0, 0.0, wl, hl),
-            &theme,
-            &mut |p| {
-                self.text.measure(&tab_label(p), 12.0)
-                    + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                    + chrome::PANEL_TAB_CLOSE_W
-            },
-            &panels::has_menu,
-        )
-    }
-
-    /// Collapse-to-icons for a detached panel (states "Collapsed Icon +
-    /// Title / Icon Only [Detached]"): shrinks the actual OS window down
-    /// to one icon row, remembering its size to restore on
-    /// [`Self::expand_floating`].
-    fn collapse_floating(&mut self, id: u64) {
-        let Some(f) = self.dock.floating_mut(id) else {
-            return;
-        };
-        let Some([w, h]) = f.collapse() else {
-            return;
-        };
-        if let Some(win) = self.floating_window(id) {
-            let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
-            win.request_redraw();
-        }
-        self.request_main_redraw();
-    }
-
-    /// Restores a floating panel collapsed by [`Self::collapse_floating`]
-    /// to the size it had before.
-    fn expand_floating(&mut self, id: u64) {
-        let Some(f) = self.dock.floating_mut(id) else {
-            return;
-        };
-        let Some([w, h]) = f.expand() else {
-            return;
-        };
-        if let Some(win) = self.floating_window(id) {
-            let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
-            win.request_redraw();
-        }
-        self.request_main_redraw();
-    }
-
 }
 
 impl ApplicationHandler for App {
@@ -5694,6 +5882,12 @@ impl ApplicationHandler for App {
     /// something is mid-animation, `Poll` only until the first frame lands.
     /// Rendering itself is on demand — see [`App::request_main_redraw`].
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Cheap per-tick safety net: a Master must never sit empty,
+        // regardless of which interaction path produced one — see
+        // `reap_closed_floating_windows`'s own doc comment. Runs every
+        // event-loop iteration rather than only after specific drag
+        // commits, so no path can be missed.
+        self.reap_closed_floating_windows();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let actions = self
@@ -5903,17 +6097,17 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                 } else if let Some(host) = self.hosts.remove(&id) {
                     if let Role::Floating(fid) = host.role {
-                        // Closing a floating window folds its panels back
-                        // into the right rail so nothing is lost.
-                        let path = self.dock.right.any_tab_path().unwrap_or_default();
-                        self.dock.redock(
-                            fid,
-                            RailSide::Right,
-                            DropTarget::Tab {
-                                path,
-                                index: usize::MAX,
-                            },
-                        );
+                        // Closing a Master's OS window folds its groups
+                        // back into whatever's already docked right, so
+                        // nothing is lost — or just docks it there outright
+                        // if nothing else is.
+                        if let Some(&right) = self.dock.docked(Side::Right).first() {
+                            if !self.dock.merge_masters(fid, right) {
+                                self.dock.dock_master(fid, Side::Right, 0);
+                            }
+                        } else {
+                            self.dock.dock_master(fid, Side::Right, 0);
+                        }
                     }
                     self.request_main_redraw();
                 }
@@ -5935,7 +6129,7 @@ impl ApplicationHandler for App {
                         size.width as f32 / self.scale as f32,
                         size.height as f32 / self.scale as f32,
                     );
-                    if let Some(f) = self.dock.floating_mut(fid) {
+                    if let Some(f) = self.dock.master_mut(fid) {
                         f.rect[2] = w;
                         f.rect[3] = h;
                     }
@@ -5953,14 +6147,16 @@ impl ApplicationHandler for App {
                 self.pointer = Point::new(position.x / self.scale, position.y / self.scale);
                 self.pointer_win = Some(id);
                 self.on_cursor_move();
-                if let Some((panel, press)) = self.pending_tearoff.take() {
-                    self.tear_off(event_loop, panel, press);
+                if let Some(master) = self.pending_master_undock.take() {
+                    if let Drag::PendingMasterMove { grab, .. } = self.drag {
+                        self.undock_master_to_window(event_loop, master, grab);
+                    }
                 }
-                if let Some((side, column, group, press)) = self.pending_icon_tearoff.take() {
-                    self.tear_off_icon_group(event_loop, side, column, group, press);
+                if let Some((master, group)) = self.pending_group_live_detach.take() {
+                    self.detach_group_live(event_loop, master, group);
                 }
-                if let Some((side, path, press)) = self.pending_group_tearoff.take() {
-                    self.tear_off_group(event_loop, side, &path, press);
+                if let Some(panel) = self.pending_panel_live_detach.take() {
+                    self.detach_panel_live(event_loop, panel);
                 }
             }
             WindowEvent::CursorLeft { .. } => {
@@ -6070,48 +6266,6 @@ impl ApplicationHandler for App {
 
 /// Right rail: Color|Transform|Pathfinder|Align on top (Swatches starts
 /// closed), Character in the middle, Layers|Artboards at the bottom.
-fn demo_right_dock() -> Node {
-    Node::Split {
-        axis: Axis::Vertical,
-        children: vec![
-            Child {
-                node: Node::Tabs {
-                    panels: vec![
-                        PanelId("color"),
-                        PanelId("transform"),
-                        PanelId("pathfinder"),
-                        PanelId("align"),
-                    ],
-                    active: 0,
-                },
-                weight: 1.5,
-            },
-            Child {
-                node: Node::Tabs {
-                    panels: vec![PanelId("character"), PanelId("paragraph")],
-                    active: 0,
-                },
-                weight: 1.1,
-            },
-            Child {
-                node: Node::Tabs {
-                    panels: vec![PanelId("layers"), PanelId("artboards")],
-                    active: 0,
-                },
-                weight: 1.6,
-            },
-        ],
-    }
-}
-
-/// Left rail: the Tools panel, like amalith-app.
-fn demo_left_dock() -> Node {
-    Node::Tabs {
-        panels: vec![PanelId("tools")],
-        active: 0,
-    }
-}
-
 /// Snap `p` to a 45°-stepped direction from `prev` when `snap` (Shift).
 fn constrained(prev: Option<Point>, p: Point, snap: bool) -> Point {
     let Some(prev) = prev.filter(|_| snap) else {
@@ -6300,6 +6454,33 @@ fn textbox_resized_rect(
     Rect::new(x0, y0, x1, y1)
 }
 
+/// A docked Master's rect within the main window — full available height,
+/// x offset from every other master already docked to the same side (⇐
+/// `layoutDocks`'s offset accumulation). A free function (not an `App`
+/// method) so both `App::docked_master_rect` and the free-standing
+/// `main_view::paint_main` (which only has a `&DockModel`, not a whole
+/// `App`) share the exact same math.
+fn docked_master_rect(dock: &DockModel, id: u64, w: f64, h: f64) -> Rect {
+    let Some(m) = dock.master(id) else {
+        return Rect::ZERO;
+    };
+    let Some((side, idx)) = m.dock else {
+        return Rect::ZERO;
+    };
+    let widths: Vec<f64> = dock
+        .docked(side)
+        .iter()
+        .map(|&mid| dock.master(mid).map(|mm| mm.rect[2] as f64).unwrap_or(0.0))
+        .collect();
+    let off = layout::dock_offset(&widths, idx);
+    let mw = m.rect[2] as f64;
+    let top = APP_BAR_H + OPT_BAR_H;
+    match side {
+        Side::Left => Rect::new(off, top, off + mw, h),
+        Side::Right => Rect::new(w - off - mw, top, w - off, h),
+    }
+}
+
 fn tab_label(panel: PanelId) -> String {
     match panel.0 {
         "tools" => "Tools",
@@ -6323,164 +6504,6 @@ fn tab_label(panel: PanelId) -> String {
         other => other,
     }
     .to_string()
-}
-
-/// A fully collapsed rail (every column iconized, `tree: None`) has no
-/// docked content left to size for — it should shrink to just the icon
-/// strip's width rather than keep reserving whatever width the user had
-/// it dragged to, which would otherwise leave a dead, empty gap between
-/// the icon strip and the canvas (not how Illustrator's dock behaves:
-/// the whole rail visually collapses down to the icon column).
-fn rail_effective_width(rail: &Rail) -> f64 {
-    if rail.tree.is_none() && !rail.icons.is_empty() {
-        rail.icon_col_w as f64
-    } else {
-        rail.width as f64
-    }
-}
-
-fn rail_rect_for(side: RailSide, rail: &Rail, width: f64, height: f64) -> Rect {
-    let rail_w = rail_effective_width(rail);
-    let rw = rail_w.clamp(RAIL_MIN_W.min(rail_w), (width * 0.7).max(RAIL_MIN_W));
-    // Rails sit below the full-width app bar + options bar.
-    let top = APP_BAR_H + OPT_BAR_H;
-    match side {
-        RailSide::Left => Rect::new(0.0, top, rw, height),
-        RailSide::Right => Rect::new(width - rw, top, width, height),
-    }
-}
-
-/// The draggable bar on a rail's canvas-facing edge.
-fn rail_edge_bar(side: RailSide, rect: Rect) -> Rect {
-    match side {
-        RailSide::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
-        RailSide::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
-    }
-}
-
-/// The draggable bar on an icon strip's own inner edge — narrower drops
-/// labels, wider brings them back (see `layout::ICON_LABEL_THRESHOLD`).
-/// Sits fully inside the rail's rect (unlike `rail_edge_bar`, which spills
-/// onto the canvas), since the icon strip never touches the canvas edge.
-fn icon_col_edge_bar(side: RailSide, col: Rect) -> Rect {
-    match side {
-        RailSide::Left => Rect::new(col.x1 - RAIL_EDGE, col.y0, col.x1, col.y1),
-        RailSide::Right => Rect::new(col.x0, col.y0, col.x0 + RAIL_EDGE, col.y1),
-    }
-}
-
-fn build_rail_layout(
-    rail: &Rail,
-    side: RailSide,
-    theme: &Theme,
-    text: &mut TextContext,
-    rect: Rect,
-) -> Layout {
-    let icon_w = (!rail.icons.is_empty()).then_some(rail.icon_col_w as f64);
-    let (tree_rect, icon_col) = layout::split_icon_col(rect, side, icon_w);
-    let mut out = match &rail.tree {
-        Some(tree) => layout::layout(
-            tree,
-            tree_rect,
-            theme,
-            &mut |p| {
-                text.measure(&tab_label(p), 12.0)
-                    + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                    + chrome::PANEL_TAB_CLOSE_W
-            },
-            &panels::has_menu,
-        ),
-        None => Layout::default(),
-    };
-    if let Some(col) = icon_col {
-        out.icon_rects = layout::layout_icons(&rail.icons, col);
-        out.icon_col = Some(col);
-    }
-    out
-}
-
-/// Comfortable minimum width for a flyout, regardless of how narrow its
-/// rail happens to be configured — a rail can be dragged down close to
-/// `RAIL_MIN_W`, and reusing that tiny width verbatim for the flyout
-/// silently clips its tabs (a multi-panel group's second-and-later tabs
-/// just disappear off the narrow strip) while the body still paints
-/// whichever tab was actually active — a real bug this constant fixes,
-/// not just a cosmetic one.
-const FLYOUT_MIN_W: f64 = 260.0;
-
-/// Where an icon strip's open flyout goes: a panel just inside the icon
-/// column (canvas side), its tab strip aligned with the icon row that
-/// opened it, sized like the rail itself (with a floor — see
-/// `FLYOUT_MIN_W`) and clamped to the rail's own vertical extent so it
-/// never spills past the window.
-fn flyout_rect_for(side: RailSide, icon_col: Rect, icon_row: Rect, rail_rect: Rect, rail_w: f64) -> Rect {
-    let w = rail_w.max(FLYOUT_MIN_W);
-    let h = 360.0_f64.min((rail_rect.y1 - icon_row.y0).max(120.0));
-    match side {
-        RailSide::Right => Rect::new(icon_col.x0 - w, icon_row.y0, icon_col.x0, icon_row.y0 + h),
-        RailSide::Left => Rect::new(icon_col.x1, icon_row.y0, icon_col.x1 + w, icon_row.y0 + h),
-    }
-}
-
-/// [`build_rail_layout`], plus — if `flyout` names an icon-strip row on
-/// `side` — one extra synthesized `PanelArea` appended for that row's own
-/// group (just that one nested `Tabs`, not its whole collapsed column),
-/// positioned by [`flyout_rect_for`]. A plain function (not an `App`
-/// method) so both the click router (`press.rs`, which has `self`) and
-/// the renderer (`paint_main`, a free function with no `self`) can call
-/// the exact same logic — every caller that already walks
-/// `Layout::areas` for clicks, painting, or hit-testing then handles the
-/// flyout exactly like any other docked group, with no separate code
-/// path to fall out of sync.
-fn build_rail_layout_with_flyout(
-    rail: &Rail,
-    side: RailSide,
-    rect: Rect,
-    flyout: Option<(RailSide, usize, usize)>,
-    theme: &Theme,
-    text: &mut TextContext,
-) -> Layout {
-    let mut laid = build_rail_layout(rail, side, theme, text, rect);
-    let Some((fs, column, group)) = flyout else {
-        return laid;
-    };
-    if fs != side {
-        return laid;
-    }
-    // Anchor the flyout at the *top* of the group's icon cluster — a
-    // multi-tab group now spans several rows (one per tab), any of which
-    // could have been clicked.
-    let group_top = laid
-        .icon_rects
-        .iter()
-        .filter(|r| r.column == column && r.group == group)
-        .map(|r| r.rect)
-        .reduce(|a, b| if b.y0 < a.y0 { b } else { a });
-    let (Some(col), Some(row_rect)) = (laid.icon_col, group_top) else {
-        return laid;
-    };
-    let Some((panels, active)) = rail.icons.get(column).and_then(|c| c.groups().into_iter().nth(group))
-    else {
-        return laid;
-    };
-    let flyout_rect = flyout_rect_for(side, col, row_rect, rect, rail.width as f64);
-    let node = Node::Tabs { panels, active };
-    let mut fl = layout::layout(
-        &node,
-        flyout_rect,
-        theme,
-        &mut |p| {
-            text.measure(&tab_label(p), 12.0)
-                + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                + chrome::PANEL_TAB_CLOSE_W
-        },
-        &panels::has_menu,
-    );
-    for a in &mut fl.areas {
-        a.is_flyout = true;
-    }
-    laid.areas.append(&mut fl.areas);
-    laid
 }
 
 /// The options / context bar: full window width, directly under the app
@@ -6546,59 +6569,42 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod rail_geometry_tests {
+mod dock_geometry_tests {
     use super::*;
-    use crate::dock::IconColumn;
 
-    fn tabs(panel: &'static str) -> Node {
-        Node::Tabs { panels: vec![PanelId(panel)], active: 0 }
+    const A: PanelId = PanelId("a");
+    const B: PanelId = PanelId("b");
+
+    #[test]
+    fn a_lone_docked_master_keeps_its_configured_width() {
+        let mut dock = DockModel::new();
+        let m = dock.spawn_master(vec![vec![A]], [0.0, 0.0, 240.0, 100.0]);
+        dock.dock_master(m, Side::Right, 0);
+        assert_eq!(docked_master_rect(&dock, m, 1000.0, 800.0).width(), 240.0);
     }
 
     #[test]
-    fn a_docked_rail_keeps_its_configured_width() {
-        let mut rail = Rail::with(tabs("color"));
-        rail.width = 240.0;
-        assert_eq!(rail_effective_width(&rail), 240.0);
-        assert_eq!(rail_rect_for(RailSide::Right, &rail, 1000.0, 800.0).width(), 240.0);
+    fn two_masters_docked_the_same_side_stack_by_width_in_order() {
+        let mut dock = DockModel::new();
+        let m1 = dock.spawn_master(vec![vec![A]], [0.0, 0.0, 200.0, 100.0]);
+        let m2 = dock.spawn_master(vec![vec![B]], [0.0, 0.0, 150.0, 100.0]);
+        dock.dock_master(m1, Side::Left, 0);
+        dock.dock_master(m2, Side::Left, 1);
+        let r1 = docked_master_rect(&dock, m1, 1000.0, 800.0);
+        let r2 = docked_master_rect(&dock, m2, 1000.0, 800.0);
+        assert_eq!(r1.x0, 0.0);
+        assert_eq!(r1.x1, 200.0);
+        assert_eq!(r2.x0, 200.0);
+        assert_eq!(r2.x1, 350.0);
     }
 
     #[test]
-    fn a_fully_collapsed_rail_shrinks_to_the_icon_strip_not_its_old_width() {
-        // Every column iconized: `tree` is empty but the rail is not — it
-        // must not keep reserving its pre-collapse width, or the canvas
-        // leaves a dead empty gap between the icon strip and the drawing
-        // area instead of the whole rail visually shrinking down, which is
-        // how Illustrator's dock actually behaves.
-        let mut rail = Rail::default();
-        rail.width = 240.0;
-        rail.icons = vec![IconColumn { node: tabs("color") }];
-        assert_eq!(rail.tree, None);
-        assert_eq!(rail_effective_width(&rail), layout::ICON_COL_W);
-        let rect = rail_rect_for(RailSide::Right, &rail, 1000.0, 800.0);
-        assert_eq!(rect.width(), layout::ICON_COL_W);
-    }
-
-    #[test]
-    fn a_fully_collapsed_rail_tracks_its_own_dragged_icon_width() {
-        // The icon strip's width is user-draggable (icon+label vs.
-        // icon-only), independent of the docked-tree width it had before
-        // collapsing — a fully collapsed rail must reflect *that* value,
-        // not the fixed default.
-        let mut rail = Rail::default();
-        rail.icons = vec![IconColumn { node: tabs("color") }];
-        rail.icon_col_w = 48.0;
-        assert_eq!(rail_effective_width(&rail), 48.0);
-        assert_eq!(rail_rect_for(RailSide::Left, &rail, 1000.0, 800.0).width(), 48.0);
-    }
-
-    #[test]
-    fn a_partially_collapsed_rail_keeps_its_full_width() {
-        // Only some columns are iconized (side-by-side columns, one
-        // collapsed); the tree still holds the survivors, so the rail
-        // keeps its normal width — the icon strip just adds onto it.
-        let mut rail = Rail::with(tabs("layers"));
-        rail.width = 240.0;
-        rail.icons = vec![IconColumn { node: tabs("color") }];
-        assert_eq!(rail_effective_width(&rail), 240.0);
+    fn a_right_docked_master_hugs_the_window_s_right_edge() {
+        let mut dock = DockModel::new();
+        let m = dock.spawn_master(vec![vec![A]], [0.0, 0.0, 300.0, 100.0]);
+        dock.dock_master(m, Side::Right, 0);
+        let r = docked_master_rect(&dock, m, 1000.0, 800.0);
+        assert_eq!(r.x1, 1000.0);
+        assert_eq!(r.x0, 700.0);
     }
 }

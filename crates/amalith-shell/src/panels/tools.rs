@@ -61,7 +61,7 @@ fn cols(body: Rect) -> usize {
 
 /// Shortest body that still shows every tool plus the fill / stroke chips,
 /// for the splitter-drag minimum. Depends on width via the column reflow.
-pub(super) fn natural_height(width: f64) -> f64 {
+pub fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
     let rows = 12usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
@@ -284,7 +284,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
     scene.stroke(&Stroke::new(2.0), ID, SLASH_RED, None, &slash);
 }
 
-pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
+pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
     for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
         let r = cell(body, i, cols);

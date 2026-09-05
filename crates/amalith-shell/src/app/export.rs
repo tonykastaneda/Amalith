@@ -95,7 +95,7 @@ impl App {
             .hosts
             .iter()
             .filter_map(|(wid, h)| match h.role {
-                Role::Floating(fid) if self.dock.floating(fid).is_none() => Some(*wid),
+                Role::Floating(fid) if self.dock.master(fid).is_none() => Some(*wid),
                 _ => None,
             })
             .collect();

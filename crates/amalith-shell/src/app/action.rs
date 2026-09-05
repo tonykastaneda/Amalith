@@ -682,43 +682,8 @@ impl App {
                 return Some(f);
             }
         }
-        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
-            [RailSide::Left, RailSide::Right]
-                .iter()
-                .flat_map(|&side| {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        return Vec::new();
-                    }
-                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail, w, h);
-                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
-                })
-                .collect()
-        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
-            self.hosts.get(&wid).and_then(|h| match h.role {
-                Role::Floating(f) => Some(f),
-                _ => None,
-            })
-        }) {
-            self.floating_layout(fid).areas
-        } else {
-            return None;
-        };
-        for area in &areas {
-            if !area.body.contains(self.pointer) {
-                continue;
-            }
-            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
-                continue;
-            };
-            if pid.0 != "transform" {
-                continue;
-            }
-            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
-            return panels::transform::field_at(pbody, self.pointer);
-        }
-        None
+        let pbody = self.active_panel_body_at_pointer("transform")?;
+        panels::transform::field_at(pbody, self.pointer)
     }
 
     /// The Gradient-panel numeric under the pointer, for scroll-to-nudge.
@@ -727,43 +692,8 @@ impl App {
             return None;
         }
         let kind = self.target_gradient().map(|(_, g)| g.kind);
-        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
-            [RailSide::Left, RailSide::Right]
-                .iter()
-                .flat_map(|&side| {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        return Vec::new();
-                    }
-                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail, w, h);
-                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
-                })
-                .collect()
-        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
-            self.hosts.get(&wid).and_then(|h| match h.role {
-                Role::Floating(f) => Some(f),
-                _ => None,
-            })
-        }) {
-            self.floating_layout(fid).areas
-        } else {
-            return None;
-        };
-        for area in &areas {
-            if !area.body.contains(self.pointer) {
-                continue;
-            }
-            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
-                continue;
-            };
-            if pid.0 != "gradient" {
-                continue;
-            }
-            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
-            return panels::gradient::field_at(pbody, self.pointer, kind);
-        }
-        None
+        let pbody = self.active_panel_body_at_pointer("gradient")?;
+        panels::gradient::field_at(pbody, self.pointer, kind)
     }
 
     /// Digit / Enter / Esc stay in the field. Anything else (Space, V, ⌘Z)
@@ -1076,43 +1006,10 @@ impl App {
         if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
             return false;
         }
-        let areas: Vec<crate::layout::PanelArea> = if self.pointer_win == self.main_id {
-            [RailSide::Left, RailSide::Right]
-                .iter()
-                .flat_map(|&side| {
-                    let rail = self.dock.rail(side);
-                    if rail.is_empty() {
-                        return Vec::new();
-                    }
-                    let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-                    let rect = rail_rect_for(side, rail, w, h);
-                    build_rail_layout(rail, side, &self.theme, &mut self.text, rect).areas
-                })
-                .collect()
-        } else if let Some(fid) = self.pointer_win.and_then(|wid| {
-            self.hosts.get(&wid).and_then(|h| match h.role {
-                Role::Floating(f) => Some(f),
-                _ => None,
-            })
-        }) {
-            self.floating_layout(fid).areas
-        } else {
+        let Some(pbody) = self.active_panel_body_at_pointer("align") else {
             return false;
         };
-        for area in &areas {
-            if !area.body.contains(self.pointer) {
-                continue;
-            }
-            let Some(pid) = area.tabs.get(area.active).map(|t| t.panel) else {
-                continue;
-            };
-            if pid.0 != "align" {
-                continue;
-            }
-            let pbody = panels::scrolled_body(pid, area.body, self.panel_scroll_of(pid)).0;
-            return panels::align::spacing_field_at(pbody, self.pointer);
-        }
-        false
+        panels::align::spacing_field_at(pbody, self.pointer)
     }
 
     /// Digit / Enter / Esc stay in the Align spacing field.

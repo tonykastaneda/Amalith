@@ -69,6 +69,6 @@ pub mod theme;
 pub mod tool;
 pub mod workspace;
 
-pub use dock::{Axis, Child, DockModel, DropTarget, Floating, Node, NodePath, PanelId, Side};
-pub use layout::{hit_test, Layout, PanelArea, SplitterHandle, TabRect};
+pub use dock::{DockModel, Group, Master, MasterKind, MasterLayout, PanelId, Side, ToolsDensity};
+pub use layout::{GroupArea, GroupDrop, MasterFrame, PanelDrop, PanelRow, TabRect};
 pub use theme::Theme;
