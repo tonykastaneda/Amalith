@@ -13,7 +13,7 @@ const features = [
   {
     eyebrow: "One command engine",
     title: "Draw it. Script it. Agent it.",
-    body: "The mouse, keyboard, plugins, scripts, CLI, and agents all speak the same operation language. Every change remains undoable and every workflow stays consistent.",
+    body: "The editor uses a shared command engine. Broader access for scripts, plugins, CLI tools, and agents is a development goal; those integrations are not all available today.",
     tone: "yellow",
     label: "Command engine diagram placeholder",
   },
@@ -50,9 +50,9 @@ export default function Home() {
     <>
       <Header basePath={basePath} />
 
-      <main id="top">
+      <main tabIndex={-1} id="top">
         <section className="hero" aria-labelledby="hero-title">
-          <p className="kicker"><span /> Free · open source · cross-platform</p>
+          <p className="kicker"><span /> Free today · open source · cross-platform</p>
           <h1 id="hero-title">Design freely.<br /><em>Keep the power.</em></h1>
           <div className="hero__bottom">
             <p>A professional vector editor built for familiar workflows—and a future where every action is equally available to people, scripts, plugins, and agents.</p>
@@ -67,7 +67,7 @@ export default function Home() {
         <section className="manifesto section-shell" id="why">
           <p className="section-number">01 / Why Amalith</p>
           <div>
-            <h2>The vector editor that launched yesterday with <em>20 years of tutorials.</em></h2>
+            <h2>A vector editor built around <em>familiar workflows.</em></h2>
             <p>Amalith is being built so experienced Illustrator users can sit down and begin—without giving up openness, automation, or ownership of their work.</p>
           </div>
         </section>
@@ -86,10 +86,11 @@ export default function Home() {
         </section>
 
         <section className="principles section-shell">
+          <p>Amalith is free today. We plan to charge in the future, but no date or pricing has been announced.</p>
           <p className="section-number">05 / Built in public</p>
           <h2>Open to All.<br /><em>Yours to shape.</em></h2>
           <div className="principles__grid">
-            <p>No subscription</p><p>No mandatory account</p><p>No proprietary cloud</p>
+            <p>No payment required today</p><p>No mandatory account</p><p>No proprietary cloud</p>
             <p>Open document format</p><p>macOS, Windows &amp; Linux</p><p>MIT or Apache 2.0</p>
           </div>
         </section>
@@ -101,7 +102,7 @@ export default function Home() {
           </div>
           <div className="status__copy">
             <p>Amalith is in early development. The native desktop app already has documents, multiple artboards, tabs, an infinite pasteboard, save/load, undoable commands, and core canvas navigation.</p>
-            <p>Pen drawing, object selection, fill and stroke editing, export UI, and the full CLI are still ahead. Follow the repository to watch—and help—the editor grow.</p>
+            <p>Features and platform support are evolving. Check the repository for current implementation details and known limitations; previews on this site are illustrative placeholders.</p>
             <a className="text-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Explore on GitHub <span aria-hidden="true">→</span></a>
           </div>
         </section>

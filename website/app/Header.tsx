@@ -13,10 +13,11 @@ export function Header({ basePath }: { basePath: string }) {
   useEffect(() => {
     let frame = 0;
 
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const rawProgress = Math.min(Math.max(window.scrollY / 180, 0), 1);
+        const rawProgress = reducedMotion.matches ? 0 : Math.min(Math.max(window.scrollY / 180, 0), 1);
         const progress = rawProgress * rawProgress * (3 - 2 * rawProgress);
         const logoScale = 1 - progress * 0.18;
         const glassAlpha = 0.68 - progress * 0.16;
@@ -51,18 +52,18 @@ export function Header({ basePath }: { basePath: string }) {
       </a>
       <nav className="desktop-nav" aria-label="Primary navigation">
         <a href={whyHref}>Why Amalith</a>
-        <a href={`${homeHref}#why`}>Features</a>
+        <a href={`${homeHref}#features`}>Features</a>
         <a href={`${homeHref}#status`}>News</a>
         <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub</a>
       </nav>
       <a className="get-link" href={downloadsHref}>
-        Coming Soon
+        Downloads
       </a>
       <details className="mobile-nav">
         <summary>Menu</summary>
         <div>
           <a href={whyHref}>Why Amalith</a>
-          <a href={`${homeHref}#why`}>Features</a>
+          <a href={`${homeHref}#features`}>Features</a>
           <a href={`${homeHref}#status`}>News</a>
           <a href={downloadsHref}>Get Amalith <ArrowUpRight /></a>
           <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a>

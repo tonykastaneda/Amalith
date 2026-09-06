@@ -15,7 +15,7 @@ export default function WhyAmalith() {
     <>
       <Header basePath={basePath} />
 
-      <main id="top" className="why-page why-cost-page" aria-label="Why Amalith">
+      <main tabIndex={-1} id="top" className="why-page why-cost-page" aria-label="Why Amalith">
         <section className="why-cost-hero" aria-labelledby="why-cost-title">
           <div className="why-cost-hero__inner">
             <p className="kicker">Why Amalith</p>
@@ -57,11 +57,11 @@ export default function WhyAmalith() {
             <h2>Make the tool <em>yours.</em></h2>
           </div>
           <div className="why-cost-answer__copy">
-            <p>Amalith is being built as a professional vector editor with no subscription, no mandatory account, and no proprietary cloud lock-in.</p>
+            <p>Amalith is free to use today, with no payment or mandatory account required. We plan to charge in the future, but have not announced when, how much, or which offerings will be paid.</p>
             <ul>
               <li>Open documents you can keep and move</li>
-              <li>A shared command engine for people, scripts, plugins, and agents</li>
-              <li>Professional workflows without a toll gate between you and your work</li>
+              <li>A shared command engine, with broader automation integrations planned</li>
+              <li>Local documents and familiar vector editing workflows</li>
             </ul>
             <a className="text-link" href={`${basePath}/downloads/`}>See the download plan <ArrowUpRight /></a>
           </div>
@@ -87,14 +87,7 @@ export default function WhyAmalith() {
           </div>
         </section>
 
-        <section className="why-cost-research section-shell">
-          <p className="section-number">08 / Follow the incentives</p>
-          <div>
-            <h2>The pattern is bigger than one app.</h2>
-            <p>The accompanying research tracks documented SEC and regulatory findings, civil allegations, dismissals, and open research involving investors and institutional holders connected to Canva and Adobe. It is a record of different kinds of matters—not a claim that every party listed acted unlawfully.</p>
-            <p className="why-cost-research__fineprint">Allegations are labeled as allegations. Regulatory findings are attributed to the relevant proceeding. Dismissals and matters involving affiliates or portfolio companies are retained with their distinctions.</p>
-          </div>
-        </section>
+
       </main>
 
       <Footer basePath={basePath} />

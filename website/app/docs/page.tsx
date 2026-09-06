@@ -61,7 +61,7 @@ export default function Docs() {
           </nav>
         </aside>
 
-        <main className="docs-main" id="top">
+        <main className="docs-main" id="top" tabIndex={-1}>
           <article className="docs-article">
             <div className="docs-breadcrumb"><a href={`${basePath}/docs/`}>Amalith Docs</a></div>
 

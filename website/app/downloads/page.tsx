@@ -29,7 +29,7 @@ export default function Downloads() {
     <>
       <Header basePath={basePath} />
 
-      <main id="top" className="downloads-page">
+      <main tabIndex={-1} id="top" className="downloads-page">
         <section className="downloads-hero" aria-labelledby="downloads-title">
           <div className="downloads-hero__inner">
             <p className="kicker">Finally</p>
@@ -38,12 +38,15 @@ export default function Downloads() {
               <span>creatives <em>create.</em></span>
             </h1>
 
+            <p className="download-note">Amalith is free today. No payment or card is required. We plan to charge in the future, but no date or pricing has been announced.</p>
+            <p className="download-note">Packaged downloads are coming soon. You can <a href="https://github.com/tonykastaneda/Amalith#build-and-run">build from source</a> now.</p>
+
             <div className="download-actions" aria-label="Desktop downloads coming soon">
               {platforms.map((platform) => (
-                <button className="platform-download" type="button" key={platform.name}>
+                <span className="platform-download platform-download--unavailable" key={platform.name}>
                   <img src={platform.icon} alt="" aria-hidden="true" />
                   <span>Coming soon for {platform.name}</span>
-                </button>
+                </span>
               ))}
             </div>
           </div>
