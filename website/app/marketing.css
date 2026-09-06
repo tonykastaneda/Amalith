@@ -59,8 +59,8 @@
 .marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
 .marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; }
 .marketing-page .cta__mark { width: 400px; max-width: none; top: -100px; bottom: auto; left: 20%; transform: none; opacity: .08; }
-.marketing-page .why-cost-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; border: 0; padding-block: 48px; }
-.marketing-page .why-cost-grid article { min-height: 320px; padding: 32px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.marketing-page .why-cost-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; border: 0; padding-block: 48px; }
+.marketing-page .why-cost-grid article { min-height: 0; padding: 24px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
 .marketing-page .why-cost-grid h2 { margin: 32px 0 20px; font-size: 32px; }
 .marketing-page .why-cost-grid article > p:last-child { font-size: 16px; line-height: 1.6; color: var(--muted); }
 .marketing-page .why-cost-answer, .marketing-page .why-cost-allies { padding: var(--section-space) 0; grid-template-columns: 1fr 1fr; gap: 64px; }
@@ -71,13 +71,13 @@
 .marketing-page .why-cost-allies__links a { min-height: 88px; }
 .marketing-page .platform-section { padding-bottom: var(--section-space); }
 .marketing-page .platform-section > h2 { margin: 24px 0 32px; }
-.marketing-page .platform-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.marketing-page .platform-card { padding: 32px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
-.marketing-page .platform-card__icon { width: 48px; height: 48px; padding: 12px; border-radius: 8px; background: var(--paper); display: grid; place-items: center; }
-.marketing-page .platform-card__icon img { width: 24px; height: 24px; object-fit: contain; }
+.marketing-page .platform-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; }
+.marketing-page .platform-card { padding: 24px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
+.marketing-page .platform-card__icon { width: 32px; height: 32px; padding: 0; background: transparent; display: grid; place-items: center; }
+.marketing-page .platform-card__icon img { width: 28px; height: 28px; object-fit: contain; filter: invert(1); }
 .marketing-page .platform-card h3 { margin: 32px 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
 .marketing-page .platform-card p { margin: 0 0 24px; color: var(--muted); font-size: 16px; }
-.marketing-page .availability-label { display: inline-block; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; color: var(--muted); }
+.marketing-page .availability-label { display: inline-block; padding: 0; border: 0; font-size: 13px; color: var(--muted); }
 .marketing-page .pricing-note { margin: 32px 0 0; max-width: 680px; color: var(--muted); font-size: 16px; line-height: 1.6; }
 .marketing-page .pricing-note a { display: inline; color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
 .marketing-page .information-layout { display: grid; grid-template-columns: 240px minmax(0, 720px); justify-content: space-between; gap: 64px; padding-block: 32px var(--section-space); border-top: 1px solid var(--line); }
@@ -98,7 +98,7 @@
   .marketing-page .status, .marketing-page .why-cost-answer, .marketing-page .why-cost-allies { grid-template-columns: 1fr; gap: 32px; }
   .marketing-page .cta { padding: 32px; grid-template-columns: 1fr; grid-template-rows: auto; }
   .marketing-page .cta > a { justify-self: start; grid-row: auto; }
-  .marketing-page .platform-card { padding: 24px; }
+  .marketing-page .platform-card { padding: 24px 0 0; }
   .marketing-page .information-layout { grid-template-columns: 1fr; gap: 32px; }
   .marketing-page .information-nav { position: static; flex-direction: row; flex-wrap: wrap; }
 }

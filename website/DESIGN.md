@@ -18,7 +18,7 @@ Retain yellow `#ffc619`, warm white `#f5f2ea`, ink `#11110f`, canvas `#050505`, 
 - Display 48–96px, weight 600, line height 1.04; section headings 34–56px, line height 1.08.
 - Body 18px / 1.6, reading pages 17px / 1.75; muted text uses `#b9b7ae`.
 - 12px uppercase eyebrows, consistent spacing before titles and paragraphs.
-- 12px panel corners; 8px action corners; 1px neutral borders.
+- Prefer open columns with thin top rules for feature comparisons and platform availability. No filled, rounded cards for these sections; no icon tiles or bordered status badges. Reserve panel framing for product previews. Use 8px action corners.
 - Actions at least 48px tall; yellow primary, bordered dark secondary. Availability is static status text, never a fake download button.
 - PolicyLayout provides one shared project-information navigation and reading column.
 - Narrow layouts stack columns; avoid fixed minimum widths and horizontal overflow.
