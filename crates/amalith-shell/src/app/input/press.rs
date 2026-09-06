@@ -50,6 +50,9 @@ impl App {
                 if action == panels::Action::ShapeSlot {
                     let anchor = panels::tools::shape_slot_rect(frame.body);
                     self.shape_press = Some((Instant::now(), anchor));
+                } else if let panels::Action::ToolFlyout(group) = action {
+                    let anchor = panels::tools::group_slot_rect(frame.body, group);
+                    self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
                     let spawn = double && matches!(action, panels::Action::OpenPicker(_));
                     let grad_drag = gradient_drag_for(&action, double);
@@ -150,6 +153,9 @@ impl App {
                 if action == panels::Action::ShapeSlot {
                     let anchor = panels::tools::shape_slot_rect(pbody);
                     self.shape_press = Some((Instant::now(), anchor));
+                } else if let panels::Action::ToolFlyout(group) = action {
+                    let anchor = panels::tools::group_slot_rect(pbody, group);
+                    self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
                     let spawn = double && matches!(action, panels::Action::OpenPicker(_));
                     let arm_drag = !double && pid == PanelId("layers") && matches!(action, panels::Action::Select(_));
@@ -548,7 +554,7 @@ impl App {
                 // shape tool, or click away to dismiss.
                 if let Some(anchor) = self.shape_flyout {
                     for (i, t) in panels::tools::SHAPE_TOOLS.iter().enumerate() {
-                        if shape_flyout_cell(anchor, i).contains(self.pointer) {
+                        if tool_flyout_row(anchor, i).contains(self.pointer) {
                             self.last_shape_tool = *t;
                             self.set_tool(*t);
                             break;
@@ -556,6 +562,21 @@ impl App {
                     }
                     self.shape_flyout = None;
                     self.shape_press = None;
+                    self.request_main_redraw();
+                    return;
+                }
+
+                // The labeled tool-group flyout captures the next click:
+                // pick a tool from the group, or click away to dismiss.
+                if let Some((anchor, group)) = self.tool_flyout {
+                    for (i, t) in group.tools().iter().enumerate() {
+                        if tool_flyout_row(anchor, i).contains(self.pointer) {
+                            self.set_tool(*t);
+                            break;
+                        }
+                    }
+                    self.tool_flyout = None;
+                    self.tool_flyout_press = None;
                     self.request_main_redraw();
                     return;
                 }
@@ -819,7 +840,7 @@ impl App {
                                 .map(|o| (*id, convert::affine(o.transform)))
                         })
                         .collect();
-                    if let Some(pivot) = self.rotate_pivot().filter(|_| !start_xf.is_empty()) {
+                    if let Some(pivot) = self.transform_tool_pivot().filter(|_| !start_xf.is_empty()) {
                         self.drag = Drag::RotateTool {
                             pivot,
                             start_angle: handles::angle_to(pivot, dp),
@@ -827,6 +848,34 @@ impl App {
                             start_xf,
                             copy: self.alt_down,
                             moved: false,
+                        };
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
+
+                // Reflect / Shear tools: a drag mirrors / shears the
+                // selection about the reference point; a plain click (no
+                // drag) re-places it — same mechanics as the Rotate tool.
+                if matches!(self.active_tool, Tool::Reflect | Tool::Shear | Tool::Scale) {
+                    let start_xf: HashMap<ObjectId, Affine> = self
+                        .doc
+                        .selection
+                        .iter()
+                        .filter_map(|id| {
+                            self.doc
+                                .editor
+                                .document()
+                                .object(*id)
+                                .map(|o| (*id, convert::affine(o.transform)))
+                        })
+                        .collect();
+                    if let Some(pivot) = self.transform_tool_pivot().filter(|_| !start_xf.is_empty()) {
+                        let (press, copy) = (self.pointer, self.alt_down);
+                        self.drag = match self.active_tool {
+                            Tool::Reflect => Drag::ReflectTool { pivot, press, preview: start_xf.clone(), start_xf, copy, moved: false },
+                            Tool::Shear => Drag::ShearTool { pivot, press, preview: start_xf.clone(), start_xf, copy, moved: false },
+                            _ => Drag::ScaleTool { pivot, press, preview: start_xf.clone(), start_xf, copy, moved: false },
                         };
                         self.request_main_redraw();
                     }
@@ -1128,10 +1177,29 @@ impl App {
                     let visible = self.visible_doc_rect();
                     let candidate =
                         select::topmost_selectable_at(self.doc.editor.document(), dp, visible);
-                    self.drag = Drag::AnchorMarquee {
-                        start: self.pointer,
-                        candidate,
-                    };
+                    if let Some(id) = candidate {
+                        // A press on an object's body/fill (not a node):
+                        // select it, revealing its nodes, and arm a move
+                        // drag — same as the Selection tool — so a
+                        // click-drag from here moves the whole object
+                        // instead of rubber-banding its nodes.
+                        if self.shift_down {
+                            if !self.doc.selection.contains(&id) {
+                                self.doc.selection.push(id);
+                            }
+                        } else if !self.doc.selection.contains(&id) {
+                            self.doc.selection = vec![id];
+                        }
+                        self.doc.anchor_sel.clear();
+                        self.drag = Drag::MoveObjects {
+                            start_doc: dp,
+                            last_doc: dp,
+                            moved: false,
+                            hit: Some(id),
+                        };
+                    } else {
+                        self.drag = Drag::AnchorMarquee { start: self.pointer };
+                    }
                     self.request_main_redraw();
                     return;
                 }

@@ -23,6 +23,9 @@ const CELL: f64 = 36.0;
 const TOP: f64 = 4.0;
 /// Index of the Shape slot among [`slots`].
 const SHAPE_SLOT: usize = 5;
+/// Index of the Rotate/Reflect and Scale/Shear flyout-group slots.
+pub const ROTATE_GROUP_SLOT: usize = 11;
+pub const SCALE_GROUP_SLOT: usize = 12;
 
 /// The primitive tools the Shape slot collects, in flyout order.
 pub const SHAPE_TOOLS: [Tool; 5] = [
@@ -33,8 +36,9 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
     Tool::Star,
 ];
 
-/// The visible slots; the Shape slot shows `shape`'s icon.
-fn slots(shape: Tool) -> [Tool; 12] {
+/// The visible slots; the Shape slot shows `shape`'s icon, and the two
+/// flyout-group slots show whichever tool in that group was last used.
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 13] {
     [
         Tool::Select,
         Tool::DirectSelect,
@@ -47,7 +51,8 @@ fn slots(shape: Tool) -> [Tool; 12] {
         Tool::Zoom,
         Tool::Eyedropper,
         Tool::Gradient,
-        Tool::Rotate,
+        rotate_group,
+        scale_group,
     ]
 }
 
@@ -63,7 +68,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
-    let rows = 12usize.div_ceil(cols) as f64;
+    let rows = 13usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     TOP + rows * CELL + 12.0 + PROXY_H
 }
@@ -84,6 +89,15 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
 /// Screen rect of the Shape slot — the flyout anchors to it.
 pub fn shape_slot_rect(body: Rect) -> Rect {
     cell(body, SHAPE_SLOT, cols(body))
+}
+
+/// Screen rect of a flyout-group slot — its labeled flyout anchors here.
+pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup) -> Rect {
+    let i = match group {
+        crate::tool::ToolGroup::RotateReflect => ROTATE_GROUP_SLOT,
+        crate::tool::ToolGroup::ScaleShear => SCALE_GROUP_SLOT,
+    };
+    cell(body, i, cols(body))
 }
 
 /// Screen rects of every hit target in the Fill/Stroke proxy.
@@ -286,10 +300,17 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+        .into_iter()
+        .enumerate()
+    {
         let r = cell(body, i, cols);
         let active = if i == SHAPE_SLOT {
             ctx.active_tool.is_shape()
+        } else if i == ROTATE_GROUP_SLOT {
+            crate::tool::ToolGroup::RotateReflect.contains(ctx.active_tool)
+        } else if i == SCALE_GROUP_SLOT {
+            crate::tool::ToolGroup::ScaleShear.contains(ctx.active_tool)
         } else {
             tool == ctx.active_tool
         };
@@ -305,7 +326,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             ctx.theme.text_dim
         };
         icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (22.0, 22.0)), color);
-        if i == SHAPE_SLOT {
+        if matches!(i, SHAPE_SLOT | ROTATE_GROUP_SLOT | SCALE_GROUP_SLOT) {
             // Bottom-right triangle: this slot has a flyout.
             let mut t = BezPath::new();
             t.move_to((r.x1 - 6.0, r.y1 - 2.0));
@@ -353,12 +374,16 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::SetPaint(Paint::None);
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+        .into_iter()
+        .enumerate()
+    {
         if cell(body, i, cols).contains(local) {
-            return if i == SHAPE_SLOT {
-                Action::ShapeSlot
-            } else {
-                Action::SetTool(tool)
+            return match i {
+                SHAPE_SLOT => Action::ShapeSlot,
+                ROTATE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::RotateReflect),
+                SCALE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::ScaleShear),
+                _ => Action::SetTool(tool),
             };
         }
     }
@@ -390,7 +415,10 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         return Some("Fill".into());
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool).into_iter().enumerate() {
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+        .into_iter()
+        .enumerate()
+    {
         if cell(body, i, cols).contains(local) {
             let key = tool.key();
             return Some(if key.is_empty() {

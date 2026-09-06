@@ -61,6 +61,9 @@ pub(in crate::app) fn paint_main(
     cursor_mode: CanvasCursor,
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
+    last_rotate_tool: Tool,
+    last_scale_tool: Tool,
+    tool_flyout: Option<(Rect, crate::tool::ToolGroup)>,
     stroke_popover: bool,
     editing_text: Option<ObjectId>,
     text_style: amalith_core::TextStyle,
@@ -534,6 +537,8 @@ pub(in crate::app) fn paint_main(
         cur_fill,
         cur_stroke,
         shape_tool,
+        rotate_group_tool: last_rotate_tool,
+        scale_group_tool: last_scale_tool,
         expanded,
         renaming,
         selected_layer,
@@ -723,6 +728,30 @@ pub(in crate::app) fn paint_main(
     // The Stroke flyout is painted by the overlay pass (after the rulers)
     // so a dropped-down popover isn't covered by the ruler strip.
 
+
+    // Primitive flyout — Illustrator's own flyout style: icon + name +
+    // shortcut per row, with a small marker beside the current tool.
+    if let Some(anchor) = shape_flyout {
+        paint_flyout_bg(scene, theme, anchor, panels::tools::SHAPE_TOOLS.len());
+        for (i, t) in panels::tools::SHAPE_TOOLS.iter().enumerate() {
+            paint_flyout_row(scene, text, theme, pointer, tool_flyout_row(anchor, i), *t, shape_tool);
+        }
+    }
+
+    // Labeled tool-group flyout (Rotate/Reflect, Scale/Shear) — same style.
+    if let Some((anchor, group)) = tool_flyout {
+        let tools = group.tools();
+        paint_flyout_bg(scene, theme, anchor, tools.len());
+        let current = match group {
+            crate::tool::ToolGroup::RotateReflect => last_rotate_tool,
+            crate::tool::ToolGroup::ScaleShear => last_scale_tool,
+        };
+        for (i, t) in tools.iter().enumerate() {
+            paint_flyout_row(scene, text, theme, pointer, tool_flyout_row(anchor, i), *t, current);
+        }
+    }
+
+
     // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, hint, over_selectable)) = cursor_glyph {
         let sz = 30.0;
@@ -855,30 +884,6 @@ pub(in crate::app) fn paint_main(
             _ => {}
         }
     }
-
-    // Primitive flyout.
-    if let Some(anchor) = shape_flyout {
-        let last = shape_flyout_cell(anchor, panels::tools::SHAPE_TOOLS.len() - 1);
-        let bg = Rect::new(anchor.x1 + 4.0, anchor.y0 - 3.0, last.x1 + 3.0, last.y1 + 3.0);
-        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bg);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bg);
-        for (i, t) in panels::tools::SHAPE_TOOLS.iter().enumerate() {
-            let c = shape_flyout_cell(anchor, i);
-            let on = *t == shape_tool;
-            if on {
-                scene.fill(Fill::NonZero, ID, theme.accent, None, &c);
-            } else if c.contains(pointer) {
-                scene.fill(Fill::NonZero, ID, theme.accent.with_alpha(0.14), None, &c);
-            }
-            let col = if on {
-                Color::from_rgb8(0xff, 0xff, 0xff)
-            } else {
-                theme.text_dim
-            };
-            icons::draw(scene, t.icon(), Rect::from_center_size(c.center(), (22.0, 22.0)), col);
-        }
-    }
-
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
     // traffic lights floating over its left end. On Windows APP_BAR_H is 0
     // — the native title bar and menu bar own this space — so skip it.
@@ -920,4 +925,47 @@ pub(in crate::app) fn paint_main(
         }
     }
 
+}
+
+/// Panel background for a labeled flyout of `n` rows anchored at `anchor`
+/// — shared by the primitive flyout and the Rotate/Reflect and
+/// Scale/Shear group flyouts.
+fn paint_flyout_bg(scene: &mut Scene, theme: &Theme, anchor: Rect, n: usize) {
+    let last = tool_flyout_row(anchor, n - 1);
+    let bg = Rect::new(anchor.x1 + 4.0, anchor.y0 - 3.0, last.x1 + 3.0, last.y1 + 3.0);
+    scene.fill(Fill::NonZero, ID, theme.bg, None, &bg.to_rounded_rect(5.0));
+    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bg.to_rounded_rect(5.0));
+}
+
+/// One labeled flyout row: icon + name + shortcut, with a small marker
+/// beside `t` when it's `current`.
+fn paint_flyout_row(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    theme: &Theme,
+    pointer: Point,
+    r: Rect,
+    t: Tool,
+    current: Tool,
+) {
+    let on = t == current;
+    if r.contains(pointer) {
+        scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &r);
+    }
+    if on {
+        let bullet = Rect::from_center_size(Point::new(r.x0 + 12.0, r.center().y), (5.0, 5.0));
+        scene.fill(Fill::NonZero, ID, theme.text_dim, None, &bullet);
+    }
+    let ink = if on { theme.accent } else { theme.text_dim };
+    let icon_box = Rect::from_center_size(Point::new(r.x0 + 32.0, r.center().y), (20.0, 20.0));
+    icons::draw(scene, t.icon(), icon_box, ink);
+    let label_col = if on { theme.accent } else { theme.text };
+    let label = format!("{} Tool", t.label());
+    text.draw(scene, &label, 12.5, label_col, r.x0 + 48.0, r.center().y + 4.5);
+    let key = t.key();
+    if !key.is_empty() {
+        let s = format!("({key})");
+        let sw = text.measure(&s, 11.0);
+        text.draw(scene, &s, 11.0, theme.text_dim, r.x1 - sw - 10.0, r.center().y + 4.0);
+    }
 }

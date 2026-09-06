@@ -29,7 +29,7 @@ impl App {
         // it also needs a per-move repaint for the node hover-swell.
         if self.cursor_mode.is_drawn()
             || self.ctx_menu.is_some()
-            || (self.active_tool == Tool::Rotate
+            || (matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
                 && !self.doc.selection.is_empty()
                 && matches!(self.drag, Drag::None))
         {
@@ -517,6 +517,77 @@ impl App {
                 self.update_canvas_cursor();
                 self.request_main_redraw();
             }
+            Drag::ReflectTool {
+                pivot,
+                press,
+                start_xf,
+                copy,
+                moved,
+                ..
+            } => {
+                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                let mut axis_deg = handles::angle_to(pivot, dp).to_degrees();
+                if self.shift_down {
+                    axis_deg = (axis_deg / 45.0).round() * 45.0;
+                }
+                let m = handles::reflect_transform(pivot, axis_deg);
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                self.drag = Drag::ReflectTool { pivot, press, start_xf, preview, copy, moved };
+                self.update_canvas_cursor();
+                self.request_main_redraw();
+            }
+            Drag::ShearTool {
+                pivot,
+                press,
+                start_xf,
+                copy,
+                moved,
+                ..
+            } => {
+                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                // Bounded by |run|, not a raw full-circle angle_to: the
+                // shear angle must stay in (-90°, 90°) — the underlying
+                // tan() blows up and flips sign right at 90°, which is
+                // exactly what a signed run would hit as the drag crosses
+                // above/below the pivot.
+                let v = dp - pivot;
+                let mut shear_deg = v.y.atan2(v.x.abs()).to_degrees();
+                if self.shift_down {
+                    shear_deg = (shear_deg / 45.0).round() * 45.0;
+                }
+                shear_deg = shear_deg.clamp(-89.0, 89.0);
+                let m = handles::shear_transform(pivot, shear_deg, 0.0);
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                self.drag = Drag::ShearTool { pivot, press, start_xf, preview, copy, moved };
+                self.update_canvas_cursor();
+                self.request_main_redraw();
+            }
+            Drag::ScaleTool {
+                pivot,
+                press,
+                start_xf,
+                copy,
+                moved,
+                ..
+            } => {
+                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let start_xf = start_xf.clone();
+                let dp = self.doc_point(self.pointer);
+                let press_doc = self.doc_point(press);
+                let eps = 4.0 / self.doc.view.zoom;
+                let m = handles::scale_tool_transform(pivot, press_doc, dp, self.shift_down, eps);
+                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                self.drag = Drag::ScaleTool { pivot, press, start_xf, preview, copy, moved };
+                self.update_canvas_cursor();
+                self.request_main_redraw();
+            }
             Drag::PendingMasterMove { master, press, grab, was_docked } => {
                 if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
                     let (master, grab) = (*master, *grab);
@@ -669,6 +740,16 @@ impl App {
         if self.shape_press.take().is_some() && self.shape_flyout.is_none() {
             let t = self.last_shape_tool;
             self.set_tool(t);
+        }
+        // Same, for a quick tap on a flyout-group slot.
+        if let Some((_, _, group)) = self.tool_flyout_press.take() {
+            if self.tool_flyout.is_none() {
+                let t = match group {
+                    ToolGroup::RotateReflect => self.last_rotate_tool,
+                    ToolGroup::ScaleShear => self.last_scale_tool,
+                };
+                self.set_tool(t);
+            }
         }
         match std::mem::take(&mut self.drag) {
             Drag::None
@@ -881,7 +962,10 @@ impl App {
                         | Tool::Zoom
                         | Tool::Eyedropper
                         | Tool::Gradient
-                        | Tool::Rotate => return,
+                        | Tool::Rotate
+                        | Tool::Reflect
+                        | Tool::Shear
+                        | Tool::Scale => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1061,6 +1145,41 @@ impl App {
                 }
                 self.request_main_redraw();
             }
+            Drag::ReflectTool { start_xf, preview, copy, moved, .. }
+            | Drag::ShearTool { start_xf, preview, copy, moved, .. }
+            | Drag::ScaleTool { start_xf, preview, copy, moved, .. } => {
+                if !moved {
+                    // A click, not a drag: re-place the reference point.
+                    self.transform_pivot = Some(self.doc_point(self.pointer));
+                } else if preview != start_xf {
+                    if copy {
+                        let ids: Vec<ObjectId> = self.doc.selection.clone();
+                        if let Ok(new_ids) = self
+                            .doc
+                            .editor
+                            .duplicate_objects(&ids, convert::vec2_to_core(Vec2::ZERO))
+                        {
+                            let items: Vec<_> = ids
+                                .iter()
+                                .zip(&new_ids)
+                                .filter_map(|(src, dst)| {
+                                    preview.get(src).map(|a| (*dst, convert::affine_to_core(*a)))
+                                })
+                                .collect();
+                            let _ =
+                                self.doc.editor.execute(Command::SetTransforms { items });
+                            self.doc.selection = new_ids;
+                        }
+                    } else {
+                        let items = preview
+                            .into_iter()
+                            .map(|(id, a)| (id, convert::affine_to_core(a)))
+                            .collect();
+                        let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    }
+                }
+                self.request_main_redraw();
+            }
             Drag::Scale {
                 start_xf, preview, ..
             } => {
@@ -1170,7 +1289,7 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::AnchorMarquee { start, candidate } => {
+            Drag::AnchorMarquee { start } => {
                 let moved = (self.pointer - start).hypot() > 3.0;
                 if moved {
                     // A real drag: rubber-band every node inside the box,
@@ -1192,16 +1311,6 @@ impl App {
                     } else {
                         self.doc.anchor_sel = hits;
                     }
-                } else if let Some(id) = candidate {
-                    // A click on an object: select it, revealing its nodes.
-                    if self.shift_down {
-                        if !self.doc.selection.contains(&id) {
-                            self.doc.selection.push(id);
-                        }
-                    } else {
-                        self.doc.selection = vec![id];
-                    }
-                    self.doc.anchor_sel.clear();
                 } else if !self.shift_down {
                     // A click on empty canvas: clear everything.
                     self.doc.selection.clear();

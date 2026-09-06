@@ -47,7 +47,7 @@ pub(crate) use crate::handles::{self, Handle};
 pub(crate) use crate::layout::{GroupDrop, MasterFrame, PanelDrop};
 pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
-pub(crate) use crate::tool::Tool;
+pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, chrome, colormanage, confirm_close, context_bar, convert, home, icons, layout,
     panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel,
@@ -266,6 +266,47 @@ enum Drag {
         copy: bool,
         moved: bool,
     },
+    /// Reflect tool: the drag vector from `pivot` to the pointer *is* the
+    /// mirror axis (document space) — dragging sweeps the axis around and
+    /// the selection mirrors across it live. A release with
+    /// `moved == false` was a click and re-places the reference point
+    /// instead. `copy` (Alt held at press) reflects a duplicate and leaves
+    /// the originals put. `press` (screen space) is only used to tell a
+    /// click from a drag.
+    ReflectTool {
+        pivot: Point,
+        press: Point,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+        copy: bool,
+        moved: bool,
+    },
+    /// Shear tool: the drag vector's angle off `pivot` is the shear angle,
+    /// applied along the horizontal axis (matching the Shear dialog's own
+    /// default axis) — same click-vs-drag and `copy` semantics as
+    /// [`Drag::ReflectTool`].
+    ShearTool {
+        pivot: Point,
+        press: Point,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+        copy: bool,
+        moved: bool,
+    },
+    /// Scale tool: the horizontal/vertical offset from `pivot` to the
+    /// pointer, each relative to that offset at press, is that axis's
+    /// scale factor — so dragging away from the pivot grows the
+    /// selection, toward it shrinks. A plain drag scales each axis
+    /// independently; Shift (read live) locks to one uniform factor. Same
+    /// click-vs-drag and `copy` semantics as [`Drag::ReflectTool`].
+    ScaleTool {
+        pivot: Point,
+        press: Point,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+        copy: bool,
+        moved: bool,
+    },
     /// Loaded-text cursor: rubber-banding the frame that will receive
     /// `from`'s overflow. Release creates it and threads the two.
     ThreadNewBox {
@@ -372,13 +413,12 @@ enum Drag {
         start_doc: Point,
         last_doc: Point,
     },
-    /// Direct Selection: rubber-banding to select anchors. `candidate` is
-    /// the object under the press — selected on release if the pointer
-    /// never moved far enough to count as a marquee.
-    AnchorMarquee {
-        start: Point,
-        candidate: Option<ObjectId>,
-    },
+    /// Direct Selection: rubber-banding to select anchors, started on
+    /// empty space (a press that hit an object's body instead arms
+    /// [`Drag::MoveObjects`], same as the Selection tool). A release that
+    /// never moved far enough to count as a marquee just clears the
+    /// selection.
+    AnchorMarquee { start: Point },
     /// Artboard tool: rubber-banding a new artboard.
     DrawArtboard { start_doc: Point, cur_doc: Point },
     /// Type tool: press-drag before deciding point vs area type.
@@ -924,6 +964,16 @@ struct App {
     shape_press: Option<(Instant, Rect)>,
     /// The primitive flyout, anchored at the Shape slot's screen rect.
     shape_flyout: Option<Rect>,
+    /// The tool each Tools-panel flyout group slot represents / re-activates
+    /// — whichever tool in that group was last used.
+    last_rotate_tool: Tool,
+    last_scale_tool: Tool,
+    /// A flyout-group slot press in progress: (when, its screen rect,
+    /// which group) — a hold opens the labeled flyout, a quick release
+    /// re-activates that group's last tool.
+    tool_flyout_press: Option<(Instant, Rect, ToolGroup)>,
+    /// The labeled tool flyout, anchored at its group slot's screen rect.
+    tool_flyout: Option<(Rect, ToolGroup)>,
     /// Set on boot / new / open — fit the view to the artboards once the
     /// canvas viewport size is known.
     pending_fit: bool,
@@ -1191,6 +1241,10 @@ impl App {
             last_shape_tool: Tool::Rectangle,
             shape_press: None,
             shape_flyout: None,
+            last_rotate_tool: Tool::Rotate,
+            last_scale_tool: Tool::Scale,
+            tool_flyout_press: None,
+            tool_flyout: None,
             pending_fit: true,
             zoom_sign: 1,
             stroke_popover: false,
@@ -4016,8 +4070,14 @@ impl App {
         if t.is_shape() {
             self.last_shape_tool = t;
         }
-        if t != Tool::Rotate {
-            // The Rotate tool's custom reference point is per-session.
+        if ToolGroup::RotateReflect.contains(t) {
+            self.last_rotate_tool = t;
+        }
+        if ToolGroup::ScaleShear.contains(t) {
+            self.last_scale_tool = t;
+        }
+        if !matches!(t, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale) {
+            // A transform tool's custom reference point is per-session.
             self.transform_pivot = None;
         }
         self.last_pen = None;
@@ -5346,6 +5406,8 @@ impl App {
             cur_fill: self.doc.fill,
             cur_stroke: self.doc.stroke,
             shape_tool: self.last_shape_tool,
+            rotate_group_tool: self.last_rotate_tool,
+            scale_group_tool: self.last_scale_tool,
             expanded: &self.doc.expanded_groups,
             renaming: None,
             selected_layer: self.doc.selected_layer,
@@ -5401,6 +5463,8 @@ impl App {
             cur_fill: self.doc.fill,
             cur_stroke: self.doc.stroke,
             shape_tool: self.last_shape_tool,
+            rotate_group_tool: self.last_rotate_tool,
+            scale_group_tool: self.last_scale_tool,
             expanded: &self.doc.expanded_groups,
             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
             selected_layer: self.doc.selected_layer,
@@ -5943,10 +6007,10 @@ impl App {
         }
     }
 
-    /// The Rotate tool's reference point (document space): the custom
-    /// `transform_pivot` if placed, else the selection's bbox centre.
-    /// `None` when nothing is selected.
-    fn rotate_pivot(&self) -> Option<Point> {
+    /// The active transform tool's (Rotate / Reflect / Shear) reference
+    /// point (document space): the custom `transform_pivot` if placed,
+    /// else the selection's bbox centre. `None` when nothing is selected.
+    fn transform_tool_pivot(&self) -> Option<Point> {
         let c = select::union_bounds(self.doc.editor.document(), &self.doc.selection)?.center();
         Some(self.transform_pivot.unwrap_or(c))
     }
@@ -6475,6 +6539,14 @@ impl ApplicationHandler for App {
                 self.request_main_redraw();
             }
         }
+        // A held flyout-group-slot press opens its labeled flyout.
+        if let Some((t, anchor, group)) = self.tool_flyout_press {
+            if self.tool_flyout.is_none() && t.elapsed().as_millis() >= 300 {
+                self.tool_flyout = Some((anchor, group));
+                self.tool_flyout_press = None;
+                self.request_main_redraw();
+            }
+        }
 
         // --- Frame scheduling --------------------------------------------
         //
@@ -6527,6 +6599,15 @@ impl ApplicationHandler for App {
         // above); wake in time to notice.
         if let Some((t, _)) = self.shape_press {
             if self.shape_flyout.is_none() {
+                wake = merge(
+                    wake,
+                    Duration::from_millis(300).saturating_sub(t.elapsed()) + Duration::from_millis(8),
+                );
+            }
+        }
+        // Same, for a held flyout-group-slot press.
+        if let Some((t, _, _)) = self.tool_flyout_press {
+            if self.tool_flyout.is_none() {
                 wake = merge(
                     wake,
                     Duration::from_millis(300).saturating_sub(t.elapsed()) + Duration::from_millis(8),
@@ -6905,11 +6986,16 @@ fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
         .map(|ab| ab.id)
 }
 
-/// Rect of primitive flyout cell `i`, a horizontal row right of `anchor`.
-fn shape_flyout_cell(anchor: Rect, i: usize) -> Rect {
-    let sz = 34.0;
-    let x = anchor.x1 + 8.0 + i as f64 * sz;
-    Rect::new(x, anchor.y0, x + sz, anchor.y0 + sz)
+/// Width and per-row height of the labeled tool-group flyout.
+const TOOL_FLYOUT_W: f64 = 220.0;
+const TOOL_FLYOUT_ROW: f64 = 30.0;
+
+/// Rect of labeled flyout row `i`, a vertical list right of `anchor`
+/// (Illustrator's own tool-group flyout layout).
+fn tool_flyout_row(anchor: Rect, i: usize) -> Rect {
+    let x = anchor.x1 + 8.0;
+    let y = anchor.y0 + i as f64 * TOOL_FLYOUT_ROW;
+    Rect::new(x, y, x + TOOL_FLYOUT_W, y + TOOL_FLYOUT_ROW)
 }
 
 /// Fractional (0..1) hotspot of a tool's cursor glyph within its box —

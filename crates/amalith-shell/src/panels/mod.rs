@@ -100,6 +100,10 @@ pub struct Ctx<'a> {
     pub cur_stroke: amalith_core::Paint,
     /// Which primitive tool the Tools-panel Shape slot stands in for.
     pub shape_tool: Tool,
+    /// Which tool each Tools-panel flyout group slot stands in for —
+    /// whichever tool in that group was last used.
+    pub rotate_group_tool: Tool,
+    pub scale_group_tool: Tool,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
     /// The row being inline-renamed, and its current edit buffer.
@@ -251,6 +255,9 @@ pub enum Action {
     /// Tools panel: the Shape slot was clicked (tap = last shape tool,
     /// hold = flyout).
     ShapeSlot,
+    /// Tools panel: a flyout-group slot was clicked (tap = its last tool,
+    /// hold = the labeled flyout).
+    ToolFlyout(crate::tool::ToolGroup),
     /// Panel footer buttons.
     NewLayer,
     NewArtboard,

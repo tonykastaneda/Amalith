@@ -97,6 +97,15 @@ impl App {
             | Drag::Rotate { preview, .. }
             | Drag::RotateTool {
                 preview, moved: true, ..
+            }
+            | Drag::ReflectTool {
+                preview, moved: true, ..
+            }
+            | Drag::ShearTool {
+                preview, moved: true, ..
+            }
+            | Drag::ScaleTool {
+                preview, moved: true, ..
             } => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: Vec2::ZERO,
@@ -297,14 +306,21 @@ impl App {
             self.effective_tool() == Tool::DirectSelect || !self.doc.anchor_sel.is_empty();
         // The Pen tool also shows a selected path's nodes (Illustrator:
         // switch V -> P with an object selected and its anchors appear).
-        // The Rotate tool does the same — you turn about a reference
-        // point, so the 8 scale handles would be misleading; show nodes.
-        let pen_nodes = matches!(self.active_tool, Tool::Pen | Tool::Rotate)
+        // The Rotate / Reflect / Shear tools do the same — you're
+        // transforming about a reference point, so the 8 scale handles
+        // would be misleading; show nodes.
+        let pen_nodes = matches!(self.active_tool, Tool::Pen | Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
             && !self.doc.selection.is_empty();
         // Hold Space with the Selection tool to peek at every node (read-only;
         // the bounding box stays). Direct Selection proper takes precedence.
         let peek = !direct && !pen_nodes && self.space_peek();
-        let anchor_paths: Vec<ObjectId> = if peek {
+        // Dragging a whole object by its body hides the nodes for the
+        // duration — they'd just clutter a plain move — and they come
+        // back the instant the drag ends.
+        let moving_whole_object = matches!(self.drag, Drag::MoveObjects { moved: true, .. });
+        let anchor_paths: Vec<ObjectId> = if moving_whole_object {
+            Vec::new()
+        } else if peek {
             self.peek_paths()
         } else if direct || pen_nodes {
             self.node_paths()
@@ -391,8 +407,8 @@ impl App {
         let panel_text_align = self.active_text_align();
         let panel_text_paragraph = self.active_text_paragraph();
         let panel_text_editing = self.text_edit.is_some();
-        let rotate_pivot = (self.active_tool == Tool::Rotate)
-            .then(|| self.rotate_pivot())
+        let rotate_pivot = matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
+            .then(|| self.transform_tool_pivot())
             .flatten();
         // Ruler guides: committed ones (minus any being dragged) plus the
         // live preview line for a create / move drag.
@@ -476,6 +492,9 @@ impl App {
                 self.cursor_mode,
                 self.last_shape_tool,
                 self.shape_flyout,
+                self.last_rotate_tool,
+                self.last_scale_tool,
+                self.tool_flyout,
                 self.stroke_popover,
                 self.text_edit.as_ref().map(|t| t.object),
                 panel_text_style,
@@ -562,6 +581,8 @@ impl App {
                             cur_fill: self.doc.fill,
                             cur_stroke: self.doc.stroke,
                             shape_tool: self.last_shape_tool,
+                            rotate_group_tool: self.last_rotate_tool,
+                            scale_group_tool: self.last_scale_tool,
                             expanded: &self.doc.expanded_groups,
                             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                             selected_layer: self.doc.selected_layer,
@@ -623,6 +644,8 @@ impl App {
                                 cur_fill: self.doc.fill,
                                 cur_stroke: self.doc.stroke,
                                 shape_tool: self.last_shape_tool,
+                                rotate_group_tool: self.last_rotate_tool,
+                                scale_group_tool: self.last_scale_tool,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
@@ -694,6 +717,8 @@ impl App {
                                 cur_fill: self.doc.fill,
                                 cur_stroke: self.doc.stroke,
                                 shape_tool: self.last_shape_tool,
+                                rotate_group_tool: self.last_rotate_tool,
+                                scale_group_tool: self.last_scale_tool,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,

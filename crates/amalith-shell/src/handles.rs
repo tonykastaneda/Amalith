@@ -216,3 +216,55 @@ pub fn rotate_transform(center: Point, start_angle: f64, pointer: Point, uniform
 pub fn angle_to(center: Point, p: Point) -> f64 {
     (p.y - center.y).atan2(p.x - center.x)
 }
+
+/// The affine to premultiply for a Reflect-tool drag: mirrors about
+/// `pivot` across the axis at `axis_deg` to the horizontal — the drag
+/// vector's own angle, so sweeping the pointer sweeps the mirror line.
+/// Same reflection formula as `amalith_core::xform::reflect_about`'s
+/// world-space step, just applied directly (every selected object's
+/// stored transform is already in document space here, like
+/// [`rotate_transform`]'s `m * s`).
+pub fn reflect_transform(pivot: Point, axis_deg: f64) -> Affine {
+    let (s, c) = (axis_deg * 2.0).to_radians().sin_cos();
+    let m = Affine::new([c, s, s, -c, 0.0, 0.0]);
+    Affine::translate(pivot.to_vec2()) * m * Affine::translate(-pivot.to_vec2())
+}
+
+/// The affine to premultiply for a Scale-tool drag: `pivot` stays fixed,
+/// each axis scales by (current offset from pivot) / (offset at press),
+/// independently — `uniform` (shift) instead uses one factor (the ratio
+/// of the two offsets' lengths) for both axes. `eps` (document units)
+/// guards the ratio when press landed on the pivot along an axis.
+pub fn scale_tool_transform(
+    pivot: Point,
+    press_doc: Point,
+    pointer_doc: Point,
+    uniform: bool,
+    eps: f64,
+) -> Affine {
+    let r = press_doc - pivot;
+    let c = pointer_doc - pivot;
+    let axis_ratio = |rv: f64, cv: f64| if rv.abs() > eps { cv / rv } else { 1.0 };
+    let (mut sx, mut sy) = (axis_ratio(r.x, c.x), axis_ratio(r.y, c.y));
+    if uniform {
+        let (rl, cl) = (r.hypot(), c.hypot());
+        let s = if rl > eps { cl / rl } else { 1.0 };
+        sx = s;
+        sy = s;
+    }
+    Affine::translate(pivot.to_vec2())
+        * Affine::scale_non_uniform(sx, sy)
+        * Affine::translate(-pivot.to_vec2())
+}
+
+/// The affine to premultiply for a Shear-tool drag: shears about `pivot`
+/// by `shear_deg` along the axis at `axis_deg` to the horizontal. Same
+/// convention as [`reflect_transform`]; mirrors
+/// `amalith_core::xform::shear_about`'s world-space step.
+pub fn shear_transform(pivot: Point, shear_deg: f64, axis_deg: f64) -> Affine {
+    let tan = shear_deg.to_radians().tan();
+    let rot = axis_deg.to_radians();
+    let sh = Affine::new([1.0, 0.0, tan, 1.0, 0.0, 0.0]);
+    let m = Affine::rotate(rot) * sh * Affine::rotate(-rot);
+    Affine::translate(pivot.to_vec2()) * m * Affine::translate(-pivot.to_vec2())
+}

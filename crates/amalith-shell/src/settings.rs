@@ -153,6 +153,9 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Eyedropper => "Eyedropper",
         Tool::Gradient => "Gradient",
         Tool::Rotate => "Rotate",
+        Tool::Reflect => "Reflect",
+        Tool::Shear => "Shear",
+        Tool::Scale => "Scale",
     }
 }
 

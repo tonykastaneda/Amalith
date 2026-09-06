@@ -55,6 +55,9 @@ pub enum Icon {
     Eyedropper,
     Gradient,
     Rotate,
+    Reflect,
+    Shear,
+    Scale,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -70,7 +73,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
-        | Icon::Rotate => "",
+        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale => "",
     }
 }
 
@@ -104,6 +107,18 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
         draw_rotate_glyph(scene, box_, color);
         return;
     }
+    if icon == Icon::Reflect {
+        draw_reflect_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Shear {
+        draw_shear_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Scale {
+        draw_scale_glyph(scene, box_, color);
+        return;
+    }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
 }
 
@@ -135,6 +150,90 @@ fn draw_rotate_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     head.line_to(p + perp * aw);
     head.line_to(p - perp * aw);
     head.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &head);
+}
+
+/// A triangle mirrored across a dashed vertical axis — the Reflect tool.
+fn draw_reflect_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let cx = box_.center().x;
+    let top = box_.y0 + h * 0.22;
+    let bot = box_.y1 - h * 0.22;
+    let gap = w * 0.08;
+    let tri = |mirror: f64| {
+        let x0 = cx + mirror * gap;
+        let x1 = cx + mirror * (gap + w * 0.28);
+        let mut p = BezPath::new();
+        p.move_to((x1, top));
+        p.line_to((x1, bot));
+        p.line_to((x0, bot));
+        p.close_path();
+        p
+    };
+    scene.fill(Fill::NonZero, ID, color, None, &tri(1.0));
+    scene.fill(Fill::NonZero, ID, color, None, &tri(-1.0));
+    // Dashed mirror axis.
+    let sw = (w * 0.07).max(1.2);
+    let mut y = top - h * 0.06;
+    let (dash, hole) = (h * 0.09, h * 0.06);
+    while y < bot + h * 0.06 {
+        let y1 = (y + dash).min(bot + h * 0.06);
+        scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((cx, y), (cx, y1)));
+        y = y1 + hole;
+    }
+}
+
+/// A slanted parallelogram against an upright square — the Shear tool.
+fn draw_shear_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x0 = box_.x0 + w * 0.20;
+    let x1 = box_.x1 - w * 0.20;
+    let y0 = box_.y0 + h * 0.26;
+    let y1 = box_.y1 - h * 0.26;
+    let shear = w * 0.22;
+    let mut p = BezPath::new();
+    p.move_to((x0 + shear, y0));
+    p.line_to((x1 + shear, y0));
+    p.line_to((x1 - shear, y1));
+    p.line_to((x0 - shear, y1));
+    p.close_path();
+    scene.stroke(&Stroke::new((w * 0.09).max(1.6)), ID, color, None, &p);
+    // Baseline the slant runs from.
+    scene.stroke(
+        &Stroke::new((w * 0.06).max(1.0)),
+        ID,
+        color,
+        None,
+        &Line::new((box_.x0 + w * 0.1, box_.center().y), (box_.x1 - w * 0.1, box_.center().y)),
+    );
+}
+
+/// A small square nested in a larger one, joined by a diagonal arrow —
+/// the Scale tool.
+fn draw_scale_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let big = Rect::new(box_.x0 + w * 0.14, box_.y0 + h * 0.14, box_.x1 - w * 0.40, box_.y1 - h * 0.40);
+    let small = Rect::new(box_.x0 + w * 0.46, box_.y0 + h * 0.46, box_.x1 - w * 0.14, box_.y1 - h * 0.14);
+    let sw = (w * 0.08).max(1.4);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &big);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &small);
+    // Arrowhead pointing out past the small square's corner, along the
+    // same NW-SE diagonal the two squares already sit on.
+    let tip = Point::new(small.x1 + w * 0.08, small.y1 + h * 0.08);
+    let dir = Vec2::new(1.0, 1.0) / std::f64::consts::SQRT_2;
+    let perp = Vec2::new(-dir.y, dir.x);
+    let ah = w * 0.14;
+    let aw = w * 0.09;
+    let base = tip - dir * ah;
+    let mut head = BezPath::new();
+    head.move_to(tip);
+    head.line_to(base + perp * aw);
+    head.line_to(base - perp * aw);
+    head.close_path();
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(small.center(), base));
     scene.fill(Fill::NonZero, ID, color, None, &head);
 }
 

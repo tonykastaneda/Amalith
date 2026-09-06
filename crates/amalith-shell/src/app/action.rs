@@ -279,7 +279,7 @@ impl App {
                 }
             }
             // Intercepted in on_press (press-and-hold logic).
-            panels::Action::ShapeSlot => {}
+            panels::Action::ShapeSlot | panels::Action::ToolFlyout(_) => {}
             // --- Character panel ---
             panels::Action::SetFontFamily(name) => {
                 self.edit_text_style(move |s| s.family = name.clone());

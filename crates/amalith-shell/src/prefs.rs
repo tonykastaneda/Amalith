@@ -131,7 +131,9 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Eyedropper => KeyChord::plain(KeyI),
         Tool::Gradient => KeyChord::plain(KeyG),
         Tool::Rotate => KeyChord::plain(KeyR),
-        Tool::RoundedRect | Tool::Polygon | Tool::Star => return None,
+        Tool::Reflect => KeyChord::plain(KeyO),
+        Tool::Scale => KeyChord::plain(KeyS),
+        Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear => return None,
     })
 }
 

@@ -20,10 +20,13 @@ pub enum Tool {
     Eyedropper,
     Gradient,
     Rotate,
+    Reflect,
+    Shear,
+    Scale,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 16] = [
+    pub const ALL: [Tool; 19] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -40,6 +43,9 @@ impl Tool {
         Tool::Eyedropper,
         Tool::Gradient,
         Tool::Rotate,
+        Tool::Reflect,
+        Tool::Shear,
+        Tool::Scale,
     ];
 
     /// A drag-a-box shape tool.
@@ -68,6 +74,9 @@ impl Tool {
             Tool::Eyedropper => "Eyedropper",
             Tool::Gradient => "Gradient",
             Tool::Rotate => "Rotate",
+            Tool::Reflect => "Reflect",
+            Tool::Shear => "Shear",
+            Tool::Scale => "Scale",
         }
     }
 
@@ -87,6 +96,8 @@ impl Tool {
             Tool::Eyedropper => "I",
             Tool::Gradient => "G",
             Tool::Rotate => "R",
+            Tool::Reflect => "O",
+            Tool::Scale => "S",
             _ => "",
         }
     }
@@ -109,6 +120,34 @@ impl Tool {
             Tool::Eyedropper => Icon::Eyedropper,
             Tool::Gradient => Icon::Gradient,
             Tool::Rotate => Icon::Rotate,
+            Tool::Reflect => Icon::Reflect,
+            Tool::Shear => Icon::Shear,
+            Tool::Scale => Icon::Scale,
         }
+    }
+}
+
+/// A press-and-hold flyout group of related tools in the Tools panel —
+/// same idea as the primitive-shape slot, just rendered as a labeled list
+/// (icon + name + shortcut) like Illustrator's own tool flyouts, since
+/// these hold more than interchangeable shape variants.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToolGroup {
+    RotateReflect,
+    ScaleShear,
+}
+
+impl ToolGroup {
+    pub const ALL: [ToolGroup; 2] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear];
+
+    pub fn tools(self) -> &'static [Tool] {
+        match self {
+            ToolGroup::RotateReflect => &[Tool::Rotate, Tool::Reflect],
+            ToolGroup::ScaleShear => &[Tool::Scale, Tool::Shear],
+        }
+    }
+
+    pub fn contains(self, t: Tool) -> bool {
+        self.tools().contains(&t)
     }
 }
