@@ -1,3 +1,5 @@
+import { MarketingHero } from "../MarketingHero";
+import { ArrowUpRight } from "../ArrowUpRight";
 import type { Metadata } from "next";
 import { Footer } from "../Footer";
 import { Header } from "../Header";
@@ -29,27 +31,28 @@ export default function Downloads() {
     <>
       <Header basePath={basePath} />
 
-      <main tabIndex={-1} id="top" className="downloads-page">
-        <section className="downloads-hero" aria-labelledby="downloads-title">
-          <div className="downloads-hero__inner">
-            <p className="kicker">Finally</p>
-            <h1 id="downloads-title">
-              <span>The design tool that lets</span>
-              <span>creatives <em>create.</em></span>
-            </h1>
-
-            <p className="download-note">Amalith is free today. No payment or card is required. We plan to charge in the future, but no date or pricing has been announced.</p>
-            <p className="download-note">Packaged downloads are coming soon. You can <a href="https://github.com/tonykastaneda/Amalith#build-and-run">build from source</a> now.</p>
-
-            <div className="download-actions" aria-label="Desktop downloads coming soon">
-              {platforms.map((platform) => (
-                <span className="platform-download platform-download--unavailable" key={platform.name}>
-                  <img src={platform.icon} alt="" aria-hidden="true" />
-                  <span>Coming soon for {platform.name}</span>
-                </span>
-              ))}
-            </div>
+      <main tabIndex={-1} id="top" className="marketing-page downloads-page">
+        <MarketingHero
+          eyebrow="Download Amalith"
+          title={<>Your next idea.<br /><em>Your workspace.</em></>}
+          actions={<a className="marketing-button" href="https://github.com/tonykastaneda/Amalith#build-and-run">Build from source <ArrowUpRight /></a>}
+        >
+          <p>Amalith is free today. No payment or card is required. Packaged downloads are coming soon; you can build from source now.</p>
+        </MarketingHero>
+        <section className="platform-section" aria-labelledby="platform-title">
+          <p className="section-number">Desktop availability</p>
+          <h2 id="platform-title">A place on <em>your desktop.</em></h2>
+          <div className="platform-grid">
+            {platforms.map((platform) => (
+              <article className="platform-card" key={platform.name}>
+                <div className="platform-card__icon"><img src={platform.icon} alt="" aria-hidden="true" /></div>
+                <h3>{platform.name}</h3>
+                <p>Packaged download</p>
+                <span className="availability-label">Coming soon</span>
+              </article>
+            ))}
           </div>
+          <p className="pricing-note">We plan to charge in the future, but no date or pricing has been announced. <a href={`${basePath}/terms/`}>Read about pricing and payments <ArrowUpRight /></a></p>
         </section>
       </main>
 

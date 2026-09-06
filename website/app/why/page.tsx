@@ -1,3 +1,4 @@
+import { MarketingHero } from "../MarketingHero";
 import type { Metadata } from "next";
 import { ArrowUpRight } from "../ArrowUpRight";
 import { Footer } from "../Footer";
@@ -15,15 +16,10 @@ export default function WhyAmalith() {
     <>
       <Header basePath={basePath} />
 
-      <main tabIndex={-1} id="top" className="why-page why-cost-page" aria-label="Why Amalith">
-        <section className="why-cost-hero" aria-labelledby="why-cost-title">
-          <div className="why-cost-hero__inner">
-            <p className="kicker">Why Amalith</p>
-            <h1 id="why-cost-title">The Cost of <em>Free.</em></h1>
-            <p className="why-cost-hero__lede">When the price is zero, the bill moves somewhere else.</p>
-          </div>
-          <p className="why-cost-hero__note">01 / The premise</p>
-        </section>
+      <main tabIndex={-1} id="top" className="marketing-page why-page why-cost-page" aria-label="Why Amalith">
+        <MarketingHero eyebrow="Why Amalith" title={<>The Cost of <em>Free.</em></>}>
+          <p>When the price is zero, the bill moves somewhere else.</p>
+        </MarketingHero>
 
         <section className="why-cost-intro section-shell">
           <p className="section-number">02 / The trade</p>

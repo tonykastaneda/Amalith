@@ -1,0 +1,117 @@
+/* Scoped design system: never applies to Header, Footer, or the Docs page. */
+.marketing-page {
+  --content-width: 1200px;
+  --gutter: clamp(24px, 5vw, 72px);
+  --section-space: clamp(64px, 8vw, 112px);
+  --surface: #11110f;
+  --muted: #b9b7ae;
+  --radius: 12px;
+  --display-size: clamp(48px, 7vw, 96px);
+  --heading-size: clamp(34px, 4.2vw, 56px);
+  color: var(--paper);
+  background: #050505;
+}
+.marketing-page :where(h1, h2, h3) { text-wrap: balance; }
+.marketing-page h2 { font-size: var(--heading-size); line-height: 1.08; letter-spacing: -.045em; font-weight: 600; }
+.marketing-page h2 em { font-family: Georgia, "Times New Roman", serif; font-weight: 400; color: var(--yellow); }
+.marketing-page :where(p, li) { text-wrap: pretty; }
+.marketing-page .section-number, .marketing-page .kicker { color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.5; letter-spacing: .1em; }
+.marketing-page .section-shell, .marketing-page .feature-stack, .marketing-page .platform-section, .marketing-page .information-layout, .marketing-page .cta, .marketing-page .marketing-hero {
+  width: min(var(--content-width), calc(100% - var(--gutter) * 2));
+  margin-inline: auto;
+}
+.marketing-page .marketing-hero { padding-block: var(--section-space) 64px; }
+.marketing-page .marketing-hero h1 { max-width: 1000px; margin: 24px 0; font-size: var(--display-size); font-weight: 600; line-height: 1.04; letter-spacing: -.055em; }
+.marketing-page .marketing-hero h1 em { font-family: Georgia, "Times New Roman", serif; color: var(--yellow); font-weight: 400; }
+.marketing-page .marketing-hero__lede { max-width: 640px; color: var(--muted); font-size: 20px; line-height: 1.6; }
+.marketing-page .marketing-hero__lede p { margin: 0; }
+.marketing-page .marketing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 32px; }
+.marketing-page .marketing-button { display: inline-flex; align-items: center; justify-content: center; gap: 24px; min-height: 48px; padding: 12px 20px; border: 1px solid var(--yellow); border-radius: 8px; background: var(--yellow); color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.5; transition: background 160ms ease, border-color 160ms ease; }
+.marketing-page .marketing-button:hover { background: var(--paper); border-color: var(--paper); }
+.marketing-page .marketing-button--secondary { background: var(--surface); color: var(--paper); border-color: var(--line); }
+.marketing-page .marketing-button--secondary:hover { background: #272724; border-color: var(--muted); }
+.marketing-page .text-link { min-height: 44px; align-items: center; gap: 24px; margin-top: 24px; font-size: 14px; line-height: 1.5; border-bottom-width: 1px; }
+.marketing-page .text-link:hover { color: var(--yellow); }
+.marketing-page .hero-media { padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.marketing-page .placeholder { min-height: 0; border-radius: 8px; background: #1a1a18; }
+.marketing-page .placeholder__workspace { height: clamp(240px, 33vw, 440px); grid-template-columns: 40px minmax(0, 1fr) 100px; }
+.marketing-page .placeholder__label { max-width: calc(100% - 24px); right: 12px; bottom: 12px; font-size: 10px; line-height: 1.4; letter-spacing: .04em; border-radius: 4px; }
+.marketing-page .manifesto, .marketing-page .why-cost-intro { display: grid; grid-template-columns: 1fr 2fr; gap: 48px; padding: var(--section-space) 0; border-bottom: 1px solid var(--line); border-top: 0; }
+.marketing-page .manifesto h2, .marketing-page .why-cost-intro h2 { margin: 0; }
+.marketing-page .manifesto div > p, .marketing-page .why-cost-intro div > p { margin: 24px 0 0; max-width: 620px; color: var(--muted); font-size: 18px; line-height: 1.6; letter-spacing: 0; }
+.marketing-page .feature { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 64px; padding: 64px 0; background: transparent; border-top: 0; border-bottom: 1px solid var(--line); }
+.marketing-page .feature__copy h2 { margin: 24px 0; font-size: clamp(32px, 3vw, 44px); }
+.marketing-page .feature__copy > p:last-child { color: var(--muted); font-size: 18px; line-height: 1.6; margin: 0; }
+.marketing-page .feature .placeholder { min-height: 0; }
+.marketing-page .feature .placeholder__workspace { height: 300px; grid-template-columns: 32px minmax(0, 1fr) 64px; }
+.marketing-page .principles { padding: var(--section-space) 0; }
+.marketing-page .principles h2 { margin: 24px 0; }
+.marketing-page .section-intro { max-width: 640px; color: var(--muted); font-size: 18px; line-height: 1.6; margin: 0 0 32px; }
+.marketing-page .principles__grid { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); gap: 1px; }
+.marketing-page .principles__grid p { min-height: 100px; padding: 24px; align-items: center; font-size: 16px; font-weight: 500; border: 0; }
+.marketing-page .status { padding: 40px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); gap: 64px; }
+.marketing-page .status h2 { margin: 24px 0 0; }
+.marketing-page .status__copy { padding: 0; }
+.marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
+.marketing-page .cta { min-height: 0; margin-block: var(--section-space); padding: 48px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); color: var(--ink); grid-template-columns: 1fr auto; gap: 32px; }
+.marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; }
+.marketing-page .cta h2 em { color: var(--ink); }
+.marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
+.marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; }
+.marketing-page .cta__mark { width: 400px; max-width: none; top: -100px; bottom: auto; left: 20%; transform: none; opacity: .08; }
+.marketing-page .why-cost-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; border: 0; padding-block: 48px; }
+.marketing-page .why-cost-grid article { min-height: 320px; padding: 32px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.marketing-page .why-cost-grid h2 { margin: 32px 0 20px; font-size: 32px; }
+.marketing-page .why-cost-grid article > p:last-child { font-size: 16px; line-height: 1.6; color: var(--muted); }
+.marketing-page .why-cost-answer, .marketing-page .why-cost-allies { padding: var(--section-space) 0; grid-template-columns: 1fr 1fr; gap: 64px; }
+.marketing-page .why-cost-answer h2, .marketing-page .why-cost-allies h2 { margin: 24px 0 0; }
+.marketing-page .why-cost-answer__copy, .marketing-page .why-cost-allies__copy { padding: 0; }
+.marketing-page .why-cost-answer__copy > p, .marketing-page .why-cost-allies__copy > p { color: var(--muted); font-size: 18px; line-height: 1.6; letter-spacing: 0; }
+.marketing-page .why-cost-answer ul, .marketing-page .why-cost-allies__links { margin-top: 32px; }
+.marketing-page .why-cost-allies__links a { min-height: 88px; }
+.marketing-page .platform-section { padding-bottom: var(--section-space); }
+.marketing-page .platform-section > h2 { margin: 24px 0 32px; }
+.marketing-page .platform-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.marketing-page .platform-card { padding: 32px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.marketing-page .platform-card__icon { width: 48px; height: 48px; padding: 12px; border-radius: 8px; background: var(--paper); display: grid; place-items: center; }
+.marketing-page .platform-card__icon img { width: 24px; height: 24px; object-fit: contain; }
+.marketing-page .platform-card h3 { margin: 32px 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+.marketing-page .platform-card p { margin: 0 0 24px; color: var(--muted); font-size: 16px; }
+.marketing-page .availability-label { display: inline-block; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; font-size: 12px; color: var(--muted); }
+.marketing-page .pricing-note { margin: 32px 0 0; max-width: 680px; color: var(--muted); font-size: 16px; line-height: 1.6; }
+.marketing-page .pricing-note a { display: inline; color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
+.marketing-page .information-layout { display: grid; grid-template-columns: 240px minmax(0, 720px); justify-content: space-between; gap: 64px; padding-block: 32px var(--section-space); border-top: 1px solid var(--line); }
+.marketing-page .information-nav { display: flex; flex-direction: column; gap: 8px; align-self: start; position: sticky; top: 156px; }
+.marketing-page .information-nav a { min-height: 44px; display: flex; align-items: center; padding: 12px 16px; font-size: 14px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); }
+.marketing-page .information-nav a[aria-current="page"] { color: var(--paper); border-color: var(--line); background: var(--surface); }
+.marketing-page .information-nav a:hover { color: var(--yellow); }
+.marketing-page .information-body { min-width: 0; overflow-wrap: anywhere; }
+.marketing-page .information-body h2 { margin: 40px 0 16px; padding-top: 32px; border-top: 1px solid var(--line); font-size: 24px; line-height: 1.3; letter-spacing: -.025em; }
+.marketing-page .information-body p { margin: 0 0 20px; color: var(--muted); font-size: 17px; line-height: 1.75; }
+.marketing-page .information-body a { color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
+.marketing-page .information-body a:hover { color: var(--yellow); }
+@media (max-width: 900px) {
+  .marketing-page .manifesto, .marketing-page .why-cost-intro { grid-template-columns: 1fr; gap: 24px; }
+  .marketing-page .feature { gap: 32px; }
+  .marketing-page .why-cost-grid { grid-template-columns: 1fr; }
+  .marketing-page .why-cost-grid article { min-height: 0; }
+  .marketing-page .status, .marketing-page .why-cost-answer, .marketing-page .why-cost-allies { grid-template-columns: 1fr; gap: 32px; }
+  .marketing-page .cta { padding: 32px; grid-template-columns: 1fr; grid-template-rows: auto; }
+  .marketing-page .cta > a { justify-self: start; grid-row: auto; }
+  .marketing-page .platform-card { padding: 24px; }
+  .marketing-page .information-layout { grid-template-columns: 1fr; gap: 32px; }
+  .marketing-page .information-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+}
+@media (max-width: 640px) {
+  .marketing-page .marketing-hero { padding-bottom: 48px; }
+  .marketing-page .marketing-hero__lede { font-size: 18px; }
+  .marketing-page .feature { grid-template-columns: 1fr; padding-block: 48px; }
+  .marketing-page .hero-media { padding: 12px; }
+  .marketing-page .placeholder__workspace, .marketing-page .feature .placeholder__workspace { height: 240px; grid-template-columns: 24px minmax(0, 1fr); }
+  .marketing-page .placeholder__panel { display: none; }
+  .marketing-page .principles__grid, .marketing-page .platform-grid { grid-template-columns: 1fr; }
+  .marketing-page .principles__grid p { min-height: 72px; border-bottom: 1px solid var(--line); }
+  .marketing-page .principles__grid p:last-child { border-bottom: 0; }
+  .marketing-page .status, .marketing-page .cta { padding: 24px; }
+  .marketing-page .information-nav a { padding-inline: 12px; }
+}

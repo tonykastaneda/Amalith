@@ -1,3 +1,4 @@
+import { MarketingHero } from "./MarketingHero";
 import { Header } from "./Header";
 import { ArrowUpRight } from "./ArrowUpRight";
 import { Footer } from "./Footer";
@@ -50,15 +51,14 @@ export default function Home() {
     <>
       <Header basePath={basePath} />
 
-      <main tabIndex={-1} id="top">
-        <section className="hero" aria-labelledby="hero-title">
-          <p className="kicker"><span /> Free today · open source · cross-platform</p>
-          <h1 id="hero-title">Design freely.<br /><em>Keep the power.</em></h1>
-          <div className="hero__bottom">
-            <p>A professional vector editor built for familiar workflows—and a future where every action is equally available to people, scripts, plugins, and agents.</p>
-            <a className="circle-link" href="#why" aria-label="Explore Amalith"><span aria-hidden="true">↓</span></a>
-          </div>
-        </section>
+      <main tabIndex={-1} id="top" className="marketing-page">
+        <MarketingHero
+          eyebrow="Free today · open source · cross-platform"
+          title={<>Design freely.<br /><em>Keep the power.</em></>}
+          actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
+        >
+          <p>A professional vector editor built for familiar workflows—and a future where every action is equally available to people, scripts, plugins, and agents.</p>
+        </MarketingHero>
 
         <section className="hero-media section-shell" aria-label="Amalith product preview">
           <Placeholder label="Amalith interface preview placeholder" />
@@ -86,9 +86,9 @@ export default function Home() {
         </section>
 
         <section className="principles section-shell">
-          <p>Amalith is free today. We plan to charge in the future, but no date or pricing has been announced.</p>
           <p className="section-number">05 / Built in public</p>
           <h2>Open to All.<br /><em>Yours to shape.</em></h2>
+          <p className="section-intro">Amalith is free today. We plan to charge in the future, but no date or pricing has been announced.</p>
           <div className="principles__grid">
             <p>No payment required today</p><p>No mandatory account</p><p>No proprietary cloud</p>
             <p>Open document format</p><p>macOS, Windows &amp; Linux</p><p>MIT or Apache 2.0</p>
@@ -111,8 +111,8 @@ export default function Home() {
           <div className="cta__art" aria-hidden="true">
             <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
           </div>
-          <p><span>The Open source vector design,</span><br /><span>suite without the compromise.</span></p>
-          <a href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
+          <h2>Open-source design.<br /><em>Room to create.</em></h2>
+          <a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
         </section>
       </main>
 
