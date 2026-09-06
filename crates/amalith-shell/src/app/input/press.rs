@@ -245,7 +245,7 @@ impl App {
             self.ruler_menu_click(self.pointer);
             return;
         }
-        if self.ctx_menu.is_some() && self.ctx_menu_click(self.pointer) {
+        if self.ctx_menu.is_some() && self.ctx_menu_click(event_loop, self.pointer) {
             return;
         }
         // Isolation breadcrumb bar.

@@ -29,9 +29,49 @@ impl App {
         if self.export.is_some() && self.dock.floating_id_of(export::EXPORT_PID) == Some(fid) {
             return true;
         }
-        self.shape_dialog
+        if self.shape_dialog
             .as_ref()
             .is_some_and(|d| self.dock.floating_id_of(Self::shape_panel_id(d.tool)) == Some(fid))
+        {
+            return true;
+        }
+        self.xform_dialog
+            .as_ref()
+            .is_some_and(|d| self.dock.floating_id_of(Self::xform_panel_id(d.kind)) == Some(fid))
+    }
+
+    /// The shape dialog's own body rect (window-local, `(0, 0)`-based) —
+    /// its window is fixed-size and never resized, so this is the same
+    /// formula `spawn_shape_dialog` used to size it.
+    fn shape_dialog_body(&mut self) -> Option<Rect> {
+        let tool = self.shape_dialog.as_ref()?.tool;
+        let pid = Self::shape_panel_id(tool);
+        let fid = self.dock.floating_id_of(pid)?;
+        let h = self.theme.tab_strip_h + shapedialog::body_height(tool);
+        let bounds = Rect::new(0.0, 0.0, shapedialog::W, h);
+        Some(self.build_master_frame(fid, bounds).body)
+    }
+
+    /// Scroll wheel over a numeric field steps it — no click needed,
+    /// matching every other numeric field in the app. Returns whether it
+    /// was consumed.
+    pub(in crate::app) fn shape_wheel(&mut self, dy: f64) -> bool {
+        if self.shape_dialog.is_none() || dy.abs() < 0.5 {
+            return false;
+        }
+        let Some(body) = self.shape_dialog_body() else { return false };
+        let p = self.pointer;
+        let field = self.shape_dialog.as_ref().and_then(|d| match d.hit(body, p) {
+            shapedialog::Hit::Field(i) => Some(i),
+            _ => None,
+        });
+        let Some(i) = field else { return false };
+        let dir = if dy > 0.0 { 1.0 } else { -1.0 };
+        if let Some(dlg) = self.shape_dialog.as_mut() {
+            dlg.step(i, dir);
+        }
+        self.request_main_redraw();
+        true
     }
 
     /// Open the exact-size dialog for `tool` (anchored at document-space

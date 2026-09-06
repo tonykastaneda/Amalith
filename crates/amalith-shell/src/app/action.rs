@@ -140,6 +140,25 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::XformHit(hit) => {
+                if let xformdlg::Hit::Dial(field, _, center) = hit {
+                    self.drag = Drag::XformDialAngle { field, center };
+                }
+                let outcome = self
+                    .xform_dialog
+                    .as_mut()
+                    .map(|d| d.apply(hit))
+                    .unwrap_or(xformdlg::Outcome::None);
+                match outcome {
+                    xformdlg::Outcome::Changed => self.apply_xform_preview(),
+                    xformdlg::Outcome::Copy => self.close_xform_dialog(xform_dialog::XformClose::Copy),
+                    xformdlg::Outcome::Cancel => self.close_xform_dialog(xform_dialog::XformClose::Cancel),
+                    xformdlg::Outcome::Ok => self.close_xform_dialog(xform_dialog::XformClose::Ok),
+                    xformdlg::Outcome::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
             panels::Action::SetPaint(paint) => {
                 self.set_paint(self.active_slot, paint);
                 if let Some(c) = paint.color() {
@@ -1025,6 +1044,18 @@ impl App {
             return false;
         };
         panels::align::spacing_field_at(pbody, self.pointer)
+    }
+
+    /// Scroll-wheel nudge of the Align spacing field, no click needed.
+    /// `None` ("Auto") starts from 0 on the first nudge.
+    pub(in crate::app) fn nudge_align_spacing(&mut self, delta: f64) {
+        let next = (self.align_spacing.unwrap_or(0.0) + delta).max(0.0);
+        self.align_spacing = Some(next);
+        if let Some((buf, fresh)) = &mut self.align_spacing_edit {
+            *buf = trim_num(next);
+            *fresh = false;
+        }
+        self.request_main_redraw();
     }
 
     /// Digit / Enter / Esc stay in the Align spacing field.

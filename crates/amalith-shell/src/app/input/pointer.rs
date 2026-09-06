@@ -179,6 +179,15 @@ impl App {
                 self.set_color_spectrum(t);
                 self.drag = Drag::ColorSpectrum { track };
             }
+            Drag::XformDialAngle { field, center } => {
+                let (field, center) = (*field, *center);
+                let deg = xformdlg::angle_at(center, self.pointer);
+                if let Some(dlg) = self.xform_dialog.as_mut() {
+                    dlg.set_dial_angle(field, deg);
+                }
+                self.apply_xform_preview();
+                self.request_main_redraw();
+            }
             Drag::GradientStop { index, bar } => {
                 let (index, bar) = (*index, *bar);
                 let off = ((self.pointer.x - bar.x0) / bar.width()).clamp(0.0, 1.0) as f32;
@@ -667,6 +676,7 @@ impl App {
             | Drag::GroupContentResize { .. }
             | Drag::PendingGroupDrag { .. }
             | Drag::PendingMasterMove { .. }
+            | Drag::XformDialAngle { .. }
             | Drag::Pan { .. } => {}
             // A scrubby-zoom that never moved = a click: step-zoom at the
             // point (Alt / left-drag direction = out).

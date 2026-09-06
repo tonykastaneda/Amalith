@@ -589,6 +589,7 @@ impl App {
                             key_object: self.key_object,
                             shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                             export: self.export.as_ref().map(|d| (d, caret_blink)),
+                            xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
@@ -653,6 +654,7 @@ impl App {
                                 key_object: self.key_object,
                                 shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
+                                xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -719,6 +721,7 @@ impl App {
                                 key_object: self.key_object,
                                 shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
+                                xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };

@@ -229,6 +229,11 @@ impl App {
             self.shape_dialog_key(&event);
             return;
         }
+        // The Reflect/Shear dialog takes every key while open.
+        if self.xform_dialog.is_some() {
+            self.xform_dialog_key(&event);
+            return;
+        }
         // The Export for Screens dialog takes every key while open.
         if self.export.is_some() {
             self.export_key(&event);

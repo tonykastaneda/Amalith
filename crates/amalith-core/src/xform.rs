@@ -168,6 +168,36 @@ pub fn flip_v(local: Affine, bounds: Rect, rp: RefPoint) -> Affine {
     scale_local(local, bounds, rp, 1.0, -1.0)
 }
 
+/// New local-to-parent transform after reflecting the object's whole
+/// *world* transform about a line through `pivot` (document space) at
+/// `axis_deg` to the horizontal — unlike [`flip_h`]/[`flip_v`], which pivot
+/// each object around its own local bounds, this takes one shared pivot so
+/// a multi-object selection reflects as a single rigid group (⇐
+/// Illustrator's Reflect dialog/tool: "Vertical" is `axis_deg = 90`,
+/// "Horizontal" is `axis_deg = 0`).
+pub fn reflect_about(local: Affine, parent: Affine, pivot: Point, axis_deg: f64) -> Affine {
+    let world = parent * local;
+    let (s, c) = (axis_deg * 2.0).to_radians().sin_cos();
+    let m = Affine::new([c, s, s, -c, 0.0, 0.0]);
+    let xf = Affine::translate(pivot.to_vec2()) * m * Affine::translate(-pivot.to_vec2());
+    relocal(parent, xf * world)
+}
+
+/// New local-to-parent transform after shearing the object's whole *world*
+/// transform by `shear_deg` about a line through `pivot` (document space)
+/// at `axis_deg` to the horizontal — same shared-pivot, rigid-group
+/// semantics as [`reflect_about`]. `axis_deg = 0` (Illustrator's
+/// "Horizontal" axis) reduces to the same shear matrix as [`set_shear`].
+pub fn shear_about(local: Affine, parent: Affine, pivot: Point, shear_deg: f64, axis_deg: f64) -> Affine {
+    let world = parent * local;
+    let tan = shear_deg.to_radians().tan();
+    let rot = axis_deg.to_radians();
+    let sh = Affine::new([1.0, 0.0, tan, 1.0, 0.0, 0.0]);
+    let m = Affine::rotate(rot) * sh * Affine::rotate(-rot);
+    let xf = Affine::translate(pivot.to_vec2()) * m * Affine::translate(-pivot.to_vec2());
+    relocal(parent, xf * world)
+}
+
 fn scale_local(local: Affine, bounds: Rect, rp: RefPoint, fx: f64, fy: f64) -> Affine {
     let r = ref_local(bounds, rp);
     let s = Affine::translate(r.to_vec2())
@@ -346,5 +376,51 @@ mod tests {
         assert_eq!(fmt_px(100.0), "100 px");
         assert_eq!(fmt_px(133.0203), "133.0203 px");
         assert_eq!(fmt_deg(0.0), "0°");
+    }
+
+    #[test]
+    fn reflect_about_vertical_axis_mirrors_across_a_shared_pivot() {
+        // Two objects straddling x=50: reflecting the pair across a
+        // vertical line at that shared pivot must swap their sides, not
+        // just flip each one in place (⇐ the whole point of a shared
+        // pivot over `flip_h`'s per-object one).
+        let left = Affine::translate((10.0, 0.0));
+        let right = Affine::translate((90.0, 0.0));
+        let pivot = Point::new(50.0, 0.0);
+        let left_r = reflect_about(left, Affine::IDENTITY, pivot, 90.0);
+        let right_r = reflect_about(right, Affine::IDENTITY, pivot, 90.0);
+        assert!((left_r.translation().x - 90.0).abs() < 1e-9);
+        assert!((right_r.translation().x - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reflect_about_horizontal_axis_matches_a_vertical_flip() {
+        let local = Affine::translate((0.0, 30.0));
+        let pivot = Point::new(0.0, 10.0);
+        let next = reflect_about(local, Affine::IDENTITY, pivot, 0.0);
+        assert!((next.translation().y - (-10.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shear_about_horizontal_axis_matches_set_shear_at_the_origin() {
+        // `axis_deg = 0` is the same invariant line `set_shear` always
+        // uses, so the two must agree when the pivot sits at the origin.
+        let local = Affine::IDENTITY;
+        let via_shear_about = shear_about(local, Affine::IDENTITY, Point::ORIGIN, 30.0, 0.0);
+        let via_set_shear = set_shear(local, Affine::IDENTITY, box10(), RefPoint { col: 0, row: 0 }, 30.0);
+        let a = via_shear_about.as_coeffs();
+        let b = via_set_shear.as_coeffs();
+        for i in 0..6 {
+            assert!((a[i] - b[i]).abs() < 1e-9, "coeff {i}: {} vs {}", a[i], b[i]);
+        }
+    }
+
+    #[test]
+    fn shear_about_a_pivot_leaves_that_point_fixed() {
+        let pivot = Point::new(40.0, 15.0);
+        let local = Affine::translate(pivot.to_vec2());
+        let next = shear_about(local, Affine::IDENTITY, pivot, 25.0, 35.0);
+        assert!((next.translation().x - pivot.x).abs() < 1e-9);
+        assert!((next.translation().y - pivot.y).abs() < 1e-9);
     }
 }

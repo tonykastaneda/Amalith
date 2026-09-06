@@ -23,6 +23,14 @@ impl App {
             // Pixel-based (trackpad): physical px → logical.
             MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
         };
+        // The Reflect/Shear dialog, then the exact-size shape dialogs —
+        // both bespoke floating windows with their own numeric fields.
+        if self.xform_wheel(dy) {
+            return;
+        }
+        if self.shape_wheel(dy) {
+            return;
+        }
         // The command palette's result list.
         if let Some(p) = &mut self.palette {
             p.scroll(dy);
@@ -140,6 +148,8 @@ impl App {
             } else if let Some(field) = self.gradient_field_at_pointer() {
                 let dir = if dy > 0.0 { 1.0 } else { -1.0 };
                 self.gradient_step(field, dir * crate::panels::gradient::step_of(field));
+            } else if self.align_spacing_field_at_pointer() {
+                self.nudge_align_spacing(if dy > 0.0 { 1.0 } else { -1.0 });
             } else {
                 self.doc.view.pan += Vec2::new(dx, dy);
             }

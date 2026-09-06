@@ -26,6 +26,7 @@ mod isolation;
 mod native_menu;
 mod render;
 mod shape_dialog;
+mod xform_dialog;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use native_menu::NativeMenu;
@@ -50,7 +51,7 @@ pub(crate) use crate::tool::Tool;
 pub(crate) use crate::{
     about, appicon, chrome, colormanage, confirm_close, context_bar, convert, home, icons, layout,
     panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel,
-    textedit, workspace, workspace_dialog, workspaces, Theme,
+    textedit, workspace, workspace_dialog, workspaces, xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -309,6 +310,10 @@ enum Drag {
     ColorScrub { channel: u8, track: Rect },
     /// Color panel: dragging the hue spectrum bar.
     ColorSpectrum { track: Rect },
+    /// Reflect/Shear dialog: turning one of the angle dials. `center` is
+    /// its screen-space centre, captured at press time so the drag never
+    /// needs to re-derive the dialog's own layout.
+    XformDialAngle { field: xformdlg::DialField, center: Point },
     /// Gradient panel: dragging stop `index` along the ramp `bar` (screen
     /// px). Releasing with the pointer well below the bar deletes the stop.
     GradientStop { index: usize, bar: Rect },
@@ -541,6 +546,8 @@ enum SameKind {
 
 #[derive(Clone, Copy, PartialEq)]
 enum CtxAction {
+    Reflect,
+    Shear,
     ClipMake,
     ClipRelease,
     ToggleGuides,
@@ -850,6 +857,10 @@ struct App {
     /// The Export for Screens dialog (File ▸ Export, ⌘⌥E). Free-floating
     /// like the colour picker; never dockable, never in the Window menu.
     export: Option<crate::export::ExportForScreens>,
+    /// The Reflect / Shear dialog, opened from the canvas right-click menu.
+    /// Free-floating like the colour picker; never dockable, never in the
+    /// Window menu.
+    xform_dialog: Option<xformdlg::TransformDialog>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -1153,6 +1164,7 @@ impl App {
             pending_shape_dialog: None,
             export: None,
             pending_export: false,
+            xform_dialog: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -2100,7 +2112,20 @@ impl App {
     fn open_ctx_menu(&mut self, at: Point) {
         let has_guides = !self.doc.editor.document().guides().is_empty();
         let (can_clip, can_release) = self.clip_state();
-        let mut items = vec![];
+        let has_selection = !self.doc.selection.is_empty();
+        let mut items = vec![
+            CtxItem::Action {
+                label: "Reflect…".into(),
+                action: CtxAction::Reflect,
+                enabled: has_selection,
+            },
+            CtxItem::Action {
+                label: "Shear…".into(),
+                action: CtxAction::Shear,
+                enabled: has_selection,
+            },
+            CtxItem::Sep,
+        ];
         if can_clip || can_release {
             items.push(CtxItem::Action {
                 label: "Make Clipping Mask".into(),
@@ -2145,7 +2170,7 @@ impl App {
 
     /// A left press while the context menu is open: run the row under `p`
     /// (if any) and close. Returns whether the press was consumed.
-    fn ctx_menu_click(&mut self, p: Point) -> bool {
+    fn ctx_menu_click(&mut self, event_loop: &ActiveEventLoop, p: Point) -> bool {
         let Some(menu) = self.ctx_menu.take() else {
             return false;
         };
@@ -2169,6 +2194,8 @@ impl App {
         }
         if let Some(a) = hit {
             match a {
+                CtxAction::Reflect => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Reflect),
+                CtxAction::Shear => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Shear),
                 CtxAction::ClipMake => self.clip_make(),
                 CtxAction::ClipRelease => self.clip_release(),
                 CtxAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
@@ -5349,6 +5376,7 @@ impl App {
             key_object: self.key_object,
             shape_dialog: None,
             export: None,
+            xform_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -5400,6 +5428,7 @@ impl App {
             key_object: self.key_object,
             shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
             export: self.export.as_ref().map(|d| (d, false)),
+            xform_dialog: self.xform_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6469,7 +6498,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -6726,6 +6755,7 @@ impl ApplicationHandler for App {
                     || self.shape_dialog.is_some()
                     || self.export.is_some()
                     || self.picker.is_some()
+                    || self.xform_dialog.is_some()
                 {
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
@@ -6763,14 +6793,19 @@ impl ApplicationHandler for App {
                 if Some(id) == self.main_id
                     || self.picker.is_some()
                     || self.shape_dialog.is_some()
-                    || self.export.is_some() =>
+                    || self.export.is_some()
+                    || self.xform_dialog.is_some() =>
             {
                 self.on_key(event);
             }
             WindowEvent::PinchGesture { delta, .. } if Some(id) == self.main_id => {
                 self.on_pinch(delta);
             }
-            WindowEvent::MouseWheel { delta, .. } if Some(id) == self.main_id => {
+            WindowEvent::MouseWheel { delta, .. }
+                if Some(id) == self.main_id
+                    || self.shape_dialog.is_some()
+                    || self.xform_dialog.is_some() =>
+            {
                 self.on_wheel(delta);
             }
             WindowEvent::RedrawRequested => self.redraw(id),
@@ -7020,6 +7055,8 @@ fn tab_label(panel: PanelId) -> String {
         "shapedlg.polygon" => "Polygon",
         "shapedlg.star" => "Star",
         "export-screens" => "Export for Screens",
+        "xformdlg.reflect" => "Reflect",
+        "xformdlg.shear" => "Shear",
         other => other,
     }
     .to_string()
