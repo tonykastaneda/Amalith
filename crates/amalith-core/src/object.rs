@@ -101,6 +101,14 @@ pub struct PathData {
     /// load — never serialised.
     #[serde(skip)]
     pub geometry: BezPath,
+    /// `geometry`'s bounding box, cached alongside it — `bounding_box()`
+    /// walks every curve segment, and `local_bounds()` is called once per
+    /// object on every render frame (for culling) as well as on every
+    /// hit-test, so recomputing it there instead of on mutation would
+    /// make both costs scale with total document geometry instead of
+    /// with what's actually on screen.
+    #[serde(skip)]
+    bounds: Rect,
 }
 
 /// On-disk shape of [`PathData`]. Files written before the anchor model
@@ -537,7 +545,8 @@ impl PathData {
     /// Builds a path from an anchor model, deriving the `geometry` cache.
     pub fn from_subpaths(subpaths: Vec<Subpath>) -> Self {
         let geometry = subpaths_to_bezpath(&subpaths);
-        Self { subpaths, geometry }
+        let bounds = crate::geom::bez_path_bounds(&geometry);
+        Self { subpaths, geometry, bounds }
     }
 
     /// Wraps an existing kurbo path, deriving the anchor model from it.
@@ -545,7 +554,8 @@ impl PathData {
     /// only render / export see no change.
     pub fn from_bezpath(geometry: BezPath) -> Self {
         let subpaths = bezpath_to_subpaths(&geometry);
-        Self { subpaths, geometry }
+        let bounds = crate::geom::bez_path_bounds(&geometry);
+        Self { subpaths, geometry, bounds }
     }
 
     /// The editable anchor model.
@@ -553,10 +563,12 @@ impl PathData {
         &self.subpaths
     }
 
-    /// Mutates the anchor model, then rebuilds the `geometry` cache.
+    /// Mutates the anchor model, then rebuilds the `geometry` and
+    /// `bounds` caches.
     pub fn edit_subpaths(&mut self, f: impl FnOnce(&mut Vec<Subpath>)) {
         f(&mut self.subpaths);
         self.geometry = subpaths_to_bezpath(&self.subpaths);
+        self.bounds = crate::geom::bez_path_bounds(&self.geometry);
     }
 
 
@@ -662,7 +674,7 @@ impl PathData {
     }
 
     pub fn local_bounds(&self) -> Rect {
-        crate::geom::bez_path_bounds(&self.geometry)
+        self.bounds
     }
 
     /// Returns a polyline approximation of every subpath in local space.

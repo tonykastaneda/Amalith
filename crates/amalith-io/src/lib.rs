@@ -13,12 +13,14 @@
 //!
 //! See `manifest.rs` for the on-disk schema and `container.rs` for the
 //! save/load implementation.
+mod ai;
 mod assets;
 mod container;
 mod error;
 mod manifest;
 mod svg;
 
+pub use ai::{import_ai, AiError};
 pub use assets::AssetStore;
 pub use container::{load, save};
 pub use error::IoError;

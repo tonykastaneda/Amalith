@@ -3564,10 +3564,12 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// ⌘O — pick a `.amalith` file and load it, replacing the document.
+    /// ⌘O — pick a `.amalith` or `.ai` file and load it, replacing the
+    /// document.
     fn open_document(&mut self) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Amalith document", &["amalith"])
+            .add_filter("Illustrator document", &["ai"])
             .pick_file()
         else {
             return;
@@ -3576,9 +3578,23 @@ impl App {
     }
 
     /// Load `path` into a tab (filling the Home placeholder if we're on Home,
-    /// otherwise a new tab) and record it in the recent list.
+    /// otherwise a new tab) and record it in the recent list. An `.ai`
+    /// file reads its PDF-compatible layer (see `amalith_io::import_ai`)
+    /// rather than the native `.amalith` container.
     fn open_path(&mut self, path: &std::path::Path) {
-        match amalith_io::load(path) {
+        let is_ai = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("ai"));
+        let result: Result<(Document, amalith_io::AssetStore), String> = if is_ai {
+            std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| amalith_io::import_ai(&bytes).map_err(|e| e.to_string()))
+                .map(|doc| (doc, amalith_io::AssetStore::new()))
+        } else {
+            amalith_io::load(path).map_err(|e| e.to_string())
+        };
+        match result {
             Ok((document, assets)) => {
                 let mut doc = Doc::new(Editor::new(document));
                 doc.asset_store = assets;
