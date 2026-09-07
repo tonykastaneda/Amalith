@@ -142,6 +142,7 @@ impl App {
                             code,
                             shift: self.shift_down,
                             cmd: self.cmd_down,
+                            alt: self.alt_down,
                         };
                         if let Some(p) = self.prefs.as_mut() {
                             // Steal the chord from whichever binding holds it.
@@ -353,6 +354,9 @@ impl App {
                 textedit::KeyResult::PassThrough => {
                     self.commit_text_edit();
                 }
+                // The Option-held text-formatting nudges — fall through
+                // to the shell's dispatch below *without* committing.
+                textedit::KeyResult::Ignored => {}
             }
         }
         // Escape closes the Stroke flyout before anything else acts.
@@ -377,6 +381,7 @@ impl App {
                         code,
                         shift: self.shift_down,
                         cmd: self.cmd_down,
+                        alt: self.alt_down,
                     };
                     if let Some(path) = self.scripts.script_for_chord(chord) {
                         crate::scripts::run(&path);
@@ -477,6 +482,7 @@ impl App {
                     code,
                     shift: self.shift_down,
                     cmd: true,
+                    alt: self.alt_down,
                 };
                 if let Some(i) = self
                     .settings
@@ -598,6 +604,28 @@ impl App {
                     _ => {}
                 }
             }
+            // Option-held (no ⌘) text-formatting nudges — kerning/
+            // tracking, leading, baseline shift — user-remappable like
+            // everything in `action_keys`. Illustrator reserves plain
+            // Option here instead of the OS's word-navigation meaning
+            // (see `textedit.rs`'s `KeyResult::Ignored` for the other
+            // half of that trade).
+            PhysicalKey::Code(code) if pressed && !self.cmd_down && self.alt_down => {
+                let chord = KeyChord {
+                    code,
+                    shift: self.shift_down,
+                    cmd: false,
+                    alt: true,
+                };
+                if let Some(i) = self
+                    .settings
+                    .action_keys
+                    .iter()
+                    .position(|k| *k == Some(chord))
+                {
+                    self.run_pref_action(prefs::PrefAction::ALL[i]);
+                }
+            }
             // Bare-key: arrow nudge, Escape, tool shortcuts.
             PhysicalKey::Code(code) if pressed && !self.cmd_down && !self.alt_down => {
                 match code {
@@ -656,6 +684,7 @@ impl App {
                             code,
                             shift: self.shift_down,
                             cmd: false,
+                            alt: false,
                         };
                         if let Some(i) = self
                             .settings
@@ -689,6 +718,23 @@ impl App {
             }
             prefs::PrefAction::Place => self.place_image_dialog(),
             prefs::PrefAction::CommandPalette => self.open_palette(),
+            // Whole-object only (Amalith has no per-character styling
+            // yet — see `edit_text_style`), same as every Character panel
+            // control. `20.0` tracking = Illustrator's default 20/1000 em
+            // kerning increment; `2.0` leading/baseline-shift match its
+            // default Units & Increments too.
+            prefs::PrefAction::TrackingDecrease => self.edit_text_style(|s| s.tracking -= 20.0),
+            prefs::PrefAction::TrackingIncrease => self.edit_text_style(|s| s.tracking += 20.0),
+            prefs::PrefAction::LeadingDecrease => self.edit_text_style(|s| {
+                let base = s.leading.unwrap_or(s.size * 1.2);
+                s.leading = Some((base - 2.0).max(0.0));
+            }),
+            prefs::PrefAction::LeadingIncrease => self.edit_text_style(|s| {
+                let base = s.leading.unwrap_or(s.size * 1.2);
+                s.leading = Some(base + 2.0);
+            }),
+            prefs::PrefAction::BaselineShiftUp => self.edit_text_style(|s| s.baseline_shift += 2.0),
+            prefs::PrefAction::BaselineShiftDown => self.edit_text_style(|s| s.baseline_shift -= 2.0),
         }
     }
 }

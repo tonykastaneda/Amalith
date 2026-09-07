@@ -256,21 +256,27 @@ impl TextEdit {
                 }
                 self.touched = true;
             }
-            Key::Named(NamedKey::ArrowLeft) => match (sel, mods.alt, mods.meta) {
-                (false, false, false) => drv.move_left(),
-                (true, false, false) => drv.select_left(),
-                (false, true, _) => drv.move_word_left(),
-                (true, true, _) => drv.select_word_left(),
-                (false, _, true) => drv.move_to_line_start(),
-                (true, _, true) => drv.select_to_line_start(),
+            // Option is reserved for kerning/tracking (Left/Right),
+            // leading (Up/Down), and — with Shift too — baseline shift
+            // (Up/Down), matching Illustrator: unlike a plain text field,
+            // its Type tool doesn't use Option for word navigation. Bail
+            // out untouched so the shell's `action_keys` dispatch (see
+            // `keyboard.rs`) gets the keystroke instead.
+            Key::Named(NamedKey::ArrowLeft) if mods.alt => return KeyResult::Ignored,
+            Key::Named(NamedKey::ArrowRight) if mods.alt => return KeyResult::Ignored,
+            Key::Named(NamedKey::ArrowUp) if mods.alt => return KeyResult::Ignored,
+            Key::Named(NamedKey::ArrowDown) if mods.alt => return KeyResult::Ignored,
+            Key::Named(NamedKey::ArrowLeft) => match (sel, mods.meta) {
+                (false, false) => drv.move_left(),
+                (true, false) => drv.select_left(),
+                (false, true) => drv.move_to_line_start(),
+                (true, true) => drv.select_to_line_start(),
             },
-            Key::Named(NamedKey::ArrowRight) => match (sel, mods.alt, mods.meta) {
-                (false, false, false) => drv.move_right(),
-                (true, false, false) => drv.select_right(),
-                (false, true, _) => drv.move_word_right(),
-                (true, true, _) => drv.select_word_right(),
-                (false, _, true) => drv.move_to_line_end(),
-                (true, _, true) => drv.select_to_line_end(),
+            Key::Named(NamedKey::ArrowRight) => match (sel, mods.meta) {
+                (false, false) => drv.move_right(),
+                (true, false) => drv.select_right(),
+                (false, true) => drv.move_to_line_end(),
+                (true, true) => drv.select_to_line_end(),
             },
             Key::Named(NamedKey::ArrowUp) => {
                 if mods.meta {
@@ -405,6 +411,10 @@ impl TextEdit {
         caret_on: bool,
         theme_blue: Color,
     ) {
+        // Baseline shift is a pure local-space vertical offset (positive
+        // = up, so subtracted — local space is y-down), applied before
+        // the object's own world transform like everything else.
+        let xf = xf * Affine::translate((0.0, -self.style.baseline_shift));
         // Refresh the editor's layout up front. Driver ops (typing,
         // select-all, arrow keys) mark it dirty but don't rebuild, so
         // `selection_geometry` / `cursor_geometry` would otherwise read a
@@ -540,8 +550,14 @@ pub enum KeyResult {
     Handled,
     /// Commit and exit edit mode.
     Commit,
-    /// Not an editing key — let the shell handle it (e.g. ⌘Z, ⌘S).
+    /// Not an editing key — let the shell handle it (e.g. ⌘Z, ⌘S). Exits
+    /// edit mode first (unlike `Ignored`), since the shell-level action
+    /// this hands off to is generally not text-editing-aware.
     PassThrough,
+    /// Not an editing key, but — unlike `PassThrough` — one the shell can
+    /// act on *without* leaving edit mode (the Option-held text-
+    /// formatting nudges: kerning/tracking, leading, baseline shift).
+    Ignored,
 }
 
 /// Line height for a [`TextStyle`] as parley's [`LineHeight`].

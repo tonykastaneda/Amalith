@@ -1395,6 +1395,11 @@ fn paint_object(
             // Live text stays solid in Outline view — only text that's been
             // expanded to paths (now a Path / CompoundPath) wireframes.
             // The object open in the Type tool is drawn live by the shell.
+            // Baseline shift is a pure local-space vertical offset, applied
+            // before the object's own transform like everything else here
+            // — positive shifts up, so it's subtracted (local space is
+            // y-down).
+            let m = m * Affine::translate((0.0, -td.style.baseline_shift));
             if Some(id) != editing_text {
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
                 // Live area-text-box resize: re-wrap at the previewed frame

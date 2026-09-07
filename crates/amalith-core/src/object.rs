@@ -838,6 +838,12 @@ pub struct TextStyle {
     pub leading: Option<f64>,
     /// Tracking, in thousandths of an em (Illustrator's unit).
     pub tracking: f64,
+    /// Vertical offset in local px, positive = shifted up (Illustrator's
+    /// Character panel convention regardless of the renderer's own y-down
+    /// space). `#[serde(default)]` so a `.amalith` file saved before this
+    /// field existed still loads.
+    #[serde(default)]
+    pub baseline_shift: f64,
     pub underline: bool,
     pub strikethrough: bool,
     pub small_caps: bool,
@@ -853,6 +859,7 @@ impl Default for TextStyle {
             size: 24.0,
             leading: None,
             tracking: 0.0,
+            baseline_shift: 0.0,
             underline: false,
             strikethrough: false,
             small_caps: false,

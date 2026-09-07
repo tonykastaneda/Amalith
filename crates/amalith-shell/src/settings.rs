@@ -167,6 +167,12 @@ pub fn action_name(a: PrefAction) -> &'static str {
         PrefAction::DefaultPaints => "DefaultPaints",
         PrefAction::Place => "Place",
         PrefAction::CommandPalette => "CommandPalette",
+        PrefAction::TrackingDecrease => "TrackingDecrease",
+        PrefAction::TrackingIncrease => "TrackingIncrease",
+        PrefAction::LeadingDecrease => "LeadingDecrease",
+        PrefAction::LeadingIncrease => "LeadingIncrease",
+        PrefAction::BaselineShiftUp => "BaselineShiftUp",
+        PrefAction::BaselineShiftDown => "BaselineShiftDown",
     }
 }
 

@@ -16,13 +16,14 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
 
-/// A tool / command shortcut: a letter/digit key, optionally with Shift
-/// and/or Cmd (Ctrl on Windows/Linux).
+/// A tool / command shortcut: a letter/digit/arrow key, optionally with
+/// Shift, Option (Alt on Windows/Linux), and/or Cmd (Ctrl).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct KeyChord {
     pub code: KeyCode,
     pub shift: bool,
     pub cmd: bool,
+    pub alt: bool,
 }
 
 impl KeyChord {
@@ -31,6 +32,7 @@ impl KeyChord {
             code,
             shift: false,
             cmd: false,
+            alt: false,
         }
     }
     fn with_shift(code: KeyCode) -> Self {
@@ -38,6 +40,7 @@ impl KeyChord {
             code,
             shift: true,
             cmd: false,
+            alt: false,
         }
     }
     fn with_cmd_shift(code: KeyCode) -> Self {
@@ -45,6 +48,27 @@ impl KeyChord {
             code,
             shift: true,
             cmd: true,
+            alt: false,
+        }
+    }
+    /// Option/Alt alone — the primary modifier for the text-formatting
+    /// nudges (kerning/tracking, leading): Illustrator reserves Option
+    /// there instead of the OS-standard word-navigation meaning.
+    pub fn with_alt(code: KeyCode) -> Self {
+        Self {
+            code,
+            shift: false,
+            cmd: false,
+            alt: true,
+        }
+    }
+    /// Shift+Option — baseline shift's primary modifier.
+    pub fn with_shift_alt(code: KeyCode) -> Self {
+        Self {
+            code,
+            shift: true,
+            cmd: false,
+            alt: true,
         }
     }
 }
@@ -52,12 +76,16 @@ impl KeyChord {
 impl fmt::Display for KeyChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let c = key_char(self.code).unwrap_or('?');
-        match (self.cmd, self.shift) {
-            (true, true) => write!(f, "Cmd+Shift+{c}"),
-            (true, false) => write!(f, "Cmd+{c}"),
-            (false, true) => write!(f, "Shift+{c}"),
-            (false, false) => write!(f, "{c}"),
+        if self.cmd {
+            write!(f, "Cmd+")?;
         }
+        if self.alt {
+            write!(f, "Option+")?;
+        }
+        if self.shift {
+            write!(f, "Shift+")?;
+        }
+        write!(f, "{c}")
     }
 }
 
@@ -66,13 +94,14 @@ impl std::str::FromStr for KeyChord {
     fn from_str(s: &str) -> Result<Self, ()> {
         let s = s.trim();
         let (cmd, s) = s.strip_prefix("Cmd+").map_or((false, s), |r| (true, r));
+        let (alt, s) = s.strip_prefix("Option+").map_or((false, s), |r| (true, r));
         let (shift, rest) = s.strip_prefix("Shift+").map_or((false, s), |r| (true, r));
         let mut ch = rest.chars();
         let (Some(c), None) = (ch.next(), ch.next()) else {
             return Err(());
         };
         key_code(c)
-            .map(|code| KeyChord { code, shift, cmd })
+            .map(|code| KeyChord { code, shift, cmd, alt })
             .ok_or(())
     }
 }
@@ -92,6 +121,7 @@ pub fn key_char(code: KeyCode) -> Option<char> {
         Digit4 => '4', Digit5 => '5', Digit6 => '6', Digit7 => '7',
         Digit8 => '8', Digit9 => '9',
         Backslash => '\\',
+        ArrowLeft => '←', ArrowRight => '→', ArrowUp => '↑', ArrowDown => '↓',
         _ => return None,
     })
 }
@@ -110,6 +140,7 @@ pub fn key_code(c: char) -> Option<KeyCode> {
         '4' => Digit4, '5' => Digit5, '6' => Digit6, '7' => Digit7,
         '8' => Digit8, '9' => Digit9,
         '\\' => Backslash,
+        '←' => ArrowLeft, '→' => ArrowRight, '↑' => ArrowUp, '↓' => ArrowDown,
         _ => return None,
     })
 }
@@ -145,14 +176,26 @@ pub enum PrefAction {
     DefaultPaints,
     Place,
     CommandPalette,
+    TrackingDecrease,
+    TrackingIncrease,
+    LeadingDecrease,
+    LeadingIncrease,
+    BaselineShiftUp,
+    BaselineShiftDown,
 }
 
 impl PrefAction {
-    pub const ALL: [PrefAction; 4] = [
+    pub const ALL: [PrefAction; 10] = [
         PrefAction::SwapPaints,
         PrefAction::DefaultPaints,
         PrefAction::Place,
         PrefAction::CommandPalette,
+        PrefAction::TrackingDecrease,
+        PrefAction::TrackingIncrease,
+        PrefAction::LeadingDecrease,
+        PrefAction::LeadingIncrease,
+        PrefAction::BaselineShiftUp,
+        PrefAction::BaselineShiftDown,
     ];
 
     pub fn label(self) -> &'static str {
@@ -161,6 +204,12 @@ impl PrefAction {
             PrefAction::DefaultPaints => "Default Fill / Stroke",
             PrefAction::Place => "Place…",
             PrefAction::CommandPalette => "Command Palette",
+            PrefAction::TrackingDecrease => "Decrease Tracking/Kerning",
+            PrefAction::TrackingIncrease => "Increase Tracking/Kerning",
+            PrefAction::LeadingDecrease => "Decrease Leading",
+            PrefAction::LeadingIncrease => "Increase Leading",
+            PrefAction::BaselineShiftUp => "Baseline Shift Up",
+            PrefAction::BaselineShiftDown => "Baseline Shift Down",
         }
     }
 
@@ -173,7 +222,16 @@ impl PrefAction {
                 code: KeyCode::KeyK,
                 shift: false,
                 cmd: true,
+                alt: false,
             },
+            PrefAction::TrackingDecrease => KeyChord::with_alt(KeyCode::ArrowLeft),
+            PrefAction::TrackingIncrease => KeyChord::with_alt(KeyCode::ArrowRight),
+            // Illustrator: Option-Up tightens (decreases) leading,
+            // Option-Down loosens (increases) it.
+            PrefAction::LeadingDecrease => KeyChord::with_alt(KeyCode::ArrowUp),
+            PrefAction::LeadingIncrease => KeyChord::with_alt(KeyCode::ArrowDown),
+            PrefAction::BaselineShiftUp => KeyChord::with_shift_alt(KeyCode::ArrowUp),
+            PrefAction::BaselineShiftDown => KeyChord::with_shift_alt(KeyCode::ArrowDown),
         })
     }
 }
