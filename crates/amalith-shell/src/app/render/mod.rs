@@ -821,6 +821,19 @@ impl App {
             self.paint_ctx_menu();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
+            // Recent-file previews are rendered headlessly, one per frame,
+            // until every tile has settled — see `app/thumbnails.rs`.
+            if let Some(pending) = self.home.as_ref().and_then(|hm| {
+                let i = hm.next_missing_thumbnail()?;
+                Some((i, hm.recent_path(i)?.to_path_buf()))
+            }) {
+                let (i, path) = pending;
+                let img = self.recent_thumbnail(&path);
+                if let Some(hm) = &mut self.home {
+                    hm.set_thumbnail(i, img);
+                }
+                self.request_main_redraw();
+            }
             if let Some(hm) = &mut self.home {
                 hm.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
             }

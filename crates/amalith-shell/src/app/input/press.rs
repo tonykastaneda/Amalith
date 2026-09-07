@@ -526,14 +526,15 @@ impl App {
                 if self.home.is_some() {
                     let hit = self
                         .home
-                        .as_ref()
-                        .map(|hm| hm.on_press(self.pointer.to_vec2()));
+                        .as_mut()
+                        .map(|hm| hm.on_press(self.pointer.to_vec2(), double));
                     match hit {
                         Some(home::Hit::NewDocument) => self.open_new_doc(),
                         Some(home::Hit::Youtube) => about::open_url(home::YOUTUBE_URL),
                         Some(home::Hit::News) => about::open_url(home::NEWS_URL),
                         Some(home::Hit::Docs) => about::open_url(home::DOCS_URL),
                         Some(home::Hit::Github) => about::open_url(home::GITHUB_URL),
+                        Some(home::Hit::Import) => self.import_from_home(),
                         Some(home::Hit::Recent(i)) => {
                             let path = self
                                 .home

@@ -2,9 +2,10 @@
 //!
 //! Shown on launch and whenever the last document tab is closed: a left panel
 //! with the app mark, the welcome wordmark, and a short stack of external
-//! links (News, Docs, GitHub), plus a three-column grid on the right — a
-//! "New Document" tile, recent files, and dark-grey placeholders, with a
-//! scrollbar when the grid overflows.
+//! links (News, Docs, GitHub), plus a responsive grid on the right — a
+//! "New Document" tile, recent files with rendered previews, and dark-grey
+//! placeholders, with a scrollbar when the grid overflows and an Open /
+//! Import bar pinned below it.
 //!
 //! The YouTube tutorials link is kept in the code but hidden for now (see
 //! `Badge::Youtube` / `hit_youtube`) — bring it back once the app is closer
@@ -12,7 +13,9 @@
 //!
 //! Rendered with vello + parley like the rest of the chrome. It's a full-window
 //! surface: while it's up, the canvas underneath takes no input. Artwork comes
-//! from `assets/home/` (SVGs rasterised to PNG at build prep time).
+//! from `assets/home/` (SVGs rasterised to PNG at build prep time). Recent-file
+//! previews are rendered headlessly and cached to disk — see `app/thumbnails.rs`;
+//! this module only paints whatever preview it's handed via `set_thumbnail`.
 
 use std::path::{Path, PathBuf};
 
@@ -49,11 +52,18 @@ const INK: Color = Color::from_rgb8(238, 238, 240);
 const DIM: Color = Color::from_rgb8(138, 138, 144);
 const DIVIDER: Color = Color::from_rgb8(48, 48, 51);
 const TILE_RECENT: Color = Color::from_rgb8(46, 46, 48);
+const TILE_RECENT_HOVER: Color = Color::from_rgb8(56, 56, 59);
 const TILE_PLACEHOLDER: Color = Color::from_rgb8(38, 38, 40);
 const SCROLL_THUMB: Color = Color::from_rgb8(90, 90, 94);
+const BAR_BG: Color = Color::from_rgb8(24, 24, 26);
 /// Always fill at least this many cells (New Document + recents + blanks).
 const MIN_SLOTS: usize = 9;
-const COLS: usize = 3;
+/// Column count settles around this tile width as the window resizes.
+const TARGET_TILE: f64 = 172.0;
+const MIN_TILE: f64 = 128.0;
+const MAX_TILE: f64 = 224.0;
+/// Height of the solid Open / Import bar along the bottom of the panel.
+const TOOLBAR_H: f64 = 76.0;
 
 /// What a press on the Home screen landed on.
 pub enum Hit {
@@ -66,6 +76,28 @@ pub enum Hit {
     News,
     Docs,
     Github,
+    Import,
+}
+
+/// Which tile the pointer is currently over — drives the highlight that
+/// used to be permanently glued to New Document. Open / Import use the
+/// New Document dialog's plain (non-hover) button styling, so they don't
+/// need a hover state of their own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Hover {
+    NewDoc,
+    Recent(usize),
+}
+
+/// A recent file's rendered preview, generated headlessly by
+/// `App::recent_thumbnail` and handed back in via `set_thumbnail`.
+enum ThumbState {
+    /// Not requested yet, or `App` hasn't gotten to it this frame.
+    Pending,
+    /// Tried and failed (missing file, decode error, empty document, …) —
+    /// don't keep retrying every frame.
+    Failed,
+    Ready(ImageData),
 }
 
 fn decode(bytes: &[u8]) -> Option<ImageData> {
@@ -90,6 +122,19 @@ fn image_into(scene: &mut Scene, img: &ImageData, dst: Rect) {
     scene.draw_image(img, xf);
 }
 
+/// Scale + place `img` so it fits inside `dst` without cropping, centred.
+fn image_contain(scene: &mut Scene, img: &ImageData, dst: Rect) {
+    let (iw, ih) = (img.width as f64, img.height as f64);
+    if iw <= 0.0 || ih <= 0.0 {
+        return;
+    }
+    let s = (dst.width() / iw).min(dst.height() / ih);
+    let (dw, dh) = (iw * s, ih * s);
+    let cx = dst.x0 + (dst.width() - dw) / 2.0;
+    let cy = dst.y0 + (dst.height() - dh) / 2.0;
+    image_into(scene, img, Rect::from_origin_size((cx, cy), (dw, dh)));
+}
+
 fn display_name(path: &Path) -> String {
     path.file_stem()
         .or_else(|| path.file_name())
@@ -105,12 +150,16 @@ pub struct Home {
     youtube: ImageData,
     github: ImageData,
     tile: ImageData,
-    /// (path, display name), most-recent first.
-    recents: Vec<(PathBuf, String)>,
+    /// (path, display name, preview), most-recent first.
+    recents: Vec<(PathBuf, String, ThumbState)>,
     /// Vertical scroll of the document grid, in px.
     scroll: f64,
     /// Last paint's max scroll; wheel clamping uses this.
     max_scroll: f64,
+    hover: Option<Hover>,
+    /// The recent file a single click landed on. Open (and double-click)
+    /// act on this — a click here only marks the tile, it doesn't open it.
+    selected: Option<usize>,
     // Hit rectangles in window coordinates, refreshed each paint.
     hit_new: Rect,
     hit_recents: Vec<Rect>,
@@ -119,6 +168,8 @@ pub struct Home {
     hit_news: Rect,
     hit_docs: Rect,
     hit_github: Rect,
+    hit_open: Rect,
+    hit_import: Rect,
 }
 
 impl Home {
@@ -133,25 +184,50 @@ impl Home {
                 .into_iter()
                 .map(|p| {
                     let n = display_name(&p);
-                    (p, n)
+                    (p, n, ThumbState::Pending)
                 })
                 .collect(),
             scroll: 0.0,
             max_scroll: 0.0,
+            hover: None,
+            selected: None,
             hit_new: Rect::ZERO,
             hit_recents: Vec::new(),
             hit_youtube: Rect::ZERO,
             hit_news: Rect::ZERO,
             hit_docs: Rect::ZERO,
             hit_github: Rect::ZERO,
+            hit_open: Rect::ZERO,
+            hit_import: Rect::ZERO,
         })
     }
 
     pub fn recent_path(&self, i: usize) -> Option<&Path> {
-        self.recents.get(i).map(|(p, _)| p.as_path())
+        self.recents.get(i).map(|(p, ..)| p.as_path())
     }
 
-    pub fn on_press(&self, p: Vec2) -> Hit {
+    /// Index of the first recent file that still needs its preview
+    /// rendered, if any. `App` drives `recent_thumbnail` off this, one per
+    /// frame, until the whole list is settled.
+    pub fn next_missing_thumbnail(&self) -> Option<usize> {
+        self.recents
+            .iter()
+            .position(|(.., t)| matches!(t, ThumbState::Pending))
+    }
+
+    pub fn set_thumbnail(&mut self, i: usize, img: Option<ImageData>) {
+        if let Some(entry) = self.recents.get_mut(i) {
+            entry.2 = match img {
+                Some(img) => ThumbState::Ready(img),
+                None => ThumbState::Failed,
+            };
+        }
+    }
+
+    /// `double` is whether this press is the second half of a double-click
+    /// (see `App::click_streak`). A single click on a recent file only
+    /// selects it — Open (or a double-click) is what actually opens it.
+    pub fn on_press(&mut self, p: Vec2, double: bool) -> Hit {
         let pt = p.to_point();
         if self.hit_new.contains(pt) {
             return Hit::NewDocument;
@@ -168,12 +244,45 @@ impl Home {
         if self.hit_github.contains(pt) {
             return Hit::Github;
         }
+        if self.hit_open.contains(pt) {
+            return match self.selected {
+                Some(i) => Hit::Recent(i),
+                None => Hit::None,
+            };
+        }
+        if self.hit_import.contains(pt) {
+            return Hit::Import;
+        }
         for (i, r) in self.hit_recents.iter().enumerate() {
             if r.contains(pt) {
-                return Hit::Recent(i);
+                if double {
+                    return Hit::Recent(i);
+                }
+                self.selected = Some(i);
+                return Hit::None;
             }
         }
         Hit::None
+    }
+
+    /// Pointer moved. Returns whether the hover state changed (and so the
+    /// screen needs a repaint) — mirrors `CommandPalette::hover`.
+    pub fn on_move(&mut self, p: Vec2) -> bool {
+        let pt = p.to_point();
+        let next = if self.hit_new.contains(pt) {
+            Some(Hover::NewDoc)
+        } else {
+            self.hit_recents
+                .iter()
+                .position(|r| r.contains(pt))
+                .map(Hover::Recent)
+        };
+        if next != self.hover {
+            self.hover = next;
+            true
+        } else {
+            false
+        }
     }
 
     /// Wheel over the document grid. `dy` is the same sign as the rest of
@@ -278,19 +387,24 @@ impl Home {
     ) {
         let area_x = split + 92.0;
         let area_top = 92.0;
-        let area_bottom = hl - 40.0;
+        let area_right = wl - 56.0;
         let scroll_w = 10.0;
-        let area_w = (wl - area_x - 56.0 - scroll_w).max(240.0);
+        let area_w = (area_right - area_x - scroll_w).max(240.0);
+        let area_bottom = hl - TOOLBAR_H;
 
+        // Column count settles around `TARGET_TILE`, so the grid actually
+        // reflows (more/fewer columns, not just resized ones) as the
+        // window is resized, instead of being pinned at a fixed count.
         let gap = 30.0;
-        let tile = ((area_w - gap * (COLS as f64 - 1.0)) / COLS as f64).clamp(130.0, 215.0);
+        let cols = (((area_w + gap) / (TARGET_TILE + gap)).round() as usize).max(1);
+        let tile = ((area_w - gap * (cols as f64 - 1.0)) / cols as f64).clamp(MIN_TILE, MAX_TILE);
         let label_gap = 12.0;
         let cell_h = tile + label_gap + 24.0;
         let row_stride = cell_h + gap;
 
         let filled = 1 + self.recents.len();
-        let total = filled.max(MIN_SLOTS);
-        let rows = total.div_ceil(COLS);
+        let total = filled.max(MIN_SLOTS.max(cols));
+        let rows = total.div_ceil(cols);
         let content_h = rows as f64 * row_stride - gap;
         let viewport_h = (area_bottom - area_top).max(1.0);
         self.max_scroll = (content_h - viewport_h).max(0.0);
@@ -303,8 +417,8 @@ impl Home {
         self.hit_recents.clear();
         self.hit_recents.resize(self.recents.len(), Rect::ZERO);
         for idx in 0..total {
-            let col = idx % COLS;
-            let row = idx / COLS;
+            let col = idx % cols;
+            let row = idx / cols;
             let x = area_x + col as f64 * (tile + gap);
             let y = area_top + row as f64 * row_stride - self.scroll;
             if y + tile < area_top - 8.0 || y > area_bottom + 8.0 {
@@ -315,17 +429,24 @@ impl Home {
             if idx == 0 {
                 image_into(scene, &self.tile, tile_rect);
                 self.hit_new = tile_rect;
-                label(scene, tcx, theme, "New Document", tile_rect, label_gap, true);
+                let sel = self.hover == Some(Hover::NewDoc);
+                label(scene, tcx, theme, "New Document", tile_rect, label_gap, sel);
             } else if idx - 1 < self.recents.len() {
-                scene.fill(
-                    Fill::NonZero,
-                    Affine::IDENTITY,
-                    TILE_RECENT,
-                    None,
-                    &RoundedRect::from_rect(tile_rect, 18.0),
-                );
+                let is_sel = self.selected == Some(idx - 1);
+                let is_hov = self.hover == Some(Hover::Recent(idx - 1));
+                let rr = RoundedRect::from_rect(tile_rect, 18.0);
+                let bg = if is_hov { TILE_RECENT_HOVER } else { TILE_RECENT };
+                scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &rr);
+                if let ThumbState::Ready(img) = &self.recents[idx - 1].2 {
+                    scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &rr);
+                    image_contain(scene, img, tile_rect.inset(-12.0));
+                    scene.pop_layer();
+                }
+                if is_sel {
+                    scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, theme.accent, None, &rr);
+                }
                 let name = self.recents[idx - 1].1.clone();
-                label(scene, tcx, theme, &name, tile_rect, label_gap, false);
+                label(scene, tcx, theme, &name, tile_rect, label_gap, is_sel);
                 self.hit_recents[idx - 1] = tile_rect;
             } else {
                 scene.fill(
@@ -339,12 +460,7 @@ impl Home {
         }
 
         if self.max_scroll > 0.0 {
-            let track = Rect::new(
-                wl - 22.0,
-                area_top,
-                wl - 16.0,
-                area_bottom,
-            );
+            let track = Rect::new(wl - 22.0, area_top, wl - 16.0, area_bottom);
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
@@ -365,6 +481,40 @@ impl Home {
         }
 
         scene.pop_layer();
+
+        // A solid bar along the bottom, like a file picker's footer: a flat
+        // panel with a hairline top border, holding Open (primary — acts on
+        // whichever tile is selected) and Import (secondary).
+        let bar = Rect::new(split, area_bottom, wl, hl);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, BAR_BG, None, &bar);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            DIVIDER,
+            None,
+            &Rect::new(split, area_bottom, wl, area_bottom + 1.0),
+        );
+
+        // Same button dimensions as the New Document dialog's Create /
+        // Cancel pair (`newdoc::layout`).
+        let btn_h = 34.0;
+        let btn_gap = 12.0;
+        let btn_y = area_bottom + (TOOLBAR_H - btn_h) / 2.0;
+        let open_rect = Rect::new(area_right - 104.0, btn_y, area_right, btn_y + btn_h);
+        let import_rect = Rect::new(
+            open_rect.x0 - btn_gap - 92.0,
+            btn_y,
+            open_rect.x0 - btn_gap,
+            btn_y + btn_h,
+        );
+        self.hit_open = open_rect;
+        self.hit_import = import_rect;
+        // Exactly the New Document dialog's Cancel / Create pair, so the
+        // two bars actually match — Open only turns "primary" (solid
+        // accent) once a file is selected; until then it reads as a
+        // second Cancel-style outline, same as Import.
+        crate::widgets::button(scene, tcx, theme, import_rect, "Import…", false);
+        crate::widgets::button(scene, tcx, theme, open_rect, "Open", self.selected.is_some());
     }
 }
 
@@ -482,7 +632,8 @@ fn line_path(a: (f64, f64), b: (f64, f64)) -> BezPath {
     p
 }
 
-/// Centred caption under a tile. `selected` draws the accent highlight pill.
+/// Centred caption under a tile. `selected` draws the accent highlight pill
+/// — hover, for New Document; click-selection, for a recent file.
 fn label(
     scene: &mut Scene,
     tcx: &mut TextContext,

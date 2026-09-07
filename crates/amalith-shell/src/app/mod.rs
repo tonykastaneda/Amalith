@@ -27,6 +27,7 @@ mod isolation;
 mod native_menu;
 mod render;
 mod shape_dialog;
+mod thumbnails;
 mod xform_dialog;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -3679,6 +3680,55 @@ impl App {
                     self.doc.selection = ids;
                     self.doc.anchor_sel.clear();
                     self.doc.io_error = None;
+                }
+                Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+            },
+            Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+        }
+        self.request_main_redraw();
+    }
+
+    /// The Home screen's Import button: there's no open document to paste
+    /// into yet, so this starts one (default size, like New Document with
+    /// its dialog skipped) and imports the picked SVG's shapes into it.
+    fn import_from_home(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("SVG", &["svg"])
+            .pick_file()
+        else {
+            return;
+        };
+        let svg = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(err) => {
+                self.doc.io_error = Some(format!("Import failed: {err}"));
+                self.request_main_redraw();
+                return;
+            }
+        };
+
+        let form = newdoc::NewDocForm::default();
+        let (wpx, hpx) = (form.width_px(), form.height_px());
+        let mut doc = amalith_core::Document::new("Untitled");
+        doc.settings.default_unit = form.unit;
+        doc.settings.color_mode = form.color_mode;
+        let mut editor = Editor::new(doc);
+        let _ = editor.execute(Command::CreateArtboard {
+            name: "Artboard 1".into(),
+            rect: amalith_core::Rect::new(-wpx / 2.0, -hpx / 2.0, wpx / 2.0, hpx / 2.0),
+            index: None,
+        });
+        let _ = editor.execute(Command::CreateLayer { name: "Layer 1".into(), index: None });
+        editor.clear_history();
+
+        match editor.copy_from_svg(&svg) {
+            Ok(()) => match editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
+                Ok(ids) => {
+                    self.home = None;
+                    let mut doc = Doc::new(editor);
+                    doc.selection = ids;
+                    self.load_active_doc(doc);
+                    self.pending_fit = true;
                 }
                 Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
             },

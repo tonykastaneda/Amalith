@@ -72,3 +72,16 @@ pub fn push(path: &Path) {
         .join("\n");
     let _ = std::fs::write(&store, body);
 }
+
+/// Where a Home-screen preview for `path` is cached, next to `recents.txt`.
+/// The file's mtime is folded into the name, so editing and resaving a
+/// document invalidates its old thumbnail automatically (the stale file
+/// is simply orphaned — cheap enough to leave behind).
+pub fn thumbnail_cache_path(path: &Path, mtime_secs: u64) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let dir = store_path()?.parent()?.join("thumbnails");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    let h = hasher.finish();
+    Some(dir.join(format!("{h:016x}-{mtime_secs}.png")))
+}

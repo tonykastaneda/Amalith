@@ -372,8 +372,14 @@ impl App {
     }
 
     /// Render `scene` (already sized in pixels) headlessly to RGBA8 bytes,
-    /// sRGB-encoded and un-premultiplied, top-to-bottom.
-    fn render_scene_to_rgba(&mut self, scene: &Scene, w: u32, h: u32) -> Option<Vec<u8>> {
+    /// sRGB-encoded and un-premultiplied, top-to-bottom. Also used by
+    /// `thumbnails.rs` for Home-screen recent-file previews.
+    pub(in crate::app) fn render_scene_to_rgba(
+        &mut self,
+        scene: &Scene,
+        w: u32,
+        h: u32,
+    ) -> Option<Vec<u8>> {
         let dev_id = self.hosts.get(&self.main_id?)?.surface.dev_id;
         if self.export_renderer.is_none() {
             let dev = &self.context.devices[dev_id].device;

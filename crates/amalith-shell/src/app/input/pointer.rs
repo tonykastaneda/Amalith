@@ -21,6 +21,13 @@ impl App {
             }
             return;
         }
+        // Home screen: hovering a tile / Open / Import highlights it.
+        if let Some(hm) = &mut self.home {
+            if hm.on_move(self.pointer.to_vec2()) {
+                self.request_main_redraw();
+            }
+            return;
+        }
         self.update_canvas_cursor();
         self.refresh_tooltip();
         // Redraw so any painted cursor glyph tracks the pointer — this
