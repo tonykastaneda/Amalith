@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="website/public/brand/amalith-wordmark.png" width="360" alt="Amalith logo">
+  <img src="website/public/brand/amalith-wordmark.svg" width="360" alt="Amalith logo">
 </p>
 
 <p align="center"><em>The Illustrator-class vector editor that launched yesterday with 20 years of tutorials.</em></p>

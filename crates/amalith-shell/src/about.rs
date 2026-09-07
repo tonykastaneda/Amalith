@@ -22,7 +22,7 @@ use crate::text::TextContext;
 
 /// Right-side illustration (pre-cropped to the panel's aspect).
 const ART_PNG: &[u8] = include_bytes!("../assets/about/art.png");
-/// The Amalith wordmark, white on transparent.
+/// The Amalith icon + wordmark lockup, on transparent.
 const LOGO_PNG: &[u8] = include_bytes!("../assets/about/wordmark.png");
 
 /// Where `Github` points.
