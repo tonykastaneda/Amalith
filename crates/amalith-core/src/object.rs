@@ -676,7 +676,7 @@ impl PathData {
 /// Children are stored as an ordered `Vec<ObjectId>`; index 0 is the
 /// bottom of the group's local stacking order, matching
 /// [`crate::Layer::children`]'s convention (see `document.rs`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct GroupData {
     pub children: Vec<ObjectId>,
     /// When set, this is a clip group: `clip` names the child (which must
@@ -684,6 +684,50 @@ pub struct GroupData {
     /// The clip child is not drawn in its own right.
     #[serde(default)]
     pub clip: Option<ObjectId>,
+    /// When set, this is a blend group: `children` holds the two original
+    /// shapes plus the generated in-between steps between them, and
+    /// `blend` names the two originals, the spacing mode, and an optional
+    /// spine. See `crate::blend` for the interpolation this is rebuilt
+    /// from (`amalith-commands` owns *when* to rebuild).
+    #[serde(default)]
+    pub blend: Option<BlendData>,
+}
+
+/// A blend group's own data: the two original shapes it interpolates
+/// between (each still a normal, independently editable member of
+/// `GroupData::children`), an optional spine its generated steps'
+/// centers walk instead of the straight line between the originals, and
+/// the spacing mode controlling how many steps get generated.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BlendData {
+    pub start: ObjectId,
+    pub end: ObjectId,
+    /// A path elsewhere in the document (not necessarily inside this
+    /// group) whose curve the generated steps' centers travel along —
+    /// Illustrator's "Replace Spine". `None` uses the straight line
+    /// between the two shapes' centers.
+    #[serde(default)]
+    pub spine: Option<ObjectId>,
+    pub spacing: BlendSpacing,
+}
+
+/// How many steps a blend generates between its two shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum BlendSpacing {
+    /// Illustrator auto-computes a step count from how far apart the two
+    /// fills are (see `crate::blend::smooth_color_steps`).
+    SmoothColor,
+    /// A fixed number of in-between steps.
+    SpecifiedSteps(u32),
+    /// Steps spaced roughly this far apart (document units) along the
+    /// line or spine.
+    SpecifiedDistance(f64),
+}
+
+impl Default for BlendSpacing {
+    fn default() -> Self {
+        BlendSpacing::SmoothColor
+    }
 }
 
 /// One or more subpaths treated as a single fillable shape (even/odd or

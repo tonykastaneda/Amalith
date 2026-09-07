@@ -965,7 +965,8 @@ impl App {
                         | Tool::Rotate
                         | Tool::Reflect
                         | Tool::Shear
-                        | Tool::Scale => return,
+                        | Tool::Scale
+                        | Tool::Blend => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];

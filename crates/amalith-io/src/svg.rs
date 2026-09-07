@@ -468,7 +468,7 @@ fn import_node(
                 // downstream (bounds, paste) can do with it.
                 return None;
             }
-            let mut object = Object::new(id, parent, ObjectKind::Group(GroupData { children, clip: None }));
+            let mut object = Object::new(id, parent, ObjectKind::Group(GroupData { children, clip: None, blend: None }));
             object.transform = transform;
             objects.insert(id, object);
             return Some(id);

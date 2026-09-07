@@ -35,9 +35,14 @@ impl App {
         {
             return true;
         }
-        self.xform_dialog
+        if self
+            .xform_dialog
             .as_ref()
             .is_some_and(|d| self.dock.floating_id_of(Self::xform_panel_id(d.kind)) == Some(fid))
+        {
+            return true;
+        }
+        self.blend_dialog.is_some() && self.dock.floating_id_of(Self::blend_panel_id()) == Some(fid)
     }
 
     /// The shape dialog's own body rect (window-local, `(0, 0)`-based) —

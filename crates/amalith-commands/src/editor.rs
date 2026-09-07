@@ -14,9 +14,9 @@ use crate::edit::{self, Edit, NewId};
 use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
-    Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, Color, Document,
-    DocumentError, Gradient, GradientId, GradientKind, Layer, LayerId, Object, ObjectId, ObjectKind,
-    ObjectParent, Paint, PathData, Rect, Vec2,
+    Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, BlendData, BlendSpacing,
+    Color, Document, DocumentError, Gradient, GradientId, GradientKind, Layer, LayerId, Object,
+    ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, Vec2,
 };
 use kurbo::BezPath;
 use std::collections::{HashMap, HashSet};
@@ -315,10 +315,19 @@ impl Editor {
                 .first()
                 .map_or(CommandOutcome::None, |&id| CommandOutcome::Object(id)));
         }
+        // Blend creation/option changes already regenerate their own
+        // steps directly (`compile_blend_steps`); the live-rebuild pass
+        // below is only for *other* commands whose edits happen to touch
+        // a blend's dependencies, so it's skipped here to avoid a
+        // redundant, wasteful rebuild of a blend right after it was
+        // (re)built on purpose.
+        let skip_live_rebuild =
+            matches!(&command, Command::MakeBlend { .. } | Command::SetBlendOptions { .. });
         let edits = self.compile(command)?;
         if edits.is_empty() {
             return Ok(CommandOutcome::None);
         }
+        let touched: HashSet<ObjectId> = edits.iter().filter_map(touched_object_id).collect();
         let mut inverses = Vec::with_capacity(edits.len());
         let mut new_id = None;
         for edit in edits {
@@ -326,6 +335,32 @@ impl Editor {
             inverses.push(inverse);
             if new_id.is_none() {
                 new_id = created;
+            }
+        }
+        // Live-updating blends: any blend whose start, end, or spine was
+        // just touched regenerates its steps from the fresh state (read
+        // *after* the edits above applied, so this sees the new
+        // position/shape/color, not the old one).
+        if !skip_live_rebuild {
+            for group_id in self.blends_depending_on(&touched) {
+                let Some(ObjectKind::Group(g)) = self.document.object(group_id).map(|o| &o.kind)
+                else {
+                    continue;
+                };
+                let Some(blend) = g.blend else { continue };
+                let existing_children = g.children.clone();
+                let rebuild_edits = self.compile_blend_steps(
+                    group_id,
+                    &existing_children,
+                    blend.start,
+                    blend.end,
+                    blend.spine,
+                    blend.spacing,
+                )?;
+                for edit in rebuild_edits {
+                    let (inverse, _) = edit::apply(edit, &mut self.document)?;
+                    inverses.push(inverse);
+                }
             }
         }
         inverses.reverse();
@@ -367,6 +402,150 @@ impl Editor {
             ObjectKind::Path(pd) => Ok(pd.clone()),
             _ => Err(CommandError::NotAPath(id)),
         }
+    }
+
+    /// Edits that (re)generate a blend group's in-between steps for the
+    /// given `start`/`end`/`spine`/`spacing`, replacing whatever generated
+    /// steps `existing_children` currently holds (its two entries that
+    /// equal `start`/`end` are left alone; everything else in it is
+    /// removed and regenerated). Shared by `Command::MakeBlend` (a fresh
+    /// group, `existing_children` is just `[start, end]`),
+    /// `Command::SetBlendOptions`, and the live-rebuild hook in
+    /// `Editor::execute`.
+    fn compile_blend_steps(
+        &self,
+        group_id: ObjectId,
+        existing_children: &[ObjectId],
+        start_id: ObjectId,
+        end_id: ObjectId,
+        spine_id: Option<ObjectId>,
+        spacing: BlendSpacing,
+    ) -> Result<Vec<Edit>, CommandError> {
+        let start_obj = self
+            .document
+            .object(start_id)
+            .ok_or(CommandError::ObjectNotFound(start_id))?;
+        let end_obj = self
+            .document
+            .object(end_id)
+            .ok_or(CommandError::ObjectNotFound(end_id))?;
+        let ObjectKind::Path(start_path) = &start_obj.kind else {
+            return Err(CommandError::NotAPath(start_id));
+        };
+        let ObjectKind::Path(end_path) = &end_obj.kind else {
+            return Err(CommandError::NotAPath(end_id));
+        };
+
+        // Every source point, flattened and moved into document space (the
+        // blend group itself always sits at identity, at the same parent
+        // the two originals shared before joining it — see
+        // `Command::MakeBlend` — so this is also the group's own local
+        // space).
+        const TOL: f64 = 0.25;
+        let start_xf = self.document.world_transform(start_id);
+        let end_xf = self.document.world_transform(end_id);
+        let flatten_in_place = |path: &PathData, xf: Affine| -> Vec<(Vec<Point>, bool)> {
+            path.subpaths()
+                .iter()
+                .zip(path.flattened_points(TOL))
+                .map(|(sp, pts)| (pts.into_iter().map(|p| xf * p).collect(), sp.closed))
+                .collect()
+        };
+        let a = flatten_in_place(start_path, start_xf);
+        let b = flatten_in_place(end_path, end_xf);
+        let a_points: Vec<Vec<Point>> = a.iter().map(|(p, _)| p.clone()).collect();
+        let b_points: Vec<Vec<Point>> = b.iter().map(|(p, _)| p.clone()).collect();
+        let center_a = amalith_core::blend::shape_center(&a_points);
+        let center_b = amalith_core::blend::shape_center(&b_points);
+
+        let spine_points: Option<Vec<Point>> = match spine_id {
+            Some(sid) => {
+                let obj = self.document.object(sid).ok_or(CommandError::ObjectNotFound(sid))?;
+                let ObjectKind::Path(p) = &obj.kind else {
+                    return Err(CommandError::NotAPath(sid));
+                };
+                let xf = self.document.world_transform(sid);
+                p.flattened_points(TOL)
+                    .into_iter()
+                    .next()
+                    .map(|pts| pts.into_iter().map(|pt| xf * pt).collect())
+            }
+            None => None,
+        };
+        let line_or_spine_length = || match &spine_points {
+            Some(pts) => pts.windows(2).map(|w| (w[1] - w[0]).hypot()).sum(),
+            None => (center_b - center_a).hypot(),
+        };
+
+        let steps: u32 = match spacing {
+            BlendSpacing::SmoothColor => {
+                amalith_core::blend::smooth_color_steps(start_obj.appearance.fill, end_obj.appearance.fill)
+            }
+            BlendSpacing::SpecifiedSteps(n) => n,
+            BlendSpacing::SpecifiedDistance(d) if d > 0.0 => {
+                ((line_or_spine_length() / d).round() as i64 - 1).max(0) as u32
+            }
+            BlendSpacing::SpecifiedDistance(_) => 0,
+        };
+
+        let mut edits = Vec::new();
+        for &id in existing_children {
+            if id != start_id && id != end_id {
+                edits.push(Edit::RemoveObject { id });
+            }
+        }
+        // Every new step just appends — the `SetChildOrder` edit below
+        // puts everything in its final start → steps → end order
+        // regardless of these intermediate append positions, so nothing
+        // here depends on start/end's original relative order.
+        let mut append_at = 2usize;
+        let mut order = vec![start_id];
+        let start_fill = start_obj.appearance.fill;
+        let end_fill = end_obj.appearance.fill;
+        let start_stroke = start_obj.appearance.stroke;
+        let end_stroke = end_obj.appearance.stroke;
+        let start_width = start_obj.appearance.stroke_width;
+        let end_width = end_obj.appearance.stroke_width;
+        for i in 1..=steps {
+            let t = i as f64 / (steps as f64 + 1.0);
+            let center = match &spine_points {
+                Some(pts) => amalith_core::blend::point_on_path(pts, t),
+                None => Point::new(
+                    center_a.x + (center_b.x - center_a.x) * t,
+                    center_a.y + (center_b.y - center_a.y) * t,
+                ),
+            };
+            let path = amalith_core::blend::interpolate_step(&a, &b, center_a, center_b, center, t);
+            let step_id = ObjectId::new();
+            let mut obj = Object::new(step_id, ObjectParent::Group(group_id), ObjectKind::Path(path));
+            obj.appearance.fill = amalith_core::blend::lerp_paint(start_fill, end_fill, t);
+            obj.appearance.stroke = amalith_core::blend::lerp_paint(start_stroke, end_stroke, t);
+            obj.appearance.stroke_width = start_width + (end_width - start_width) * t;
+            edits.push(Edit::InsertObject { object: Box::new(obj), index: append_at });
+            append_at += 1;
+            order.push(step_id);
+        }
+        order.push(end_id);
+        edits.push(Edit::SetChildOrder { parent: ObjectParent::Group(group_id), order });
+        Ok(edits)
+    }
+
+    /// Every blend group whose `start`, `end`, or `spine` is in `touched`
+    /// — for the live-rebuild hook in `Editor::execute`.
+    fn blends_depending_on(&self, touched: &HashSet<ObjectId>) -> Vec<ObjectId> {
+        self.document
+            .objects()
+            .filter_map(|o| match &o.kind {
+                ObjectKind::Group(g) => {
+                    let b = g.blend?;
+                    (touched.contains(&b.start)
+                        || touched.contains(&b.end)
+                        || b.spine.is_some_and(|s| touched.contains(&s)))
+                    .then_some(o.id)
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     fn compile(&self, command: Command) -> Result<Vec<Edit>, CommandError> {
@@ -1109,6 +1288,7 @@ impl Editor {
                     ObjectKind::Group(amalith_core::GroupData {
                         children: Vec::new(),
                         clip: clip_id,
+                        blend: None,
                     }),
                 );
                 group.name = name;
@@ -1140,6 +1320,111 @@ impl Editor {
                 let mut edits = vec![Edit::SetClip { group, clip: None }];
                 let (ungroup_edits, _freed) = self.compile_ungroup(&[group])?;
                 edits.extend(ungroup_edits);
+                edits
+            }
+            Command::MakeBlend { start, end, name } => {
+                let start_obj = self
+                    .document
+                    .object(start)
+                    .ok_or(CommandError::ObjectNotFound(start))?;
+                let end_obj = self
+                    .document
+                    .object(end)
+                    .ok_or(CommandError::ObjectNotFound(end))?;
+                if !matches!(start_obj.kind, ObjectKind::Path(_)) {
+                    return Err(CommandError::NotAPath(start));
+                }
+                if !matches!(end_obj.kind, ObjectKind::Path(_)) {
+                    return Err(CommandError::NotAPath(end));
+                }
+                if start_obj.parent != end_obj.parent {
+                    return Err(CommandError::ObjectsSpanMultipleParents);
+                }
+                let parent = start_obj.parent;
+                let selected: std::collections::HashSet<ObjectId> = [start, end].into_iter().collect();
+                let siblings = self.document.children_of(parent);
+                let topmost_index = siblings
+                    .iter()
+                    .rposition(|id| selected.contains(id))
+                    .expect("start and end were validated to exist in this parent's children above");
+                let group_index = siblings[..=topmost_index]
+                    .iter()
+                    .filter(|id| !selected.contains(id))
+                    .count();
+                let group_children: Vec<ObjectId> = siblings
+                    .iter()
+                    .copied()
+                    .filter(|id| selected.contains(id))
+                    .collect();
+
+                let group_id = ObjectId::new();
+                let mut group = Object::new(
+                    group_id,
+                    parent,
+                    ObjectKind::Group(amalith_core::GroupData {
+                        children: Vec::new(),
+                        clip: None,
+                        blend: Some(BlendData {
+                            start,
+                            end,
+                            spine: None,
+                            spacing: BlendSpacing::SmoothColor,
+                        }),
+                    }),
+                );
+                group.name = name;
+                let mut edits = vec![Edit::InsertObject {
+                    object: Box::new(group),
+                    index: group_index,
+                }];
+                for (index, &child_id) in group_children.iter().enumerate() {
+                    let mut child = self
+                        .document
+                        .object(child_id)
+                        .expect("child_id from this parent's children")
+                        .clone();
+                    child.parent = ObjectParent::Group(group_id);
+                    edits.push(Edit::RemoveObject { id: child_id });
+                    edits.push(Edit::InsertObject {
+                        object: Box::new(child),
+                        index,
+                    });
+                }
+                edits.extend(self.compile_blend_steps(
+                    group_id,
+                    &group_children,
+                    start,
+                    end,
+                    None,
+                    BlendSpacing::SmoothColor,
+                )?);
+                edits
+            }
+            Command::SetBlendOptions { group, spacing, spine } => {
+                let obj = self
+                    .document
+                    .object(group)
+                    .ok_or(CommandError::ObjectNotFound(group))?;
+                let ObjectKind::Group(g) = &obj.kind else {
+                    return Err(CommandError::NotABlend(group));
+                };
+                let old_blend = g.blend.ok_or(CommandError::NotABlend(group))?;
+                let existing_children = g.children.clone();
+                let new_blend = BlendData {
+                    start: old_blend.start,
+                    end: old_blend.end,
+                    spine,
+                    spacing,
+                };
+                let mut edits = vec![Edit::SetBlendData { group, blend: new_blend }];
+                edits.extend(self.compile_blend_steps(
+                    group,
+                    &existing_children,
+                    old_blend.start,
+                    old_blend.end,
+                    spine,
+                    spacing,
+                )?);
                 edits
             }
             Command::SetFill { objects, paint } => objects
@@ -1837,6 +2122,28 @@ fn next_artboard_name(document: &Document) -> String {
         .max()
         .unwrap_or(0);
     format!("Artboard {}", max_number + 1)
+}
+
+/// The object `edit` touches, for the blend live-rebuild hook in
+/// `Editor::execute` — not every `Edit` variant names an object, so this
+/// is deliberately not exhaustive.
+fn touched_object_id(edit: &Edit) -> Option<ObjectId> {
+    match edit {
+        Edit::InsertObject { object, .. } => Some(object.id),
+        Edit::RemoveObject { id }
+        | Edit::RenameObject { id, .. }
+        | Edit::SetTransform { id, .. }
+        | Edit::SetPathData { id, .. }
+        | Edit::SetTextData { id, .. }
+        | Edit::SetFill { id, .. }
+        | Edit::SetStroke { id, .. }
+        | Edit::SetStrokeWidth { id, .. }
+        | Edit::SetStrokeStyle { id, .. }
+        | Edit::SetOpacity { id, .. }
+        | Edit::SetVisible { id, .. }
+        | Edit::SetLocked { id, .. } => Some(*id),
+        _ => None,
+    }
 }
 
 fn outcome_of(new_id: Option<NewId>) -> CommandOutcome {

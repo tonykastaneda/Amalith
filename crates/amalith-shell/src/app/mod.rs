@@ -16,6 +16,7 @@
 //! positioning command — that feedback path is what makes drag jitter.
 
 mod action;
+mod blend_dialog;
 mod command_palette;
 mod export;
 mod gradient;
@@ -49,9 +50,9 @@ pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
-    about, appicon, chrome, colormanage, confirm_close, context_bar, convert, home, icons, layout,
-    panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog, stroke_panel,
-    textedit, workspace, workspace_dialog, workspaces, xformdlg, Theme,
+    about, appicon, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
+    icons, layout, panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog,
+    stroke_panel, textedit, workspace, workspace_dialog, workspaces, xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -590,6 +591,8 @@ enum CtxAction {
     Shear,
     ClipMake,
     ClipRelease,
+    BlendOptions,
+    ReplaceSpine,
     ToggleGuides,
     ToggleGuideLock,
     ReleaseGuides,
@@ -901,6 +904,10 @@ struct App {
     /// Free-floating like the colour picker; never dockable, never in the
     /// Window menu.
     xform_dialog: Option<xformdlg::TransformDialog>,
+    /// The Blend Options dialog, opened from the canvas right-click menu.
+    /// Free-floating like the colour picker; never dockable, never in the
+    /// Window menu.
+    blend_dialog: Option<blenddlg::BlendDialog>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -922,6 +929,10 @@ struct App {
     /// back to the selection's bounding-box centre. A plain click with the
     /// Rotate tool re-places it; switching selection clears it.
     transform_pivot: Option<Point>,
+    /// Blend tool: the first-clicked shape, waiting for a second click to
+    /// blend with. Cleared by a click that doesn't complete a blend, and
+    /// by leaving the Blend tool.
+    blend_first: Option<ObjectId>,
     /// Caret blink phase origin.
     text_blink: Instant,
     /// Installed font family names, sorted — built once, for the Character
@@ -1215,6 +1226,7 @@ impl App {
             export: None,
             pending_export: false,
             xform_dialog: None,
+            blend_dialog: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -1222,6 +1234,7 @@ impl App {
             para_defaults: amalith_core::Paragraph::default(),
             text_load: None,
             transform_pivot: None,
+            blend_first: None,
             text_blink: Instant::now(),
             font_families: Vec::new(),
             font_menu: None,
@@ -2162,11 +2175,48 @@ impl App {
         )
     }
 
+    /// The selection's blend group, when it's exactly one object and that
+    /// object is one — Blend Options' enabling condition.
+    fn selected_blend_group(&self) -> Option<ObjectId> {
+        if self.doc.selection.len() != 1 {
+            return None;
+        }
+        let id = self.doc.selection[0];
+        match self.doc.editor.document().object(id).map(|o| &o.kind) {
+            Some(amalith_core::ObjectKind::Group(g)) if g.blend.is_some() => Some(id),
+            _ => None,
+        }
+    }
+
+    /// `(blend group, spine candidate)` when the selection is exactly one
+    /// blend group and one plain path — Replace Spine's enabling
+    /// condition.
+    fn replace_spine_candidate(&self) -> Option<(ObjectId, ObjectId)> {
+        if self.doc.selection.len() != 2 {
+            return None;
+        }
+        let doc = self.doc.editor.document();
+        let is_blend = |id: ObjectId| {
+            matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Group(g)) if g.blend.is_some())
+        };
+        let is_path = |id: ObjectId| matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Path(_)));
+        let (a, b) = (self.doc.selection[0], self.doc.selection[1]);
+        if is_blend(a) && is_path(b) {
+            Some((a, b))
+        } else if is_blend(b) && is_path(a) {
+            Some((b, a))
+        } else {
+            None
+        }
+    }
+
     /// Build and show the canvas context menu at `at` (screen px).
     fn open_ctx_menu(&mut self, at: Point) {
         let has_guides = !self.doc.editor.document().guides().is_empty();
         let (can_clip, can_release) = self.clip_state();
         let has_selection = !self.doc.selection.is_empty();
+        let blend_group = self.selected_blend_group();
+        let spine_candidate = self.replace_spine_candidate();
         let mut items = vec![
             CtxItem::Action {
                 label: "Reflect…".into(),
@@ -2180,6 +2230,19 @@ impl App {
             },
             CtxItem::Sep,
         ];
+        if blend_group.is_some() || spine_candidate.is_some() {
+            items.push(CtxItem::Action {
+                label: "Blend Options…".into(),
+                action: CtxAction::BlendOptions,
+                enabled: blend_group.is_some(),
+            });
+            items.push(CtxItem::Action {
+                label: "Replace Spine".into(),
+                action: CtxAction::ReplaceSpine,
+                enabled: spine_candidate.is_some(),
+            });
+            items.push(CtxItem::Sep);
+        }
         if can_clip || can_release {
             items.push(CtxItem::Action {
                 label: "Make Clipping Mask".into(),
@@ -2250,6 +2313,26 @@ impl App {
             match a {
                 CtxAction::Reflect => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Reflect),
                 CtxAction::Shear => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Shear),
+                CtxAction::BlendOptions => {
+                    if let Some(g) = self.selected_blend_group() {
+                        self.spawn_blend_dialog(event_loop, g);
+                    }
+                }
+                CtxAction::ReplaceSpine => {
+                    if let Some((group, spine)) = self.replace_spine_candidate() {
+                        let spacing = match self.doc.editor.document().object(group).map(|o| &o.kind) {
+                            Some(amalith_core::ObjectKind::Group(g)) => {
+                                g.blend.map(|b| b.spacing).unwrap_or(amalith_core::BlendSpacing::SmoothColor)
+                            }
+                            _ => amalith_core::BlendSpacing::SmoothColor,
+                        };
+                        let _ = self.doc.editor.execute(Command::SetBlendOptions {
+                            group,
+                            spacing,
+                            spine: Some(spine),
+                        });
+                    }
+                }
                 CtxAction::ClipMake => self.clip_make(),
                 CtxAction::ClipRelease => self.clip_release(),
                 CtxAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
@@ -4080,6 +4163,9 @@ impl App {
             // A transform tool's custom reference point is per-session.
             self.transform_pivot = None;
         }
+        if t != Tool::Blend {
+            self.blend_first = None;
+        }
         self.last_pen = None;
         self.active_tool = t;
         self.request_main_redraw();
@@ -5439,6 +5525,7 @@ impl App {
             shape_dialog: None,
             export: None,
             xform_dialog: None,
+            blend_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -5493,6 +5580,7 @@ impl App {
             shape_dialog: self.shape_dialog.as_ref().map(|d| (d, false)),
             export: self.export.as_ref().map(|d| (d, false)),
             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, false)),
+            blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6570,7 +6658,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -6837,6 +6925,7 @@ impl ApplicationHandler for App {
                     || self.export.is_some()
                     || self.picker.is_some()
                     || self.xform_dialog.is_some()
+                    || self.blend_dialog.is_some()
                 {
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
@@ -6875,7 +6964,8 @@ impl ApplicationHandler for App {
                     || self.picker.is_some()
                     || self.shape_dialog.is_some()
                     || self.export.is_some()
-                    || self.xform_dialog.is_some() =>
+                    || self.xform_dialog.is_some()
+                    || self.blend_dialog.is_some() =>
             {
                 self.on_key(event);
             }
@@ -6885,7 +6975,8 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. }
                 if Some(id) == self.main_id
                     || self.shape_dialog.is_some()
-                    || self.xform_dialog.is_some() =>
+                    || self.xform_dialog.is_some()
+                    || self.blend_dialog.is_some() =>
             {
                 self.on_wheel(delta);
             }
@@ -7143,6 +7234,7 @@ fn tab_label(panel: PanelId) -> String {
         "export-screens" => "Export for Screens",
         "xformdlg.reflect" => "Reflect",
         "xformdlg.shear" => "Shear",
+        "blenddlg" => "Blend Options",
         other => other,
     }
     .to_string()

@@ -2384,4 +2384,152 @@ mod tests {
         assert!(!editor.document().object(id).unwrap().visible);
         assert!(editor.document().object(id).unwrap().locked);
     }
+
+    fn two_rects(editor: &mut Editor) -> (ObjectId, ObjectId) {
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(0.0, 0.0, 20.0, 20.0),
+                name: Some("A".into()),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreateRect {
+                layer,
+                rect: Rect::new(100.0, 0.0, 120.0, 20.0),
+                name: Some("B".into()),
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        (a, b)
+    }
+
+    #[test]
+    fn make_blend_groups_the_two_shapes_with_generated_steps_between_them() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        // Black to white is the largest possible per-channel distance —
+        // `smooth_color_steps` should hit its 255-step ceiling.
+        editor
+            .execute(Command::SetFill { objects: vec![a], paint: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)) })
+            .unwrap();
+        editor
+            .execute(Command::SetFill { objects: vec![b], paint: Paint::Solid(Color::rgb(1.0, 1.0, 1.0)) })
+            .unwrap();
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let doc = editor.document();
+        let ObjectKind::Group(g) = &doc.object(group).unwrap().kind else {
+            panic!("expected a group");
+        };
+        let blend = g.blend.expect("expected a blend group");
+        assert_eq!(blend.start, a);
+        assert_eq!(blend.end, b);
+        assert!(blend.spine.is_none());
+        // 255 generated steps (black-to-white's `smooth_color_steps`
+        // ceiling) plus the two originals themselves.
+        assert_eq!(g.children.len(), 257);
+        assert_eq!(g.children.first(), Some(&a));
+        assert_eq!(g.children.last(), Some(&b));
+        // The originals moved into the new group, not deleted.
+        assert_eq!(doc.object(a).unwrap().parent, ObjectParent::Group(group));
+        assert_eq!(doc.object(b).unwrap().parent, ObjectParent::Group(group));
+    }
+
+    #[test]
+    fn set_blend_options_specified_steps_changes_the_generated_count() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::SetBlendOptions {
+                group,
+                spacing: amalith_core::BlendSpacing::SpecifiedSteps(3),
+                spine: None,
+            })
+            .unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else {
+            panic!("expected a group");
+        };
+        assert_eq!(g.children.len(), 5); // start + 3 steps + end
+    }
+
+    #[test]
+    fn editing_the_start_shape_after_a_blend_regenerates_its_steps() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::SetBlendOptions {
+                group,
+                spacing: amalith_core::BlendSpacing::SpecifiedSteps(3),
+                spine: None,
+            })
+            .unwrap();
+        let before: Vec<ObjectId> = {
+            let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else {
+                panic!()
+            };
+            g.children.clone()
+        };
+
+        editor
+            .execute(Command::MoveObject { object: a, delta: Vec2::new(10.0, 0.0) })
+            .unwrap();
+
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else {
+            panic!()
+        };
+        // Same shape (start + 3 + end), but the 3 generated steps are
+        // fresh objects — proof the blend actually rebuilt rather than
+        // silently keeping the old (now stale) ones.
+        assert_eq!(g.children.len(), before.len());
+        assert_eq!(g.children.first(), before.first());
+        assert_eq!(g.children.last(), before.last());
+        assert_ne!(g.children[1..4], before[1..4]);
+    }
+
+    #[test]
+    fn undo_make_blend_restores_both_shapes_to_the_layer_directly() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap();
+        let layer_parent = editor.document().object(a).unwrap().parent;
+        assert!(matches!(layer_parent, ObjectParent::Group(_)));
+
+        editor.undo().unwrap();
+
+        let doc = editor.document();
+        assert!(matches!(doc.object(a).unwrap().parent, ObjectParent::Layer(_)));
+        assert!(matches!(doc.object(b).unwrap().parent, ObjectParent::Layer(_)));
+        assert_eq!(doc.object(a).unwrap().parent, doc.object(b).unwrap().parent);
+        assert_eq!(doc.bounds_of(a), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+    }
 }

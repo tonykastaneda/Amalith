@@ -882,6 +882,39 @@ impl App {
                     return;
                 }
 
+                // Blend tool: click one shape, then click a second to
+                // blend them (Object > Blend > Make's own click-click
+                // flow). Clicking empty space, or the same shape twice,
+                // cancels back to a clean slate instead of erroring.
+                if self.active_tool == Tool::Blend {
+                    let visible = self.visible_doc_rect();
+                    let hit = select::topmost_selectable_at(self.doc.editor.document(), dp, visible);
+                    match (self.blend_first, hit) {
+                        (None, Some(id)) => {
+                            self.blend_first = Some(id);
+                            self.doc.selection = vec![id];
+                        }
+                        (Some(first), Some(second)) if second != first => {
+                            if let Ok(CommandOutcome::Object(group)) =
+                                self.doc.editor.execute(Command::MakeBlend {
+                                    start: first,
+                                    end: second,
+                                    name: None,
+                                })
+                            {
+                                self.doc.selection = vec![group];
+                            }
+                            self.blend_first = None;
+                        }
+                        _ => {
+                            self.blend_first = None;
+                            self.doc.selection.clear();
+                        }
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+
                 // "Loaded text" cursor: a prior out-port click armed a
                 // thread. This press drops its target — an existing frame
                 // clicked, or a new one rubber-banded.
@@ -1175,8 +1208,10 @@ impl App {
                     }
 
                     let visible = self.visible_doc_rect();
-                    let candidate =
-                        select::topmost_selectable_at(self.doc.editor.document(), dp, visible);
+                    let candidate = match self.isolation_root() {
+                        Some(root) => select::topmost_in(self.doc.editor.document(), root, dp, hit_r),
+                        None => select::topmost_selectable_at(self.doc.editor.document(), dp, visible),
+                    };
                     if let Some(id) = candidate {
                         // A press on an object's body/fill (not a node):
                         // select it, revealing its nodes, and arm a move

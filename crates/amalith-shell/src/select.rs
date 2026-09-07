@@ -72,8 +72,8 @@ pub fn topmost_in(
     point: Point,
     contour_tol: f64,
 ) -> Option<ObjectId> {
-    let clip = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => g.clip,
+    let (clip, blend) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (g.clip, g.blend),
         Some(_) => {
             // A bare object was isolated: only it is selectable, hit either
             // by its bounds or (for a shape) close to its contour.
@@ -85,6 +85,16 @@ pub fn topmost_in(
     for &id in doc.children_of(ObjectParent::Group(group)).iter().rev() {
         if Some(id) == clip {
             continue;
+        }
+        // A blend group's generated in-between steps aren't independently
+        // selectable — only the two shapes it interpolates between are,
+        // matching Illustrator (the steps are computed geometry, not
+        // editable objects of their own, and get discarded on the next
+        // rebuild regardless of anything done to them directly).
+        if let Some(b) = blend {
+            if id != b.start && id != b.end {
+                continue;
+            }
         }
         let Some(obj) = doc.object(id) else { continue };
         if !obj.visible || obj.locked {
@@ -159,9 +169,19 @@ pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId
             _ => Vec::new(),
         };
     }
+    let blend = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => g.blend,
+        _ => None,
+    };
     doc.children_of(ObjectParent::Group(group))
         .iter()
         .copied()
+        // A blend group's generated in-between steps aren't independently
+        // selectable — see `topmost_in`'s doc comment for why.
+        .filter(|&id| match blend {
+            Some(b) => id == b.start || id == b.end,
+            None => true,
+        })
         .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
         .filter(|id| bounds(doc, *id).is_some_and(|b| overlaps(b, marquee)))
         .collect()

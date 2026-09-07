@@ -140,6 +140,47 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::BlendHit(hit) => {
+                match hit {
+                    blenddlg::Hit::Row(i) => {
+                        if let Some(dlg) = self.blend_dialog.as_mut() {
+                            dlg.mode = [blenddlg::Mode::SmoothColor, blenddlg::Mode::Steps, blenddlg::Mode::Distance][i];
+                            dlg.focused = dlg.mode != blenddlg::Mode::SmoothColor;
+                        }
+                        self.apply_blend_preview();
+                    }
+                    blenddlg::Hit::Field => {
+                        if let Some(dlg) = self.blend_dialog.as_mut() {
+                            dlg.focused = true;
+                        }
+                    }
+                    blenddlg::Hit::Preview => {
+                        if let Some(dlg) = self.blend_dialog.as_mut() {
+                            dlg.preview = !dlg.preview;
+                        }
+                        match self.blend_dialog.as_ref().map(|d| d.preview) {
+                            Some(true) => self.apply_blend_preview(),
+                            Some(false) => {
+                                if let Some(dlg) = &self.blend_dialog {
+                                    let (group, spacing, spine) =
+                                        (dlg.group, dlg.original_spacing, dlg.spine);
+                                    let _ = self.doc.editor.execute(Command::SetBlendOptions {
+                                        group,
+                                        spacing,
+                                        spine,
+                                    });
+                                }
+                            }
+                            None => {}
+                        }
+                    }
+                    blenddlg::Hit::Ok => self.close_blend_dialog(blend_dialog::BlendClose::Ok),
+                    blenddlg::Hit::Cancel => self.close_blend_dialog(blend_dialog::BlendClose::Cancel),
+                    blenddlg::Hit::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
             panels::Action::XformHit(hit) => {
                 if let xformdlg::Hit::Dial(field, _, center) = hit {
                     self.drag = Drag::XformDialAngle { field, center };

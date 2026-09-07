@@ -11,6 +11,7 @@
 pub mod appearance;
 pub mod artboard;
 pub mod asset;
+pub mod blend;
 pub mod document;
 pub mod error;
 pub mod geom;
@@ -37,8 +38,8 @@ pub use layer::Layer;
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use object::{
     anchor_at, anchor_count, delete_anchor, insert_anchor, set_anchor_smooth, set_handle,
-    subpaths_to_bezpath, toggle_anchor_smooth, translate_anchor_n, Anchor, CompoundPathData,
-    GroupData, HandleMode,
+    subpaths_to_bezpath, toggle_anchor_smooth, translate_anchor_n, Anchor, BlendData,
+    BlendSpacing, CompoundPathData, GroupData, HandleMode,
     HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
     Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };

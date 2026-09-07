@@ -360,6 +360,9 @@ impl App {
         });
         let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
         let active_tab = self.active;
+        let blend_spine_hover = self
+            .blend_spine_hover()
+            .map(|pts| pts.into_iter().map(convert::point).collect::<Vec<_>>());
         let zoom_cursor =
             (self.cursor_mode == CanvasCursor::Zoom).then_some(self.zoom_sign >= 0);
         let cursor_glyph = (self.cursor_mode == CanvasCursor::Glyph).then(|| {
@@ -495,6 +498,7 @@ impl App {
                 self.last_rotate_tool,
                 self.last_scale_tool,
                 self.tool_flyout,
+                blend_spine_hover,
                 self.stroke_popover,
                 self.text_edit.as_ref().map(|t| t.object),
                 panel_text_style,
@@ -611,6 +615,7 @@ impl App {
                             shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                             export: self.export.as_ref().map(|d| (d, caret_blink)),
                             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
+                            blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
@@ -678,6 +683,7 @@ impl App {
                                 shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
+                                blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -747,6 +753,7 @@ impl App {
                                 shape_dialog: self.shape_dialog.as_ref().map(|d| (d, caret_blink)),
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
+                                blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };

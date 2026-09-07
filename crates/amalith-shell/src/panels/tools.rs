@@ -38,7 +38,7 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
 
 /// The visible slots; the Shape slot shows `shape`'s icon, and the two
 /// flyout-group slots show whichever tool in that group was last used.
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 13] {
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 14] {
     [
         Tool::Select,
         Tool::DirectSelect,
@@ -53,6 +53,7 @@ fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 13] {
         Tool::Gradient,
         rotate_group,
         scale_group,
+        Tool::Blend,
     ]
 }
 
@@ -68,7 +69,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
-    let rows = 13usize.div_ceil(cols) as f64;
+    let rows = 14usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     TOP + rows * CELL + 12.0 + PROXY_H
 }

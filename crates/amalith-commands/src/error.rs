@@ -48,4 +48,6 @@ pub enum CommandError {
     NothingToAlign,
     #[error("cannot move a group into itself")]
     CannotReparent,
+    #[error("object {0} is not a blend group")]
+    NotABlend(ObjectId),
 }

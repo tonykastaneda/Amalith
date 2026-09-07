@@ -308,6 +308,26 @@ pub enum Command {
     ClipRelease {
         group: ObjectId,
     },
+    /// Blends two shapes: wraps them in a new blend group (like
+    /// [`Command::Group`]) and generates the in-between steps between them
+    /// (Smooth Color spacing, no spine, straight line between their
+    /// centers). Both must be paths. Yields [`CommandOutcome::Object`] for
+    /// the new group. The generated steps live-rebuild afterward whenever
+    /// a later command edits the two originals, their fill, or (once set)
+    /// the spine — see `Editor::execute`.
+    MakeBlend {
+        start: ObjectId,
+        end: ObjectId,
+        name: Option<String>,
+    },
+    /// Replaces a blend's spacing and/or spine, then regenerates its
+    /// steps. Errors if `group` isn't a blend group, or (when set) `spine`
+    /// isn't a path.
+    SetBlendOptions {
+        group: ObjectId,
+        spacing: amalith_core::BlendSpacing,
+        spine: Option<ObjectId>,
+    },
     /// Sets every listed object's fill paint, one undo group.
     SetFill {
         objects: Vec<ObjectId>,

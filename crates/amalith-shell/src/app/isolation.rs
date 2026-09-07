@@ -117,6 +117,53 @@ impl App {
         out
     }
 
+    /// Doc-space points of the line to show while hovering one of a
+    /// blend's generated steps (not its two original shapes) — the
+    /// straight line between their centers, or the real spine polyline
+    /// once one is set. Only while isolated directly into that blend
+    /// group, matching how its steps are only ever reachable there in
+    /// the first place (they're deliberately excluded from normal
+    /// hit-testing, so this checks their bounds directly instead of
+    /// going through `select::topmost_in`).
+    pub(in crate::app) fn blend_spine_hover(&self) -> Option<Vec<amalith_core::Point>> {
+        if !matches!(self.drag, Drag::None) {
+            return None;
+        }
+        let group_id = self.isolation_root()?;
+        let doc = self.doc.editor.document();
+        let amalith_core::ObjectKind::Group(g) = &doc.object(group_id)?.kind else {
+            return None;
+        };
+        let blend = g.blend?;
+        let dp = self.doc_point(self.pointer);
+        let over_a_step = g.children.iter().any(|&id| {
+            id != blend.start
+                && id != blend.end
+                && select::bounds(doc, id).is_some_and(|b| b.contains(dp))
+        });
+        if !over_a_step {
+            return None;
+        }
+        match blend.spine {
+            Some(spine_id) => {
+                let obj = doc.object(spine_id)?;
+                let amalith_core::ObjectKind::Path(p) = &obj.kind else {
+                    return None;
+                };
+                let xf = doc.world_transform(spine_id);
+                p.flattened_points(0.5)
+                    .into_iter()
+                    .next()
+                    .map(|pts| pts.into_iter().map(|pt| xf * pt).collect())
+            }
+            None => {
+                let a = doc.bounds_of(blend.start)?.center();
+                let b = doc.bounds_of(blend.end)?.center();
+                Some(vec![a, b])
+            }
+        }
+    }
+
     /// Object ▸ Clipping Mask ▸ Make (⌘7) — wrap the selection in a clip
     /// group masked by its topmost member.
     pub(in crate::app) fn clip_make(&mut self) {

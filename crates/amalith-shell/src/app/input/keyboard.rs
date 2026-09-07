@@ -234,6 +234,11 @@ impl App {
             self.xform_dialog_key(&event);
             return;
         }
+        // The Blend Options dialog takes every key while open.
+        if self.blend_dialog.is_some() {
+            self.blend_dialog_key(&event);
+            return;
+        }
         // The Export for Screens dialog takes every key while open.
         if self.export.is_some() {
             self.export_key(&event);

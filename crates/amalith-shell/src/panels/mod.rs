@@ -164,6 +164,9 @@ pub struct Ctx<'a> {
     /// The Reflect/Shear dialog + caret-blink phase, when an `xformdlg.*`
     /// float-only panel is being drawn / hit-tested.
     pub xform_dialog: Option<(&'a crate::xformdlg::TransformDialog, bool)>,
+    /// The Blend Options dialog + caret-blink phase, when the `blenddlg`
+    /// float-only panel is being drawn / hit-tested.
+    pub blend_dialog: Option<(&'a crate::blenddlg::BlendDialog, bool)>,
     /// The gradient the Gradient panel edits (a clone of the pooled
     /// target), plus the selected stop index. `None` when the selection
     /// has no gradient paint.
@@ -362,6 +365,9 @@ pub enum Action {
     /// The whole Reflect/Shear dialog hit-vocabulary passes through — the
     /// App owns the state machine (`xformdlg::TransformDialog::apply`).
     XformHit(crate::xformdlg::Hit),
+    /// The whole Blend Options dialog hit-vocabulary passes through — the
+    /// App applies it directly (row select, field focus, OK/Cancel).
+    BlendHit(crate::blenddlg::Hit),
     // --- Links panel ---
     /// A row was clicked — just highlights it.
     SelectAsset(AssetId),
@@ -463,6 +469,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::xformdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        "blenddlg" => {
+            if let Some((dlg, caret)) = ctx.blend_dialog {
+                crate::blenddlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
         _ => {}
     }
 }
@@ -514,6 +525,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             Some((dlg, _)) => Action::XformHit(crate::xformdlg::hit(dlg, body, local)),
             None => Action::None,
         },
+        "blenddlg" => Action::BlendHit(crate::blenddlg::hit(body, local)),
         _ => Action::None,
     }
 }
@@ -551,6 +563,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "export-screens" => crate::export::H,
         "xformdlg.reflect" => crate::xformdlg::body_height(crate::xformdlg::Kind::Reflect),
         "xformdlg.shear" => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
+        "blenddlg" => crate::blenddlg::body_height(),
         s if shape_dialog_tool(PanelId(s)).is_some() => {
             crate::shapedialog::body_height(shape_dialog_tool(PanelId(s)).unwrap())
         }

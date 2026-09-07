@@ -58,6 +58,7 @@ pub enum Icon {
     Reflect,
     Shear,
     Scale,
+    Blend,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -73,7 +74,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
-        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale => "",
+        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend => "",
     }
 }
 
@@ -117,6 +118,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Scale {
         draw_scale_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Blend {
+        draw_blend_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -235,6 +240,27 @@ fn draw_scale_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     head.close_path();
     scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(small.center(), base));
     scene.fill(Fill::NonZero, ID, color, None, &head);
+}
+
+/// A circle with a square tucked behind it, three small dots ramping
+/// between them — the Blend tool.
+fn draw_blend_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let sq = Rect::new(box_.x0 + w * 0.14, box_.y0 + h * 0.14, box_.x0 + w * 0.56, box_.y0 + h * 0.56);
+    let sw = (w * 0.08).max(1.4);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &sq);
+    let c = Point::new(box_.x1 - w * 0.32, box_.y1 - h * 0.32);
+    let r = w * 0.21;
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Circle::new(c, r));
+    // Three small in-between dots along the diagonal from the square's
+    // center to the circle's, shrinking as they approach the circle.
+    let from = sq.center();
+    for i in 1..=3 {
+        let t = i as f64 / 4.0;
+        let p = Point::new(from.x + (c.x - from.x) * t, from.y + (c.y - from.y) * t);
+        scene.fill(Fill::NonZero, ID, color, None, &Circle::new(p, w * 0.035));
+    }
 }
 
 /// A rounded square with a left→right light-to-dark ramp — the Gradient tool.

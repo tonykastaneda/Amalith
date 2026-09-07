@@ -28,6 +28,9 @@ impl App {
         if self.xform_wheel(dy) {
             return;
         }
+        if self.blend_wheel(dy) {
+            return;
+        }
         if self.shape_wheel(dy) {
             return;
         }

@@ -133,6 +133,7 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Rotate => KeyChord::plain(KeyR),
         Tool::Reflect => KeyChord::plain(KeyO),
         Tool::Scale => KeyChord::plain(KeyS),
+        Tool::Blend => KeyChord::plain(KeyW),
         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear => return None,
     })
 }

@@ -64,6 +64,7 @@ pub(in crate::app) fn paint_main(
     last_rotate_tool: Tool,
     last_scale_tool: Tool,
     tool_flyout: Option<(Rect, crate::tool::ToolGroup)>,
+    blend_spine_hover: Option<Vec<Point>>,
     stroke_popover: bool,
     editing_text: Option<ObjectId>,
     text_style: amalith_core::TextStyle,
@@ -469,6 +470,35 @@ pub(in crate::app) fn paint_main(
         }
     }
 
+    // Hovering one of a blend's generated steps: the line its centers
+    // travel along (the straight line between the two originals, or the
+    // real spine once one's set), with a mark at each of its own ends.
+    if let Some(pts) = &blend_spine_hover {
+        if pts.len() >= 2 {
+            let vt = view.to_screen();
+            let scr: Vec<Point> = pts.iter().map(|&p| vt * p).collect();
+            let mut line = BezPath::new();
+            line.move_to(scr[0]);
+            for &p in &scr[1..] {
+                line.line_to(p);
+            }
+            let ink = Color::from_rgb8(0x5b, 0x8d, 0xef);
+            let halo = Color::WHITE;
+            scene.stroke(&Stroke::new(3.0), ID, halo.with_alpha(0.6), None, &line);
+            scene.stroke(&Stroke::new(1.4), ID, ink, None, &line);
+            for &c in [scr[0], scr[scr.len() - 1]].iter() {
+                let a = 4.0;
+                let mut x = BezPath::new();
+                x.move_to((c.x - a, c.y - a));
+                x.line_to((c.x + a, c.y + a));
+                x.move_to((c.x - a, c.y + a));
+                x.line_to((c.x + a, c.y - a));
+                scene.stroke(&Stroke::new(2.6), ID, halo.with_alpha(0.7), None, &x);
+                scene.stroke(&Stroke::new(1.2), ID, ink, None, &x);
+            }
+        }
+    }
+
     // Rulers (when on) are drawn by `App::paint_rulers` after this fn
     // returns — their static layer is cached across frames.
 
@@ -567,6 +597,7 @@ pub(in crate::app) fn paint_main(
         shape_dialog: None,
         export: None,
         xform_dialog: None,
+        blend_dialog: None,
         gradient: gradient.clone(),
         gradient_edit,
     };

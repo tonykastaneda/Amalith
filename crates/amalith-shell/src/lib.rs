@@ -28,6 +28,7 @@ pub mod about;
 pub mod anchors;
 pub mod app;
 pub mod appicon;
+pub mod blenddlg;
 pub mod canvas;
 pub mod chrome;
 pub mod colormanage;
