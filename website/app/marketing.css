@@ -149,12 +149,24 @@
 .marketing-page .research-entry dd { margin: 0; line-height: 1.6; }
 .marketing-page .research-entry a { display: inline-block; padding-block: 12px; text-decoration: underline; text-underline-offset: 5px; }
 .marketing-page .research-content .research-source-note { font-size: 14px; margin-top: 16px; }
-.marketing-page .research-notes ul { padding-left: 24px; max-width: 90ch; }
-.marketing-page .research-notes li { padding-bottom: 16px; color: var(--muted); font-size: 18px; line-height: 1.65; }
+.marketing-page .research-notes { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.4fr); gap: clamp(48px, 8vw, 120px); border-top: 1px solid var(--line); }
+.marketing-page .research-notes__heading { position: sticky; top: 164px; align-self: start; }
+.marketing-page .research-notes__heading h2 { margin-bottom: 28px; }
+.marketing-page .research-content .research-notes__summary { max-width: 34ch; font-size: 16px; }
+.marketing-page .research-notes__body dl { margin: 0; }
+.marketing-page .research-notes__body dl > div { display: grid; grid-template-columns: minmax(140px, .45fr) minmax(0, 1fr); gap: 32px; padding: 24px 0; border-top: 1px solid var(--line); }
+.marketing-page .research-notes__body dl > div:first-child { border-top: 0; padding-top: 0; }
+.marketing-page .research-notes__body dt { color: var(--paper); font-size: 16px; font-weight: 700; line-height: 1.5; }
+.marketing-page .research-notes__body dd { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.65; }
+.marketing-page .research-content .research-notes__scope { display: grid; grid-template-columns: minmax(140px, .45fr) minmax(0, 1fr); gap: 32px; margin: 32px 0 0; padding: 28px 0 0; border-top: 2px solid var(--yellow); font-size: 15px; }
+.marketing-page .research-notes__scope strong { color: var(--paper); }
+.marketing-page .research-notes__scope span { color: var(--muted); }
 .marketing-page .research-content a:hover { color: var(--yellow); }
 @media (max-width: 900px) {
-  .marketing-page .research-intro, .marketing-page .research-entry { grid-template-columns: 1fr; gap: 24px; }
+  .marketing-page .research-intro, .marketing-page .research-entry, .marketing-page .research-notes { grid-template-columns: 1fr; gap: 24px; }
+  .marketing-page .research-notes__heading { position: static; }
 }
 @media (max-width: 640px) {
   .marketing-page .research-entry dl { grid-template-columns: 1fr; gap: 20px; }
+  .marketing-page .research-notes__body dl > div, .marketing-page .research-content .research-notes__scope { grid-template-columns: 1fr; gap: 8px; }
 }

@@ -54,17 +54,22 @@ export default function WhyAmalith() {
             </section>
           ))}
           <section id="research-notes" className="research-notes" aria-labelledby="notes-title">
-            <p className="section-number">03 / Method and attribution</p>
-            <h2 id="notes-title">Read the <em>distinctions.</em></h2>
-            <ul>
-              <li><strong>Allegation</strong> means a claim was made; it does not mean the claim was proven.</li>
-              <li><strong>SEC/regulatory finding</strong> means the regulator formally stated findings in an enforcement proceeding. Some settlements were entered without the respondent admitting or denying those findings.</li>
-              <li><strong>Dismissed</strong> and <strong>defendant prevailed</strong> outcomes are retained rather than omitted.</li>
-              <li>Conduct by a <strong>portfolio company</strong> is not attributed to its investor unless a source independently establishes investor responsibility.</li>
-              <li>Conduct by a parent, subsidiary, predecessor, or acquired company is identified as such rather than automatically attributed across the corporate group.</li>
-              <li><strong>No strong direct matter located yet</strong> means the research conducted so far did not identify a sufficiently well-supported matter; it is not a representation that no such matter exists.</li>
-            </ul>
-            <p>This is a factual research record, not a determination of guilt or wrongdoing beyond what the cited matter established. Allegations, regulatory findings, settlements, dismissals, and matters involving affiliates or portfolio companies are labeled separately. Original notes are preserved; remaining citation gaps are identified beside the relevant entries.</p>
+            <div className="research-notes__heading">
+              <p className="section-number">03 / Method and attribution</p>
+              <h2 id="notes-title">Read the <em>distinctions.</em></h2>
+              <p className="research-notes__summary">The labels matter. They separate what was alleged, what a regulator found, who prevailed, and whose conduct is actually being described.</p>
+            </div>
+            <div className="research-notes__body">
+              <dl>
+                <div><dt>Allegation</dt><dd>A claim was made; it does not mean the claim was proven.</dd></div>
+                <div><dt>Regulatory finding</dt><dd>A regulator formally stated findings in an enforcement proceeding. Some settlements were entered without the respondent admitting or denying those findings.</dd></div>
+                <div><dt>Dismissed or prevailed</dt><dd>Dismissals and defendant victories remain in the record rather than being omitted.</dd></div>
+                <div><dt>Portfolio company</dt><dd>Conduct is not attributed to an investor unless a source independently establishes investor responsibility.</dd></div>
+                <div><dt>Related entity</dt><dd>Conduct by a parent, subsidiary, predecessor, or acquired company is identified as such instead of being attributed across the corporate group.</dd></div>
+                <div><dt>Open research</dt><dd>“No strong direct matter located yet” describes the research completed so far. It does not claim that no such matter exists.</dd></div>
+              </dl>
+              <p className="research-notes__scope"><strong>Scope of this record</strong><span>This is not a determination of guilt or wrongdoing beyond what a cited matter established. Original notes are preserved, and remaining citation gaps are identified beside the relevant entries.</span></p>
+            </div>
           </section>
         </div>
       </main>

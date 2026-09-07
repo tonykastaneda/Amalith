@@ -1,352 +1,364 @@
 # Canva and Adobe Investor / Holder Legal & Regulatory Findings
 
+> **Scope:** This is a factual research record, not a determination of guilt or wrongdoing beyond what a cited matter established. The groupings reflect the original research notes and are not a verified current ownership register. Historical holdings may change, and an asset manager may hold shares for clients.
+
+The entries distinguish regulatory findings, allegations, dismissals, portfolio-company conduct, and open research. A source link verifies the individual matter where one has been added; it does not necessarily verify every ownership relationship in the heading.
+
 ## Canva Investors
 
-  -----------------------------------------------------------------------------------
-  Canva investor    Documented matter   Classification          Outcome/status
-  ----------------- ------------------- ----------------------- ---------------------
-  **500 Startups /  Founder and GP Dave **Internal misconduct   **McClure resigned**,
-  500 Global**      McClure was         finding / admitted      2017
-                    investigated        conduct**               
-                    internally over                             
-                    inappropriate                               
-                    conduct toward                              
-                    women. 500 said it                          
-                    found his behavior                          
-                    unacceptable.                               
-                    McClure                                     
-                    acknowledged making                         
-                    inappropriate                               
-                    advances toward                             
-                    multiple women in                           
-                    work-related                                
-                    situations.                                 
+### 1. 500 Startups / 500 Global
 
-  **Shasta Ventures *Innospan Corp. v.  **Civil allegations     **Plaintiff's case
-  GP LLC**          Intuit et al.*      directly involving      ultimately
-                    alleged that after  investment activity**   dismissed**
-                    Shasta reviewed                             
-                    Innospan as a                               
-                    potential                                   
-                    investment, Shasta                          
-                    misappropriated the                         
-                    "Mint" name and                             
-                    subsequently                                
-                    invested in Mint                            
-                    Software. Claims                            
-                    included                                    
-                    misappropriation,                           
-                    unfair competition,                         
-                    conversion, and                             
-                    unjust enrichment.                          
+**Documented matter:** Founder and GP Dave McClure was investigated internally over inappropriate conduct toward women. 500 said it found his behavior unacceptable. McClure acknowledged making inappropriate advances toward multiple women in work-related situations.
 
-  **Fidelity        SEC found failures  **SEC enforcement /     **Censure,
-  Management &      involving broker    regulatory findings**   cease-and-desist,
-  Research**        selection,                                  \$8M civil penalty**
-                    undisclosed                                 
-                    conflicts,                                  
-                    supervision,                                
-                    recordkeeping, and                          
-                    best execution.                             
-                    Fidelity personnel                          
-                    accepted more than                          
-                    \$1.6M in travel,                           
-                    entertainment, and                          
-                    gifts from                                  
-                    brokerage firms                             
-                    seeking Fidelity                            
-                    business.                                   
+**Classification:** Internal misconduct finding / admitted conduct
 
-  **Franklin        SEC found           **SEC enforcement /     **Cease-and-desist,
-  Advisers /        violations          fiduciary-duty          censure, penalties**
-  Franklin          involving client    findings**              
-  Templeton         funds exceeding                             
-  Investments**     statutory                                   
-                    investment limits.                          
-                    Franklin Advisers                           
-                    subsequently sold                           
-                    ETFs to restore                             
-                    compliance, causing                         
-                    certain client                              
-                    funds more than                             
-                    \$2M in losses, did                         
-                    not reimburse them                          
-                    under its normal                            
-                    trade-error policy,                         
-                    and failed to                               
-                    disclose the                                
-                    situation and                               
-                    conflicts to fund                           
-                    boards.                                     
+**Outcome/status in the notes:** McClure resigned, 2017
 
-  **Franklin        Separate earlier    **SEC enforcement**     **Settled SEC order**
-  Advisers /        SEC proceedings                             
-  Franklin          involving conflicts                         
-  Templeton**       and fund practices                          
-                    resulted in                                 
-                    censures and                                
-                    approximately \$20M                         
-                    in civil penalties                          
-                    against Franklin                            
-                    entities.                                   
+**Source:** [Read the supporting source](https://techcrunch.com/2017/07/03/dave-mcclure-has-resigned-as-gp-of-500-startups/)
 
-  **J.P. Morgan     SEC found the       **SEC enforcement       **Final
-  Investment        investment manager  against                 cease-and-desist
-  Management**      caused prohibited   investment-management   order**, 2024
-                    joint transactions  entity**                
-                    between U.S.                                
-                    money-market funds                          
-                    and an affiliated                           
-                    foreign fund                                
-                    without obtaining                           
-                    the required SEC                            
-                    exemption; the SEC                          
-                    found those                                 
-                    transactions                                
-                    advantaged the                              
-                    foreign fund over                           
-                    the domestic funds.                         
+---
 
-  **T. Rowe Price   Shareholders sued   **Civil allegations**   **Dismissed with
-  Associates**      under §36(b) of the                         prejudice in 2020; no
-                    Investment Company                          settlement/payment by
-                    Act alleging T.                             T. Rowe Price**
-                    Rowe Price                                  
-                    collected excessive                         
-                    advisory fees from                          
-                    eight mutual funds                          
-                    compared with fees                          
-                    charged to                                  
-                    comparable                                  
-                    subadvised clients.                         
+### 2. Shasta Ventures GP LLC
 
-  **ICONIQ Capital  Former plaintiff    **Civil litigation**    **ICONIQ won summary
-  Management**      Marley Dominguez                            judgment on all
-                    brought civil                               causes of action**
-                    claims against                              
-                    ICONIQ.                                     
+**Documented matter:** Innospan Corp. v. Intuit et al. alleged that after Shasta reviewed Innospan as a potential investment, Shasta misappropriated the "Mint" name and subsequently invested in Mint Software. Claims included misappropriation, unfair competition, conversion, and unjust enrichment.
 
-  **Quadrant        Quadrant owned more **Controlled            **Grays penalized;
-  Private Equity**  than 90% of Grays   portfolio-company       attribution remains
-                    Ecommerce when      wrongdoing --- not a    to Grays**
-                    Grays engaged in    wrongdoing finding      
-                    conduct the         against Quadrant        
-                    Australian Federal  itself**                
-                    Court found                                 
-                    violated Australian                         
-                    Consumer Law                                
-                    through misleading                          
-                    vehicle listings.                           
+**Classification:** Civil allegations directly involving investment activity
 
-  **Blackbird       No comparably       **No strong direct      **Open research**
-  Ventures**        strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Outcome/status in the notes:** Plaintiff's case ultimately dismissed
 
-  **AirTree         No comparably       **No strong direct      **Open research**
-  Ventures**        strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Source:** [Read the supporting source](https://law.justia.com/cases/federal/district-courts/california/candce/3%3A2010cv04422/232490/123/)
 
-  **Square Peg      No comparably       **No strong direct      **Open research**
-  Capital**         strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Verification note:** Linked order documents the allegations and an intermediate ruling; the original notes report the ultimate dismissal. Final disposition citation still needs completion.
 
-  **Felicis**       No comparably       **No strong direct      **Open research**
-                    strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+---
 
-  **Dragoneer       No comparably       **No strong direct      **Open research**
-  Investment        strong direct       matter located yet**    
-  Group**           wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+### 3. Fidelity Management & Research
 
-  **Coatue**        No comparably       **No strong direct      **Open research**
-                    strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Documented matter:** SEC found failures involving broker selection, undisclosed conflicts, supervision, recordkeeping, and best execution. Fidelity personnel accepted more than $1.6M in travel, entertainment, and gifts from brokerage firms seeking Fidelity business.
 
-  **Greenoaks**     No comparably       **No strong direct      **Open research**
-                    strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Classification:** SEC enforcement / regulatory findings
 
-  **Bessemer        No comparably       **No strong direct      **Open research**
-  Venture           strong direct       matter located yet**    
-  Partners**        wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
+**Outcome/status in the notes:** Censure, cease-and-desist, $8M civil penalty
 
-  **General         No comparably       **No strong direct      **Open research**
-  Catalyst**        strong direct       matter located yet**    
-                    wrongdoing finding                          
-                    located in the                              
-                    research pass                               
-                    completed so far.                           
-  -----------------------------------------------------------------------------------
+**Source:** [Read the supporting source](https://www.sec.gov/news/press/2008/2008-32.htm)
+
+---
+
+### 4. Franklin Advisers / Franklin Templeton Investments
+
+**Documented matter:** SEC found violations involving client funds exceeding statutory investment limits. Franklin Advisers subsequently sold ETFs to restore compliance, causing certain client funds more than $2M in losses, did not reimburse them under its normal trade-error policy, and failed to disclose the situation and conflicts to fund boards.
+
+**Classification:** SEC enforcement / fiduciary-duty findings
+
+**Outcome/status in the notes:** Cease-and-desist, censure, penalties
+
+**Source:** [Read the supporting source](https://www.sec.gov/enforcement-litigation/administrative-proceedings/ia-5531-s)
+
+---
+
+### 5. Franklin Advisers / Franklin Templeton
+
+**Documented matter:** Separate earlier SEC proceedings involving conflicts and fund practices resulted in censures and approximately $20M in civil penalties against Franklin entities.
+
+**Classification:** SEC enforcement
+
+**Outcome/status in the notes:** Settled SEC order
+
+**Source:** [Read the supporting source](https://www.sec.gov/enforcement-litigation/administrative-proceedings/ia-2271)
+
+---
+
+### 6. J.P. Morgan Investment Management
+
+**Documented matter:** SEC found the investment manager caused prohibited joint transactions between U.S. money-market funds and an affiliated foreign fund without obtaining the required SEC exemption; the SEC found those transactions advantaged the foreign fund over the domestic funds.
+
+**Classification:** SEC enforcement against investment-management entity
+
+**Outcome/status in the notes:** Final cease-and-desist order, 2024
+
+**Source:** [Read the supporting source](https://www.jpmorgan.com/content/dam/jpm/securities/documents/adv/part-b/JP_Morgan_Investments_Management_Inc_ADV.pdf)
+
+---
+
+### 7. T. Rowe Price Associates
+
+**Documented matter:** Shareholders sued under §36(b) of the Investment Company Act alleging T. Rowe Price collected excessive advisory fees from eight mutual funds compared with fees charged to comparable subadvised clients.
+
+**Classification:** Civil allegations
+
+**Outcome/status in the notes:** Dismissed with prejudice in 2020; no settlement/payment by T. Rowe Price
+
+**Source:** [Read the supporting source](https://investors.troweprice.com/static-files/0436e885-105f-4d0a-8e93-3887a83e2b91)
+
+---
+
+### 8. ICONIQ Capital Management
+
+**Documented matter:** Former plaintiff Marley Dominguez brought civil claims against ICONIQ.
+
+**Classification:** Civil litigation
+
+**Outcome/status in the notes:** ICONIQ won summary judgment on all causes of action
+
+**Source:** [Read the supporting source](https://www.docketalarm.com/cases/California_State_San_Francisco_County_Superior_Court/CGC-21-589700/MARLEY_R._DOMINGUEZ_VS._ICONIQ_CAPITAL_MANAGEMENT_LLC_ET_AL/08017584/)
+
+---
+
+### 9. Quadrant Private Equity
+
+**Documented matter:** Quadrant owned more than 90% of Grays Ecommerce when Grays engaged in conduct the Australian Federal Court found violated Australian Consumer Law through misleading vehicle listings.
+
+**Classification:** Controlled portfolio-company wrongdoing — not a wrongdoing finding against Quadrant itself
+
+**Outcome/status in the notes:** Grays penalized; attribution remains to Grays
+
+**Source:** [Read the supporting source](https://www.accc.gov.au/media-release/grays-to-redress-consumers-and-pay-10-million-in-penalties-for-misleading-descriptions-of-cars-for-sale-by-auction)
+
+**Verification note:** The ACCC source establishes the outcome against Grays. The ownership percentage in the original notes needs a separate ownership citation; it is not a finding against Quadrant.
+
+---
+
+### 10. Blackbird Ventures
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 11. AirTree Ventures
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 12. Square Peg Capital
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 13. Felicis
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 14. Dragoneer Investment Group
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 15. Coatue
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 16. Greenoaks
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 17. Bessemer Venture Partners
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 18. General Catalyst
+
+**Documented matter:** No comparably strong direct wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
 
 ## Adobe Institutional Holders
 
-  -------------------------------------------------------------------------------
-  Adobe holder      Documented matter    Classification      Outcome/status
-  ----------------- -------------------- ------------------- --------------------
-  **The Vanguard    SEC found Vanguard   **SEC enforcement / **\$106.41M ordered
-  Group**           made misleading      misleading          relief**, 2025
-                    statements about tax disclosures**       
-                    consequences                             
-                    associated with its                      
-                    Target Retirement                        
-                    Funds after lowering                     
-                    the                                      
-                    institutional-fund                       
-                    minimum,                                 
-                    contributing to                          
-                    unexpectedly large                       
-                    taxable                                  
-                    capital-gains                            
-                    distributions for                        
-                    some retail                              
-                    investors.                               
+### 1. The Vanguard Group
 
-  **BlackRock       SEC found BlackRock  **SEC enforcement / **\$12M penalty,
-  Advisors LLC**    failed to disclose a fiduciary-duty      censure, compliance
-                    portfolio manager's  conflict**          consultant**
-                    conflict involving a                     
-                    company in which he                      
-                    personally had                           
-                    approximately \$50M                      
-                    invested and which                       
-                    became connected to                      
-                    the largest holding                      
-                    in a                                     
-                    BlackRock-managed                        
-                    fund.                                    
+**Documented matter:** SEC found Vanguard made misleading statements about tax consequences associated with its Target Retirement Funds after lowering the institutional-fund minimum, contributing to unexpectedly large taxable capital-gains distributions for some retail investors.
 
-  **BlackRock       Separate SEC case:   **SEC enforcement / **\$2.5M penalty,
-  Advisors LLC**    BlackRock            inaccurate          censure,
-                    inaccurately         investment          cease-and-desist**
-                    described a fund's   disclosures**       
-                    Aviron investment                        
-                    and reported an                          
-                    incorrect interest                       
-                    rate. Aviron's                           
-                    founder was                              
-                    separately charged                       
-                    for misappropriating                     
-                    money invested by                        
-                    the BlackRock fund.                      
+**Classification:** SEC enforcement / misleading disclosures
 
-  **State Street    SEC found State      **SEC enforcement / **More than \$88M
-  Bank and Trust /  Street routinely     client              SEC settlement;
-  State Street**    overcharged          overcharging**      additional state
-                    investment-company                       resolution**
-                    clients, including a                     
-                    secret markup on                         
-                    SWIFT messaging                          
-                    expenses. SEC said                       
-                    the overcharges                          
-                    totaled roughly                          
-                    \$170M, including                        
-                    about \$110M from                        
-                    the undisclosed                          
-                    markup.                                  
+**Outcome/status in the notes:** $106.41M ordered relief, 2025
 
-  **Invesco         SEC proceedings      **SEC enforcement / **Censure,
-  Advisers /        found Invesco fund   fiduciary-duty      cease-and-desist,
-  predecessors**    entities entered     violations**        financial remedies**
-                    market-timing                            
-                    arrangements that                        
-                    conflicted with fund                     
-                    prospectus                               
-                    disclosures and                          
-                    breached fiduciary                       
-                    duties to funds.                         
+**Source:** [Read the supporting source](https://www.sec.gov/files/litigation/admin/2025/34-102528.pdf)
 
-  **Invesco         SEC charged Invesco  **SEC enforcement / **Settled SEC
-  Advisers Inc.**   in 2024 over         misleading          proceeding**
-                    misleading           investment          
-                    statements           statements**        
-                    concerning how ESG                       
-                    considerations were                      
-                    supposedly                               
-                    integrated into                          
-                    investment                               
-                    decisions.                               
+---
 
-  **UBS Asset       Legacy Credit Suisse **SEC enforcement / **Censure,
-  Management /      investment-adviser   statutory           cease-and-desist,
-  legacy Credit     entities continued   disqualification;   approximately
-  Suisse entities** providing fund       legacy Credit       \$10.08M**
-                    services during a    Suisse matter**     
-                    period when an                           
-                    injunction caused                        
-                    statutory                                
-                    disqualification                         
-                    issues under the                         
-                    Investment Company                       
-                    Act. Those                               
-                    businesses were                          
-                    subsequently                             
-                    integrated into UBS                      
-                    Asset Management.                        
+### 2. BlackRock Advisors LLC
 
-  **Geode Capital   No comparably strong **No strong direct  **Open research**
-  Management**      direct SEC/DOJ       matter located      
-                    wrongdoing finding   yet**               
-                    located in the                           
-                    research pass                            
-                    completed so far.                        
+**Documented matter:** SEC found BlackRock failed to disclose a portfolio manager's conflict involving a company in which he personally had approximately $50M invested and which became connected to the largest holding in a BlackRock-managed fund.
 
-  **Arrowstreet     No comparable direct **No strong direct  **Open research**
-  Capital**         regulator finding    matter located      
-                    located in the       yet**               
-                    research pass                            
-                    completed so far.                        
+**Classification:** SEC enforcement / fiduciary-duty conflict
 
-  **PRIMECAP        No comparable direct **No strong direct  **Open research**
-  Management**      wrongdoing           matter located      
-                    proceeding located   yet**               
-                    in the research pass                     
-                    completed so far.                        
-                    Recent SEC material                      
-                    located concerned                        
-                    routine exemptive                        
-                    applications rather                      
-                    than misconduct.                         
-  -------------------------------------------------------------------------------
+**Outcome/status in the notes:** $12M penalty, censure, compliance consultant
 
-## Research Notes
+**Source:** [Read the supporting source](https://www.sec.gov/newsroom/press-releases/2015-71)
 
--   **Allegation** means a claim was made; it does not mean the claim
-    was proven.
--   **SEC/regulatory finding** means the regulator formally stated
-    findings in an enforcement proceeding. Some settlements were entered
-    without the respondent admitting or denying those findings.
--   **Dismissed** and **defendant prevailed** outcomes are retained
-    rather than omitted.
--   Conduct by a **portfolio company** is not attributed to its investor
-    unless a source independently establishes investor responsibility.
--   Conduct by a parent, subsidiary, predecessor, or acquired company is
-    identified as such rather than automatically attributed across the
-    corporate group.
--   "No strong direct matter located yet" means the research conducted
-    so far did not identify a sufficiently well-supported matter; it is
-    not a representation that no such matter exists.
-    **Scope note:** This is a factual research table, not a determination of guilt or wrongdoing beyond what the cited matter established. Allegations, regulatory findings, settlements, dismissals, and matters involving affiliates or portfolio companies are labeled separately.
+---
+
+### 3. BlackRock Advisors LLC
+
+**Documented matter:** Separate SEC case: BlackRock inaccurately described a fund's Aviron investment and reported an incorrect interest rate. Aviron's founder was separately charged for misappropriating money invested by the BlackRock fund.
+
+**Classification:** SEC enforcement / inaccurate investment disclosures
+
+**Outcome/status in the notes:** $2.5M penalty, censure, cease-and-desist
+
+**Source:** [Read the supporting source](https://www.sec.gov/newsroom/press-releases/2023-226)
+
+---
+
+### 4. State Street Bank and Trust / State Street
+
+**Documented matter:** SEC found State Street routinely overcharged investment-company clients, including a secret markup on SWIFT messaging expenses. SEC said the overcharges totaled roughly $170M, including about $110M from the undisclosed markup.
+
+**Classification:** SEC enforcement / client overcharging
+
+**Outcome/status in the notes:** More than $88M SEC settlement; additional state resolution
+
+**Source:** [Read the supporting source](https://www.sec.gov/newsroom/press-releases/2019-114)
+
+---
+
+### 5. Invesco Advisers / predecessors
+
+**Documented matter:** SEC proceedings found Invesco fund entities entered market-timing arrangements that conflicted with fund prospectus disclosures and breached fiduciary duties to funds.
+
+**Classification:** SEC enforcement / fiduciary-duty violations
+
+**Outcome/status in the notes:** Censure, cease-and-desist, financial remedies
+
+**Source:** [Read the supporting source](https://www.sec.gov/litigation/admin/ia-2288.htm)
+
+**Verification note:** Related SEC order concerning an individual and the predecessor fund group; the entity-level financial-remedy citation still needs completion.
+
+---
+
+### 6. Invesco Advisers Inc.
+
+**Documented matter:** SEC charged Invesco in 2024 over misleading statements concerning how ESG considerations were supposedly integrated into investment decisions.
+
+**Classification:** SEC enforcement / misleading investment statements
+
+**Outcome/status in the notes:** Settled SEC proceeding
+
+**Source:** [Read the supporting source](https://www.sec.gov/files/litigation/admin/2024/ia-6770.pdf)
+
+---
+
+### 7. UBS Asset Management / legacy Credit Suisse entities
+
+**Documented matter:** Legacy Credit Suisse investment-adviser entities continued providing fund services during a period when an injunction caused statutory disqualification issues under the Investment Company Act. Those businesses were subsequently integrated into UBS Asset Management.
+
+**Classification:** SEC enforcement / statutory disqualification; legacy Credit Suisse matter
+
+**Outcome/status in the notes:** Censure, cease-and-desist, approximately $10.08M
+
+**Source:** [Read the supporting source](https://www.sec.gov/newsroom/press-releases/2023-249)
+
+---
+
+### 8. Geode Capital Management
+
+**Documented matter:** No comparably strong direct SEC/DOJ wrongdoing finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 9. Arrowstreet Capital
+
+**Documented matter:** No comparable direct regulator finding located in the research pass completed so far.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+### 10. PRIMECAP Management
+
+**Documented matter:** No comparable direct wrongdoing proceeding located in the research pass completed so far. Recent SEC material located concerned routine exemptive applications rather than misconduct.
+
+**Classification:** No strong direct matter located yet
+
+**Outcome/status in the notes:** Open research
+
+**Source status:** Open research; no supporting source has been added to this record yet.
+
+---
+
+## Research notes
+
+- **Allegation** means a claim was made; it does not mean the claim was proven.
+- **SEC/regulatory finding** means the regulator formally stated findings in an enforcement proceeding. Some settlements were entered without the respondent admitting or denying those findings.
+- **Dismissed** and **defendant prevailed** outcomes are retained rather than omitted.
+- Conduct by a **portfolio company** is not attributed to its investor unless a source independently establishes investor responsibility.
+- Conduct by a parent, subsidiary, predecessor, or acquired company is identified as such rather than automatically attributed across the corporate group.
+- **No strong direct matter located yet** means the research conducted so far did not identify a sufficiently well-supported matter. It is not a representation that no such matter exists.
+
+## Citation status
+
+The original notes are preserved in substance. Entries without source links remain clearly marked as open research. A linked source supports the described proceeding or outcome only to the extent stated in that source.

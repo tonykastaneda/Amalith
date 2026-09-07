@@ -21,6 +21,7 @@ Retain yellow `#ffc619`, warm white `#f5f2ea`, ink `#11110f`, canvas `#050505`, 
 - No marketing cards, rounded section containers, filled content panels, icon tiles, or bordered status badges anywhere. Use open sections, typography and thin rules. Product previews may depict application UI but get no outer card frame. Buttons may retain 8px corners.
 - Actions at least 48px tall; yellow primary, bordered dark secondary. Availability is static status text, never a fake download button.
 - PolicyLayout provides one shared project-information navigation and reading column.
+- Long research methodology uses a two-column editorial layout: a sticky heading and a ruled definition list. Avoid unstructured full-width bullet lists and long edge-to-edge paragraphs.
 - Narrow layouts stack columns; avoid fixed minimum widths and horizontal overflow.
 
 ## Content and accessibility
