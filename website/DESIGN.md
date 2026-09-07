@@ -13,12 +13,12 @@ Retain yellow `#ffc619`, warm white `#f5f2ea`, ink `#11110f`, canvas `#050505`, 
 ## Layout and typography
 
 - Shared MarketingHero across Home, Why, Downloads, Privacy, Terms and Contact.
-- Content width 1200px; responsive gutters 24–72px.
+- Fluid page width with responsive gutters 24–72px; no maximum-width outer container. Keep readable paragraph measures.
 - Section spacing 64–112px; spacing steps 8, 12, 16, 24, 32, 48, 64px.
 - Display 48–96px, weight 600, line height 1.04; section headings 34–56px, line height 1.08.
 - Body 18px / 1.6, reading pages 17px / 1.75; muted text uses `#b9b7ae`.
 - 12px uppercase eyebrows, consistent spacing before titles and paragraphs.
-- Prefer open columns with thin top rules for feature comparisons and platform availability. No filled, rounded cards for these sections; no icon tiles or bordered status badges. Reserve panel framing for product previews. Use 8px action corners.
+- No marketing cards, rounded section containers, filled content panels, icon tiles, or bordered status badges anywhere. Use open sections, typography and thin rules. Product previews may depict application UI but get no outer card frame. Buttons may retain 8px corners.
 - Actions at least 48px tall; yellow primary, bordered dark secondary. Availability is static status text, never a fake download button.
 - PolicyLayout provides one shared project-information navigation and reading column.
 - Narrow layouts stack columns; avoid fixed minimum widths and horizontal overflow.

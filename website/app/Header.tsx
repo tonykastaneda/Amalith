@@ -13,11 +13,10 @@ export function Header({ basePath }: { basePath: string }) {
   useEffect(() => {
     let frame = 0;
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const rawProgress = reducedMotion.matches ? 0 : Math.min(Math.max(window.scrollY / 180, 0), 1);
+        const rawProgress = Math.min(Math.max(window.scrollY / 180, 0), 1);
         const progress = rawProgress * rawProgress * (3 - 2 * rawProgress);
         const logoScale = 1 - progress * 0.18;
         const glassAlpha = 0.68 - progress * 0.16;

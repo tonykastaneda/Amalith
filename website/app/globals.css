@@ -16,8 +16,8 @@ img { display: block; max-width: 100%; }
 summary { font: inherit; }
 ::selection { background: var(--yellow); color: var(--ink); }
 
-.site-header { --logo-scale: 1; --glass-alpha: .92; --shadow-alpha: 0; height: 124px; padding: 0 26px 0 50px; display: grid; grid-template-columns: minmax(260px, 1fr) auto auto auto; align-items: stretch; background: transparent; color: #fff; position: sticky; top: 0; z-index: 100; isolation: isolate; box-shadow: 0 14px 38px rgba(0,0,0,var(--shadow-alpha)); }
-.header-glass { position: absolute; inset: 0; z-index: 0; pointer-events: none; background: rgba(5,5,5,.92); border-bottom: 1px solid rgba(255,255,255,.11); }
+.site-header { --logo-scale: 1; --glass-alpha: .68; --shadow-alpha: 0; height: 124px; padding: 0 26px 0 50px; display: grid; grid-template-columns: minmax(260px, 1fr) auto auto auto; align-items: stretch; background: transparent; color: #fff; position: sticky; top: 0; z-index: 100; isolation: isolate; box-shadow: 0 14px 38px rgba(0,0,0,var(--shadow-alpha)); }
+.header-glass { position: absolute; inset: 0; z-index: 0; pointer-events: none; background: rgba(5,5,5,var(--glass-alpha)); border-bottom: 1px solid rgba(255,255,255,.11); }
 .site-header > :not(.header-glass) { position: relative; z-index: 1; }
 .brand { display: flex; align-items: center; justify-self: start; }
 .brand img { width: 258px; height: auto; transform: scale(var(--logo-scale)); transform-origin: left center; will-change: transform; }

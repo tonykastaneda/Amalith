@@ -1,11 +1,9 @@
 /* Scoped design system: never applies to Header, Footer, or the Docs page. */
 .marketing-page {
-  --content-width: 1200px;
   --gutter: clamp(24px, 5vw, 72px);
   --section-space: clamp(64px, 8vw, 112px);
   --surface: #11110f;
   --muted: #b9b7ae;
-  --radius: 12px;
   --display-size: clamp(48px, 7vw, 96px);
   --heading-size: clamp(34px, 4.2vw, 56px);
   color: var(--paper);
@@ -17,7 +15,7 @@
 .marketing-page :where(p, li) { text-wrap: pretty; }
 .marketing-page .section-number, .marketing-page .kicker { color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.5; letter-spacing: .1em; }
 .marketing-page .section-shell, .marketing-page .feature-stack, .marketing-page .platform-section, .marketing-page .information-layout, .marketing-page .cta, .marketing-page .marketing-hero {
-  width: min(var(--content-width), calc(100% - var(--gutter) * 2));
+  width: calc(100% - var(--gutter) * 2);
   margin-inline: auto;
 }
 .marketing-page .marketing-hero { padding-block: var(--section-space) 64px; }
@@ -32,8 +30,8 @@
 .marketing-page .marketing-button--secondary:hover { background: #272724; border-color: var(--muted); }
 .marketing-page .text-link { min-height: 44px; align-items: center; gap: 24px; margin-top: 24px; font-size: 14px; line-height: 1.5; border-bottom-width: 1px; }
 .marketing-page .text-link:hover { color: var(--yellow); }
-.marketing-page .hero-media { padding: 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.marketing-page .placeholder { min-height: 0; border-radius: 8px; background: #1a1a18; }
+.marketing-page .hero-media { padding: 0; background: transparent; border: 0; border-radius: 0; }
+.marketing-page .placeholder { min-height: 0; border: 0; border-radius: 0; background: #1a1a18; }
 .marketing-page .placeholder__workspace { height: clamp(240px, 33vw, 440px); grid-template-columns: 40px minmax(0, 1fr) 100px; }
 .marketing-page .placeholder__label { max-width: calc(100% - 24px); right: 12px; bottom: 12px; font-size: 10px; line-height: 1.4; letter-spacing: .04em; border-radius: 4px; }
 .marketing-page .manifesto, .marketing-page .why-cost-intro { display: grid; grid-template-columns: 1fr 2fr; gap: 48px; padding: var(--section-space) 0; border-bottom: 1px solid var(--line); border-top: 0; }
@@ -47,15 +45,15 @@
 .marketing-page .principles { padding: var(--section-space) 0; }
 .marketing-page .principles h2 { margin: 24px 0; }
 .marketing-page .section-intro { max-width: 640px; color: var(--muted); font-size: 18px; line-height: 1.6; margin: 0 0 32px; }
-.marketing-page .principles__grid { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); gap: 1px; }
-.marketing-page .principles__grid p { min-height: 100px; padding: 24px; align-items: center; font-size: 16px; font-weight: 500; border: 0; }
-.marketing-page .status { padding: 40px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); gap: 64px; }
+.marketing-page .principles__grid { border: 0; border-radius: 0; background: transparent; gap: 0 40px; }
+.marketing-page .principles__grid p { min-height: 88px; padding: 24px 0; align-items: center; font-size: 18px; font-weight: 500; border: 0; border-top: 1px solid var(--line); }
+.marketing-page .status { padding: var(--section-space) 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; gap: 64px; }
 .marketing-page .status h2 { margin: 24px 0 0; }
 .marketing-page .status__copy { padding: 0; }
 .marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
-.marketing-page .cta { min-height: 0; margin-block: var(--section-space); padding: 48px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); color: var(--ink); grid-template-columns: 1fr auto; gap: 32px; }
+.marketing-page .cta { min-height: 0; margin-block: 0; padding: var(--section-space) 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--paper); grid-template-columns: 1fr auto; gap: 32px; }
 .marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; }
-.marketing-page .cta h2 em { color: var(--ink); }
+.marketing-page .cta h2 em { color: var(--yellow); }
 .marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
 .marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; }
 .marketing-page .cta__mark { width: 400px; max-width: none; top: -100px; bottom: auto; left: 20%; transform: none; opacity: .08; }
@@ -80,10 +78,10 @@
 .marketing-page .availability-label { display: inline-block; padding: 0; border: 0; font-size: 13px; color: var(--muted); }
 .marketing-page .pricing-note { margin: 32px 0 0; max-width: 680px; color: var(--muted); font-size: 16px; line-height: 1.6; }
 .marketing-page .pricing-note a { display: inline; color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
-.marketing-page .information-layout { display: grid; grid-template-columns: 240px minmax(0, 720px); justify-content: space-between; gap: 64px; padding-block: 32px var(--section-space); border-top: 1px solid var(--line); }
+.marketing-page .information-layout { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 3fr); justify-content: space-between; gap: 64px; padding-block: 32px var(--section-space); border-top: 1px solid var(--line); }
 .marketing-page .information-nav { display: flex; flex-direction: column; gap: 8px; align-self: start; position: sticky; top: 156px; }
-.marketing-page .information-nav a { min-height: 44px; display: flex; align-items: center; padding: 12px 16px; font-size: 14px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); }
-.marketing-page .information-nav a[aria-current="page"] { color: var(--paper); border-color: var(--line); background: var(--surface); }
+.marketing-page .information-nav a { min-height: 44px; display: flex; align-items: center; padding: 12px 0; font-size: 14px; border: 0; border-radius: 0; color: var(--muted); }
+.marketing-page .information-nav a[aria-current="page"] { color: var(--yellow); background: transparent; text-decoration: underline; text-underline-offset: 6px; }
 .marketing-page .information-nav a:hover { color: var(--yellow); }
 .marketing-page .information-body { min-width: 0; overflow-wrap: anywhere; }
 .marketing-page .information-body h2 { margin: 40px 0 16px; padding-top: 32px; border-top: 1px solid var(--line); font-size: 24px; line-height: 1.3; letter-spacing: -.025em; }
@@ -96,7 +94,7 @@
   .marketing-page .why-cost-grid { grid-template-columns: 1fr; }
   .marketing-page .why-cost-grid article { min-height: 0; }
   .marketing-page .status, .marketing-page .why-cost-answer, .marketing-page .why-cost-allies { grid-template-columns: 1fr; gap: 32px; }
-  .marketing-page .cta { padding: 32px; grid-template-columns: 1fr; grid-template-rows: auto; }
+  .marketing-page .cta { padding: var(--section-space) 0; grid-template-columns: 1fr; grid-template-rows: auto; }
   .marketing-page .cta > a { justify-self: start; grid-row: auto; }
   .marketing-page .platform-card { padding: 24px 0 0; }
   .marketing-page .information-layout { grid-template-columns: 1fr; gap: 32px; }
@@ -106,12 +104,57 @@
   .marketing-page .marketing-hero { padding-bottom: 48px; }
   .marketing-page .marketing-hero__lede { font-size: 18px; }
   .marketing-page .feature { grid-template-columns: 1fr; padding-block: 48px; }
-  .marketing-page .hero-media { padding: 12px; }
+  .marketing-page .hero-media { padding: 0; }
   .marketing-page .placeholder__workspace, .marketing-page .feature .placeholder__workspace { height: 240px; grid-template-columns: 24px minmax(0, 1fr); }
   .marketing-page .placeholder__panel { display: none; }
   .marketing-page .principles__grid, .marketing-page .platform-grid { grid-template-columns: 1fr; }
-  .marketing-page .principles__grid p { min-height: 72px; border-bottom: 1px solid var(--line); }
+  .marketing-page .principles__grid p { min-height: 72px; border-bottom: 0; }
   .marketing-page .principles__grid p:last-child { border-bottom: 0; }
-  .marketing-page .status, .marketing-page .cta { padding: 24px; }
-  .marketing-page .information-nav a { padding-inline: 12px; }
+  .marketing-page .status, .marketing-page .cta { padding: var(--section-space) 0; }
+  .marketing-page .information-nav a { padding-inline: 0; margin-right: 16px; }
+}
+
+/* Downloads is a spacious landing page, not a catalog of cards. */
+.marketing-page .download-stage { min-height: calc(100svh - 124px); padding: clamp(64px, 8vw, 128px) var(--gutter); text-align: center; }
+.marketing-page .download-stage .kicker { justify-content: center; }
+.marketing-page .download-stage h1 { margin: 32px 0; font-size: clamp(46px, 6.6vw, 108px); line-height: 1.04; font-weight: 600; letter-spacing: -.055em; }
+.marketing-page .download-stage h1 em { font-family: Georgia, "Times New Roman", serif; color: var(--yellow); font-weight: 400; }
+.marketing-page .download-stage__intro { color: var(--muted); font-size: 20px; line-height: 1.6; }
+.marketing-page .download-stage .platform-grid { margin: 64px 0 40px; gap: clamp(24px, 6vw, 96px); }
+.marketing-page .download-stage .platform-card { border: 0; padding: 16px 0; }
+.marketing-page .download-stage .platform-card__icon { width: 72px; height: 72px; margin: 0 auto; }
+.marketing-page .download-stage .platform-card__icon img { width: 64px; height: 64px; }
+.marketing-page .download-stage .platform-card h3 { margin-top: 24px; }
+.marketing-page .download-stage .availability-label { margin-top: 8px; }
+.marketing-page .download-stage .pricing-note { margin: 32px auto 0; font-size: 14px; }
+@media (max-width: 640px) {
+  .marketing-page .download-stage { min-height: calc(100svh - 76px); }
+  .marketing-page .download-stage .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-block: 40px 24px; }
+  .marketing-page .download-stage .platform-card__icon, .marketing-page .download-stage .platform-card__icon img { width: 40px; height: 40px; }
+  .marketing-page .download-stage .platform-card h3 { font-size: 18px; }
+}
+
+.marketing-page .research-content { width: calc(100% - var(--gutter) * 2); margin: 0 auto; }
+.marketing-page .research-intro { display: grid; grid-template-columns: 1fr 1.4fr; gap: 64px; padding-bottom: 64px; }
+.marketing-page .research-intro h2 { margin: 0; }
+.marketing-page .research-content p { color: var(--muted); font-size: 18px; line-height: 1.65; margin: 0 0 20px; }
+.marketing-page .research-index { display: flex; flex-wrap: wrap; gap: 16px 40px; padding: 24px 0; border-block: 1px solid var(--line); }
+.marketing-page .research-index a { min-height: 44px; display: inline-flex; align-items: center; gap: 24px; }
+.marketing-page .research-group, .marketing-page .research-notes { padding-block: 64px; }
+.marketing-page .research-group > h2, .marketing-page .research-notes h2 { margin: 24px 0 48px; }
+.marketing-page .research-entry { display: grid; grid-template-columns: 1fr 2fr; gap: 64px; padding: 32px 0; border-top: 1px solid var(--line); }
+.marketing-page .research-entry h3 { margin: 0; font-size: 24px; line-height: 1.3; font-weight: 500; }
+.marketing-page .research-entry dl { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin: 24px 0; }
+.marketing-page .research-entry dt { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 12px; }
+.marketing-page .research-entry dd { margin: 0; line-height: 1.6; }
+.marketing-page .research-entry a { display: inline-block; padding-block: 12px; text-decoration: underline; text-underline-offset: 5px; }
+.marketing-page .research-content .research-source-note { font-size: 14px; margin-top: 16px; }
+.marketing-page .research-notes ul { padding-left: 24px; max-width: 90ch; }
+.marketing-page .research-notes li { padding-bottom: 16px; color: var(--muted); font-size: 18px; line-height: 1.65; }
+.marketing-page .research-content a:hover { color: var(--yellow); }
+@media (max-width: 900px) {
+  .marketing-page .research-intro, .marketing-page .research-entry { grid-template-columns: 1fr; gap: 24px; }
+}
+@media (max-width: 640px) {
+  .marketing-page .research-entry dl { grid-template-columns: 1fr; gap: 20px; }
 }

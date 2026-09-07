@@ -1,0 +1,236 @@
+[
+  {
+    "title": "Canva Investors",
+    "rows": [
+      {
+        "name": "500 Startups / 500 Global",
+        "matter": "Founder and GP Dave McClure was investigated internally over inappropriate conduct toward women. 500 said it found his behavior unacceptable. McClure acknowledged making inappropriate advances toward multiple women in work-related situations.",
+        "classification": "Internal misconduct finding / admitted conduct",
+        "outcome": "McClure resigned, 2017",
+        "source": "https://techcrunch.com/2017/07/03/dave-mcclure-has-resigned-as-gp-of-500-startups/",
+        "sourceNote": ""
+      },
+      {
+        "name": "Shasta Ventures GP LLC",
+        "matter": "Innospan Corp. v. Intuit et al. alleged that after Shasta reviewed Innospan as a potential investment, Shasta misappropriated the \"Mint\" name and subsequently invested in Mint Software. Claims included misappropriation, unfair competition, conversion, and unjust enrichment.",
+        "classification": "Civil allegations directly involving investment activity",
+        "outcome": "Plaintiff's case ultimately dismissed",
+        "source": "https://law.justia.com/cases/federal/district-courts/california/candce/3%3A2010cv04422/232490/123/",
+        "sourceNote": "Linked order documents the allegations and an intermediate ruling; the original notes report the ultimate dismissal. Final disposition citation still needs completion."
+      },
+      {
+        "name": "Fidelity Management & Research",
+        "matter": "SEC found failures involving broker selection, undisclosed conflicts, supervision, recordkeeping, and best execution. Fidelity personnel accepted more than $1.6M in travel, entertainment, and gifts from brokerage firms seeking Fidelity business.",
+        "classification": "SEC enforcement / regulatory findings",
+        "outcome": "Censure, cease-and-desist, $8M civil penalty",
+        "source": "https://www.sec.gov/news/press/2008/2008-32.htm",
+        "sourceNote": ""
+      },
+      {
+        "name": "Franklin Advisers / Franklin Templeton Investments",
+        "matter": "SEC found violations involving client funds exceeding statutory investment limits. Franklin Advisers subsequently sold ETFs to restore compliance, causing certain client funds more than $2M in losses, did not reimburse them under its normal trade-error policy, and failed to disclose the situation and conflicts to fund boards.",
+        "classification": "SEC enforcement / fiduciary-duty findings",
+        "outcome": "Cease-and-desist, censure, penalties",
+        "source": "https://www.sec.gov/enforcement-litigation/administrative-proceedings/ia-5531-s",
+        "sourceNote": ""
+      },
+      {
+        "name": "Franklin Advisers / Franklin Templeton",
+        "matter": "Separate earlier SEC proceedings involving conflicts and fund practices resulted in censures and approximately $20M in civil penalties against Franklin entities.",
+        "classification": "SEC enforcement",
+        "outcome": "Settled SEC order",
+        "source": "https://www.sec.gov/enforcement-litigation/administrative-proceedings/ia-2271",
+        "sourceNote": ""
+      },
+      {
+        "name": "J.P. Morgan Investment Management",
+        "matter": "SEC found the investment manager caused prohibited joint transactions between U.S. money-market funds and an affiliated foreign fund without obtaining the required SEC exemption; the SEC found those transactions advantaged the foreign fund over the domestic funds.",
+        "classification": "SEC enforcement against investment-management entity",
+        "outcome": "Final cease-and-desist order, 2024",
+        "source": "https://www.jpmorgan.com/content/dam/jpm/securities/documents/adv/part-b/JP_Morgan_Investments_Management_Inc_ADV.pdf",
+        "sourceNote": ""
+      },
+      {
+        "name": "T. Rowe Price Associates",
+        "matter": "Shareholders sued under §36(b) of the Investment Company Act alleging T. Rowe Price collected excessive advisory fees from eight mutual funds compared with fees charged to comparable subadvised clients.",
+        "classification": "Civil allegations",
+        "outcome": "Dismissed with prejudice in 2020; no settlement/payment by T. Rowe Price",
+        "source": "https://investors.troweprice.com/static-files/0436e885-105f-4d0a-8e93-3887a83e2b91",
+        "sourceNote": ""
+      },
+      {
+        "name": "ICONIQ Capital Management",
+        "matter": "Former plaintiff Marley Dominguez brought civil claims against ICONIQ.",
+        "classification": "Civil litigation",
+        "outcome": "ICONIQ won summary judgment on all causes of action",
+        "source": "https://www.docketalarm.com/cases/California_State_San_Francisco_County_Superior_Court/CGC-21-589700/MARLEY_R._DOMINGUEZ_VS._ICONIQ_CAPITAL_MANAGEMENT_LLC_ET_AL/08017584/",
+        "sourceNote": ""
+      },
+      {
+        "name": "Quadrant Private Equity",
+        "matter": "Quadrant owned more than 90% of Grays Ecommerce when Grays engaged in conduct the Australian Federal Court found violated Australian Consumer Law through misleading vehicle listings.",
+        "classification": "Controlled portfolio-company wrongdoing — not a wrongdoing finding against Quadrant itself",
+        "outcome": "Grays penalized; attribution remains to Grays",
+        "source": "https://www.accc.gov.au/media-release/grays-to-redress-consumers-and-pay-10-million-in-penalties-for-misleading-descriptions-of-cars-for-sale-by-auction",
+        "sourceNote": "The ACCC source establishes the outcome against Grays. The ownership percentage in the original notes needs a separate ownership citation; it is not a finding against Quadrant."
+      },
+      {
+        "name": "Blackbird Ventures",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "AirTree Ventures",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Square Peg Capital",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Felicis",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Dragoneer Investment Group",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Coatue",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Greenoaks",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Bessemer Venture Partners",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "General Catalyst",
+        "matter": "No comparably strong direct wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      }
+    ]
+  },
+  {
+    "title": "Adobe Institutional Holders",
+    "rows": [
+      {
+        "name": "The Vanguard Group",
+        "matter": "SEC found Vanguard made misleading statements about tax consequences associated with its Target Retirement Funds after lowering the institutional-fund minimum, contributing to unexpectedly large taxable capital-gains distributions for some retail investors.",
+        "classification": "SEC enforcement / misleading disclosures",
+        "outcome": "$106.41M ordered relief, 2025",
+        "source": "https://www.sec.gov/files/litigation/admin/2025/34-102528.pdf",
+        "sourceNote": ""
+      },
+      {
+        "name": "BlackRock Advisors LLC",
+        "matter": "SEC found BlackRock failed to disclose a portfolio manager's conflict involving a company in which he personally had approximately $50M invested and which became connected to the largest holding in a BlackRock-managed fund.",
+        "classification": "SEC enforcement / fiduciary-duty conflict",
+        "outcome": "$12M penalty, censure, compliance consultant",
+        "source": "https://www.sec.gov/newsroom/press-releases/2015-71",
+        "sourceNote": ""
+      },
+      {
+        "name": "BlackRock Advisors LLC",
+        "matter": "Separate SEC case: BlackRock inaccurately described a fund's Aviron investment and reported an incorrect interest rate. Aviron's founder was separately charged for misappropriating money invested by the BlackRock fund.",
+        "classification": "SEC enforcement / inaccurate investment disclosures",
+        "outcome": "$2.5M penalty, censure, cease-and-desist",
+        "source": "https://www.sec.gov/newsroom/press-releases/2023-226",
+        "sourceNote": ""
+      },
+      {
+        "name": "State Street Bank and Trust / State Street",
+        "matter": "SEC found State Street routinely overcharged investment-company clients, including a secret markup on SWIFT messaging expenses. SEC said the overcharges totaled roughly $170M, including about $110M from the undisclosed markup.",
+        "classification": "SEC enforcement / client overcharging",
+        "outcome": "More than $88M SEC settlement; additional state resolution",
+        "source": "https://www.sec.gov/newsroom/press-releases/2019-114",
+        "sourceNote": ""
+      },
+      {
+        "name": "Invesco Advisers / predecessors",
+        "matter": "SEC proceedings found Invesco fund entities entered market-timing arrangements that conflicted with fund prospectus disclosures and breached fiduciary duties to funds.",
+        "classification": "SEC enforcement / fiduciary-duty violations",
+        "outcome": "Censure, cease-and-desist, financial remedies",
+        "source": "https://www.sec.gov/litigation/admin/ia-2288.htm",
+        "sourceNote": "Related SEC order concerning an individual and the predecessor fund group; the entity-level financial-remedy citation still needs completion."
+      },
+      {
+        "name": "Invesco Advisers Inc.",
+        "matter": "SEC charged Invesco in 2024 over misleading statements concerning how ESG considerations were supposedly integrated into investment decisions.",
+        "classification": "SEC enforcement / misleading investment statements",
+        "outcome": "Settled SEC proceeding",
+        "source": "https://www.sec.gov/files/litigation/admin/2024/ia-6770.pdf",
+        "sourceNote": ""
+      },
+      {
+        "name": "UBS Asset Management / legacy Credit Suisse entities",
+        "matter": "Legacy Credit Suisse investment-adviser entities continued providing fund services during a period when an injunction caused statutory disqualification issues under the Investment Company Act. Those businesses were subsequently integrated into UBS Asset Management.",
+        "classification": "SEC enforcement / statutory disqualification; legacy Credit Suisse matter",
+        "outcome": "Censure, cease-and-desist, approximately $10.08M",
+        "source": "https://www.sec.gov/newsroom/press-releases/2023-249",
+        "sourceNote": ""
+      },
+      {
+        "name": "Geode Capital Management",
+        "matter": "No comparably strong direct SEC/DOJ wrongdoing finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "Arrowstreet Capital",
+        "matter": "No comparable direct regulator finding located in the research pass completed so far.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      },
+      {
+        "name": "PRIMECAP Management",
+        "matter": "No comparable direct wrongdoing proceeding located in the research pass completed so far. Recent SEC material located concerned routine exemptive applications rather than misconduct.",
+        "classification": "No strong direct matter located yet",
+        "outcome": "Open research",
+        "source": null,
+        "sourceNote": ""
+      }
+    ]
+  }
+]

@@ -1,4 +1,3 @@
-import { MarketingHero } from "../MarketingHero";
 import { ArrowUpRight } from "../ArrowUpRight";
 import type { Metadata } from "next";
 import { Footer } from "../Footer";
@@ -32,26 +31,20 @@ export default function Downloads() {
       <Header basePath={basePath} />
 
       <main tabIndex={-1} id="top" className="marketing-page downloads-page">
-        <MarketingHero
-          eyebrow="Download Amalith"
-          title={<>Your next idea.<br /><em>Your workspace.</em></>}
-          actions={<a className="marketing-button" href="https://github.com/tonykastaneda/Amalith#build-and-run">Build from source <ArrowUpRight /></a>}
-        >
-          <p>Amalith is free today. No payment or card is required. Packaged downloads are coming soon; you can build from source now.</p>
-        </MarketingHero>
-        <section className="platform-section" aria-labelledby="platform-title">
-          <p className="section-number">Desktop availability</p>
-          <h2 id="platform-title">A place on <em>your desktop.</em></h2>
+        <section className="download-stage" aria-labelledby="downloads-title">
+          <p className="kicker">Amalith / Coming soon</p>
+          <h1 id="downloads-title">The design tool that lets<br />creatives <em>create.</em></h1>
+          <p className="download-stage__intro">Your ideas. Your files. Your workspace.<br />Free today. No payment or card required.</p>
           <div className="platform-grid">
             {platforms.map((platform) => (
               <article className="platform-card" key={platform.name}>
                 <div className="platform-card__icon"><img src={platform.icon} alt="" aria-hidden="true" /></div>
                 <h3>{platform.name}</h3>
-                <p>Packaged download</p>
                 <span className="availability-label">Coming soon</span>
               </article>
             ))}
           </div>
+          <a className="text-link" href="https://github.com/tonykastaneda/Amalith#build-and-run">Build from source while we get ready <ArrowUpRight /></a>
           <p className="pricing-note">We plan to charge in the future, but no date or pricing has been announced. <a href={`${basePath}/terms/`}>Read about pricing and payments <ArrowUpRight /></a></p>
         </section>
       </main>
