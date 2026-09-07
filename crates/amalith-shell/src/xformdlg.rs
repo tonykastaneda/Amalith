@@ -13,7 +13,7 @@
 use amalith_core::xform::{reflect_about, shear_about};
 use amalith_core::ObjectId;
 use vello::kurbo::{Affine, Circle, Line, Point, Rect, Shape, Stroke, Vec2};
-use vello::peniko::{Color, Fill};
+use vello::peniko::Fill;
 use vello::Scene;
 
 use crate::text::TextContext;
@@ -537,9 +537,9 @@ pub fn paint(scene: &mut Scene, dlg: &TransformDialog, body: Rect, theme: &Theme
     }
     text.draw(scene, "Preview", 12.5, theme.text, cb.x1 + 8.0, cb.y0 + cb.height() * 0.5 + 4.5);
 
-    draw_button(scene, text, theme, l.copy, "Copy", false);
-    draw_button(scene, text, theme, l.cancel, "Cancel", false);
-    draw_button(scene, text, theme, l.ok, "OK", true);
+    crate::widgets::button(scene, text, theme, l.copy, "Copy", false);
+    crate::widgets::button(scene, text, theme, l.cancel, "Cancel", false);
+    crate::widgets::button(scene, text, theme, l.ok, "OK", true);
 }
 
 fn draw_radio(scene: &mut Scene, c: Point, theme: &Theme, selected: bool) {
@@ -623,13 +623,3 @@ fn draw_field(
     }
 }
 
-fn draw_button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, label: &str, primary: bool) {
-    let fill = if primary { theme.accent } else { theme.strip_active };
-    scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(4.0));
-    if !primary {
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.6), None, &r.to_rounded_rect(4.0));
-    }
-    let col = if primary { Color::from_rgb8(0xff, 0xff, 0xff) } else { theme.text };
-    let w = text.measure(label, 12.5);
-    text.draw(scene, label, 12.5, col, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + 4.5);
-}

@@ -238,12 +238,6 @@ pub fn paint(
         lay.preview.x1 + 8.0,
         lay.preview.center().y + 4.5,
     );
-    for (r, label, primary) in [(lay.cancel, "Cancel", false), (lay.ok, "OK", true)] {
-        let bg = if primary { theme.accent } else { theme.strip_bg };
-        scene.fill(Fill::NonZero, ID, bg, None, &r);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
-        let col = if primary { theme.on_accent } else { theme.text };
-        let tw = text.measure(label, 12.5);
-        text.draw(scene, label, 12.5, col, r.center().x - tw / 2.0, r.center().y + 4.5);
-    }
+    crate::widgets::button(scene, text, theme, lay.cancel, "Cancel", false);
+    crate::widgets::button(scene, text, theme, lay.ok, "OK", true);
 }

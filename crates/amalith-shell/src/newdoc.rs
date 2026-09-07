@@ -774,7 +774,7 @@ pub fn paint(
     caption(scene, text, "Preview Mode", l.preview);
     draw_dropdown(scene, text, theme, l.preview, preview_label(form.preview));
 
-    draw_button(scene, text, theme, l.more, "More Settings", false);
+    crate::widgets::button(scene, text, theme, l.more, "More Settings", false);
 
     // Open menu, still within the clip.
     if let Some(m) = form.open_menu {
@@ -832,8 +832,8 @@ pub fn paint(
         None,
         &Rect::new(footer.x0, footer.y0, footer.x1, footer.y0 + 1.0),
     );
-    draw_button(scene, text, theme, lay.close, "Cancel", false);
-    draw_button(scene, text, theme, lay.create, "Create", true);
+    crate::widgets::button(scene, text, theme, lay.close, "Cancel", false);
+    crate::widgets::button(scene, text, theme, lay.create, "Create", true);
 }
 
 /// Draw a field box (chrome) and let its [`TextField`] render the text,
@@ -970,35 +970,3 @@ fn draw_check(
     text.draw(scene, label, 12.0, theme.text_dim, box_.x1 + 8.0, r.y0 + 14.0);
 }
 
-fn draw_button(
-    scene: &mut Scene,
-    text: &mut TextContext,
-    theme: &Theme,
-    r: Rect,
-    label: &str,
-    primary: bool,
-) {
-    let fill = if primary {
-        theme.accent
-    } else {
-        theme.strip_active
-    };
-    scene.fill(Fill::NonZero, ID, fill, None, &r);
-    if !primary {
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.6), None, &r);
-    }
-    let col = if primary {
-        Color::from_rgb8(0xff, 0xff, 0xff)
-    } else {
-        theme.text
-    };
-    let w = text.measure(label, 12.5);
-    text.draw(
-        scene,
-        label,
-        12.5,
-        col,
-        r.x0 + (r.width() - w) * 0.5,
-        r.y0 + r.height() * 0.5 + 4.5,
-    );
-}

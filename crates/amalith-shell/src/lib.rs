@@ -69,6 +69,7 @@ pub mod textedit;
 pub mod thread;
 pub mod theme;
 pub mod tool;
+pub mod widgets;
 pub mod workspace;
 pub mod workspace_dialog;
 pub mod workspaces;

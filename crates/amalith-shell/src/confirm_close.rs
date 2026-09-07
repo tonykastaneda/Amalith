@@ -60,20 +60,6 @@ pub fn hit(viewport: Rect, p: Point) -> Hit {
     }
 }
 
-fn paint_button(scene: &mut Scene, text: &mut TextContext, r: Rect, label: &str, theme: &Theme, primary: bool) {
-    let rr = r.to_rounded_rect(5.0);
-    if primary {
-        scene.fill(Fill::NonZero, ID, theme.accent, None, &rr);
-    } else {
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
-    }
-    let color = if primary { theme.on_accent } else { theme.text };
-    let w = text.measure(label, 12.5);
-    let x = r.x0 + (r.width() - w) * 0.5;
-    let y = r.y0 + r.height() * 0.5 + 4.5;
-    text.draw(scene, label, 12.5, color, x, y);
-}
-
 /// `name` is the dirty document's title, for the prompt text.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, viewport: Rect, name: &str, theme: &Theme) {
     scene.fill(Fill::NonZero, ID, SCRIM, None, &viewport);
@@ -88,7 +74,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, viewport: Rect, name: &s
     text.draw(scene, body, 12.0, theme.text_dim, card.x0 + 20.0, card.y0 + 58.0);
 
     let (cancel, dont_save, save) = button_rects(card);
-    paint_button(scene, text, cancel, "Cancel", theme, false);
-    paint_button(scene, text, dont_save, "Don't Save", theme, false);
-    paint_button(scene, text, save, "Save", theme, true);
+    crate::widgets::button(scene, text, theme, cancel, "Cancel", false);
+    crate::widgets::button(scene, text, theme, dont_save, "Don't Save", false);
+    crate::widgets::button(scene, text, theme, save, "Save", true);
 }

@@ -72,20 +72,6 @@ pub fn hit(viewport: Rect, p: Point) -> Hit {
     }
 }
 
-fn paint_button(scene: &mut Scene, text: &mut TextContext, r: Rect, label: &str, theme: &Theme, primary: bool) {
-    let rr = r.to_rounded_rect(5.0);
-    if primary {
-        scene.fill(Fill::NonZero, ID, theme.accent, None, &rr);
-    } else {
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
-    }
-    let color = if primary { theme.on_accent } else { theme.text };
-    let w = text.measure(label, 12.5);
-    let x = r.x0 + (r.width() - w) * 0.5;
-    let y = r.y0 + r.height() * 0.5 + 4.5;
-    text.draw(scene, label, 12.5, color, x, y);
-}
-
 pub fn paint(scene: &mut Scene, text: &mut TextContext, viewport: Rect, p: &NamePrompt, theme: &Theme) {
     scene.fill(Fill::NonZero, ID, SCRIM, None, &viewport);
     let card = card_rect(viewport);
@@ -105,8 +91,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, viewport: Rect, p: &Name
     let caret = Rect::new(caret_x, field.y0 + 6.0, caret_x + 1.0, field.y1 - 6.0);
     scene.fill(Fill::NonZero, ID, theme.text, None, &caret);
 
-    paint_button(scene, text, cancel, "Cancel", theme, false);
-    paint_button(scene, text, ok, "OK", theme, true);
+    crate::widgets::button(scene, text, theme, cancel, "Cancel", false);
+    crate::widgets::button(scene, text, theme, ok, "OK", true);
 }
 
 // ------------------------------------------------------------ Manage Workspaces
@@ -193,5 +179,5 @@ pub fn paint_manage(scene: &mut Scene, text: &mut TextContext, viewport: Rect, n
         }
     }
 
-    paint_button(scene, text, done_rect(card), "Done", theme, true);
+    crate::widgets::button(scene, text, theme, done_rect(card), "Done", true);
 }

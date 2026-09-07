@@ -720,10 +720,10 @@ pub fn paint(
             x_glyph(scene, fr.remove, theme.text_dim);
         }
     }
-    button(scene, text, theme, l.add_scale, "+  Add Scale", false);
+    crate::widgets::button(scene, text, theme, l.add_scale, "+  Add Scale", false);
 
     // Bottom bar.
-    button(scene, text, theme, l.clear_sel, "Clear Selection", false);
+    crate::widgets::button(scene, text, theme, l.clear_sel, "Clear Selection", false);
     text.draw(scene, "Prefix:", 12.0, theme.text_dim, l.clear_sel.x1 + 8.0, l.prefix_field.y0 + 16.0);
     field(scene, text, theme, l.prefix_field, &dlg.prefix, dlg.focus == Focus::Prefix && caret_on);
 
@@ -738,8 +738,8 @@ pub fn paint(
         body.x0 + (W - cw) * 0.5,
         l.cancel.y0 - 12.0,
     );
-    button(scene, text, theme, l.cancel, "Cancel", false);
-    button(scene, text, theme, l.export, "Export Artboard", true);
+    crate::widgets::button(scene, text, theme, l.cancel, "Cancel", false);
+    crate::widgets::button(scene, text, theme, l.export, "Export Artboard", true);
 
     // Open dropdown — drawn last so it sits over everything.
     if let Some(m) = dlg.menu {
@@ -910,27 +910,6 @@ fn dropdown(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, v
     p.line_to((cx, cy + 2.5));
     p.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &p);
-}
-
-fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, label: &str, primary: bool) {
-    let rr = r.to_rounded_rect(5.0);
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        if primary { theme.accent } else { theme.strip_active },
-        None,
-        &rr,
-    );
-    if !primary {
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.6), None, &rr);
-    }
-    let col = if primary {
-        Color::from_rgb8(0xff, 0xff, 0xff)
-    } else {
-        theme.text
-    };
-    let w = text.measure(label, 12.5);
-    text.draw(scene, label, 12.5, col, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + 4.5);
 }
 
 fn folder_glyph(scene: &mut Scene, r: Rect, col: Color) {

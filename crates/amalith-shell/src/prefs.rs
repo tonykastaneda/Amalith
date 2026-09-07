@@ -1130,6 +1130,9 @@ fn checkbox(
     Rect::new(x, y - 2.0, x + 24.0 + tcx.measure(label, 12.0), y + 18.0)
 }
 
+/// `x, y` size-convenience wrapper over `widgets::button` — every call site
+/// here just wants a fixed-size button planted at a point, not a
+/// caller-computed `Rect`.
 fn button(
     scene: &mut Scene,
     tcx: &mut TextContext,
@@ -1140,20 +1143,6 @@ fn button(
     primary: bool,
 ) -> Rect {
     let r = Rect::new(x, y, x + 86.0, y + 26.0);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        if primary { theme.accent } else { theme.bg },
-        None,
-        &r.to_rounded_rect(5.0),
-    );
-    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &r.to_rounded_rect(5.0));
-    let col = if primary {
-        theme.on_accent
-    } else {
-        theme.text
-    };
-    let w = tcx.measure(label, 12.5);
-    tcx.draw(scene, label, 12.5, col, r.center().x - w / 2.0, r.center().y + 4.0);
+    crate::widgets::button(scene, tcx, theme, r, label, primary);
     r
 }

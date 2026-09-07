@@ -265,8 +265,8 @@ pub fn paint(
     text.draw(scene, "#", 20.0, marker, b.x0 + 413.0, b.y0 + 229.0);
     draw_field(scene, text, theme, text_color, field_bg, b.x0 + 430.0, b.y0 + 211.0, 90.0, &hex);
 
-    draw_button(scene, text, theme, text_color, pk.cancel_rect(), "Cancel", false);
-    draw_button(scene, text, theme, text_color, pk.ok_rect(), "OK", true);
+    crate::widgets::button(scene, text, theme, pk.cancel_rect(), "Cancel", false);
+    crate::widgets::button(scene, text, theme, pk.ok_rect(), "OK", true);
 }
 
 fn draw_field(
@@ -284,48 +284,6 @@ fn draw_field(
     scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &field);
     scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &field);
     text.draw(scene, value, 14.0, text_color, x + 7.0, y + 17.0);
-}
-
-fn draw_button(
-    scene: &mut Scene,
-    text: &mut crate::text::TextContext,
-    theme: &Theme,
-    _text_color: Color,
-    rect: Rect,
-    label: &str,
-    primary: bool,
-) {
-    // Same chrome as New Document's Close / Create buttons: sharp corners,
-    // accent fill on the primary, strip-active + hairline on the secondary.
-    let fill = if primary {
-        theme.accent
-    } else {
-        theme.strip_active
-    };
-    scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &rect);
-    if !primary {
-        scene.stroke(
-            &Stroke::new(1.0),
-            Affine::IDENTITY,
-            theme.text_dim.with_alpha(0.6),
-            None,
-            &rect,
-        );
-    }
-    let col = if primary {
-        Color::from_rgb8(0xff, 0xff, 0xff)
-    } else {
-        theme.text
-    };
-    let w = text.measure(label, 12.5);
-    text.draw(
-        scene,
-        label,
-        12.5,
-        col,
-        rect.x0 + (rect.width() - w) * 0.5,
-        rect.y0 + rect.height() * 0.5 + 4.5,
-    );
 }
 
 fn stop(offset: f32, hue: f32) -> ColorStop {
