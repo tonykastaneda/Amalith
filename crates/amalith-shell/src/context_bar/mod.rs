@@ -64,6 +64,10 @@ pub struct Ctx<'a> {
     pub cur_opacity: f32,
     /// Whether the Stroke flyout is open (the "Stroke" link reads active).
     pub stroke_open: bool,
+    /// Live edit buffer for the Stroke segment's Weight field.
+    pub stroke_weight_edit: Option<&'a str>,
+    /// Live edit buffer for the Opacity field.
+    pub opacity_edit: Option<&'a str>,
     /// The type style the `character` segment shows.
     pub text_style: amalith_core::TextStyle,
     /// Number of individually-selected path anchors — flips the
@@ -198,6 +202,22 @@ pub fn xform_field_at(bar: Rect, ctx: &Ctx, p: Point) -> Option<crate::panels::t
     xform::field_at(r, p)
 }
 
+/// Whether the pointer is over the Stroke segment's Weight field.
+pub fn stroke_weight_field_at(bar: Rect, ctx: &Ctx, p: Point) -> bool {
+    let Some(r) = segment_rect(bar, ctx, SegKind::Stroke) else {
+        return false;
+    };
+    stroke::weight_field_at(r, p)
+}
+
+/// Whether the pointer is over the Opacity field.
+pub fn opacity_field_at(bar: Rect, ctx: &Ctx, p: Point) -> bool {
+    let Some(r) = segment_rect(bar, ctx, SegKind::Opacity) else {
+        return false;
+    };
+    opacity::field_at(r, p)
+}
+
 /// Which Artboard-segment numeric field the pointer is over, if any.
 pub fn ab_field_at(bar: Rect, ctx: &Ctx, p: Point) -> Option<crate::panels::transform::ABField> {
     let r = segment_rect(bar, ctx, SegKind::Artboard)?;
@@ -237,6 +257,9 @@ fn field(x: f64, cy: f64, w: f64) -> (Rect, Rect, Rect) {
     (field, up, down)
 }
 
+/// `highlight`: the field is being edited and still "fresh" (see
+/// `crate::widgets::NumEdit`) — paints a selection band behind the value
+/// so it reads as highlighted, ready to type over.
 fn draw_field(
     scene: &mut Scene,
     text: &mut TextContext,
@@ -245,10 +268,16 @@ fn draw_field(
     up: Rect,
     down: Rect,
     value: &str,
+    highlight: bool,
 ) {
-    let border = theme.text_dim.with_alpha(0.5);
+    let border = if highlight { theme.accent } else { theme.text_dim.with_alpha(0.5) };
     scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &field);
+    if highlight {
+        let w = text.measure(value, 13.0);
+        let band = Rect::new(field.x0 + 5.0, field.y0 + 3.0, (field.x0 + 9.0 + w).min(field.x1 - 3.0), field.y1 - 3.0);
+        crate::widgets::draw_field_highlight(scene, theme, band);
+    }
+    scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &field);
     text.draw(
         scene,
         value,

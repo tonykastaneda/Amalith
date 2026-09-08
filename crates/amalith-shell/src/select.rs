@@ -145,6 +145,39 @@ fn near_contour(doc: &Document, id: ObjectId, point: Point, tol: f64) -> bool {
     hit
 }
 
+/// Frontmost visible, unlocked `Path` (not `CompoundPath` — see
+/// `pathtext::resolve`'s doc comment) whose outline `point` is within
+/// `tol` of, searching every layer front-to-back. Layer children only,
+/// same scope as [`topmost_selectable_at`] — the Type tool doesn't reach
+/// into groups to start type-on-a-path. Drives its click-on-a-path
+/// detection, so a click has to be a Path a plain click wouldn't already
+/// select as text or fall through to drawing a new text box on.
+pub fn topmost_path_near(doc: &Document, point: Point, visible: Rect, tol: f64) -> Option<ObjectId> {
+    for layer in doc.layers().iter().rev() {
+        if !layer.visible || layer.locked {
+            continue;
+        }
+        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+            let Some(obj) = doc.object(id) else { continue };
+            if !obj.visible || obj.locked || !matches!(obj.kind, ObjectKind::Path(_)) {
+                continue;
+            }
+            if let ObjectKind::Path(pd) = &obj.kind {
+                if pd.subpaths().len() != 1 { continue; }
+            }
+            if let Some(b) = bounds(doc, id) {
+                if !overlaps(b, visible) {
+                    continue;
+                }
+            }
+            if near_contour(doc, id, point, tol) {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 /// The clip mask of `group` if `point` (doc space) is within `tol` of its
 /// contour — drives the isolation-mode hover highlight.
 pub fn clip_mask_at_contour(
@@ -221,6 +254,12 @@ pub fn union_bounds(doc: &Document, ids: &[ObjectId]) -> Option<Rect> {
 /// the axis-aligned union box (as a quad) for a multi-selection.
 pub fn selection_quad(doc: &Document, ids: &[ObjectId]) -> Option<[vello::kurbo::Point; 4]> {
     if ids.len() == 1 {
+        if let Some(ObjectKind::Text(td)) = doc.object(ids[0]).map(|o| &o.kind) {
+            if let Some(path) = &td.path_geometry {
+                let m = convert::affine(doc.world_transform(ids[0]));
+                return Some(crate::handles::rect_quad(convert::rect(path.local_bounds())).map(|p| m * p));
+            }
+        }
         // A clip group's oriented box is the mask shape's.
         let id = clip_target(doc, ids[0]).unwrap_or(ids[0]);
         let local = convert::rect(doc.local_bounds_of(id)?);

@@ -44,22 +44,38 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         &Line::new((r.x0, base + 2.0), (r.x0 + uw, base + 2.0)),
     );
 
-    let w = ctx
-        .representative
-        .map(|a| a.stroke_width)
-        .unwrap_or(ctx.cur_weight);
-    draw_field(scene, text, theme, f, up, down, &format!("{w:.1} px"));
+    let editing = ctx.stroke_weight_edit.is_some();
+    let shown = match ctx.stroke_weight_edit {
+        Some(buf) => buf.to_string(),
+        None => {
+            let w = ctx
+                .representative
+                .map(|a| a.stroke_width)
+                .unwrap_or(ctx.cur_weight);
+            format!("{w:.1} px")
+        }
+    };
+    draw_field(scene, text, theme, f, up, down, &shown, editing);
 }
 
 fn hit(r: Rect, local: Point, _ctx: &Ctx) -> Action {
-    let (link, _f, up, down) = parts(r);
+    let (link, f, up, down) = parts(r);
     if link.contains(local) {
         Action::ToggleStrokeFlyout
     } else if up.contains(local) {
         Action::StepWeight(1)
     } else if down.contains(local) {
         Action::StepWeight(-1)
+    } else if f.contains(local) {
+        Action::BeginStrokeWeightEdit
     } else {
         Action::None
     }
+}
+
+/// Whether the pointer is over the Weight field — for scroll-to-nudge and
+/// commit-on-click-away, mirroring `xform::field_at`.
+pub fn weight_field_at(r: Rect, p: Point) -> bool {
+    let (_, f, _, _) = parts(r);
+    f.contains(p)
 }

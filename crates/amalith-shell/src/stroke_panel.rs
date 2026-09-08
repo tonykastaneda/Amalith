@@ -28,6 +28,15 @@ const BTN_GAP: f64 = 7.0;
 const FIELD_W: f64 = 46.0;
 const STEP_W: f64 = 13.0;
 
+/// Which of the flyout's typed numeric fields.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Field {
+    Weight,
+    Limit,
+    Dash,
+    Gap,
+}
+
 /// What a click in the flyout asks for. `Inside` = a harmless click on
 /// the panel body (swallow it); `Outside` = close the flyout.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -42,6 +51,8 @@ pub enum Hit {
     ToggleDashed,
     DashStep(i32),
     GapStep(i32),
+    /// A click on a field's text itself (not its steppers): start typing.
+    Field(Field),
 }
 
 pub struct Layout {
@@ -126,6 +137,9 @@ pub fn hit(lay: &Layout, style: &StrokeStyle, p: Point) -> Hit {
     if lay.weight_down.contains(p) {
         return Hit::WeightStep(-1);
     }
+    if lay.weight_field.contains(p) {
+        return Hit::Field(Field::Weight);
+    }
     for (i, r) in lay.cap.iter().enumerate() {
         if r.contains(p) {
             return Hit::Cap([LineCap::Butt, LineCap::Round, LineCap::Square][i]);
@@ -143,6 +157,9 @@ pub fn hit(lay: &Layout, style: &StrokeStyle, p: Point) -> Hit {
         if lay.limit_down.contains(p) {
             return Hit::LimitStep(-1);
         }
+        if lay.limit_field.contains(p) {
+            return Hit::Field(Field::Limit);
+        }
     }
     for (i, r) in lay.align.iter().enumerate() {
         if r.contains(p) {
@@ -159,11 +176,17 @@ pub fn hit(lay: &Layout, style: &StrokeStyle, p: Point) -> Hit {
         if lay.dash_down.contains(p) {
             return Hit::DashStep(-1);
         }
+        if lay.dash_field.contains(p) {
+            return Hit::Field(Field::Dash);
+        }
         if lay.gap_up.contains(p) {
             return Hit::GapStep(1);
         }
         if lay.gap_down.contains(p) {
             return Hit::GapStep(-1);
+        }
+        if lay.gap_field.contains(p) {
+            return Hit::Field(Field::Gap);
         }
     }
     Hit::Inside
@@ -212,7 +235,9 @@ pub fn paint(
     lay: &Layout,
     style: &StrokeStyle,
     weight: f64,
+    editing: Option<(Field, &str)>,
 ) {
+    let buf_of = |f: Field| editing.and_then(|(ef, s)| (ef == f).then_some(s));
     let p = lay.panel;
     // Drop shadow + body.
     scene.fill(
@@ -233,7 +258,18 @@ pub fn paint(
 
     // Weight.
     label(text, scene, "Weight", row_cy(0.0), false);
-    num_field(scene, text, theme, lay.weight_field, lay.weight_up, lay.weight_down, &fmt_px(weight), false);
+    let weight_shown = buf_of(Field::Weight).map(str::to_string).unwrap_or_else(|| fmt_px(weight));
+    num_field(
+        scene,
+        text,
+        theme,
+        lay.weight_field,
+        lay.weight_up,
+        lay.weight_down,
+        &weight_shown,
+        false,
+        buf_of(Field::Weight).is_some(),
+    );
 
     // Cap.
     label(text, scene, "Cap", row_cy(1.0), false);
@@ -254,6 +290,9 @@ pub fn paint(
     // Miter limit — only meaningful with a miter join.
     let miter = style.join == LineJoin::Miter;
     label(text, scene, "Limit", row_cy(3.0), !miter);
+    let limit_shown = buf_of(Field::Limit)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{:.0} x", style.miter_limit));
     num_field(
         scene,
         text,
@@ -261,8 +300,9 @@ pub fn paint(
         lay.limit_field,
         lay.limit_up,
         lay.limit_down,
-        &format!("{:.0} x", style.miter_limit),
+        &limit_shown,
         !miter,
+        buf_of(Field::Limit).is_some(),
     );
 
     // Align stroke.
@@ -286,6 +326,7 @@ pub fn paint(
 
     let pair = dash_gap(style);
     label(text, scene, "Dash", row_cy(6.0), !style.dashed);
+    let dash_shown = buf_of(Field::Dash).map(str::to_string).unwrap_or_else(|| format!("{:.0}", pair.0));
     num_field(
         scene,
         text,
@@ -293,8 +334,9 @@ pub fn paint(
         lay.dash_field,
         lay.dash_up,
         lay.dash_down,
-        &format!("{:.0}", pair.0),
+        &dash_shown,
         !style.dashed,
+        buf_of(Field::Dash).is_some(),
     );
     text.draw(
         scene,
@@ -304,6 +346,7 @@ pub fn paint(
         lay.gap_field.x0 - 30.0,
         lay.gap_field.y0 + 14.0,
     );
+    let gap_shown = buf_of(Field::Gap).map(str::to_string).unwrap_or_else(|| format!("{:.0}", pair.1));
     num_field(
         scene,
         text,
@@ -311,8 +354,9 @@ pub fn paint(
         lay.gap_field,
         lay.gap_up,
         lay.gap_down,
-        &format!("{:.0}", pair.1),
+        &gap_shown,
         !style.dashed,
+        buf_of(Field::Gap).is_some(),
     );
 }
 
@@ -384,11 +428,21 @@ fn num_field(
     down: Rect,
     value: &str,
     dim: bool,
+    highlight: bool,
 ) {
-    let border = theme.text_dim.with_alpha(if dim { 0.25 } else { 0.5 });
+    let border = if highlight {
+        theme.accent
+    } else {
+        theme.text_dim.with_alpha(if dim { 0.25 } else { 0.5 })
+    };
     let ink = if dim { theme.text_dim.with_alpha(0.5) } else { theme.text };
     scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &field);
+    if highlight {
+        let w = text.measure(value, 11.0);
+        let band = Rect::new(field.x0 + 3.0, field.y0 + 2.0, (field.x0 + 7.0 + w).min(field.x1 - 2.0), field.y1 - 2.0);
+        crate::widgets::draw_field_highlight(scene, theme, band);
+    }
+    scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &field);
     text.draw(scene, value, 11.0, ink, field.x0 + 5.0, field.y0 + field.height() * 0.5 + 4.0);
 
     let stepper = Rect::new(up.x0, up.y0, up.x1, down.y1);

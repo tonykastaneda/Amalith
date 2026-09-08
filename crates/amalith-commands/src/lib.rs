@@ -52,6 +52,43 @@ mod tests {
     }
 
     #[test]
+    fn path_type_conversion_owns_geometry_and_undo_restores_source() {
+        use amalith_core::{TextData, TextKind, PathTextData, PathTextAlign};
+        let mut editor = new_editor();
+        let (id, sibling) = two_rects(&mut editor);
+        let source = editor.document().object(id).unwrap().clone();
+        let layer = match source.parent { ObjectParent::Layer(id) => id, _ => panic!() };
+        let data = TextData {
+            content: "Curved text".into(),
+            kind: TextKind::Path(PathTextData { path: id, start: 0.0, end: 80.0, align: PathTextAlign::Baseline, flip: false }),
+            ..TextData::default()
+        };
+        let outcome = editor.execute(Command::CreateText { layer, data, transform: Affine::IDENTITY, name: None }).unwrap();
+        assert!(matches!(outcome, CommandOutcome::Object(created) if created == id));
+        let converted = editor.document().object(id).unwrap().clone();
+        let ObjectKind::Text(text) = &converted.kind else { panic!("conversion did not produce text") };
+        assert_eq!(text.path_geometry.as_ref(), source.kind.path_data());
+        assert_eq!(converted.transform, source.transform);
+        assert_eq!(converted.parent, source.parent);
+        assert_eq!(converted.appearance.stroke, Paint::None);
+        assert_eq!(editor.document().children_of(source.parent), &[id, sibling]);
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(id).unwrap(), &source);
+        editor.redo().unwrap();
+        assert_eq!(editor.document().object(id).unwrap(), &converted);
+        editor.execute(Command::MoveAnchors { anchors: vec![(id, 0)], delta: Vec2::new(10.0, 5.0) }).unwrap();
+        assert_ne!(editor.document().object(id).unwrap().kind.path_data(), converted.kind.path_data());
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(id).unwrap(), &converted);
+        let CommandOutcome::Object(copy) = editor.execute(Command::DuplicateObject { object: id, delta: Vec2::new(120.0, 30.0) }).unwrap() else { panic!() };
+        editor.execute(Command::DeleteObject { id }).unwrap();
+        let copy = editor.document().object(copy).unwrap();
+        assert_eq!(copy.kind.path_data(), source.kind.path_data());
+        assert_eq!(copy.transform, Affine::translate((120.0, 30.0)) * source.transform);
+
+    }
+
+    #[test]
     fn create_artboard_undo_redo_roundtrip() {
         let mut editor = new_editor();
         let outcome = editor

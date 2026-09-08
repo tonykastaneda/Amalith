@@ -288,6 +288,11 @@ pub enum Action {
     // --- context bar ---
     /// Nudge the options-bar stroke Weight (`+1` / `-1`).
     StepWeight(i32),
+    /// Click on the context bar's Stroke Weight field: enter its edit
+    /// buffer (seeded from the current value, selected for retyping).
+    BeginStrokeWeightEdit,
+    /// Click on the context bar's Opacity field: enter its edit buffer.
+    BeginOpacityEdit,
     /// Nudge the options-bar Opacity (`+1` / `-1`).
     StepOpacity(i32),
     /// Nudge the options-bar font size by this many points.

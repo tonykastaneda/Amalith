@@ -103,6 +103,10 @@ fn fill_label(fill: Option<amalith_core::Color>) -> &'static str {
     }
 }
 
+fn editing(ctx: &Ctx, f: ABField) -> bool {
+    ctx.artboard_edit.is_some_and(|(ef, _)| ef == f)
+}
+
 fn shown(ctx: &Ctx, f: ABField) -> String {
     if let Some((ef, s)) = ctx.artboard_edit {
         if ef == f {
@@ -146,17 +150,17 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     trash_icon(scene, p.trash, theme);
 
     text.draw(scene, "Name:", 13.0, theme.text_dim, p.trash.x1 + 22.0, base);
-    name_box(scene, text, theme, p.name, &shown(ctx, ABField::Name));
+    name_box(scene, text, theme, p.name, &shown(ctx, ABField::Name), editing(ctx, ABField::Name));
 
     text.draw(scene, "X:", 13.0, theme.text, p.x.0.x0 - 16.0, base);
-    draw_field(scene, text, theme, p.x.0, p.x.1, p.x.2, &shown(ctx, ABField::X));
+    draw_field(scene, text, theme, p.x.0, p.x.1, p.x.2, &shown(ctx, ABField::X), editing(ctx, ABField::X));
     text.draw(scene, "Y:", 13.0, theme.text, p.y.0.x0 - 16.0, base);
-    draw_field(scene, text, theme, p.y.0, p.y.1, p.y.2, &shown(ctx, ABField::Y));
+    draw_field(scene, text, theme, p.y.0, p.y.1, p.y.2, &shown(ctx, ABField::Y), editing(ctx, ABField::Y));
     text.draw(scene, "W:", 13.0, theme.text, p.w.x0 - 18.0, base);
-    box_field(scene, text, theme, p.w, &shown(ctx, ABField::W));
+    box_field(scene, text, theme, p.w, &shown(ctx, ABField::W), editing(ctx, ABField::W));
     lock_icon(scene, p.link, ctx.artboard_link, theme);
     text.draw(scene, "H:", 13.0, theme.text, p.h.x0 - 16.0, base);
-    box_field(scene, text, theme, p.h, &shown(ctx, ABField::H));
+    box_field(scene, text, theme, p.h, &shown(ctx, ABField::H), editing(ctx, ABField::H));
 
     if ctx.artboard_fill_menu {
         fill_menu(scene, text, theme, p.fill_combo, ab.fill);
@@ -238,14 +242,20 @@ pub fn field_at(r: Rect, p: Point) -> Option<ABField> {
 
 // --- widgets ----------------------------------------------------------
 
-fn box_field(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str) {
+fn box_field(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str, highlight: bool) {
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
-    scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.5), None, &r);
+    if highlight {
+        let w = text.measure(value, 13.0);
+        let band = Rect::new(r.x0 + 5.0, r.y0 + 3.0, (r.x0 + 9.0 + w).min(r.x1 - 3.0), r.y1 - 3.0);
+        crate::widgets::draw_field_highlight(scene, theme, band);
+    }
+    let border = if highlight { theme.accent } else { theme.text_dim.with_alpha(0.5) };
+    scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &r);
     text.draw(scene, value, 13.0, theme.text, r.x0 + 7.0, r.y0 + r.height() * 0.5 + 4.5);
 }
 
-fn name_box(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str) {
-    box_field(scene, text, theme, r, value);
+fn name_box(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str, highlight: bool) {
+    box_field(scene, text, theme, r, value, highlight);
 }
 
 fn swatch(scene: &mut Scene, r: Rect, fill: Option<amalith_core::Color>, theme: &Theme) {

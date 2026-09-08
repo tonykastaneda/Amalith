@@ -21,6 +21,7 @@ pub mod ids;
 pub mod layer;
 pub mod metadata;
 pub mod object;
+pub mod pathtext;
 pub mod swatch;
 pub mod units;
 pub mod xform;
@@ -36,12 +37,13 @@ pub use guide::{Guide, GuideId, GuideOrient};
 pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId};
 pub use layer::Layer;
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
+pub use pathtext::ArcLengthPath;
 pub use object::{
     anchor_at, anchor_count, delete_anchor, insert_anchor, set_anchor_smooth, set_handle,
     subpaths_to_bezpath, toggle_anchor_smooth, translate_anchor_n, Anchor, BlendData,
     BlendSpacing, CompoundPathData, GroupData, HandleMode,
     HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
-    Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle,
+    Paragraph, PathTextAlign, PathTextData, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};

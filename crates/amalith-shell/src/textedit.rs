@@ -12,15 +12,15 @@ use std::borrow::Cow;
 use amalith_core::geom as cg;
 use amalith_core::{Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle};
 use parley::layout::PositionedLayoutItem;
+use parley::style::{
+    FontFamily, FontFamilyName, FontFeatures, FontStyle, FontWeight, LineHeight, StyleProperty,
+};
+use parley::{Alignment, Layout, PlainEditor};
 use skrifa::{
     instance::{LocationRef, Size},
     outline::{DrawSettings, OutlinePen},
     GlyphId, MetadataProvider,
 };
-use parley::style::{
-    FontFamily, FontFamilyName, FontFeatures, FontStyle, FontWeight, LineHeight, StyleProperty,
-};
-use parley::{Alignment, Layout, PlainEditor};
 use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
@@ -38,6 +38,7 @@ pub struct TextEdit {
     pub origin: amalith_core::Point,
     editor: PlainEditor<Brush>,
     kind: TextKind,
+    path_geometry: Option<amalith_core::PathData>,
     style: TextStyle,
     align: TextAlign,
     paragraph: Paragraph,
@@ -74,6 +75,7 @@ impl TextEdit {
             origin,
             editor,
             kind,
+            path_geometry: None,
             style: style.clone(),
             align,
             paragraph,
@@ -105,11 +107,13 @@ impl TextEdit {
         let (fc, lc) = tcx.parts();
         let s = self.editor.edit_styles();
         s.clear();
-        s.insert(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
-            FontFamilyName::Named(Cow::Owned(style.family.clone())),
-        ]))));
+        s.insert(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(
+            vec![FontFamilyName::Named(Cow::Owned(style.family.clone()))],
+        ))));
         s.insert(StyleProperty::FontSize(style.size as f32));
-        s.insert(StyleProperty::FontWeight(FontWeight::new(style.weight as f32)));
+        s.insert(StyleProperty::FontWeight(FontWeight::new(
+            style.weight as f32,
+        )));
         s.insert(StyleProperty::FontStyle(if style.italic {
             FontStyle::Italic
         } else {
@@ -150,9 +154,19 @@ impl TextEdit {
         self.kind
     }
 
-    pub fn set_align(&mut self, align: TextAlign) {
+    pub fn set_path_geometry(&mut self, path: Option<amalith_core::PathData>) {
+        self.path_geometry = path;
+    }
+
+    pub fn set_align(&mut self, align: TextAlign, tcx: &mut TextContext) {
         self.align = align;
         self.editor.set_alignment(alignment(align));
+        // `PlainEditor::set_alignment` records the new paragraph setting,
+        // but an existing shaped layout remains in use until its next
+        // refresh. A keystroke happened to trigger that refresh, making
+        // placeholder text appear stuck until the user typed something.
+        let (font, layout) = tcx.parts();
+        self.editor.refresh_layout(font, layout);
     }
 
     pub fn paragraph(&self) -> Paragraph {
@@ -318,12 +332,10 @@ impl TextEdit {
                     drv.move_to_line_end();
                 }
             }
-            Key::Character(c) if mods.meta => {
-                match c.as_str() {
-                    "a" | "A" => drv.select_all(),
-                    _ => return KeyResult::PassThrough,
-                }
-            }
+            Key::Character(c) if mods.meta => match c.as_str() {
+                "a" | "A" => drv.select_all(),
+                _ => return KeyResult::PassThrough,
+            },
             _ => {
                 if let Some(t) = text {
                     let clean: String = t.chars().filter(|c| !c.is_control()).collect();
@@ -339,9 +351,7 @@ impl TextEdit {
 
     pub fn insert_str(&mut self, s: &str, tcx: &mut TextContext) {
         let (fc, lc) = tcx.parts();
-        self.editor
-            .driver(fc, lc)
-            .insert_or_replace_selection(s);
+        self.editor.driver(fc, lc).insert_or_replace_selection(s);
         self.touched = true;
     }
 
@@ -400,6 +410,148 @@ impl TextEdit {
 
     // --- render / commit -------------------------------------------------
 
+    pub fn path_editor_point(
+        &self,
+        arc: &amalith_core::ArcLengthPath,
+        pt: &amalith_core::PathTextData,
+        p: amalith_core::Point,
+    ) -> (f32, f32) {
+        let width = self
+            .editor
+            .try_layout()
+            .and_then(|l| l.lines().next())
+            .map(|l| l.metrics().advance as f64)
+            .unwrap_or(0.0);
+        let offset = crate::pathtext::paragraph_offset(self.align, pt.end - pt.start, width);
+        let distance = crate::pathtext::nearest_unwrapped(arc, p, (pt.start + pt.end) / 2.0);
+        let x = if pt.flip {
+            pt.end - distance
+        } else {
+            distance - pt.start
+        } - offset;
+        let baseline = self
+            .editor
+            .try_layout()
+            .and_then(|l| l.lines().next())
+            .map(|l| l.metrics().baseline)
+            .unwrap_or(self.style.size as f32);
+        (x as f32, baseline - self.style.size as f32 * 0.3)
+    }
+
+    /// Project the editor's selection and caret onto the same baseline as
+    /// the live glyphs, keeping typing and pointer selection on the curve.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_path(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        arc: &amalith_core::ArcLengthPath,
+        rel: amalith_core::Affine,
+        xf: Affine,
+        color: Color,
+        caret_on: bool,
+        accent: Color,
+    ) {
+        let data = self.to_text_data(tcx);
+        let TextKind::Path(pt) = data.kind else {
+            return;
+        };
+        let layout = self.editor.try_layout().unwrap();
+        let offset = crate::pathtext::paragraph_offset(
+            self.align,
+            pt.end - pt.start,
+            layout
+                .lines()
+                .next()
+                .map(|line| line.metrics().advance as f64)
+                .unwrap_or(0.0),
+        );
+        let baseline = layout
+            .lines()
+            .next()
+            .map(|l| l.metrics().baseline as f64)
+            .unwrap_or(self.style.size);
+        let vertical_shift = layout
+            .lines()
+            .next()
+            .and_then(|line| {
+                line.items().find_map(|item| match item {
+                    PositionedLayoutItem::GlyphRun(run) => {
+                        let metrics = run.run().metrics();
+                        Some(match pt.align {
+                            amalith_core::PathTextAlign::Baseline => 0.0,
+                            amalith_core::PathTextAlign::Ascender => metrics.ascent as f64,
+                            amalith_core::PathTextAlign::Descender => -(metrics.descent as f64),
+                            amalith_core::PathTextAlign::Center => {
+                                (metrics.ascent - metrics.descent) as f64 / 2.0
+                            }
+                        })
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap_or(0.0);
+        let path_xf = xf * crate::convert::affine(rel);
+        let project = |x: f64, y: f64| {
+            let d = if pt.flip {
+                pt.end - offset - x
+            } else {
+                pt.start + offset + x
+            };
+            let (p, angle) = arc.point_and_tangent(d);
+            let angle = angle + if pt.flip { std::f64::consts::PI } else { 0.0 };
+            path_xf
+                * Affine::translate((p.x, p.y))
+                * Affine::rotate(angle)
+                * vello::kurbo::Point::new(
+                    0.0,
+                    y - baseline + vertical_shift - self.style.baseline_shift,
+                )
+        };
+        for r in self.selection_rects() {
+            let x0 = r.x0.max(-offset);
+            let x1 = r.x1.min(pt.end - pt.start - offset);
+            if x1 <= x0 {
+                continue;
+            }
+            let steps = ((x1 - x0) / 3.0).ceil().clamp(1.0, 4096.0) as usize;
+            let mut shape = vello::kurbo::BezPath::new();
+            for i in 0..=steps {
+                let p = project(x0 + (x1 - x0) * i as f64 / steps as f64, r.y0);
+                if i == 0 {
+                    shape.move_to(p);
+                } else {
+                    shape.line_to(p);
+                }
+            }
+            for i in (0..=steps).rev() {
+                shape.line_to(project(x0 + (x1 - x0) * i as f64 / steps as f64, r.y1));
+            }
+            shape.close_path();
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                accent.multiply_alpha(0.35),
+                None,
+                &shape,
+            );
+        }
+        crate::pathtext::paint_path_text(scene, tcx, &data, &pt, arc, rel, xf, color);
+        if caret_on && !self.is_composing() {
+            if let Some(c) = self.caret_rect() {
+                let x =
+                    c.x0.clamp(-offset, (pt.end - pt.start - offset).max(-offset));
+                scene.stroke(
+                    &Stroke::new(1.5),
+                    Affine::IDENTITY,
+                    color,
+                    None,
+                    &vello::kurbo::Line::new(project(x, c.y0), project(x, c.y1)),
+                );
+            }
+        }
+    }
+
     /// Draw the live text, its selection, and (when `caret_on`) the caret.
     /// `xf` maps editor space → screen; `color` is the text colour.
     pub fn render(
@@ -427,8 +579,12 @@ impl TextEdit {
 
         // Point text anchors on the click point per its alignment; shift the
         // whole editor (selection, glyphs, caret) so a live edit previews it.
+        // Path text previews straight (like point text, anchored at the
+        // click) while actively being typed — it only follows the curve
+        // once committed. Curving a live caret/IME/selection is future
+        // work; see `pathtext.rs` for the committed render.
         let xf = match self.kind {
-            TextKind::Point => {
+            TextKind::Point | TextKind::Path(_) => {
                 let w = self.editor.try_layout().map(|l| l.width()).unwrap_or(0.0);
                 xf * Affine::translate((point_align_dx(self.align, w), 0.0))
             }
@@ -511,7 +667,13 @@ impl TextEdit {
         let w = layout.width() as f64;
         let h = layout.height() as f64;
         let bounds = match self.kind {
-            TextKind::Point => {
+            // Path text's real bounds (the curved footprint) need the
+            // followed path's geometry, which `TextEdit` doesn't have.
+            // This straight-line approximation stands in for now — it's
+            // only used for the selection outline / bounding-box handles,
+            // never for painting (see `pathtext::paint_path_text`, which
+            // ignores `local_bounds` entirely).
+            TextKind::Point | TextKind::Path(_) => {
                 // Same anchor offset `paint_text_data` / `measure_text_data`
                 // apply, so the committed object's bounds wrap its glyphs.
                 let dx = point_align_dx(self.align, layout.width());
@@ -526,6 +688,7 @@ impl TextEdit {
         };
         TextData {
             content,
+            path_geometry: self.path_geometry.clone(),
             kind: self.kind,
             style: self.style.clone(),
             align: self.align,
@@ -616,13 +779,13 @@ pub fn td_layout<'a>(tcx: &'a mut TextContext, td: &TextData) -> &'a Layout<Brus
     if tcx.td_cached(&key).is_none() {
         let width = match td.kind {
             TextKind::Area { width, .. } => Some(width as f32),
-            TextKind::Point => None,
+            TextKind::Point | TextKind::Path(_) => None,
         };
         let (fc, lc) = tcx.parts();
         let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
-        b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
-            FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
-        ]))));
+        b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(
+            vec![FontFamilyName::Named(Cow::Owned(td.style.family.clone()))],
+        ))));
         b.push_default(StyleProperty::FontSize(td.style.size as f32));
         b.push_default(StyleProperty::FontWeight(FontWeight::new(
             td.style.weight as f32,
@@ -664,9 +827,13 @@ pub fn paint_text_data(
         return;
     }
     let layout = td_layout(tcx, td);
+    // `TextKind::Path` never reaches here — canvas.rs routes it to
+    // `pathtext::paint_path_text` instead, which needs the followed
+    // path's geometry this function doesn't have. The arm below only
+    // exists to keep the match exhaustive.
     let xf = match td.kind {
         TextKind::Point => xf * Affine::translate((point_align_dx(td.align, layout.width()), 0.0)),
-        TextKind::Area { .. } => xf,
+        TextKind::Area { .. } | TextKind::Path(_) => xf,
     };
     // A fixed-height area box hides text past its bottom edge — but only
     // pay for the GPU clip layer when something actually overflows.
@@ -688,6 +855,15 @@ pub fn paint_text_data(
 
 /// Lay out `td` and return its local bounds (top-left at the origin).
 pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::Rect {
+    if let (TextKind::Path(pt), Some(pd)) = (td.kind, td.path_geometry.as_ref()) {
+        if let Some(points) = pd.flattened_points(0.05).first() {
+            let arc = amalith_core::ArcLengthPath::new(
+                points,
+                pd.subpaths().first().is_some_and(|s| s.closed),
+            );
+            return crate::pathtext::text_bounds(tcx, td, &pt, &arc, cg::Affine::IDENTITY);
+        }
+    }
     let layout = td_layout(tcx, td);
     let w = layout.width() as f64;
     let h = layout.height() as f64;
@@ -701,6 +877,9 @@ pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::
         TextKind::Area { width, height } => {
             amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h))
         }
+        // Straight-line approximation — see the matching note in
+        // `to_text_data` above. Selection-box use only, never painting.
+        TextKind::Path(_) => amalith_core::Rect::new(0.0, 0.0, w.max(1.0), h.max(1.0)),
     }
 }
 
@@ -725,12 +904,44 @@ pub fn hard_wrapped_content(td: &TextData, tcx: &mut TextContext) -> String {
     out
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_alignment_is_reflected_without_a_keystroke() {
+        let mut tcx = TextContext::new();
+        let mut edit = TextEdit::new(
+            amalith_core::ObjectId::new(),
+            amalith_core::Point::ORIGIN,
+            TextKind::Path(amalith_core::PathTextData {
+                path: amalith_core::ObjectId::new(),
+                start: 0.0,
+                end: 500.0,
+                align: amalith_core::PathTextAlign::Baseline,
+                flip: false,
+            }),
+            TextStyle::default(),
+            TextAlign::Start,
+            Paragraph::default(),
+            "Lorem ipsum",
+            &mut tcx,
+        );
+
+        edit.set_align(TextAlign::End, &mut tcx);
+
+        assert_eq!(edit.align(), TextAlign::End);
+        assert_eq!(edit.to_text_data(&mut tcx).align, TextAlign::End);
+        assert!(edit.editor.try_layout().is_some());
+    }
+}
+
 /// Sinks one glyph's contours into a core [`BezPath`], each point pushed
 /// through `xf`.
-struct OutlineSink<'a> {
-    path: &'a mut cg::BezPath,
-    xf: cg::Affine,
-    started: bool,
+pub(crate) struct OutlineSink<'a> {
+    pub(crate) path: &'a mut cg::BezPath,
+    pub(crate) xf: cg::Affine,
+    pub(crate) started: bool,
 }
 
 impl OutlinePen for OutlineSink<'_> {
@@ -738,11 +949,13 @@ impl OutlinePen for OutlineSink<'_> {
         if self.started {
             self.path.close_path();
         }
-        self.path.move_to(self.xf * cg::Point::new(x as f64, y as f64));
+        self.path
+            .move_to(self.xf * cg::Point::new(x as f64, y as f64));
         self.started = true;
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path.line_to(self.xf * cg::Point::new(x as f64, y as f64));
+        self.path
+            .line_to(self.xf * cg::Point::new(x as f64, y as f64));
     }
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
         self.path.quad_to(
@@ -770,19 +983,28 @@ impl OutlinePen for OutlineSink<'_> {
 /// in, so the result drops straight under the text object's transform.
 /// Used by Type ▸ Create Outlines (⌘⇧O).
 pub fn outline_text_data(td: &TextData, tcx: &mut TextContext) -> cg::BezPath {
+    if let (TextKind::Path(pt), Some(pd)) = (td.kind, td.path_geometry.as_ref()) {
+        if let Some(points) = pd.flattened_points(0.05).into_iter().next() {
+            let arc = amalith_core::ArcLengthPath::new(
+                &points,
+                pd.subpaths().first().is_some_and(|s| s.closed),
+            );
+            return crate::pathtext::outline_path_text(tcx, td, &pt, &arc, cg::Affine::IDENTITY);
+        }
+    }
     let mut out = cg::BezPath::new();
     if td.content.is_empty() {
         return out;
     }
     let width = match td.kind {
         TextKind::Area { width, .. } => Some(width as f32),
-        TextKind::Point => None,
+        TextKind::Point | TextKind::Path(_) => None,
     };
     let (fc, lc) = tcx.parts();
     let mut b = lc.ranged_builder(fc, &td.content, 1.0, true);
-    b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(vec![
-        FontFamilyName::Named(Cow::Owned(td.style.family.clone())),
-    ]))));
+    b.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Owned(
+        vec![FontFamilyName::Named(Cow::Owned(td.style.family.clone()))],
+    ))));
     b.push_default(StyleProperty::FontSize(td.style.size as f32));
     b.push_default(StyleProperty::FontWeight(FontWeight::new(
         td.style.weight as f32,
@@ -842,8 +1064,7 @@ pub fn outline_text_data(td: &TextData, tcx: &mut TextContext) -> cg::BezPath {
                     xf,
                     started: false,
                 };
-                let settings =
-                    DrawSettings::unhinted(Size::new(font_size), LocationRef::new(&loc));
+                let settings = DrawSettings::unhinted(Size::new(font_size), LocationRef::new(&loc));
                 let _ = glyph.draw(settings, &mut sink);
                 sink.close();
             }

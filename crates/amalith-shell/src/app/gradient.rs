@@ -459,18 +459,24 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Commit the typed buffer (no-op if the seed was never touched).
-    pub(in crate::app) fn commit_gradient_edit(&mut self) {
-        let Some((field, buf, fresh)) = self.gradient_edit.take() else {
+    /// Applies the focused Gradient field's current buffer live, without
+    /// leaving edit mode — called after every keystroke.
+    fn apply_gradient_edit_live(&mut self) {
+        let Some((field, buf, fresh)) = &self.gradient_edit else {
             return;
         };
-        if fresh {
-            self.request_main_redraw();
+        if *fresh {
             return;
         }
-        if let Some(v) = panels::gradient::parse_field(field, &buf) {
-            self.gradient_set_field(field, v);
+        if let Some(v) = panels::gradient::parse_field(*field, buf) {
+            self.gradient_set_field(*field, v);
         }
+    }
+
+    /// Commit the typed buffer (no-op if the seed was never touched).
+    pub(in crate::app) fn commit_gradient_edit(&mut self) {
+        self.apply_gradient_edit_live();
+        self.gradient_edit = None;
         self.request_main_redraw();
     }
 
@@ -536,6 +542,7 @@ impl App {
                         buf.pop();
                     }
                 }
+                self.apply_gradient_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -549,6 +556,7 @@ impl App {
                     }
                     buf.push_str(s);
                 }
+                self.apply_gradient_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -556,6 +564,21 @@ impl App {
                 // A non-numeric key: commit and let it fall through.
                 self.commit_gradient_edit();
                 false
+            }
+            // Consumed (and steps the value), not passed through — an
+            // un-stepped swallow here would still leave Up/Down doing
+            // nothing useful while the field is focused.
+            Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => {
+                let dir = if matches!(&event.logical_key, Key::Named(NamedKey::ArrowUp)) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                if let Some((_, buf, fresh)) = self.gradient_edit.as_mut() {
+                    let cur = super::action::parse_num(buf).unwrap_or(0.0);
+                    *buf = super::action::trim_num(cur + dir * step);
+                    *fresh = false;
+                }
+                self.apply_gradient_edit_live();
+                self.request_main_redraw();
+                true
             }
             _ => true,
         }

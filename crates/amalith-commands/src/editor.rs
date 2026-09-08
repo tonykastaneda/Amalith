@@ -399,7 +399,7 @@ impl Editor {
             .object(id)
             .ok_or(CommandError::ObjectNotFound(id))?;
         match &object.kind {
-            ObjectKind::Path(pd) => Ok(pd.clone()),
+            kind if kind.path_data().is_some() => Ok(kind.path_data().unwrap().clone()),
             _ => Err(CommandError::NotAPath(id)),
         }
     }
@@ -773,10 +773,24 @@ impl Editor {
             }
             Command::CreateText {
                 layer,
-                data,
+                mut data,
                 transform,
                 name,
             } => {
+                if let amalith_core::TextKind::Path(pt) = data.kind {
+                    let source = self.document.object(pt.path).ok_or(CommandError::ObjectNotFound(pt.path))?;
+                    let amalith_core::ObjectKind::Path(geometry) = &source.kind else {
+                        return Err(CommandError::NotAPath(pt.path));
+                    };
+                    data.path_geometry = Some(geometry.clone());
+                    let mut converted = source.clone();
+                    converted.kind = amalith_core::ObjectKind::Text(data);
+                    converted.appearance.fill = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
+                    converted.appearance.stroke = Paint::None;
+                    let index = self.document.children_of(source.parent).iter().position(|id| *id == source.id).unwrap_or(0);
+                    return Ok(vec![Edit::RemoveObject { id: source.id }, Edit::InsertObject { object: Box::new(converted), index }]);
+                }
+                let mut edits = Vec::new();
                 let mut object = Object::new(
                     amalith_core::ObjectId::new(),
                     ObjectParent::Layer(layer),
@@ -792,10 +806,11 @@ impl Editor {
                 object.transform = transform;
                 object.name = name;
                 let index = self.document.children_of(ObjectParent::Layer(layer)).len();
-                vec![Edit::InsertObject {
+                edits.push(Edit::InsertObject {
                     object: Box::new(object),
                     index,
-                }]
+                });
+                edits
             }
             Command::SetText { object, data } => vec![Edit::SetTextData { id: object, data }],
             Command::SetTexts { items } => items

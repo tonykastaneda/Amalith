@@ -262,7 +262,20 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetPathData { id, data } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
-            let ObjectKind::Path(path) = &mut object.kind else {
+            if let ObjectKind::Text(text) = &mut object.kind {
+                if text.path_geometry.is_none() {
+                    return Err(CommandError::NotAPath(id));
+                }
+                let old = text.clone();
+                // Geometry edits invalidate the shell's cached glyph bounds.
+                // Keep conservative culling bounds until the next text layout.
+                let bounds = data.local_bounds();
+                let pad = text.style.size * 2.0 + text.style.baseline_shift.abs();
+                text.local_bounds = amalith_core::Rect::new(bounds.x0 - pad, bounds.y0 - pad, bounds.x1 + pad, bounds.y1 + pad);
+                text.path_geometry = Some(data);
+                return Ok((Edit::SetTextData { id, data: old }, None));
+            }
+            let Some(path) = object.kind.path_data_mut() else {
                 return Err(CommandError::NotAPath(id));
             };
             let old = std::mem::replace(path, data);

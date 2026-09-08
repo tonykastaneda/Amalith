@@ -5,10 +5,10 @@ use std::collections::HashMap;
 
 use amalith_core::{
     ArtboardId, AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign,
-    StrokeStyle,
+    StrokeStyle, TextKind,
 };
 use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
-use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
+use vello::peniko::{BlendMode, Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
 
 use crate::handles::{self, Handle};
@@ -95,6 +95,8 @@ pub struct DragPreview<'a> {
     /// Live area-text-box resize: each frame re-wraps at its previewed
     /// width/height (document px) with its origin shifted by `origin_delta`.
     pub text_boxes: &'a [TextBoxPreview],
+    /// Live type-on-a-path bracket edit for one text object.
+    pub path_text: Option<(ObjectId, amalith_core::PathTextData)>,
 }
 
 /// One area-text box being resized by a Selection-tool handle drag.
@@ -794,6 +796,9 @@ pub fn paint(
         for &id in selection {
             let Some(obj) = doc.object(id) else { continue };
             let ObjectKind::Text(td) = &obj.kind else { continue };
+            if matches!(td.kind, TextKind::Path(_)) {
+                continue;
+            }
             // A threaded downstream frame shows its slice of the story.
             let owned: Option<amalith_core::TextData> = if td.is_threaded() {
                 crate::thread::head(doc, id).map(|head| {
@@ -825,7 +830,7 @@ pub fn paint(
             }
             let (frame_w, frame_h, area) = match td.kind {
                 amalith_core::TextKind::Area { width, height } => (width, height, true),
-                amalith_core::TextKind::Point => (0.0, None, false),
+                amalith_core::TextKind::Point | amalith_core::TextKind::Path(_) => (0.0, None, false),
             };
             let mut m = vt * convert::affine(doc.world_transform(id));
             if let Some(tb) = tb {
@@ -901,7 +906,7 @@ pub fn paint(
         // Outline every selected path, deformed live by an anchor drag or a
         // handle drag in progress.
         for &id in av.paths {
-            let Some(ObjectKind::Path(pd)) = doc.object(id).map(|o| &o.kind) else {
+            let Some(pd) = doc.object(id).and_then(|o| o.kind.path_data()) else {
                 continue;
             };
             let m = vt * convert::affine(doc.world_transform(id));
@@ -1242,6 +1247,23 @@ fn paint_object(
     let stroke = obj.appearance.stroke.color().map(convert::color);
     let sw = obj.appearance.stroke_width;
     let style = obj.appearance.stroke_style;
+    // Object-level opacity (Illustrator's Transparency panel / the
+    // options-bar Opacity field) — a layer alpha over everything this
+    // object paints, not a per-paint color multiply, so an overlapping
+    // fill + stroke don't double up their own translucency. `pdfexport.rs`
+    // already applies this the same way for the vector-PDF path; the live
+    // canvas never did. Skipped in outline (wireframe) view, which reads
+    // structure, not appearance.
+    let translucent = !outline && obj.appearance.opacity < 0.999;
+    if translucent {
+        scene.push_layer(
+            Fill::NonZero,
+            BlendMode::default(),
+            obj.appearance.opacity.clamp(0.0, 1.0) as f32,
+            Affine::IDENTITY,
+            &viewport,
+        );
+    }
     // Gradient paints (fill / stroke) resolved against the document pool.
     // The gradient is defined in bounding-box unit space; `bbox_xf` maps
     // that unit square onto this object's own local bounds so the gradient
@@ -1399,9 +1421,43 @@ fn paint_object(
             // before the object's own transform like everything else here
             // — positive shifts up, so it's subtracted (local space is
             // y-down).
-            let m = m * Affine::translate((0.0, -td.style.baseline_shift));
+            let m = if matches!(td.kind, TextKind::Path(_)) {
+                m
+            } else {
+                m * Affine::translate((0.0, -td.style.baseline_shift))
+            };
             if Some(id) != editing_text {
                 let color = fill.unwrap_or(Color::from_rgb8(0, 0, 0));
+                if let TextKind::Path(committed_pt) = &td.kind {
+                    let live_pt = drag
+                        .and_then(|d| d.path_text)
+                        .filter(|(object, _)| *object == id)
+                        .map(|(_, pt)| pt);
+                    let pt = live_pt.as_ref().unwrap_or(committed_pt);
+                    // A dangling `path` (deleted out from under the text)
+                    // just paints nothing, rather than erroring.
+                    let preview_path = td.path_geometry.as_ref().and_then(|pd| {
+                        if let Some((_, n, side, delta)) = drag.and_then(|d| d.handle).filter(|&(o, ..)| o == id) {
+                            return Some(crate::anchors::deformed_handle(pd, n, side, delta));
+                        }
+                        if let Some((selected, delta)) = drag.and_then(|d| d.anchors) {
+                            let indices: Vec<_> = selected.iter().filter(|(o, _)| *o == id).map(|(_, i)| *i).collect();
+                            if !indices.is_empty() { return Some(amalith_core::PathData::from_bezpath(crate::anchors::deformed(pd, &indices, delta))); }
+                        }
+                        None
+                    });
+                    let resolved = preview_path.as_ref().and_then(|pd| {
+                        let points = pd.flattened_points(0.05).into_iter().next()?;
+                        Some((amalith_core::ArcLengthPath::new(&points, pd.subpaths().first()?.closed), amalith_core::Affine::IDENTITY))
+                    }).or_else(|| crate::pathtext::resolve(doc, id, pt));
+                    if let Some((arc, rel_xf)) = resolved {
+                        crate::pathtext::paint_path_text(scene, text, td, pt, &arc, rel_xf, m, color);
+                    }
+                    if translucent {
+                        scene.pop_layer();
+                    }
+                    return;
+                }
                 // Live area-text-box resize: re-wrap at the previewed frame
                 // size and shift the origin, without touching the document.
                 if let Some(tb) = drag
@@ -1484,6 +1540,9 @@ fn paint_object(
                 );
             }
         }
+    }
+    if translucent {
+        scene.pop_layer();
     }
 }
 

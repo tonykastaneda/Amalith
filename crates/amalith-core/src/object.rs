@@ -763,10 +763,39 @@ impl CompoundPathData {
 
 /// Point type auto-sizes to its content and only wraps on explicit
 /// newlines. Area type wraps to `width`; `height` `None` grows downward.
+/// Path type flows along its owned curve (or a legacy linked path).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TextKind {
     Point,
     Area { width: f64, height: Option<f64> },
+    Path(PathTextData),
+}
+
+/// Which part of a glyph's vertical metrics sits exactly on the path
+/// curve — Type on a Path Options' "Align to Path".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathTextAlign {
+    #[default]
+    Baseline,
+    Ascender,
+    Descender,
+    Center,
+}
+
+/// Type-on-a-path range and alignment. New text uses `TextData::path_geometry`;
+/// `path` identifies the source only for compatibility with linked-path files.
+/// `start` and `end` are local arc-length distances, with closed ranges allowed
+/// to cross the seam. Geometry edits do not rescale these distances.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PathTextData {
+    pub path: ObjectId,
+    pub start: f64,
+    pub end: f64,
+    pub align: PathTextAlign,
+    /// Reading direction / which side of the path the glyphs sit on —
+    /// dragging the center bracket across the path or choosing Flip in the
+    /// text context menu changes this.
+    pub flip: bool,
 }
 
 /// Horizontal alignment of the text block against its anchor / box.
@@ -874,6 +903,10 @@ impl Default for TextStyle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextData {
     pub content: String,
+    /// A converted type path belongs to the text frame. Legacy files may
+    /// instead reference a separate path through `PathTextData::path`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_geometry: Option<PathData>,
     pub kind: TextKind,
     pub style: TextStyle,
     pub align: TextAlign,
@@ -900,6 +933,7 @@ impl Default for TextData {
     fn default() -> Self {
         Self {
             content: String::new(),
+            path_geometry: None,
             kind: TextKind::Point,
             style: TextStyle::default(),
             align: TextAlign::Start,
@@ -940,6 +974,21 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
+    pub fn path_data(&self) -> Option<&PathData> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Text(text) => text.path_geometry.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn path_data_mut(&mut self) -> Option<&mut PathData> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Text(text) => text.path_geometry.as_mut(),
+            _ => None,
+        }
+    }
     /// Geometry-only bounds in the object's own local space, ignoring its
     /// `transform`. `None` for an empty group/compound path.
     ///
@@ -950,7 +999,7 @@ impl ObjectKind {
         match self {
             ObjectKind::Path(p) => Some(p.local_bounds()),
             ObjectKind::CompoundPath(cp) => cp.local_bounds(),
-            ObjectKind::Text(t) => Some(t.local_bounds),
+            ObjectKind::Text(t) => Some(t.path_geometry.as_ref().map_or(t.local_bounds, |p| p.local_bounds().union(t.local_bounds))),
             ObjectKind::Image(i) => Some(i.local_bounds),
             ObjectKind::Symbol(s) => Some(s.local_bounds),
             ObjectKind::Group(_) => None,

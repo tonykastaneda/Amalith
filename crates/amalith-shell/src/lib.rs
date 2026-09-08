@@ -51,6 +51,7 @@ pub mod newdoc;
 pub mod palette;
 pub mod panel_icon;
 pub mod panels;
+pub mod pathtext;
 pub mod pdfexport;
 pub mod picker;
 pub mod prefs;

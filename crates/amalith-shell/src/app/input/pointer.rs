@@ -433,6 +433,16 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::PathTextBracket { object, edit } => {
+                let object = *object;
+                let mut edit = edit.clone();
+                let doc = self.doc.editor.document();
+                if let Some((arc, _)) = pathtext::resolve(doc, object, &edit.original) {
+                    edit.update(&arc, pathtext::to_path_local(doc, object, self.doc_point(self.pointer)));
+                }
+                self.drag = Drag::PathTextBracket { object, edit };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -1216,6 +1226,13 @@ impl App {
                     );
                     self.resize_text_boxes(&rects);
                 }
+            }
+            Drag::PathTextBracket { object, mut edit } => {
+                let doc = self.doc.editor.document();
+                if let Some((arc, _)) = pathtext::resolve(doc, object, &edit.original) {
+                    edit.update(&arc, pathtext::to_path_local(doc, object, self.doc_point(self.pointer)));
+                }
+                self.commit_path_text_bracket(object, edit);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

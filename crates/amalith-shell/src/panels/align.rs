@@ -200,6 +200,16 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
                 .map(|v| format!("{v} px"))
                 .unwrap_or_else(|| "Auto".into())
         });
+    if editing {
+        let w = text.measure(&label, 11.0);
+        let band = Rect::new(
+            l.space_field.x0 + 6.0,
+            l.space_field.y0 + 2.0,
+            (l.space_field.x0 + 10.0 + w).min(l.space_field.x1 - 2.0),
+            l.space_field.y1 - 2.0,
+        );
+        crate::widgets::draw_field_highlight(scene, th, band);
+    }
     text.draw(
         scene,
         &label,

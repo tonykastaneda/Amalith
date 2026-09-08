@@ -323,6 +323,15 @@ impl App {
         if self.align_spacing_edit.is_some() && self.align_spacing_key(&event) {
             return;
         }
+        if self.stroke_weight_edit.is_some() && self.stroke_weight_key(&event) {
+            return;
+        }
+        if self.opacity_edit.is_some() && self.opacity_key(&event) {
+            return;
+        }
+        if self.stroke_flyout_edit.is_some() && self.stroke_flyout_key(&event) {
+            return;
+        }
         if self.doc.rename.is_some() {
             self.rename_key(&event);
             return;

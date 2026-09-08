@@ -2,6 +2,7 @@
 //! the hover tooltip.
 
 use super::super::*;
+use vello::kurbo::Line;
 
 impl App {
     pub(in crate::app) fn paint_font_menu(&mut self) {
@@ -187,6 +188,90 @@ impl App {
                     .push((Rect::new(x - 3.0, bar.y0, x + w + 3.0, bar.y1), i));
             }
             x += w + 8.0;
+        }
+    }
+
+    /// Blue contour plus start / end / center brackets for one selected
+    /// path-text object. The contour remains visible while the Type tool
+    /// edits the text, but is only selection UI: the curve's original fill
+    /// and stroke stay removed from the artwork and exports.
+    pub(in crate::app) fn paint_path_text_brackets(&mut self) {
+        let selecting = matches!(self.active_tool, Tool::Select | Tool::DirectSelect);
+        let editing = self
+            .text_edit
+            .as_ref()
+            .is_some_and(|te| self.doc.selection.as_slice() == [te.object]);
+        if !selecting && !editing {
+            return;
+        }
+        let [id] = self.doc.selection[..] else { return };
+        let doc = self.doc.editor.document();
+        let Some(amalith_core::ObjectKind::Text(td)) = doc.object(id).map(|o| &o.kind) else {
+            return;
+        };
+        let amalith_core::TextKind::Path(pt) = &td.kind else {
+            return;
+        };
+        let Some((arc, rel_xf)) = pathtext::resolve(doc, id, pt) else {
+            return;
+        };
+        let live = match &self.drag {
+            Drag::PathTextBracket { object, edit } if *object == id => edit.values(&arc, self.cmd_down),
+            _ => *pt,
+        };
+        let m = self.doc.view.to_screen() * convert::affine(doc.world_transform(id)) * convert::affine(rel_xf);
+        let accent = self.theme.accent;
+
+        // Use the original Bézier geometry rather than the flattened
+        // arc-length table, keeping circles and curves visually smooth.
+        // Bake the transform into the geometry and stroke in screen space,
+        // exactly like normal Direct Selection contours, so zooming or an
+        // object scale never makes this line thicker.
+        if let Some(path) = td.path_geometry.as_ref() {
+            let screen = (self.doc.view.to_screen()
+                * convert::affine(doc.world_transform(id)))
+                * convert::bez_path(&path.geometry);
+            self.content.stroke(
+                &Stroke::new(1.5),
+                ID,
+                accent,
+                None,
+                &screen,
+            );
+        } else if let Some(amalith_core::ObjectKind::Path(path)) =
+            doc.object(pt.path).map(|object| &object.kind)
+        {
+            let screen = (self.doc.view.to_screen()
+                * convert::affine(doc.world_transform(pt.path)))
+                * convert::bez_path(&path.geometry);
+            self.content.stroke(
+                &Stroke::new(1.5),
+                ID,
+                accent,
+                None,
+                &screen,
+            );
+        }
+
+        // Illustrator hides range brackets while the insertion caret is
+        // active. Keep the curve itself visible so its shape remains clear.
+        if !selecting || self.text_edit.as_ref().is_some_and(|te| te.object == id) {
+            return;
+        }
+        let layout = crate::textedit::td_layout(&mut self.text, td);
+        let overflow = layout.lines().count() > 1 || layout.lines().next().is_some_and(|line| line.metrics().advance as f64 > live.end - live.start);
+        for handle in pathtext::screen_brackets(&arc, &live, m) {
+            self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(handle.base, handle.tip));
+            if overflow && handle.which == pathtext::Bracket::End {
+                let p = handle.tip;
+                let red = vello::peniko::Color::from_rgb8(208, 48, 48);
+                self.content.stroke(&Stroke::new(1.5), ID, red, None, &Rect::new(p.x - 4.0, p.y - 4.0, p.x + 4.0, p.y + 4.0));
+                self.content.stroke(&Stroke::new(1.0), ID, red, None, &Line::new((p.x - 2.5, p.y), (p.x + 2.5, p.y)));
+                self.content.stroke(&Stroke::new(1.0), ID, red, None, &Line::new((p.x, p.y - 2.5), (p.x, p.y + 2.5)));
+                continue;
+            }
+            let cap = handle.tangent * 5.0;
+            self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(handle.tip - cap, handle.tip + cap));
         }
     }
 

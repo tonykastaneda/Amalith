@@ -85,6 +85,8 @@ pub(in crate::app) fn paint_main(
     align_to_menu: bool,
     align_spacing: Option<f64>,
     align_spacing_edit: Option<&str>,
+    stroke_weight_edit: Option<&str>,
+    opacity_edit: Option<&str>,
     key_object: Option<ObjectId>,
     panel_scroll: &std::collections::HashMap<PanelId, f64>,
     cull_inset: f64,
@@ -733,6 +735,8 @@ pub(in crate::app) fn paint_main(
         cur_weight,
         cur_opacity,
         stroke_open: stroke_popover,
+        stroke_weight_edit,
+        opacity_edit,
         text_style: text_style.clone(),
         anchor_sel_len,
         xform: super::super::selection_xform(doc, selection, xform_ref),
@@ -841,6 +845,20 @@ pub(in crate::app) fn paint_main(
     {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
         match cursor_mode {
+            CanvasCursor::PathType => {
+                let mut cursor = BezPath::new();
+                cursor.move_to((pointer.x, pointer.y - 9.0));
+                cursor.line_to((pointer.x, pointer.y + 7.0));
+                cursor.move_to((pointer.x - 4.0, pointer.y - 9.0));
+                cursor.line_to((pointer.x + 4.0, pointer.y - 9.0));
+                cursor.move_to((pointer.x - 4.0, pointer.y + 7.0));
+                cursor.line_to((pointer.x + 4.0, pointer.y + 7.0));
+                cursor.move_to((pointer.x - 9.0, pointer.y + 5.0));
+                cursor.curve_to((pointer.x - 3.0, pointer.y - 2.0), (pointer.x + 5.0, pointer.y + 12.0), (pointer.x + 12.0, pointer.y + 3.0));
+                for (ink, width) in [(vello::peniko::Color::WHITE, 4.0), (vello::peniko::Color::BLACK, 1.5)] {
+                    scene.stroke(&vello::kurbo::Stroke::new(width), ID, ink, None, &cursor);
+                }
+            }
             CanvasCursor::FitUp => icons::draw_fit_up_cursor(scene, pointer),
             CanvasCursor::ScaleNS => icons::draw_scale_cursor(scene, pointer, FRAC_PI_2),
             CanvasCursor::ScaleEW => icons::draw_scale_cursor(scene, pointer, 0.0),

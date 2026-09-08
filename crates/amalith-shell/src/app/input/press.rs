@@ -237,6 +237,12 @@ impl App {
         if self.align_spacing_edit.is_some() && !self.align_spacing_field_at_pointer() {
             self.commit_align_spacing_edit();
         }
+        if self.stroke_weight_edit.is_some() && !self.stroke_weight_field_at_pointer() {
+            self.commit_stroke_weight_edit();
+        }
+        if self.opacity_edit.is_some() && !self.opacity_field_at_pointer() {
+            self.commit_opacity_edit();
+        }
         if self.artboard_edit.is_some() && !self.over_artboard_segment() {
             self.commit_artboard_edit();
         }
@@ -762,6 +768,36 @@ impl App {
                     return;
                 }
                 let dp = self.doc_point(self.pointer);
+                // Start / end / center bracket handles of a single
+                // selected `TextKind::Path` object — checked ahead of the
+                // ordinary scale handles / rotation halo below so a bracket
+                // near the curve bounds wins over a transform gesture.
+                if matches!(self.active_tool, Tool::Select | Tool::DirectSelect) {
+                    if let [id] = self.doc.selection[..] {
+                        let doc = self.doc.editor.document();
+                        if let Some(amalith_core::ObjectKind::Text(td)) = doc.object(id).map(|o| &o.kind) {
+                            if let amalith_core::TextKind::Path(pt) = &td.kind {
+                                if let Some((arc, rel_xf)) = pathtext::resolve(doc, id, pt) {
+                                    let m = self.doc.view.to_screen() * convert::affine(doc.world_transform(id));
+                                    if let Some(which) =
+                                        pathtext::hit_bracket(&arc, pt, rel_xf, m, self.pointer)
+                                    {
+                                        let local = pathtext::to_path_local(doc, id, dp);
+                                        let xf = m * convert::affine(rel_xf);
+                                        let scale = (xf * Point::new(1.0, 0.0) - xf * Point::ORIGIN).hypot().max(0.001);
+                                        self.drag = Drag::PathTextBracket {
+                                            object: id,
+                                            edit: pathtext::BracketDrag::new(&arc, *pt, which, local, 4.0 / scale),
+                                        };
+                                        self.request_main_redraw();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under
@@ -989,6 +1025,16 @@ impl App {
                             self.drag = Drag::TextSelect;
                             return;
                         }
+                    }
+                    // Click on a plain path's outline (not already text):
+                    // start type-on-a-path instead of a fresh text box.
+                    let tol = 4.0 / self.doc.view.zoom;
+                    if let Some(path_id) =
+                        select::topmost_path_near(self.doc.editor.document(), dp, visible, tol)
+                    {
+                        self.create_path_text(path_id, dp);
+                        self.drag = Drag::TextSelect;
+                        return;
                     }
                     self.drag = Drag::DrawText {
                         start_doc: dp,

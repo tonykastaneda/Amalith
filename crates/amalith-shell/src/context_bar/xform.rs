@@ -58,6 +58,10 @@ fn parts(r: Rect) -> Parts {
     }
 }
 
+fn editing(ctx: &Ctx, field: XformField) -> bool {
+    ctx.xform_edit.is_some_and(|(f, _)| f == field)
+}
+
 fn shown(ctx: &Ctx, field: XformField, v: Option<TransformValues>) -> String {
     if let Some((f, s)) = ctx.xform_edit {
         if f == field {
@@ -84,9 +88,9 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let v = ctx.xform;
 
     text.draw(scene, "Shape:", 13.0, theme.text_dim, r.x0, base);
-    draw_box(scene, text, theme, p.w, &shown(ctx, XformField::W, v));
+    draw_box(scene, text, theme, p.w, &shown(ctx, XformField::W, v), editing(ctx, XformField::W));
     paint_lock(scene, p.lock, ctx.xform_constrain, theme);
-    draw_box(scene, text, theme, p.h, &shown(ctx, XformField::H, v));
+    draw_box(scene, text, theme, p.h, &shown(ctx, XformField::H, v), editing(ctx, XformField::H));
 
     text.draw(scene, "Transform", 13.0, theme.text_dim, p.h.x1 + 18.0, base);
     text.draw(scene, "X:", 13.0, theme.text, p.x.x0 - 18.0, base);
@@ -98,6 +102,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         p.x_up,
         p.x_down,
         &shown(ctx, XformField::X, v),
+        editing(ctx, XformField::X),
     );
     text.draw(scene, "Y:", 13.0, theme.text, p.y.x0 - 18.0, base);
     draw_field(
@@ -108,6 +113,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         p.y_up,
         p.y_down,
         &shown(ctx, XformField::Y, v),
+        editing(ctx, XformField::Y),
     );
 }
 
@@ -117,10 +123,16 @@ fn draw_box(
     theme: &crate::theme::Theme,
     r: Rect,
     value: &str,
+    highlight: bool,
 ) {
-    let border = theme.text_dim.with_alpha(0.5);
+    let border = if highlight { theme.accent } else { theme.text_dim.with_alpha(0.5) };
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &r);
+    if highlight {
+        let w = text.measure(value, 13.0);
+        let band = Rect::new(r.x0 + 5.0, r.y0 + 3.0, (r.x0 + 9.0 + w).min(r.x1 - 3.0), r.y1 - 3.0);
+        crate::widgets::draw_field_highlight(scene, theme, band);
+    }
+    scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &r);
     text.draw(
         scene,
         value,

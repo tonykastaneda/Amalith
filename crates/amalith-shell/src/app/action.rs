@@ -574,6 +574,28 @@ impl App {
                     self.key_object = None;
                 }
             }
+            panels::Action::BeginStrokeWeightEdit => {
+                if self.stroke_weight_edit.is_none() {
+                    let w = self
+                        .doc.selection
+                        .first()
+                        .and_then(|id| self.doc.editor.document().object(*id))
+                        .map(|o| o.appearance.stroke_width)
+                        .unwrap_or(self.doc.stroke_w);
+                    self.stroke_weight_edit = Some((trim_num(w), true));
+                }
+            }
+            panels::Action::BeginOpacityEdit => {
+                if self.opacity_edit.is_none() {
+                    let op = self
+                        .doc.selection
+                        .first()
+                        .and_then(|id| self.doc.editor.document().object(*id))
+                        .map(|o| o.appearance.opacity)
+                        .unwrap_or(self.doc.opacity);
+                    self.opacity_edit = Some(widgets::NumEdit::seeded(format!("{:.0}", op * 100.0)));
+                }
+            }
             panels::Action::BeginAlignSpacingEdit => {
                 if self.align_spacing_edit.is_none() {
                     let seed = self
@@ -635,7 +657,7 @@ impl App {
             }
             _ => {
                 if self.shift_down {
-                    10.0
+                    5.0
                 } else {
                     1.0
                 }
@@ -731,6 +753,18 @@ impl App {
         }
     }
 
+    /// Applies the focused Transform field's current buffer live, without
+    /// leaving edit mode — called after every keystroke.
+    fn apply_xform_edit_live(&mut self) {
+        let Some((field, buf, fresh)) = &self.xform_edit else { return };
+        if *fresh {
+            return;
+        }
+        if let Some(v) = parse_num(buf) {
+            self.apply_xform_value(*field, v);
+        }
+    }
+
     pub(in crate::app) fn commit_xform_edit(&mut self) {
         if let Some((field, buf, fresh)) = self.xform_edit.take() {
             // `fresh` means the user never typed — scroll/handle edits are
@@ -796,9 +830,39 @@ impl App {
                     *fresh = false;
                     buf.pop();
                 }
+                self.apply_xform_edit_live();
                 self.request_main_redraw();
                 true
             }
+            // Consumed here, not passed through — otherwise it falls to
+            // the canvas's own Up/Down (nudge the selected object) while
+            // a field is focused, which is the whole point of catching it.
+            PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
+                let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                if let Some((_, buf, fresh)) = &mut self.xform_edit {
+                    let cur = parse_num(buf).unwrap_or(0.0);
+                    *buf = trim_num(cur + dir * step);
+                    *fresh = false;
+                }
+                self.apply_xform_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            // A bare modifier keydown (Shift, held for Shift+Up/Down) has
+            // no text — falling to the `_` arm below would treat it as
+            // "some other key" and commit/exit right as Shift is pressed,
+            // before the arrow key it's modifying even arrives.
+            PhysicalKey::Code(
+                KeyCode::ShiftLeft
+                | KeyCode::ShiftRight
+                | KeyCode::ControlLeft
+                | KeyCode::ControlRight
+                | KeyCode::AltLeft
+                | KeyCode::AltRight
+                | KeyCode::SuperLeft
+                | KeyCode::SuperRight,
+            ) => true,
             _ => {
                 let Some(txt) = event.text.as_ref() else {
                     self.commit_xform_edit();
@@ -820,6 +884,7 @@ impl App {
                         buf.push(ch);
                     }
                 }
+                self.apply_xform_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -856,19 +921,21 @@ impl App {
     }
 
     pub(in crate::app) fn commit_artboard_edit(&mut self) {
+        self.apply_artboard_edit_live();
+        self.artboard_edit = None;
+        self.request_main_redraw();
+    }
+
+    /// Applies the focused Artboard field's current buffer live, without
+    /// leaving edit mode — called after every keystroke.
+    fn apply_artboard_edit_live(&mut self) {
         use panels::transform::ABField as F;
-        let Some((field, buf, fresh)) = self.artboard_edit.take() else {
-            return;
-        };
-        // `fresh` = the user never typed; a scroll-nudge is already in the
-        // document, so re-applying the seed would just churn.
-        if fresh {
-            self.request_main_redraw();
+        let Some((field, buf, fresh)) = &self.artboard_edit else { return };
+        if *fresh {
             return;
         }
-        let Some(id) = self.doc.selected_artboard else {
-            return;
-        };
+        let (field, buf) = (*field, buf.clone());
+        let Some(id) = self.doc.selected_artboard else { return };
         if field == F::Name {
             let name = buf.trim();
             if !name.is_empty() {
@@ -880,7 +947,6 @@ impl App {
         } else if let Some(v) = parse_num(&buf) {
             self.apply_artboard_value(field, v);
         }
-        self.request_main_redraw();
     }
 
     fn apply_artboard_value(&mut self, field: panels::transform::ABField, v: f64) {
@@ -923,7 +989,7 @@ impl App {
         let Some(cur) = self.artboard_current(field) else {
             return;
         };
-        let step = if self.shift_down { 10.0 } else { 1.0 };
+        let step = if self.shift_down { 5.0 } else { 1.0 };
         self.apply_artboard_value(field, cur + step * dir);
         let new = self.artboard_current(field);
         if let (Some((f, buf, _)), Some(v)) = (self.artboard_edit.as_mut(), new) {
@@ -1018,6 +1084,19 @@ impl App {
                     *fresh = false;
                     buf.pop();
                 }
+                self.apply_artboard_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) if field != F::Name => {
+                let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                if let Some((_, buf, fresh)) = &mut self.artboard_edit {
+                    let cur = parse_num(buf).unwrap_or(0.0);
+                    *buf = trim_num(cur + dir * step);
+                    *fresh = false;
+                }
+                self.apply_artboard_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -1041,6 +1120,7 @@ impl App {
                         buf.push(ch);
                     }
                 }
+                self.apply_artboard_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -1063,17 +1143,24 @@ impl App {
             .is_some_and(|r| r.contains(self.pointer))
     }
 
-    pub(in crate::app) fn commit_align_spacing_edit(&mut self) {
-        if let Some((buf, fresh)) = self.align_spacing_edit.take() {
-            if !fresh {
-                let t = buf.trim();
-                if t.is_empty() || t.eq_ignore_ascii_case("auto") {
-                    self.align_spacing = None;
-                } else if let Some(v) = parse_num(&buf) {
-                    self.align_spacing = Some(v.max(0.0));
-                }
-            }
+    /// Applies the Align spacing field's current buffer live, without
+    /// leaving edit mode — called after every keystroke.
+    fn apply_align_spacing_edit_live(&mut self) {
+        let Some((buf, fresh)) = &self.align_spacing_edit else { return };
+        if *fresh {
+            return;
         }
+        let t = buf.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+            self.align_spacing = None;
+        } else if let Some(v) = parse_num(buf) {
+            self.align_spacing = Some(v.max(0.0));
+        }
+    }
+
+    pub(in crate::app) fn commit_align_spacing_edit(&mut self) {
+        self.apply_align_spacing_edit_live();
+        self.align_spacing_edit = None;
         self.request_main_redraw();
     }
 
@@ -1123,9 +1210,26 @@ impl App {
                     *fresh = false;
                     buf.pop();
                 }
+                self.apply_align_spacing_edit_live();
                 self.request_main_redraw();
                 true
             }
+            PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
+                let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                self.nudge_align_spacing(dir * step);
+                true
+            }
+            PhysicalKey::Code(
+                KeyCode::ShiftLeft
+                | KeyCode::ShiftRight
+                | KeyCode::ControlLeft
+                | KeyCode::ControlRight
+                | KeyCode::AltLeft
+                | KeyCode::AltRight
+                | KeyCode::SuperLeft
+                | KeyCode::SuperRight,
+            ) => true,
             _ => {
                 let Some(txt) = event.text.as_ref() else {
                     self.commit_align_spacing_edit();
@@ -1153,6 +1257,193 @@ impl App {
                         buf.push(ch);
                     }
                 }
+                self.apply_align_spacing_edit_live();
+                self.request_main_redraw();
+                true
+            }
+        }
+    }
+
+    /// Applies the Opacity field's current buffer to the document without
+    /// leaving edit mode — called after every keystroke so the selection
+    /// updates live, the same way the stepper arrows already did.
+    fn apply_opacity_edit_live(&mut self) {
+        let Some(edit) = &self.opacity_edit else { return };
+        if edit.fresh {
+            return;
+        }
+        let Some(v) = parse_num(&edit.buf) else { return };
+        let opacity = (v as f32 / 100.0).clamp(0.0, 1.0);
+        self.doc.opacity = opacity;
+        if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetOpacity {
+                objects: self.doc.selection.clone(),
+                opacity,
+            });
+        }
+    }
+
+    pub(in crate::app) fn commit_opacity_edit(&mut self) {
+        self.apply_opacity_edit_live();
+        self.opacity_edit = None;
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn opacity_field_at_pointer(&mut self) -> bool {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return false;
+        }
+        if self.pointer_win == self.main_id
+            && self.pointer.y >= APP_BAR_H
+            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+        {
+            let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+            let bar = opt_bar_rect(w);
+            let cx = self.context_bar_ctx();
+            return context_bar::opacity_field_at(bar, &cx, self.pointer);
+        }
+        false
+    }
+
+    /// Digit / Enter / Esc stay in the Opacity field.
+    pub(in crate::app) fn opacity_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        let Some(edit) = &mut self.opacity_edit else {
+            return false;
+        };
+        match widgets::edit_key(edit, event, self.shift_down) {
+            widgets::EditOutcome::Consumed => {
+                self.apply_opacity_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            widgets::EditOutcome::Commit => {
+                self.commit_opacity_edit();
+                true
+            }
+            widgets::EditOutcome::CommitAndPassThrough => {
+                self.commit_opacity_edit();
+                false
+            }
+            widgets::EditOutcome::Cancel => {
+                self.opacity_edit = None;
+                self.request_main_redraw();
+                true
+            }
+        }
+    }
+
+    /// Applies the Stroke Weight field's current buffer live, without
+    /// leaving edit mode — called after every keystroke.
+    fn apply_stroke_weight_edit_live(&mut self) {
+        let Some((buf, fresh)) = &self.stroke_weight_edit else { return };
+        if *fresh {
+            return;
+        }
+        let Some(v) = parse_num(buf) else { return };
+        let width = v.max(0.0);
+        self.doc.stroke_w = width;
+        if !self.doc.selection.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetStrokeWidth {
+                objects: self.doc.selection.clone(),
+                width,
+            });
+        }
+    }
+
+    pub(in crate::app) fn commit_stroke_weight_edit(&mut self) {
+        self.apply_stroke_weight_edit_live();
+        self.stroke_weight_edit = None;
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn stroke_weight_field_at_pointer(&mut self) -> bool {
+        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+            return false;
+        }
+        if self.pointer_win == self.main_id
+            && self.pointer.y >= APP_BAR_H
+            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+        {
+            let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
+            let bar = opt_bar_rect(w);
+            let cx = self.context_bar_ctx();
+            return context_bar::stroke_weight_field_at(bar, &cx, self.pointer);
+        }
+        false
+    }
+
+    /// Digit / Enter / Esc stay in the Stroke Weight field.
+    pub(in crate::app) fn stroke_weight_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        if self.stroke_weight_edit.is_none() {
+            return false;
+        }
+        if !event.state.is_pressed() {
+            return true;
+        }
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.commit_stroke_weight_edit();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.stroke_weight_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                if let Some((buf, fresh)) = &mut self.stroke_weight_edit {
+                    *fresh = false;
+                    buf.pop();
+                }
+                self.apply_stroke_weight_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
+                let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                if let Some((buf, fresh)) = &mut self.stroke_weight_edit {
+                    let cur = parse_num(buf).unwrap_or(0.0);
+                    *buf = trim_num((cur + dir * step).max(0.0));
+                    *fresh = false;
+                }
+                self.apply_stroke_weight_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(
+                KeyCode::ShiftLeft
+                | KeyCode::ShiftRight
+                | KeyCode::ControlLeft
+                | KeyCode::ControlRight
+                | KeyCode::AltLeft
+                | KeyCode::AltRight
+                | KeyCode::SuperLeft
+                | KeyCode::SuperRight,
+            ) => true,
+            _ => {
+                let Some(txt) = event.text.as_ref() else {
+                    self.commit_stroke_weight_edit();
+                    return false;
+                };
+                let numeric = txt
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+');
+                if !numeric {
+                    self.commit_stroke_weight_edit();
+                    return false;
+                }
+                if let Some((buf, fresh)) = &mut self.stroke_weight_edit {
+                    for ch in txt.chars().filter(|c| !c.is_control()) {
+                        if *fresh {
+                            buf.clear();
+                            *fresh = false;
+                        }
+                        buf.push(ch);
+                    }
+                }
+                self.apply_stroke_weight_edit_live();
                 self.request_main_redraw();
                 true
             }
@@ -1160,7 +1451,7 @@ impl App {
     }
 }
 
-fn parse_num(s: &str) -> Option<f64> {
+pub(in crate::app) fn parse_num(s: &str) -> Option<f64> {
     let t = s
         .trim()
         .trim_end_matches("px")
@@ -1169,7 +1460,7 @@ fn parse_num(s: &str) -> Option<f64> {
     t.parse().ok()
 }
 
-fn trim_num(v: f64) -> String {
+pub(in crate::app) fn trim_num(v: f64) -> String {
     let r = (v * 10_000.0).round() / 10_000.0;
     if (r - r.round()).abs() < 5e-5 {
         format!("{}", r.round() as i64)

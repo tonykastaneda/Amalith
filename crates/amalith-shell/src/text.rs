@@ -58,7 +58,7 @@ impl TextLayoutKey {
             align: td.align as u8,
             wrap: match td.kind {
                 TextKind::Area { width, .. } => width.to_bits(),
-                TextKind::Point => u64::MAX,
+                TextKind::Point | TextKind::Path(_) => u64::MAX,
             },
         }
     }

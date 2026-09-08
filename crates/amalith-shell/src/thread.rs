@@ -49,6 +49,7 @@ pub fn frame_overset(doc: &Document, tcx: &mut TextContext, id: ObjectId) -> boo
             .unwrap_or(false);
     }
     let probe = TextData {
+        path_geometry: None,
         content: td.content.clone(),
         kind: TextKind::Area {
             width,
@@ -113,7 +114,10 @@ pub fn slices(
         let Some(ftd) = text_of(doc, fid) else { continue };
         let (fw, fh) = match ftd.kind {
             TextKind::Area { width, height } => (width, height),
-            TextKind::Point => (head_td.local_bounds.width().max(1.0), None),
+            // Threading is an area-text concept; a Point or Path frame
+            // can't actually appear in a chain, but the match must cover
+            // them.
+            TextKind::Point | TextKind::Path(_) => (head_td.local_bounds.width().max(1.0), None),
         };
 
         if cursor >= content.len() {
@@ -124,6 +128,7 @@ pub fn slices(
         // Lay out the remaining story at this frame's width and find the
         // first line whose bottom crosses the box floor.
         let probe = TextData {
+        path_geometry: None,
             content: content[cursor..].to_string(),
             kind: TextKind::Area {
                 width: fw,

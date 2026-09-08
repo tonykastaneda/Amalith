@@ -13,7 +13,7 @@ pub fn path_leaves(doc: &Document) -> Vec<ObjectId> {
     fn rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId>) {
         for &id in doc.children_of(parent) {
             match doc.object(id).map(|o| &o.kind) {
-                Some(ObjectKind::Path(_)) => out.push(id),
+                Some(kind) if kind.path_data().is_some() => out.push(id),
                 Some(ObjectKind::Group(_)) => rec(doc, ObjectParent::Group(id), out),
                 _ => {}
             }
@@ -34,7 +34,7 @@ pub fn anchors_of(doc: &Document, id: ObjectId) -> Vec<(usize, Point)> {
     let Some(obj) = doc.object(id) else {
         return Vec::new();
     };
-    let ObjectKind::Path(pd) = &obj.kind else {
+    let Some(pd) = obj.kind.path_data() else {
         return Vec::new();
     };
     let m = convert::affine(doc.world_transform(id));
@@ -52,7 +52,7 @@ pub fn handles_of(doc: &Document, id: ObjectId) -> Vec<(usize, HandleSide, Point
     let Some(obj) = doc.object(id) else {
         return Vec::new();
     };
-    let ObjectKind::Path(pd) = &obj.kind else {
+    let Some(pd) = obj.kind.path_data() else {
         return Vec::new();
     };
     let m = convert::affine(doc.world_transform(id));
@@ -103,7 +103,7 @@ pub fn segment_at(
     let r2 = radius * radius;
     for &id in ids.iter().rev() {
         let Some(obj) = doc.object(id) else { continue };
-        let ObjectKind::Path(pd) = &obj.kind else {
+        let Some(pd) = obj.kind.path_data() else {
             continue;
         };
         let m: Affine = convert::affine(doc.world_transform(id));

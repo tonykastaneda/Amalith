@@ -92,6 +92,7 @@ impl App {
                 anchors: None,
                 handle: None,
                 text_boxes: &[],
+                path_text: None,
             }),
             Drag::Scale { preview, .. }
             | Drag::Rotate { preview, .. }
@@ -114,6 +115,7 @@ impl App {
                 anchors: None,
                 handle: None,
                 text_boxes: &[],
+                path_text: None,
             }),
             Drag::ResizeTextBox { .. } => Some(DragPreview {
                 ids: &[],
@@ -123,6 +125,7 @@ impl App {
                 anchors: None,
                 handle: None,
                 text_boxes: &resize_previews,
+                path_text: None,
             }),
             Drag::MoveAnchors {
                 start_doc,
@@ -139,6 +142,7 @@ impl App {
                 )),
                 handle: None,
                 text_boxes: &[],
+                path_text: None,
             }),
             Drag::MoveHandle {
                 object,
@@ -159,7 +163,22 @@ impl App {
                     convert::vec2_to_core(*last_doc - *start_doc),
                 )),
                 text_boxes: &[],
+                path_text: None,
             }),
+            Drag::PathTextBracket { object, edit } => {
+                let live = pathtext::resolve(self.doc.editor.document(), *object, &edit.original)
+                    .map(|(arc, _)| edit.values(&arc, self.cmd_down));
+                Some(DragPreview {
+                    ids: &[],
+                    delta: Vec2::ZERO,
+                    dup: false,
+                    xf: None,
+                    anchors: None,
+                    handle: None,
+                    text_boxes: &[],
+                    path_text: live.map(|pt| (*object, pt)),
+                })
+            }
             _ => None,
         };
         let draw_shape = match &self.drag {
@@ -519,6 +538,8 @@ impl App {
                 self.align_to_menu.is_some(),
                 self.align_spacing,
                 self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
+                self.stroke_weight_edit.as_ref().map(|(s, _)| s.as_str()),
+                self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
                 self.key_object,
                 &self.panel_scroll,
                 self.settings.cull_inset,
@@ -782,6 +803,7 @@ impl App {
                     &stroke_flyout,
                     &stroke_style_shown,
                     shown_weight,
+                    self.stroke_flyout_edit.as_ref().map(|(f, e)| (*f, e.buf.as_str())),
                 );
             }
             // Live text edit — drawn over the canvas, clipped to the viewport.
@@ -801,7 +823,15 @@ impl App {
                 self.content
                     .push_clip_layer(vello::peniko::Fill::NonZero, ID, &vp);
                 if let Some(te) = &mut self.text_edit {
-                    te.render(&mut self.content, &mut self.text, xf, color, caret_on, blue);
+                    let geometry = match te.kind() {
+                        amalith_core::TextKind::Path(pt) => pathtext::resolve(self.doc.editor.document(), obj, &pt),
+                        _ => None,
+                    };
+                    if let Some((arc, rel)) = geometry {
+                        te.render_path(&mut self.content, &mut self.text, &arc, rel, xf, color, caret_on, blue);
+                    } else {
+                        te.render(&mut self.content, &mut self.text, xf, color, caret_on, blue);
+                    }
                 }
                 self.content.pop_layer();
             }
@@ -819,6 +849,7 @@ impl App {
             self.paint_isolation_bar();
             self.paint_ruler_menu();
             self.paint_ctx_menu();
+            self.paint_path_text_brackets();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
             // Recent-file previews are rendered headlessly, one per frame,

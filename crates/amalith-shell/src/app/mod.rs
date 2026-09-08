@@ -52,8 +52,9 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
-    icons, layout, panels, picker, prefs, recent, rulers, sample, select, settings, shapedialog,
-    stroke_panel, textedit, workspace, workspace_dialog, workspaces, xformdlg, Theme,
+    icons, layout, panels, pathtext, picker, prefs, recent, rulers, sample, select, settings,
+    shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog, workspaces,
+    xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -330,6 +331,11 @@ enum Drag {
         start_doc: Point,
         cur_doc: Point,
     },
+    /// One undoable path-text bracket gesture, shared with the live preview.
+    PathTextBracket {
+        object: ObjectId,
+        edit: pathtext::BracketDrag,
+    },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
         tool: Tool,
@@ -588,6 +594,8 @@ enum SameKind {
 
 #[derive(Clone, Copy, PartialEq)]
 enum CtxAction {
+    PathAlign(amalith_core::PathTextAlign),
+    PathFlip,
     Reflect,
     Shear,
     ClipMake,
@@ -800,6 +808,7 @@ enum CanvasCursor {
     Zoom,
     /// I-beam — the Type tool.
     IBeam,
+    PathType,
     /// Drawn double-arrow scale cursors — hovering a transform grip.
     ScaleNS,
     ScaleEW,
@@ -824,6 +833,7 @@ impl CanvasCursor {
         matches!(
             self,
             CanvasCursor::Glyph
+                | CanvasCursor::PathType
                 | CanvasCursor::Zoom
                 | CanvasCursor::ScaleNS
                 | CanvasCursor::ScaleEW
@@ -1050,6 +1060,15 @@ struct App {
     align_spacing: Option<f64>,
     /// Live buffer while the Align spacing field is being typed.
     align_spacing_edit: Option<(String, bool)>,
+    /// Live buffer while the context bar's Stroke Weight field is being
+    /// typed. `bool` is `fresh` — true until the first keystroke, so
+    /// typing replaces the seeded value instead of appending to it.
+    stroke_weight_edit: Option<(String, bool)>,
+    /// Live buffer while the context bar's Opacity field is being typed.
+    opacity_edit: Option<widgets::NumEdit>,
+    /// Live buffer while one of the Stroke flyout's numeric fields
+    /// (Weight, Limit, Dash, Gap) is being typed.
+    stroke_flyout_edit: Option<(stroke_panel::Field, widgets::NumEdit)>,
     /// Recently used solid colours for the Color panel, newest first.
     recent_colors: Vec<amalith_core::Color>,
     /// GPU-ready rasters for placed images, keyed by document asset.
@@ -1285,6 +1304,9 @@ impl App {
             key_object: None,
             align_spacing: Some(0.0),
             align_spacing_edit: None,
+            stroke_weight_edit: None,
+            opacity_edit: None,
+            stroke_flyout_edit: None,
             recent_colors: Vec::new(),
             image_cache: HashMap::new(),
             decoded_by_path: HashMap::new(),
@@ -2231,6 +2253,18 @@ impl App {
             },
             CtxItem::Sep,
         ];
+        if let [id] = self.doc.selection[..] {
+            if let Some(amalith_core::ObjectKind::Text(td)) = self.doc.editor.document().object(id).map(|o| &o.kind) {
+                if let amalith_core::TextKind::Path(pt) = td.kind {
+                    items.push(CtxItem::Action { label: "Flip Type on Path".into(), action: CtxAction::PathFlip, enabled: true });
+                    use amalith_core::PathTextAlign;
+                    for (label, align) in [("Baseline", PathTextAlign::Baseline), ("Ascender", PathTextAlign::Ascender), ("Descender", PathTextAlign::Descender), ("Center", PathTextAlign::Center)] {
+                        items.push(CtxItem::Action { label: format!("{}Align to {}", if pt.align == align { "✓ " } else { "" }, label), action: CtxAction::PathAlign(align), enabled: true });
+                    }
+                    items.push(CtxItem::Sep);
+                }
+            }
+        }
         if blend_group.is_some() || spine_candidate.is_some() {
             items.push(CtxItem::Action {
                 label: "Blend Options…".into(),
@@ -2312,6 +2346,8 @@ impl App {
         }
         if let Some(a) = hit {
             match a {
+                CtxAction::PathAlign(align) => self.edit_path_options(Some(align)),
+                CtxAction::PathFlip => self.edit_path_options(None),
                 CtxAction::Reflect => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Reflect),
                 CtxAction::Shear => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Shear),
                 CtxAction::BlendOptions => {
@@ -2746,8 +2782,8 @@ impl App {
             self.doc.selection.retain(|id| doc.object(*id).is_some());
             self.doc.anchor_sel
                 .retain(|(id, i)| match doc.object(*id).map(|o| &o.kind) {
-                    Some(amalith_core::ObjectKind::Path(pd)) => {
-                        *i < amalith_core::anchor_count(pd.subpaths())
+                    Some(kind) if kind.path_data().is_some() => {
+                        *i < amalith_core::anchor_count(kind.path_data().unwrap().subpaths())
                     }
                     _ => false,
                 });
@@ -2799,7 +2835,7 @@ impl App {
         out.retain(|id| {
             matches!(
                 self.doc.editor.document().object(*id).map(|o| &o.kind),
-                Some(amalith_core::ObjectKind::Path(_))
+                Some(kind) if kind.path_data().is_some()
             )
         });
         out
@@ -2811,7 +2847,7 @@ impl App {
     fn peek_paths(&self) -> Vec<ObjectId> {
         fn walk(doc: &amalith_core::Document, id: ObjectId, out: &mut Vec<ObjectId>) {
             match doc.object(id).map(|o| &o.kind) {
-                Some(amalith_core::ObjectKind::Path(_)) => out.push(id),
+                Some(kind) if kind.path_data().is_some() => out.push(id),
                 Some(amalith_core::ObjectKind::Group(g)) => {
                     for &c in &g.children {
                         walk(doc, c, out);
@@ -3445,6 +3481,12 @@ impl App {
     /// stepper direction (already `+1` / `-1`).
     fn apply_stroke_flyout(&mut self, hit: stroke_panel::Hit, dir: i32) {
         use stroke_panel::Hit;
+        // A click anywhere else in the flyout (or outside it) commits a
+        // field that was mid-edit, same as clicking away from any other
+        // numeric field in the shell.
+        if self.stroke_flyout_edit.is_some() && !matches!(hit, Hit::Field(_)) {
+            self.commit_stroke_flyout_edit();
+        }
         match hit {
             Hit::Inside => {}
             Hit::Outside => {
@@ -3476,6 +3518,106 @@ impl App {
                 s.dash[0] = d;
                 s.dash[1] = (g + dir as f64).max(0.0);
             }),
+            Hit::Field(f) => self.begin_stroke_flyout_edit(f),
+        }
+    }
+
+    fn begin_stroke_flyout_edit(&mut self, field: stroke_panel::Field) {
+        if self.stroke_flyout_edit.as_ref().is_some_and(|(f, _)| *f == field) {
+            return;
+        }
+        let repr = self.stroke_style_repr();
+        let weight = self
+            .doc.selection
+            .first()
+            .and_then(|id| self.doc.editor.document().object(*id))
+            .map(|o| o.appearance.stroke_width)
+            .unwrap_or(self.doc.stroke_w);
+        let (dash, gap) = stroke_panel::dash_gap(&repr);
+        let seed = match field {
+            stroke_panel::Field::Weight => action::trim_num(weight),
+            stroke_panel::Field::Limit => action::trim_num(repr.miter_limit),
+            stroke_panel::Field::Dash => action::trim_num(dash),
+            stroke_panel::Field::Gap => action::trim_num(gap),
+        };
+        self.stroke_flyout_edit = Some((field, widgets::NumEdit::seeded(seed)));
+        self.request_main_redraw();
+    }
+
+    /// Applies the focused Stroke-flyout field's current buffer live,
+    /// without leaving edit mode — called after every keystroke.
+    fn apply_stroke_flyout_edit_live(&mut self) {
+        let Some((field, edit)) = &self.stroke_flyout_edit else {
+            return;
+        };
+        if edit.fresh {
+            return;
+        }
+        let Some(v) = action::parse_num(&edit.buf) else {
+            return;
+        };
+        let field = *field;
+        match field {
+            stroke_panel::Field::Weight => {
+                let width = v.max(0.0);
+                self.doc.stroke_w = width;
+                if !self.doc.selection.is_empty() {
+                    let _ = self.doc.editor.execute(Command::SetStrokeWidth {
+                        objects: self.doc.selection.clone(),
+                        width,
+                    });
+                }
+            }
+            stroke_panel::Field::Limit => {
+                self.edit_stroke_style(|s| s.miter_limit = v.clamp(1.0, 500.0));
+            }
+            stroke_panel::Field::Dash => {
+                self.edit_stroke_style(|s| {
+                    let (_, g) = stroke_panel::dash_gap(s);
+                    s.dash[0] = v.max(0.0);
+                    s.dash[1] = g;
+                });
+            }
+            stroke_panel::Field::Gap => {
+                self.edit_stroke_style(|s| {
+                    let (d, _) = stroke_panel::dash_gap(s);
+                    s.dash[0] = d;
+                    s.dash[1] = v.max(0.0);
+                });
+            }
+        }
+    }
+
+    fn commit_stroke_flyout_edit(&mut self) {
+        self.apply_stroke_flyout_edit_live();
+        self.stroke_flyout_edit = None;
+        self.request_main_redraw();
+    }
+
+    /// Digit / Enter / Esc stay in a Stroke-flyout field.
+    fn stroke_flyout_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        let Some((_, edit)) = &mut self.stroke_flyout_edit else {
+            return false;
+        };
+        match widgets::edit_key(edit, event, self.shift_down) {
+            widgets::EditOutcome::Consumed => {
+                self.apply_stroke_flyout_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            widgets::EditOutcome::Commit => {
+                self.commit_stroke_flyout_edit();
+                true
+            }
+            widgets::EditOutcome::CommitAndPassThrough => {
+                self.commit_stroke_flyout_edit();
+                false
+            }
+            widgets::EditOutcome::Cancel => {
+                self.stroke_flyout_edit = None;
+                self.request_main_redraw();
+                true
+            }
         }
     }
 
@@ -4290,7 +4432,7 @@ impl App {
     /// objects, else the new-text default.
     fn edit_text_align(&mut self, align: amalith_core::TextAlign) {
         if let Some(te) = &mut self.text_edit {
-            te.set_align(align);
+            te.set_align(align, &mut self.text);
             self.request_main_redraw();
         } else if !self.edit_selected_text_data(|d| d.align = align) {
             self.text_align_default = align;
@@ -4513,7 +4655,9 @@ impl App {
                 td.content = textedit::hard_wrapped_content(&td, &mut self.text);
                 td.kind = TextKind::Point;
             }
-            TextKind::Point => {
+            // Path text has no Area/Point toggle of its own in the Type
+            // menu yet — treat it like Point (leaves the path behind).
+            TextKind::Point | TextKind::Path(_) => {
                 let m = textedit::measure_text_data(&td, &mut self.text);
                 td.kind = TextKind::Area {
                     width: m.width().max(TEXTBOX_MIN),
@@ -4712,6 +4856,19 @@ impl App {
         self.request_main_redraw();
     }
 
+    fn commit_path_text_bracket(&mut self, object: ObjectId, edit: pathtext::BracketDrag) {
+        let doc = self.doc.editor.document();
+        let Some(amalith_core::ObjectKind::Text(td)) = doc.object(object).map(|o| &o.kind) else { return };
+        let Some((arc, rel)) = pathtext::resolve(doc, object, &edit.original) else { return };
+        let next = edit.values(&arc, self.cmd_down);
+        if next == edit.original { return; }
+        let mut data = td.clone();
+        data.kind = amalith_core::TextKind::Path(next);
+        data.local_bounds = pathtext::text_bounds(&mut self.text, &data, &next, &arc, rel);
+        let _ = self.doc.editor.execute(Command::SetText { object, data });
+        self.request_main_redraw();
+    }
+
     /// True while text is the editing focus — the caret is in a text
     /// object, or the whole selection is text objects. Drives the
     /// options-bar Character cluster.
@@ -4745,6 +4902,8 @@ impl App {
             cur_weight: self.doc.stroke_w,
             cur_opacity: self.doc.opacity,
             stroke_open: self.stroke_popover,
+            stroke_weight_edit: None,
+            opacity_edit: None,
             text_style: amalith_core::TextStyle::default(),
             anchor_sel_len: self.doc.anchor_sel.len(),
             xform: None,
@@ -4794,6 +4953,8 @@ impl App {
             cur_weight: self.doc.stroke_w,
             cur_opacity: self.doc.opacity,
             stroke_open: self.stroke_popover,
+            stroke_weight_edit: self.stroke_weight_edit.as_ref().map(|(s, _)| s.as_str()),
+            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
             text_style: self.active_text_style(),
             anchor_sel_len: self.doc.anchor_sel.len(),
             xform: selection_xform(self.doc.editor.document(), &self.doc.selection, self.xform_ref),
@@ -4820,7 +4981,14 @@ impl App {
 
     /// Screen (logical) point → the open editor's local space.
     fn text_editor_point(&self, screen: Point) -> Option<(f32, f32)> {
-        let obj = self.text_edit.as_ref()?.object;
+        let te = self.text_edit.as_ref()?;
+        let obj = te.object;
+        if let amalith_core::TextKind::Path(pt) = te.kind() {
+            let doc = self.doc.editor.document();
+            let (arc, _) = pathtext::resolve(doc, obj, &pt)?;
+            let p = pathtext::to_path_local(doc, obj, self.doc_point(screen));
+            return Some(te.path_editor_point(&arc, &pt, p));
+        }
         let world = self.doc.editor.document().world_transform(obj);
         let xf = self.doc.view.to_screen() * convert::affine(world);
         let p = xf.inverse() * screen;
@@ -4836,9 +5004,10 @@ impl App {
         // visible object behind instead of nothing.
         let placeholder = match kind {
             amalith_core::TextKind::Area { .. } => TEXT_PLACEHOLDER_PARAGRAPH,
-            amalith_core::TextKind::Point => TEXT_PLACEHOLDER,
+            amalith_core::TextKind::Point | amalith_core::TextKind::Path(_) => TEXT_PLACEHOLDER,
         };
         let mut data = amalith_core::TextData {
+            path_geometry: None,
             content: placeholder.to_string(),
             kind,
             style: self.text_defaults.clone(),
@@ -4864,11 +5033,94 @@ impl App {
         }
     }
 
+    fn edit_path_options(&mut self, align: Option<amalith_core::PathTextAlign>) {
+        self.commit_text_edit();
+        let [id] = self.doc.selection[..] else { return };
+        let doc = self.doc.editor.document();
+        let Some(amalith_core::ObjectKind::Text(td)) = doc.object(id).map(|o| &o.kind) else { return };
+        let amalith_core::TextKind::Path(mut pt) = td.kind else { return };
+        let Some((arc, rel)) = pathtext::resolve(doc, id, &pt) else { return };
+        let mut data = td.clone();
+        if let Some(align) = align { pt.align = align; } else { pt.flip = !pt.flip; }
+        data.kind = amalith_core::TextKind::Path(pt);
+        data.local_bounds = pathtext::text_bounds(&mut self.text, &data, &pt, &arc, rel);
+        if let Err(error) = self.doc.editor.execute(Command::SetText { object: id, data }) {
+            self.doc.io_error = Some(error.to_string());
+        }
+        self.request_main_redraw();
+    }
+
+    /// Convert the clicked curve to a text frame in place. The source's
+    /// transform, parent, and stacking position survive; text starts at
+    /// the clicked distance and closed paths continue through the seam.
+    fn create_path_text(&mut self, path_id: ObjectId, click_doc: Point) {
+        let (points, closed, path_world) = {
+            let doc = self.doc.editor.document();
+            let Some(amalith_core::ObjectKind::Path(pd)) = doc.object(path_id).map(|o| &o.kind)
+            else {
+                return;
+            };
+            let Some(points) = pd.flattened_points(0.05).into_iter().next() else {
+                return;
+            };
+            let closed = pd.subpaths().first().is_some_and(|s| s.closed);
+            (points, closed, doc.world_transform(path_id))
+        };
+        if points.len() < 2 {
+            return;
+        }
+        let arc = amalith_core::ArcLengthPath::new(&points, closed);
+        let total = arc.total_length();
+        if total <= 0.0 {
+            return;
+        }
+
+        let click_local = path_world.inverse()
+            * amalith_core::Point::new(click_doc.x, click_doc.y);
+        let start = arc.nearest_distance(click_local);
+        // Closed paths can continue through their seam. Open paths stop at
+        // their physical endpoint, just as Illustrator's end bracket does.
+        let end = if closed { start + total } else { total };
+
+        let layer = self.ensure_layer();
+        let pt = amalith_core::PathTextData {
+            path: path_id,
+            start,
+            end,
+            align: amalith_core::PathTextAlign::Baseline,
+            flip: false,
+        };
+        let mut data = amalith_core::TextData {
+            path_geometry: None,
+            content: TEXT_PLACEHOLDER.to_string(),
+            kind: amalith_core::TextKind::Path(pt),
+            style: self.text_defaults.clone(),
+            align: self.text_align_default,
+            paragraph: self.para_defaults,
+            local_bounds: amalith_core::Rect::ZERO,
+            thread_next: None,
+            thread_prev: None,
+        };
+        data.local_bounds = pathtext::text_bounds(&mut self.text, &data, &pt, &arc, amalith_core::Affine::IDENTITY);
+        let cmd = Command::CreateText {
+            layer,
+            data,
+            transform: amalith_core::Affine::IDENTITY,
+            name: None,
+        };
+        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+            self.doc.selection = vec![id];
+            let origin = click_doc;
+            self.enter_text_edit(id, origin, None);
+        }
+    }
+
     /// A blank fixed-size area-text frame (no placeholder, not opened for
     /// editing) — the receiving end of a text thread.
     fn create_empty_area_text(&mut self, w: f64, h: f64, origin: Point) -> Option<ObjectId> {
         let layer = self.ensure_layer();
         let mut data = amalith_core::TextData {
+            path_geometry: None,
             content: String::new(),
             kind: amalith_core::TextKind::Area {
                 width: w.max(TEXTBOX_MIN),
@@ -5060,12 +5312,19 @@ impl App {
             &mut self.text,
         );
         te.set_thread(td.thread_prev, td.thread_next);
+        te.set_path_geometry(td.path_geometry);
         match click {
             Some(p) => {
                 let xf =
                     self.doc.view.to_screen() * convert::affine(self.doc.editor.document().world_transform(id));
                 let lp = xf.inverse() * p;
-                te.pointer_down((lp.x as f32, lp.y as f32), 1, &mut self.text);
+                let point = if let amalith_core::TextKind::Path(pt) = te.kind() {
+                    pathtext::resolve(self.doc.editor.document(), id, &pt).map(|(arc, _)| {
+                        let local = pathtext::to_path_local(self.doc.editor.document(), id, self.doc_point(p));
+                        te.path_editor_point(&arc, &pt, local)
+                    }).unwrap_or((lp.x as f32, lp.y as f32))
+                } else { (lp.x as f32, lp.y as f32) };
+                te.pointer_down(point, 1, &mut self.text);
             }
             None => te.select_all(&mut self.text),
         }
@@ -5085,11 +5344,20 @@ impl App {
         let Some(mut te) = self.text_edit.take() else {
             return;
         };
-        if te.is_empty() {
+        let is_path = matches!(self.doc.editor.document().object(te.object).map(|o| &o.kind), Some(amalith_core::ObjectKind::Text(td)) if matches!(td.kind, amalith_core::TextKind::Path(_)));
+        if te.is_empty() && !is_path {
             let _ = self.doc.editor.execute(Command::DeleteObject { id: te.object });
             self.doc.selection.retain(|s| *s != te.object);
         } else {
-            let data = te.to_text_data(&mut self.text);
+            let mut data = te.to_text_data(&mut self.text);
+            // `to_text_data` only knows the object's own content/style —
+            // path text's real (curved) bounds need the followed path's
+            // geometry, which needs `Document`.
+            if let amalith_core::TextKind::Path(pt) = &data.kind {
+                if let Some((arc, rel_xf)) = pathtext::resolve(self.doc.editor.document(), te.object, pt) {
+                    data.local_bounds = pathtext::text_bounds(&mut self.text, &data, pt, &arc, rel_xf);
+                }
+            }
             let _ = self.doc.editor.execute(Command::SetText {
                 object: te.object,
                 data,
@@ -6094,9 +6362,14 @@ impl App {
             } else {
                 CanvasCursor::Grab
             }
+        } else if matches!(self.drag, Drag::PathTextBracket { .. }) {
+            CanvasCursor::Grabbing
         } else {
             match self.effective_tool() {
-                Tool::Text => CanvasCursor::IBeam,
+                Tool::Text => {
+                    let target = select::topmost_path_near(self.doc.editor.document(), self.doc_point(self.pointer), self.visible_doc_rect(), 4.0 / self.doc.view.zoom);
+                    if self.text_edit.is_none() && target.is_some() { CanvasCursor::PathType } else { CanvasCursor::IBeam }
+                },
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
                 Tool::Hand => CanvasCursor::Grab,
                 Tool::Zoom => {
@@ -6172,6 +6445,21 @@ impl App {
     /// If the pointer is over a transform grip (Selection or Artboard
     /// tool) or a rotation halo, the cursor that fits.
     fn handle_hover_cursor(&self) -> Option<CanvasCursor> {
+        if matches!(self.effective_tool(), Tool::Select | Tool::DirectSelect) {
+            if let [id] = self.doc.selection[..] {
+                let doc = self.doc.editor.document();
+                if let Some(amalith_core::ObjectKind::Text(td)) = doc.object(id).map(|o| &o.kind) {
+                    if let amalith_core::TextKind::Path(pt) = td.kind {
+                        if let Some((arc, rel)) = pathtext::resolve(doc, id, &pt) {
+                            let xf = self.doc.view.to_screen() * convert::affine(doc.world_transform(id));
+                            if pathtext::hit_bracket(&arc, &pt, rel, xf, self.pointer).is_some() {
+                                return Some(CanvasCursor::Grab);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let to_screen = self.doc.view.to_screen();
         let scale_for = |h: handles::Handle| match h {
             handles::Handle::Nw | handles::Handle::Se => CanvasCursor::ScaleNWSE,
