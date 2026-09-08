@@ -566,15 +566,20 @@ pub fn step_of(field: GradField) -> f64 {
     }
 }
 
-/// Parse a typed field buffer into the value the App applies. `%` and `°`
-/// suffixes are tolerated; Location / Opacity come back as a 0..1 fraction.
+/// The `MeasureKind` a Gradient field's own numbers are in.
+pub fn field_kind(field: GradField) -> amalith_core::MeasureKind {
+    match field {
+        GradField::Angle => amalith_core::MeasureKind::Angle,
+        GradField::Aspect => amalith_core::MeasureKind::Count,
+        GradField::Location | GradField::Opacity => amalith_core::MeasureKind::Percent,
+    }
+}
+
+/// Parse a typed field buffer (arithmetic, `%`/`°` tolerated) into the
+/// value the App applies; Location / Opacity come back as a 0..1
+/// fraction.
 pub fn parse_field(field: GradField, buf: &str) -> Option<f64> {
-    let t: String = buf
-        .trim()
-        .chars()
-        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-        .collect();
-    let v: f64 = t.parse().ok()?;
+    let v = amalith_core::parse_measurement(buf, field_kind(field))?;
     Some(match field {
         GradField::Angle => v,
         GradField::Aspect => v.clamp(0.05, 20.0),

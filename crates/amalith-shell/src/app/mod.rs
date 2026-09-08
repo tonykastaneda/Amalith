@@ -2119,10 +2119,20 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
                 if let Some(m) = &self.font_menu {
-                    let pick = m.matches().into_iter().next();
                     let kind = m.kind;
+                    // A typed custom size always wins over substring-
+                    // matching the fixed preset list — Illustrator's own
+                    // Size field is a combo box, not a picklist, and
+                    // accepts arithmetic / other-unit overrides like any
+                    // other measurement field (e.g. `1in` → 72pt).
+                    let custom_size = (kind == panels::FontMenu::Size)
+                        .then(|| amalith_core::parse_measurement(m.query.trim(), amalith_core::MeasureKind::Length(amalith_core::Unit::Pt)))
+                        .flatten();
+                    let pick = if custom_size.is_none() { m.matches().into_iter().next() } else { None };
                     self.font_menu = None;
-                    if let Some(label) = pick {
+                    if let Some(v) = custom_size {
+                        self.apply_panel_action(panels::Action::SetFontSize(v.clamp(1.0, 1296.0)), false);
+                    } else if let Some(label) = pick {
                         self.apply_font_choice(kind, label);
                     }
                 }
@@ -3653,7 +3663,7 @@ impl App {
             stroke_panel::Field::Dash => action::trim_num(dash),
             stroke_panel::Field::Gap => action::trim_num(gap),
         };
-        self.stroke_flyout_edit = Some((field, widgets::NumEdit::seeded(seed)));
+        self.stroke_flyout_edit = Some((field, widgets::NumEdit::seeded(seed, stroke_flyout_field_kind(field))));
         self.request_main_redraw();
     }
 
@@ -3666,7 +3676,7 @@ impl App {
         if edit.fresh {
             return;
         }
-        let Some(v) = action::parse_num(&edit.buf) else {
+        let Some(v) = action::parse_num(&edit.buf, stroke_flyout_field_kind(*field)) else {
             return;
         };
         let field = *field;
@@ -7470,6 +7480,17 @@ impl ApplicationHandler for App {
 /// Right rail: Color|Transform|Pathfinder|Align on top (Swatches starts
 /// closed), Character in the middle, Layers|Artboards at the bottom.
 /// Snap `p` to a 45°-stepped direction from `prev` when `snap` (Shift).
+/// The `MeasureKind` each Stroke-flyout field's own numbers are in —
+/// Weight/Dash/Gap are document-px lengths, Limit is a unitless ratio.
+fn stroke_flyout_field_kind(field: stroke_panel::Field) -> amalith_core::MeasureKind {
+    match field {
+        stroke_panel::Field::Limit => amalith_core::MeasureKind::Count,
+        stroke_panel::Field::Weight | stroke_panel::Field::Dash | stroke_panel::Field::Gap => {
+            amalith_core::MeasureKind::Length(amalith_core::Unit::Px)
+        }
+    }
+}
+
 fn constrained(prev: Option<Point>, p: Point, snap: bool) -> Point {
     let Some(prev) = prev.filter(|_| snap) else {
         return p;

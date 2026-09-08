@@ -220,7 +220,7 @@ impl NewDocForm {
         if f == Field::Name {
             return;
         }
-        let v = (parse(&self.text_of(f)) + delta).max(0.0);
+        let v = (parse(&self.text_of(f), self.unit) + delta).max(0.0);
         let s = fmt(v);
         self.field(f).set_text(&s);
         self.field(f).select_all(tcx);
@@ -242,7 +242,7 @@ impl NewDocForm {
         if f == Field::Name {
             return;
         }
-        let v = parse(&self.text_of(f));
+        let v = parse(&self.text_of(f), self.unit);
         self.field(f).set_text(&fmt(v));
         if self.bleed_linked
             && matches!(
@@ -263,7 +263,7 @@ impl NewDocForm {
         }
         let old = self.unit;
         let conv = |tf: &mut TextField| {
-            let v = Length::new(parse(&tf.text()), old).in_unit(unit);
+            let v = Length::new(parse(&tf.text(), old), old).in_unit(unit);
             tf.set_text(&fmt(v));
         };
         conv(&mut self.width);
@@ -285,7 +285,7 @@ impl NewDocForm {
     }
 
     fn portrait(&self) -> bool {
-        parse(&self.height.text()) >= parse(&self.width.text())
+        parse(&self.height.text(), self.unit) >= parse(&self.width.text(), self.unit)
     }
 
     pub fn set_orientation(&mut self, portrait: bool) {
@@ -296,19 +296,24 @@ impl NewDocForm {
     }
 
     pub fn width_px(&self) -> f64 {
-        Length::new(parse(&self.width.text()), self.unit).px()
+        Length::new(parse(&self.width.text(), self.unit), self.unit).px()
     }
     pub fn height_px(&self) -> f64 {
-        Length::new(parse(&self.height.text()), self.unit).px()
+        Length::new(parse(&self.height.text(), self.unit), self.unit).px()
     }
     /// Bleed in px: top, bottom, left, right.
     pub fn bleed_px(&self) -> [f64; 4] {
-        std::array::from_fn(|i| Length::new(parse(&self.bleed[i].text()), self.unit).px())
+        std::array::from_fn(|i| Length::new(parse(&self.bleed[i].text(), self.unit), self.unit).px())
     }
 }
 
-fn parse(s: &str) -> f64 {
-    s.trim().parse::<f64>().unwrap_or(0.0).max(0.0)
+/// Parses a Width/Height/Bleed buffer — arithmetic, plus any per-literal
+/// unit suffix (`5in`, `3cm`) converted into `unit` — so typing e.g. `5in`
+/// while the dialog's Units dropdown reads `px` converts it to px.
+fn parse(s: &str, unit: Unit) -> f64 {
+    amalith_core::parse_measurement(s, amalith_core::MeasureKind::Length(unit))
+        .unwrap_or(0.0)
+        .max(0.0)
 }
 
 /// Format a number with up to 3 decimals, trailing zeros trimmed.

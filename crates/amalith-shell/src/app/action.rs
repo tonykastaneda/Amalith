@@ -626,7 +626,7 @@ impl App {
                         .and_then(|id| self.doc.editor.document().object(*id))
                         .map(|o| o.appearance.opacity)
                         .unwrap_or(self.doc.opacity);
-                    self.opacity_edit = Some(widgets::NumEdit::seeded(format!("{:.0}", op * 100.0)));
+                    self.opacity_edit = Some(widgets::NumEdit::seeded(format!("{:.0}", op * 100.0), amalith_core::MeasureKind::Percent));
                 }
             }
             panels::Action::BeginAlignSpacingEdit => {
@@ -781,7 +781,7 @@ impl App {
     }
 
     fn commit_xform_buf(&mut self, field: panels::transform::XformField, buf: String) {
-        if let Some(v) = parse_num(&buf) {
+        if let Some(v) = parse_num(&buf, xform_field_kind(field)) {
             self.apply_xform_value(field, v);
         }
     }
@@ -793,7 +793,7 @@ impl App {
         if *fresh {
             return;
         }
-        if let Some(v) = parse_num(buf) {
+        if let Some(v) = parse_num(buf, xform_field_kind(*field)) {
             self.apply_xform_value(*field, v);
         }
     }
@@ -873,8 +873,8 @@ impl App {
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
                 let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
-                if let Some((_, buf, fresh)) = &mut self.xform_edit {
-                    let cur = parse_num(buf).unwrap_or(0.0);
+                if let Some((field, buf, fresh)) = &mut self.xform_edit {
+                    let cur = parse_num(buf, xform_field_kind(*field)).unwrap_or(0.0);
                     *buf = trim_num(cur + dir * step);
                     *fresh = false;
                 }
@@ -901,9 +901,7 @@ impl App {
                     self.commit_xform_edit();
                     return false;
                 };
-                let numeric = txt.chars().all(|c| {
-                    c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ','
-                });
+                let numeric = txt.chars().all(widgets::measurement_char);
                 if !numeric {
                     self.commit_xform_edit();
                     return false;
@@ -977,7 +975,7 @@ impl App {
                     .editor
                     .execute(Command::RenameArtboard { id, name: name.to_string() });
             }
-        } else if let Some(v) = parse_num(&buf) {
+        } else if let Some(v) = parse_num(&buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)) {
             self.apply_artboard_value(field, v);
         }
     }
@@ -1125,7 +1123,7 @@ impl App {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
                 let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
                 if let Some((_, buf, fresh)) = &mut self.artboard_edit {
-                    let cur = parse_num(buf).unwrap_or(0.0);
+                    let cur = parse_num(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)).unwrap_or(0.0);
                     *buf = trim_num(cur + dir * step);
                     *fresh = false;
                 }
@@ -1137,10 +1135,7 @@ impl App {
                 let Some(txt) = event.text.as_ref() else {
                     return true;
                 };
-                let ok = field == F::Name
-                    || txt.chars().all(|c| {
-                        c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == ','
-                    });
+                let ok = field == F::Name || txt.chars().all(widgets::measurement_char);
                 if !ok {
                     return true;
                 }
@@ -1186,7 +1181,7 @@ impl App {
         let t = buf.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("auto") {
             self.align_spacing = None;
-        } else if let Some(v) = parse_num(buf) {
+        } else if let Some(v) = parse_num(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)) {
             self.align_spacing = Some(v.max(0.0));
         }
     }
@@ -1268,15 +1263,7 @@ impl App {
                     self.commit_align_spacing_edit();
                     return false;
                 };
-                let numeric = txt.chars().all(|c| {
-                    c.is_ascii_digit()
-                        || c == '.'
-                        || c == '-'
-                        || c == '+'
-                        || c == ','
-                        || c.is_ascii_alphabetic()
-                        || c.is_whitespace()
-                });
+                let numeric = txt.chars().all(widgets::measurement_char);
                 if !numeric {
                     self.commit_align_spacing_edit();
                     return false;
@@ -1305,7 +1292,7 @@ impl App {
         if edit.fresh {
             return;
         }
-        let Some(v) = parse_num(&edit.buf) else { return };
+        let Some(v) = parse_num(&edit.buf, amalith_core::MeasureKind::Percent) else { return };
         let opacity = (v as f32 / 100.0).clamp(0.0, 1.0);
         self.doc.opacity = opacity;
         if !self.doc.selection.is_empty() {
@@ -1372,7 +1359,7 @@ impl App {
         if *fresh {
             return;
         }
-        let Some(v) = parse_num(buf) else { return };
+        let Some(v) = parse_num(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)) else { return };
         let width = v.max(0.0);
         self.doc.stroke_w = width;
         if !self.doc.selection.is_empty() {
@@ -1436,7 +1423,7 @@ impl App {
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
                 if let Some((buf, fresh)) = &mut self.stroke_weight_edit {
-                    let cur = parse_num(buf).unwrap_or(0.0);
+                    let cur = parse_num(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)).unwrap_or(0.0);
                     // Plain arrows match the options-bar stepper: quarter-pt
                     // steps at/below 1pt (0, .25, .5, .75, 1), whole-pt
                     // steps above it — 1pt → 2pt going up, but 1pt → 0.75pt
@@ -1474,9 +1461,7 @@ impl App {
                     self.commit_stroke_weight_edit();
                     return false;
                 };
-                let numeric = txt
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+');
+                let numeric = txt.chars().all(widgets::measurement_char);
                 if !numeric {
                     self.commit_stroke_weight_edit();
                     return false;
@@ -1498,13 +1483,23 @@ impl App {
     }
 }
 
-pub(in crate::app) fn parse_num(s: &str) -> Option<f64> {
-    let t = s
-        .trim()
-        .trim_end_matches("px")
-        .trim_end_matches('°')
-        .trim();
-    t.parse().ok()
+/// Parses a measurement field's buffer — arithmetic, plus any per-literal
+/// unit suffix (`5in`, `3pt`) converted into `kind`'s own unit — see
+/// [`amalith_core::parse_measurement`]. Every options-bar / dialog field
+/// in this file reads its buffer through this rather than a bare
+/// `str::parse`, so typing e.g. `5in` into a px field converts it.
+pub(in crate::app) fn parse_num(s: &str, kind: amalith_core::MeasureKind) -> Option<f64> {
+    amalith_core::parse_measurement(s, kind)
+}
+
+/// The [`amalith_core::MeasureKind`] a Transform field's own numbers are
+/// in — length fields in document px, Rotation/Shear in degrees.
+fn xform_field_kind(field: panels::transform::XformField) -> amalith_core::MeasureKind {
+    use panels::transform::XformField as F;
+    match field {
+        F::Rotation | F::Shear => amalith_core::MeasureKind::Angle,
+        F::X | F::Y | F::W | F::H => amalith_core::MeasureKind::Length(amalith_core::Unit::Px),
+    }
 }
 
 pub(in crate::app) fn trim_num(v: f64) -> String {

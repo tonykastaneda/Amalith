@@ -546,9 +546,7 @@ impl App {
                 self.request_main_redraw();
                 true
             }
-            Key::Character(s)
-                if s.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') =>
-            {
+            Key::Character(s) if s.chars().all(crate::widgets::measurement_char) => {
                 if let Some((_, buf, fresh)) = self.gradient_edit.as_mut() {
                     if *fresh {
                         buf.clear();
@@ -571,8 +569,8 @@ impl App {
             Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => {
                 let dir = if matches!(&event.logical_key, Key::Named(NamedKey::ArrowUp)) { 1.0 } else { -1.0 };
                 let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
-                if let Some((_, buf, fresh)) = self.gradient_edit.as_mut() {
-                    let cur = super::action::parse_num(buf).unwrap_or(0.0);
+                if let Some((field, buf, fresh)) = self.gradient_edit.as_mut() {
+                    let cur = super::action::parse_num(buf, panels::gradient::field_kind(*field)).unwrap_or(0.0);
                     *buf = super::action::trim_num(cur + dir * step);
                     *fresh = false;
                 }

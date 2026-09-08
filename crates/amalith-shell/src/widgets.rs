@@ -6,8 +6,23 @@ use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
 
+use amalith_core::MeasureKind;
+
 use crate::text::TextContext;
 use crate::theme::Theme;
+
+/// Whether `ch` may appear while typing into a measurement field —
+/// digits, a decimal point, sign, the four arithmetic operators,
+/// parentheses, and a unit-suffix letter/symbol (`px`, `pt`, `in`, `mm`,
+/// `cm`, `pc`, `ft`, `yd`, `m`, `°`, `%`, `"`, `'`) — matching what
+/// [`amalith_core::parse_measurement`] can consume. Shared by every
+/// field's per-keystroke filter so widening what's typable and widening
+/// what's parseable never drift apart.
+pub fn measurement_char(ch: char) -> bool {
+    ch.is_ascii_digit()
+        || ch.is_ascii_alphabetic()
+        || matches!(ch, '.' | ',' | '-' | '+' | '*' | '/' | '(' | ')' | ' ' | '%' | '\'' | '"' | '\u{b0}')
+}
 
 /// The standard dialog-footer button: sharp corners, a solid `theme.accent`
 /// fill for `primary` (Create, OK, Save, Open — the default action), a
@@ -51,13 +66,19 @@ pub fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect,
 pub struct NumEdit {
     pub buf: String,
     pub fresh: bool,
+    /// What the buffer's own (unsuffixed) numbers mean, and what other
+    /// units typing a suffix (`5in`, `3pt`, …) may convert *from* — see
+    /// [`amalith_core::parse_measurement`]. Nudging (Up/Down) and commit
+    /// parsing both go through this, so every `NumEdit` field
+    /// consistently shows and accepts its own unit's initials.
+    pub kind: MeasureKind,
 }
 
 impl NumEdit {
     /// Begin editing, seeded from the field's current value — freshly
     /// selected, so the first keystroke overwrites it.
-    pub fn seeded(seed: impl Into<String>) -> Self {
-        Self { buf: seed.into(), fresh: true }
+    pub fn seeded(seed: impl Into<String>, kind: MeasureKind) -> Self {
+        Self { buf: seed.into(), fresh: true, kind }
     }
 }
 
@@ -105,8 +126,8 @@ pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool,
         PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
             let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
             let step = if cmd { 0.1 } else if shift { 5.0 } else { 1.0 };
-            let cur = parse_buf(&edit.buf).unwrap_or(0.0);
-            edit.buf = format_buf(cur + dir * step);
+            let cur = amalith_core::parse_measurement(&edit.buf, edit.kind).unwrap_or(0.0);
+            edit.buf = format_number(cur + dir * step);
             edit.fresh = false;
             EditOutcome::Consumed
         }
@@ -129,9 +150,7 @@ pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool,
             let Some(txt) = event.text.as_ref() else {
                 return EditOutcome::CommitAndPassThrough;
             };
-            let numeric = txt
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '.' || c == '-' || c == '+');
+            let numeric = txt.chars().all(measurement_char);
             if !numeric {
                 return EditOutcome::CommitAndPassThrough;
             }
@@ -147,17 +166,11 @@ pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool,
     }
 }
 
-/// Parses a field buffer that may still carry a trailing unit (`"12 px"`,
-/// `"45°"`, `"2 x"`) left over from a seeded (not yet retyped) value.
-fn parse_buf(s: &str) -> Option<f64> {
-    let t = s.trim().trim_end_matches("px").trim_end_matches('°').trim_end_matches('x').trim_end_matches('%').trim();
-    t.parse().ok()
-}
-
 /// Formats a stepped value back into a plain editable number — no unit
-/// suffix, so it round-trips through [`parse_buf`] and reads as "still
-/// being typed" (trailing zeros trimmed, so `12.0` becomes `12`).
-fn format_buf(v: f64) -> String {
+/// suffix, so it reads as "still being typed" rather than a committed,
+/// re-suffixed display value (trailing zeros trimmed, so `12.0` becomes
+/// `12`).
+fn format_number(v: f64) -> String {
     let r = (v * 10_000.0).round() / 10_000.0;
     if (r - r.round()).abs() < 5e-5 {
         format!("{}", r.round() as i64)

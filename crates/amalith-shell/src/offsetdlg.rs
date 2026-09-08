@@ -51,12 +51,16 @@ impl OffsetDialog {
         }
     }
 
+    /// The offset distance, in document px — typing e.g. `5in` converts.
     pub fn resolved_offset(&self) -> f64 {
-        self.offset.trim().parse().unwrap_or(0.0)
+        amalith_core::parse_measurement(self.offset.trim(), amalith_core::MeasureKind::Length(amalith_core::Unit::Px))
+            .unwrap_or(0.0)
     }
 
     pub fn resolved_miter_limit(&self) -> f64 {
-        self.miter_limit.trim().parse::<f64>().unwrap_or(4.0).max(1.0)
+        amalith_core::parse_measurement(self.miter_limit.trim(), amalith_core::MeasureKind::Count)
+            .unwrap_or(4.0)
+            .max(1.0)
     }
 
     pub fn objects(&self) -> Vec<ObjectId> {
@@ -64,7 +68,7 @@ impl OffsetDialog {
     }
 
     pub fn push_char(&mut self, ch: char) {
-        let allowed = ch.is_ascii_digit() || ch == '.' || (self.focus == Field::Offset && ch == '-');
+        let allowed = crate::widgets::measurement_char(ch);
         if !allowed {
             return;
         }
@@ -209,6 +213,8 @@ pub fn paint(
         dlg.offset.clone()
     };
     text.draw(scene, &offset_shown, 13.0, theme.text, lay.offset_field.x0 + 10.0, lay.offset_field.center().y + 4.5);
+    let px_w = text.measure("px", 11.5);
+    text.draw(scene, "px", 11.5, theme.text_dim, lay.offset_field.x1 - px_w - 8.0, lay.offset_field.center().y + 4.5);
 
     text.draw(scene, "Joins:", 12.5, theme.text_dim, body.x0 + PAD, lay.join_seg[0].center().y + 4.5);
     for (i, r) in lay.join_seg.iter().enumerate() {

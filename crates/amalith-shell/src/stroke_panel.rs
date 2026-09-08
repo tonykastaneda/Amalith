@@ -326,7 +326,7 @@ pub fn paint(
 
     let pair = dash_gap(style);
     label(text, scene, "Dash", row_cy(6.0), !style.dashed);
-    let dash_shown = buf_of(Field::Dash).map(str::to_string).unwrap_or_else(|| format!("{:.0}", pair.0));
+    let dash_shown = buf_of(Field::Dash).map(str::to_string).unwrap_or_else(|| format!("{:.0} px", pair.0));
     num_field(
         scene,
         text,
@@ -346,7 +346,7 @@ pub fn paint(
         lay.gap_field.x0 - 30.0,
         lay.gap_field.y0 + 14.0,
     );
-    let gap_shown = buf_of(Field::Gap).map(str::to_string).unwrap_or_else(|| format!("{:.0}", pair.1));
+    let gap_shown = buf_of(Field::Gap).map(str::to_string).unwrap_or_else(|| format!("{:.0} px", pair.1));
     num_field(
         scene,
         text,

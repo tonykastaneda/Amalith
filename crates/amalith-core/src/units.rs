@@ -81,6 +81,46 @@ impl Unit {
         }
     }
 
+    /// Short suffix shown in a numeric field and accepted when typed
+    /// (case-insensitively) as an override — e.g. typing `5in` into a
+    /// field displaying `px` converts 5 inches to px, matching
+    /// Illustrator's numeric fields. Matched against the *whole* run of
+    /// trailing letters a field's parser scans off a typed value, so
+    /// there's no ambiguity between e.g. `mm` and `m`.
+    pub const fn abbr(self) -> &'static str {
+        match self {
+            Unit::Px => "px",
+            Unit::Pt => "pt",
+            Unit::Pc => "pc",
+            Unit::In => "in",
+            Unit::Ft => "ft",
+            Unit::Yd => "yd",
+            Unit::Mm => "mm",
+            Unit::Cm => "cm",
+            Unit::M => "m",
+        }
+    }
+
+    /// Recognizes a unit typed as text in a field — the canonical
+    /// [`Self::abbr`] plus a few common aliases/symbols (`in`/`inch`/
+    /// `inches`/`"`, `ft`/`'`, `pts`), matched case-insensitively.
+    /// Returns `None` for anything unrecognized, so the caller can treat
+    /// the field as a parse failure rather than silently guessing.
+    pub fn parse_abbr(s: &str) -> Option<Unit> {
+        match s.to_ascii_lowercase().as_str() {
+            "px" => Some(Unit::Px),
+            "pt" | "pts" => Some(Unit::Pt),
+            "pc" => Some(Unit::Pc),
+            "in" | "inch" | "inches" | "\"" => Some(Unit::In),
+            "ft" | "'" => Some(Unit::Ft),
+            "yd" => Some(Unit::Yd),
+            "mm" => Some(Unit::Mm),
+            "cm" => Some(Unit::Cm),
+            "m" => Some(Unit::M),
+            _ => None,
+        }
+    }
+
     /// Converts a value in this unit to canonical px.
     pub fn to_px(self, value: f64) -> f64 {
         value * (Unit::Px.per_inch() / self.per_inch())
@@ -165,5 +205,21 @@ mod tests {
     fn px_is_identity() {
         approx_eq(Unit::Px.to_px(42.0), 42.0);
         approx_eq(Unit::Px.from_px(42.0), 42.0);
+    }
+
+    #[test]
+    fn parse_abbr_recognizes_every_units_own_abbreviation() {
+        for unit in Unit::ALL {
+            assert_eq!(Unit::parse_abbr(unit.abbr()), Some(unit));
+        }
+    }
+
+    #[test]
+    fn parse_abbr_is_case_insensitive_and_knows_common_aliases() {
+        assert_eq!(Unit::parse_abbr("IN"), Some(Unit::In));
+        assert_eq!(Unit::parse_abbr("Inches"), Some(Unit::In));
+        assert_eq!(Unit::parse_abbr("\""), Some(Unit::In));
+        assert_eq!(Unit::parse_abbr("PX"), Some(Unit::Px));
+        assert_eq!(Unit::parse_abbr("bogus"), None);
     }
 }

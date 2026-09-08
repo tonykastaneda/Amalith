@@ -181,7 +181,7 @@ impl Sizing {
     }
 
     pub(crate) fn push_char(&mut self, ch: char) {
-        if ch.is_ascii_digit() || ch == '.' || ch == '-' {
+        if crate::widgets::measurement_char(ch) {
             self.fields[self.focus].buf.push(ch);
         }
     }
@@ -202,7 +202,7 @@ impl Sizing {
 
     pub(crate) fn step(&mut self, i: usize, delta: f64) {
         let Some(f) = self.fields.get_mut(i) else { return };
-        let cur = parse_num(&f.buf).unwrap_or(0.0);
+        let cur = parse_num(&f.buf, f.kind).unwrap_or(0.0);
         f.buf = match f.kind {
             Kind::Length => fmt_len((cur + delta).max(0.0)),
             Kind::Count => format!("{}", (cur + delta).max(3.0).round() as i64),
@@ -228,7 +228,7 @@ impl Sizing {
     /// Reformat the focused buffer, and mirror W↔H while linked.
     pub(crate) fn commit_focus(&mut self) {
         let f = &mut self.fields[self.focus];
-        let v = parse_num(&f.buf);
+        let v = parse_num(&f.buf, f.kind);
         match f.kind {
             Kind::Length => {
                 if let Some(v) = v {
@@ -274,14 +274,15 @@ impl Sizing {
     }
 
     fn value(&self, i: usize) -> f64 {
-        parse_num(&self.fields[i].buf).unwrap_or(0.0)
+        let f = &self.fields[i];
+        parse_num(&f.buf, f.kind).unwrap_or(0.0)
     }
 
     /// The committed row values, in row order.
     pub(crate) fn values(&self) -> Vec<f64> {
         self.fields
             .iter()
-            .map(|f| parse_num(&f.buf).unwrap_or(0.0))
+            .map(|f| parse_num(&f.buf, f.kind).unwrap_or(0.0))
             .collect()
     }
 
@@ -395,13 +396,18 @@ fn tri(scene: &mut Scene, cell: Rect, up: bool, color: Color) {
     scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &p);
 }
 
-fn parse_num(s: &str) -> Option<f64> {
-    let t: String = s
-        .trim()
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-        .collect();
-    t.parse().ok()
+/// The `MeasureKind` a row's own numbers are in — `Plain` (Arc's Slope)
+/// is signed and unitless like `Count`, just without the integer floor.
+fn measure_kind(kind: Kind) -> amalith_core::MeasureKind {
+    match kind {
+        Kind::Length => amalith_core::MeasureKind::Length(amalith_core::Unit::Px),
+        Kind::Percent => amalith_core::MeasureKind::Percent,
+        Kind::Count | Kind::Plain => amalith_core::MeasureKind::Count,
+    }
+}
+
+fn parse_num(s: &str, kind: Kind) -> Option<f64> {
+    amalith_core::parse_measurement(s, measure_kind(kind))
 }
 
 fn fmt_len(v: f64) -> String {

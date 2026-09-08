@@ -19,6 +19,7 @@ pub mod gradient;
 pub mod guide;
 pub mod ids;
 pub mod layer;
+pub mod measure;
 pub mod metadata;
 pub mod object;
 pub mod pathtext;
@@ -37,6 +38,7 @@ pub use gradient::{FreeformPoint, Gradient, GradientKind, GradientStop};
 pub use guide::{Guide, GuideId, GuideOrient};
 pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId};
 pub use layer::Layer;
+pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use pathtext::ArcLengthPath;
 pub use object::{

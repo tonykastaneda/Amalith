@@ -70,22 +70,35 @@ impl BlendDialog {
         }
     }
 
+    /// The `MeasureKind` the value field's own numbers are in — a step
+    /// count is unitless, a distance is a document-px length.
+    pub fn value_kind(&self) -> amalith_core::MeasureKind {
+        match self.mode {
+            Mode::SmoothColor | Mode::Steps => amalith_core::MeasureKind::Count,
+            Mode::Distance => amalith_core::MeasureKind::Length(amalith_core::Unit::Px),
+        }
+    }
+
     /// The `BlendSpacing` OK should commit.
     pub fn resolved_spacing(&self) -> BlendSpacing {
         match self.mode {
             Mode::SmoothColor => BlendSpacing::SmoothColor,
-            Mode::Steps => {
-                BlendSpacing::SpecifiedSteps(self.value.trim().parse::<u32>().unwrap_or(1).max(1))
-            }
+            Mode::Steps => BlendSpacing::SpecifiedSteps(
+                amalith_core::parse_measurement(self.value.trim(), self.value_kind())
+                    .unwrap_or(1.0)
+                    .round()
+                    .max(1.0) as u32,
+            ),
             Mode::Distance => BlendSpacing::SpecifiedDistance(
-                self.value.trim().parse::<f64>().unwrap_or(10.0).max(0.1),
+                amalith_core::parse_measurement(self.value.trim(), self.value_kind())
+                    .unwrap_or(10.0)
+                    .max(0.1),
             ),
         }
     }
 
     pub fn push_char(&mut self, ch: char) {
-        let allowed = ch.is_ascii_digit() || (self.mode == Mode::Distance && ch == '.' && !self.value.contains('.'));
-        if allowed && self.value.len() < 9 {
+        if crate::widgets::measurement_char(ch) && self.value.len() < 16 {
             self.value.push(ch);
         }
     }
@@ -99,7 +112,7 @@ impl BlendDialog {
             return;
         }
         let step = if self.mode == Mode::Steps { 1.0 } else { 10.0 };
-        let cur: f64 = self.value.trim().parse().unwrap_or(0.0);
+        let cur = amalith_core::parse_measurement(self.value.trim(), self.value_kind()).unwrap_or(0.0);
         let next = (cur + dir * step).max(0.0);
         self.value = format!("{next:.0}");
     }
@@ -219,6 +232,10 @@ pub fn paint(
             dlg.value.clone()
         };
         text.draw(scene, &shown, 13.0, theme.text, lay.field.x0 + 10.0, lay.field.center().y + 4.5);
+        if dlg.mode == Mode::Distance {
+            let px_w = text.measure("px", 11.5);
+            text.draw(scene, "px", 11.5, theme.text_dim, lay.field.x1 - px_w - 8.0, lay.field.center().y + 4.5);
+        }
     }
     scene.stroke(&Stroke::new(1.2), ID, theme.text_dim, None, &lay.preview);
     if dlg.preview {

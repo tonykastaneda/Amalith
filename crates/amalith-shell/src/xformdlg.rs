@@ -211,7 +211,7 @@ impl TransformDialog {
     // --- keyboard (mirrors `shapedialog::ShapeDialog`'s API shape) ------
 
     pub fn push_char(&mut self, ch: char) {
-        if !(ch.is_ascii_digit() || ch == '.' || ch == '-') {
+        if !crate::widgets::measurement_char(ch) {
             return;
         }
         let fresh = std::mem::take(&mut self.fresh);
@@ -318,7 +318,7 @@ impl TransformDialog {
 }
 
 fn parse_deg(s: &str) -> Option<f64> {
-    s.trim().trim_end_matches('°').trim().parse().ok()
+    amalith_core::parse_measurement(s, amalith_core::MeasureKind::Angle)
 }
 
 fn trim_deg(v: f64) -> String {
