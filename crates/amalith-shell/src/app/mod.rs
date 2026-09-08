@@ -527,6 +527,8 @@ enum MenuAction {
     HelpDocs,
     /// View ▸ Outline (⌘Y).
     ToggleOutline,
+    /// View ▸ Show Transparency Grid (⌘⇧D).
+    ToggleTransparencyGrid,
     /// View ▸ Guides.
     ToggleGuides,
     ToggleGuideLock,
@@ -1206,6 +1208,9 @@ struct App {
     selected_guides: Vec<amalith_core::GuideId>,
     /// Outline (wireframe) view — View ▸ Outline, ⌘Y.
     outline_mode: bool,
+    /// Transparency-grid checkerboard behind transparent artboards —
+    /// View ▸ Show Transparency Grid, ⌘⇧D.
+    transparency_grid: bool,
     /// Isolation-mode breadcrumb: the groups drilled into (outermost
     /// first). Empty = not isolated. Selection, hit-testing and the dim
     /// scrim scope to the last entry.
@@ -1395,6 +1400,7 @@ impl App {
             guides_locked,
             selected_guides: Vec::new(),
             outline_mode: false,
+            transparency_grid: false,
             isolation: Vec::new(),
             iso_bar: Vec::new(),
             layer_drop: None,
@@ -1477,6 +1483,7 @@ impl App {
             self.guides_hidden,
             self.guides_locked,
             self.outline_mode,
+            self.transparency_grid,
         );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
@@ -2231,6 +2238,15 @@ impl App {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(m) = &self.native_menu {
             m.sync_outline(self.outline_mode);
+        }
+        self.request_main_redraw();
+    }
+
+    fn toggle_transparency_grid(&mut self) {
+        self.transparency_grid = !self.transparency_grid;
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_transparency_grid(self.transparency_grid);
         }
         self.request_main_redraw();
     }
@@ -3482,6 +3498,7 @@ impl App {
                 }
             }
             MenuAction::ToggleOutline => self.toggle_outline_mode(),
+            MenuAction::ToggleTransparencyGrid => self.toggle_transparency_grid(),
             MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
             MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
             MenuAction::ClearGuides => self.clear_guides(),
@@ -7257,6 +7274,7 @@ impl ApplicationHandler for App {
                 self.guides_hidden,
                 self.guides_locked,
                 self.outline_mode,
+                self.transparency_grid,
             );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);

@@ -22,6 +22,8 @@ pub(in crate::app) struct NativeMenu {
     color_mode_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     /// View ▸ Outline checkmark.
     outline_check: muda::CheckMenuItem,
+    /// View ▸ Show Transparency Grid checkmark.
+    transparency_grid_check: muda::CheckMenuItem,
     /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
     /// selection.
     convert_text_i: muda::MenuItem,
@@ -40,6 +42,7 @@ impl NativeMenu {
         guides_hidden: bool,
         guides_locked: bool,
         outline: bool,
+        transparency_grid: bool,
     ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
@@ -109,6 +112,12 @@ impl NativeMenu {
             true,
             outline,
             Some(Accelerator::new(sup, Code::KeyY)),
+        );
+        let transparency_grid_i = CheckMenuItem::new(
+            "Show Transparency Grid",
+            true,
+            transparency_grid,
+            Some(Accelerator::new(sup_shift, Code::KeyD)),
         );
         let guides_show_i = CheckMenuItem::new(
             "Show Guides",
@@ -252,6 +261,7 @@ impl NativeMenu {
                 &fit_all_i,
                 &sep(),
                 &outline_i,
+                &transparency_grid_i,
                 &sep(),
                 &guides_show_i,
                 &guides_lock_i,
@@ -369,6 +379,7 @@ impl NativeMenu {
             (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
             (fit_all_i.id().clone(), MenuAction::FitAll),
             (outline_i.id().clone(), MenuAction::ToggleOutline),
+            (transparency_grid_i.id().clone(), MenuAction::ToggleTransparencyGrid),
             (convert_text_i.id().clone(), MenuAction::ConvertTextKind),
             (help_docs_i.id().clone(), MenuAction::HelpDocs),
             (clip_make_i.id().clone(), MenuAction::ClipMake),
@@ -400,6 +411,7 @@ impl NativeMenu {
             guide_checks: (guides_show_i, guides_lock_i),
             color_mode_checks: (cmyk_i, rgb_i),
             outline_check: outline_i,
+            transparency_grid_check: transparency_grid_i,
             convert_text_i,
             clip_items: (clip_make_i, clip_release_i),
             _menu: menu,
@@ -415,6 +427,11 @@ impl NativeMenu {
     /// Match the View ▸ Outline checkmark to the live toggle.
     pub(in crate::app) fn sync_outline(&self, on: bool) {
         self.outline_check.set_checked(on);
+    }
+
+    /// Match the View ▸ Show Transparency Grid checkmark to the live toggle.
+    pub(in crate::app) fn sync_transparency_grid(&self, on: bool) {
+        self.transparency_grid_check.set_checked(on);
     }
 
     /// Point/area convert item: `Some(true)` = an area-text object is

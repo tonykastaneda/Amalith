@@ -597,6 +597,7 @@ impl App {
                 rotate_pivot,
                 &guide_lines,
                 self.outline_mode,
+                self.transparency_grid,
                 iso_root,
                 self.layer_drop.map(|(_, _, row, into)| (row, into)),
                 ab_bar,

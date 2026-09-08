@@ -526,6 +526,9 @@ impl App {
                     KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
                     KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
                     KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
+                    // ⌘⇧D — View ▸ Show Transparency Grid; plain ⌘D is
+                    // Transform Again, below.
+                    KeyCode::KeyD if self.shift_down => self.toggle_transparency_grid(),
                     // Transform Again — Illustrator's real Cmd+D, not
                     // Duplicate (that's Cmd+C, Cmd+F / Cmd+B here, same as
                     // Illustrator itself, which gives Duplicate no default

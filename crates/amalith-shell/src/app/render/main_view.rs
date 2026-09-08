@@ -98,6 +98,8 @@ pub(in crate::app) fn paint_main(
     guide_lines: &[(amalith_core::GuideOrient, f64, GuideMark)],
     // Outline (wireframe) view active.
     outline_mode: bool,
+    // View ▸ Show Transparency Grid, ⌘⇧D.
+    transparency_grid: bool,
     // Isolation-mode group, if any.
     isolate: Option<ObjectId>,
     // Layers panel drag-reorder indicator: (visible-row index, into-container).
@@ -173,6 +175,7 @@ pub(in crate::app) fn paint_main(
         active_artboard,
         outline_mode,
         isolate,
+        transparency_grid,
     );
 
     if let Some(m) = marquee {

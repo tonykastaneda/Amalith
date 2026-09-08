@@ -77,6 +77,11 @@ impl App {
             PaletteKind::Menu(MenuAction::ToggleOutline),
         );
         add(
+            if self.transparency_grid { "Hide Transparency Grid" } else { "Show Transparency Grid" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleTransparencyGrid),
+        );
+        add(
             if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.to_string(),
             "View",
             PaletteKind::Menu(MenuAction::ToggleGuides),

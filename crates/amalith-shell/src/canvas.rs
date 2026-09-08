@@ -266,20 +266,33 @@ pub fn paint(
     outline: bool,
     // Isolation mode: dim everything, then repaint this group on top.
     isolate: Option<ObjectId>,
+    // View ▸ Show Transparency Grid, ⌘⇧D — a checkerboard shows through
+    // wherever an artboard has no explicit background fill, instead of
+    // solid white paper.
+    transparency_grid: bool,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        if artboard_mode {
-            theme.pasteboard
-        } else {
-            theme.canvas_bg
-        },
-        None,
-        &viewport,
-    );
+    // Transparency grid, when on, covers the *whole* document window —
+    // pasteboard included — as one continuous tiling from `viewport`'s
+    // own origin, so it never seams at an artboard's edge; each artboard
+    // below then either paints its own opaque fill on top (covering it)
+    // or, if transparent, leaves it showing through.
+    if transparency_grid {
+        paint_transparency_grid(scene, viewport, viewport.origin());
+    } else {
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            if artboard_mode {
+                theme.pasteboard
+            } else {
+                theme.canvas_bg
+            },
+            None,
+            &viewport,
+        );
+    }
 
     let vt = view.to_screen();
     let cull = cull_rect(viewport, cull_inset);
@@ -294,14 +307,24 @@ pub fn paint(
             None,
             &r.with_origin(Point::new(r.x0 + 3.0, r.y0 + 3.0)),
         );
-        // Paper: the artboard's background fill; transparent (the default)
-        // still shows as white paper on the canvas, like Illustrator — the
-        // fill only changes the exported background.
-        let paper = ab
-            .fill
-            .map(|c| Color::new([c.r, c.g, c.b, c.a]))
-            .unwrap_or(Color::from_rgb8(0xff, 0xff, 0xff));
-        scene.fill(Fill::NonZero, Affine::IDENTITY, paper, None, &r);
+        // Paper: the artboard's background fill; transparent (the
+        // default) shows the transparency-grid checkerboard when that
+        // view is on, else plain white paper — like Illustrator, the
+        // fill only changes the exported background. Repainted here
+        // (not just relying on the base pass under the drop shadow just
+        // drawn) but phased against `viewport`'s own origin so it still
+        // lines up seamlessly with the surrounding pasteboard.
+        match ab.fill.map(|c| Color::new([c.r, c.g, c.b, c.a])) {
+            Some(c) => scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &r),
+            None if transparency_grid => paint_transparency_grid(scene, r, viewport.origin()),
+            None => scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                Color::from_rgb8(0xff, 0xff, 0xff),
+                None,
+                &r,
+            ),
+        }
         // Thin black outline on every artboard (Illustrator); the active
         // one gets a slightly heavier line.
         scene.stroke(
@@ -1232,6 +1255,47 @@ fn stroke_path(
 /// it's a fully vector-native approximation: every layer is a real peniko
 /// radial gradient, so it stays crisp at any zoom and exports as real
 /// gradients, not a baked raster.
+/// Illustrator's own transparency-grid checkerboard (View ▸ Show
+/// Transparency Grid, ⌘⇧D) — a fixed on-screen tile size, not scaled
+/// with zoom, so it reads the same at any magnification. One fill for
+/// every light tile (the base rect) and one more for every dark tile
+/// (unioned into a single path), rather than a fill per tile.
+///
+/// Tiles are phased against `origin` rather than `r`'s own corner, so
+/// painting it once for the whole viewport and again for just one
+/// artboard's rect (e.g. to repaint over that artboard's drop shadow)
+/// produces one seamless pattern rather than each rect starting its own
+/// grid from (0, 0).
+fn paint_transparency_grid(scene: &mut Scene, r: Rect, origin: Point) {
+    const TILE: f64 = 8.0;
+    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
+    let col0 = ((r.x0 - origin.x) / TILE).floor() as i64;
+    let col1 = ((r.x1 - origin.x) / TILE).ceil() as i64;
+    let row0 = ((r.y0 - origin.y) / TILE).floor() as i64;
+    let row1 = ((r.y1 - origin.y) / TILE).ceil() as i64;
+    let mut dark = BezPath::new();
+    for gy in row0..row1 {
+        for gx in col0..col1 {
+            if (gx + gy) % 2 == 0 {
+                continue;
+            }
+            let x0 = (origin.x + gx as f64 * TILE).max(r.x0);
+            let y0 = (origin.y + gy as f64 * TILE).max(r.y0);
+            let x1 = (origin.x + (gx + 1) as f64 * TILE).min(r.x1);
+            let y1 = (origin.y + (gy + 1) as f64 * TILE).min(r.y1);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            dark.move_to((x0, y0));
+            dark.line_to((x1, y0));
+            dark.line_to((x1, y1));
+            dark.line_to((x0, y1));
+            dark.close_path();
+        }
+    }
+    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgb8(0xcc, 0xcc, 0xcc), None, &dark);
+}
+
 fn paint_freeform_fill(
     scene: &mut Scene,
     m: Affine,
