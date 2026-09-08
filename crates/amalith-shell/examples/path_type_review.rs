@@ -62,7 +62,7 @@ fn main() {
         );
         for row in 0..2 {
             let xf = Affine::translate((column as f64 * 400.0, row as f64 * 400.0));
-            for h in pathtext::screen_brackets(&arc, &pt, xf) {
+            for h in pathtext::screen_brackets(&arc, &pt, xf, pathtext::bracket_stem_len(td.style.size)) {
                 scene.stroke(
                     &Stroke::new(1.5),
                     Affine::IDENTITY,

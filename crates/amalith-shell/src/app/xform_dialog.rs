@@ -259,10 +259,10 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::Backspace) => dlg.backspace(),
             PhysicalKey::Code(KeyCode::ArrowUp) => {
-                dlg.nudge_focused(if self.shift_down { 10.0 } else { 1.0 });
+                dlg.nudge_focused(if self.cmd_down { 0.1 } else if self.shift_down { 10.0 } else { 1.0 });
             }
             PhysicalKey::Code(KeyCode::ArrowDown) => {
-                dlg.nudge_focused(if self.shift_down { -10.0 } else { -1.0 });
+                dlg.nudge_focused(if self.cmd_down { -0.1 } else if self.shift_down { -10.0 } else { -1.0 });
             }
             _ => {
                 if let Some(txt) = &event.text {

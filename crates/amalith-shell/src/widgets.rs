@@ -79,16 +79,17 @@ pub enum EditOutcome {
 
 /// Route one key event to a field's edit buffer. Digits, `.`, `-`, `+`
 /// insert (clearing the buffer first if `fresh`); Backspace deletes;
-/// Up / Down nudge the buffer's numeric value by 1 (5 with `shift`) —
-/// consumed here rather than falling through, or they'd land on the
-/// canvas as an object-nudge / other shortcut while a field is focused;
-/// Enter commits; Esc cancels; anything else (a non-numeric character, or
-/// a key with no text at all — a modifier, a function key) commits first
-/// so it can fall through to whatever it would normally do. Identical
-/// across every numeric field in the shell — only *what a commit
-/// applies* (the parsed value, to which command) differs, which is the
-/// caller's job once this returns [`EditOutcome::Commit`].
-pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool) -> EditOutcome {
+/// Up / Down nudge the buffer's numeric value by 1 (5 with `shift`, 0.1
+/// with `cmd` — `cmd` wins if both are held) — consumed here rather than
+/// falling through, or they'd land on the canvas as an object-nudge /
+/// other shortcut while a field is focused; Enter commits; Esc cancels;
+/// anything else (a non-numeric character, or a key with no text at all —
+/// a modifier, a function key) commits first so it can fall through to
+/// whatever it would normally do. Identical across every numeric field in
+/// the shell — only *what a commit applies* (the parsed value, to which
+/// command) differs, which is the caller's job once this returns
+/// [`EditOutcome::Commit`].
+pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool, cmd: bool) -> EditOutcome {
     use winit::keyboard::{KeyCode, PhysicalKey};
     if !event.state.is_pressed() {
         return EditOutcome::Consumed;
@@ -103,7 +104,7 @@ pub fn edit_key(edit: &mut NumEdit, event: &winit::event::KeyEvent, shift: bool)
         }
         PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
             let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
-            let step = if shift { 5.0 } else { 1.0 };
+            let step = if cmd { 0.1 } else if shift { 5.0 } else { 1.0 };
             let cur = parse_buf(&edit.buf).unwrap_or(0.0);
             edit.buf = format_buf(cur + dir * step);
             edit.fresh = false;

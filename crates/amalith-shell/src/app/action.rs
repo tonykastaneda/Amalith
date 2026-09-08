@@ -839,7 +839,7 @@ impl App {
             // a field is focused, which is the whole point of catching it.
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
-                let step = if self.shift_down { 5.0 } else { 1.0 };
+                let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
                 if let Some((_, buf, fresh)) = &mut self.xform_edit {
                     let cur = parse_num(buf).unwrap_or(0.0);
                     *buf = trim_num(cur + dir * step);
@@ -1090,7 +1090,7 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) if field != F::Name => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
-                let step = if self.shift_down { 5.0 } else { 1.0 };
+                let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
                 if let Some((_, buf, fresh)) = &mut self.artboard_edit {
                     let cur = parse_num(buf).unwrap_or(0.0);
                     *buf = trim_num(cur + dir * step);
@@ -1216,7 +1216,7 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
-                let step = if self.shift_down { 5.0 } else { 1.0 };
+                let step = if self.cmd_down { 0.1 } else if self.shift_down { 5.0 } else { 1.0 };
                 self.nudge_align_spacing(dir * step);
                 true
             }
@@ -1310,7 +1310,7 @@ impl App {
         let Some(edit) = &mut self.opacity_edit else {
             return false;
         };
-        match widgets::edit_key(edit, event, self.shift_down) {
+        match widgets::edit_key(edit, event, self.shift_down, self.cmd_down) {
             widgets::EditOutcome::Consumed => {
                 self.apply_opacity_edit_live();
                 self.request_main_redraw();
@@ -1402,9 +1402,23 @@ impl App {
             }
             PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
                 let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
-                let step = if self.shift_down { 5.0 } else { 1.0 };
                 if let Some((buf, fresh)) = &mut self.stroke_weight_edit {
                     let cur = parse_num(buf).unwrap_or(0.0);
+                    // Plain arrows match the options-bar stepper: quarter-pt
+                    // steps at/below 1pt (0, .25, .5, .75, 1), whole-pt
+                    // steps above it — 1pt → 2pt going up, but 1pt → 0.75pt
+                    // coming down, so the boundary depends on direction.
+                    let step = if self.cmd_down {
+                        0.1
+                    } else if self.shift_down {
+                        5.0
+                    } else if dir < 0.0 {
+                        if cur <= 1.0 { 0.25 } else { 1.0 }
+                    } else if cur < 1.0 {
+                        0.25
+                    } else {
+                        1.0
+                    };
                     *buf = trim_num((cur + dir * step).max(0.0));
                     *fresh = false;
                 }

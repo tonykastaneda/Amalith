@@ -3115,7 +3115,7 @@ impl App {
         // Up / Down nudge a numeric field (TextField doesn't handle them).
         if let PhysicalKey::Code(code @ (KeyCode::ArrowUp | KeyCode::ArrowDown)) = event.physical_key {
             let dir = if code == KeyCode::ArrowUp { 1.0 } else { -1.0 };
-            let step = if self.shift_down { 10.0 } else { 1.0 } * dir;
+            let step = (if self.cmd_down { 0.1 } else if self.shift_down { 10.0 } else { 1.0 }) * dir;
             if let Some(form) = self.newdoc.as_mut() {
                 form.step_focused(step, &mut self.text);
             }
@@ -3603,7 +3603,7 @@ impl App {
         let Some((_, edit)) = &mut self.stroke_flyout_edit else {
             return false;
         };
-        match widgets::edit_key(edit, event, self.shift_down) {
+        match widgets::edit_key(edit, event, self.shift_down, self.cmd_down) {
             widgets::EditOutcome::Consumed => {
                 self.apply_stroke_flyout_edit_live();
                 self.request_main_redraw();
