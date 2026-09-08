@@ -502,6 +502,10 @@ enum MenuAction {
     /// sets `pending_offset_dialog` for `about_to_wait` to pick up, same
     /// as `ExportForScreens` already does for `pending_export`.
     OffsetPath,
+    /// Object ▸ Lock ▸ Selection (⌘2).
+    LockSelection,
+    /// Object ▸ Unlock All (⌘⌥2).
+    UnlockAll,
     SelectAll,
     /// Select menu.
     SelectAllArtboard,
@@ -3454,6 +3458,8 @@ impl App {
             }
             MenuAction::TransformAgain => self.transform_again(),
             MenuAction::OffsetPath => self.pending_offset_dialog = true,
+            MenuAction::LockSelection => self.lock_selection(),
+            MenuAction::UnlockAll => self.unlock_all(),
             MenuAction::SelectAll => self.select_all(),
             MenuAction::SelectAllArtboard => self.select_all_artboard(),
             MenuAction::Deselect => self.deselect(),

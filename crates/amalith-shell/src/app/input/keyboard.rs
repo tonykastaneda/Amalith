@@ -556,6 +556,11 @@ impl App {
                     // ⌘7 make clipping mask, ⌘⌥7 release.
                     KeyCode::Digit7 if self.alt_down => self.clip_release(),
                     KeyCode::Digit7 => self.clip_make(),
+                    // ⌘2 locks the selection (and drops it, since a locked
+                    // object can't stay selected); ⌘⌥2 unlocks every locked
+                    // object in the document and selects them.
+                    KeyCode::Digit2 if self.alt_down => self.unlock_all(),
+                    KeyCode::Digit2 => self.lock_selection(),
                     // Select: ⌘A all, ⌥⌘A active artboard, ⇧⌘A deselect.
                     KeyCode::KeyA if self.shift_down => self.deselect(),
                     KeyCode::KeyA if self.alt_down => self.select_all_artboard(),

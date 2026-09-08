@@ -212,6 +212,38 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Object ▸ Lock ▸ Selection (⌘2) — locks every selected object; a
+    /// locked object can't stay selected (matches the Layers panel's own
+    /// lock toggle), so they drop out of the selection too.
+    pub(in crate::app) fn lock_selection(&mut self) {
+        if self.doc.selection.is_empty() {
+            return;
+        }
+        let ids = std::mem::take(&mut self.doc.selection);
+        let _ = self.doc.editor.execute(Command::SetLocked { objects: ids, locked: true });
+        self.request_main_redraw();
+    }
+
+    /// Object ▸ Unlock All (⌘⌥2) — unlocks every locked object in the
+    /// whole document (not just the selection, there isn't one to speak
+    /// of once something's locked) and selects all of them.
+    pub(in crate::app) fn unlock_all(&mut self) {
+        let ids: Vec<ObjectId> = self
+            .doc
+            .editor
+            .document()
+            .objects()
+            .filter(|o| o.locked)
+            .map(|o| o.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let _ = self.doc.editor.execute(Command::SetLocked { objects: ids.clone(), locked: false });
+        self.doc.selection = ids;
+        self.request_main_redraw();
+    }
+
     /// Whether the selection can be made into a clip group / has one to
     /// release — for enabling the Object menu items.
     pub(in crate::app) fn clip_state(&self) -> (bool, bool) {

@@ -84,6 +84,8 @@ impl NativeMenu {
         let dup_i = MenuItem::new("Duplicate", true, None);
         let transform_again_i = mk("Transform Again", sup, Code::KeyD);
         let offset_path_i = MenuItem::new("Offset Path…", true, None);
+        let lock_selection_i = mk("Selection", sup, Code::Digit2);
+        let unlock_all_i = mk("Unlock All", sup_alt, Code::Digit2);
         let all_i = mk("All", sup, Code::KeyA);
         let sel_artboard_i = mk("All on Active Artboard", sup_alt, Code::KeyA);
         let deselect_i = mk("Deselect", sup_shift, Code::KeyA);
@@ -225,10 +227,14 @@ impl NativeMenu {
         let clip_menu = Submenu::with_items("Clipping Mask", true, &[&clip_make_i, &clip_release_i])
             .expect("clip menu");
         let path_menu = Submenu::with_items("Path", true, &[&offset_path_i]).expect("path menu");
+        let lock_menu = Submenu::with_items("Lock", true, &[&lock_selection_i]).expect("lock menu");
         let object_menu = Submenu::with_items(
             "Object",
             true,
-            &[&transform_again_i, &sep(), &path_menu, &clip_menu],
+            &[
+                &transform_again_i, &sep(), &path_menu, &clip_menu, &sep(), &lock_menu,
+                &unlock_all_i,
+            ],
         )
         .expect("object menu");
         let select_menu = Submenu::with_items(
@@ -358,6 +364,8 @@ impl NativeMenu {
             (dup_i.id().clone(), MenuAction::Duplicate),
             (transform_again_i.id().clone(), MenuAction::TransformAgain),
             (offset_path_i.id().clone(), MenuAction::OffsetPath),
+            (lock_selection_i.id().clone(), MenuAction::LockSelection),
+            (unlock_all_i.id().clone(), MenuAction::UnlockAll),
             (all_i.id().clone(), MenuAction::SelectAll),
             (sel_artboard_i.id().clone(), MenuAction::SelectAllArtboard),
             (deselect_i.id().clone(), MenuAction::Deselect),

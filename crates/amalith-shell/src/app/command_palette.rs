@@ -53,6 +53,8 @@ impl App {
             ("Duplicate", "Edit", MenuAction::Duplicate),
             ("Transform Again", "Object", MenuAction::TransformAgain),
             ("Offset Path…", "Object", MenuAction::OffsetPath),
+            ("Lock Selection", "Object", MenuAction::LockSelection),
+            ("Unlock All", "Object", MenuAction::UnlockAll),
             ("Select All", "Edit", MenuAction::SelectAll),
             ("Bring Forward", "Arrange", MenuAction::BringForward),
             ("Bring to Front", "Arrange", MenuAction::BringToFront),
