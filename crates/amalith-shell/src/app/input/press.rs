@@ -779,8 +779,11 @@ impl App {
                             if let amalith_core::TextKind::Path(pt) = &td.kind {
                                 if let Some((arc, rel_xf)) = pathtext::resolve(doc, id, pt) {
                                     let m = self.doc.view.to_screen() * convert::affine(doc.world_transform(id));
+                                    let mc = m.as_coeffs();
+                                    let screen_scale = (mc[0] * mc[0] + mc[1] * mc[1]).sqrt();
+                                    let stem = pathtext::bracket_stem_len(td.style.size * screen_scale);
                                     if let Some(which) =
-                                        pathtext::hit_bracket(&arc, pt, rel_xf, m, self.pointer)
+                                        pathtext::hit_bracket(&arc, pt, rel_xf, m, self.pointer, stem)
                                     {
                                         let local = pathtext::to_path_local(doc, id, dp);
                                         let xf = m * convert::affine(rel_xf);

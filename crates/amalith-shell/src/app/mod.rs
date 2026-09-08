@@ -3400,7 +3400,11 @@ impl App {
             .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.stroke_width)
             .unwrap_or(self.doc.stroke_w);
-        let step = if base < 1.0 { 0.25 } else { 1.0 };
+        // Quarter-point steps below 1pt (0, .25, .5, .75), whole-point
+        // steps at/above it — 1pt → 2pt going up, but 1pt → 0.75pt coming
+        // down, so the boundary check depends on which way we're moving.
+        let quarter = if dir < 0 { base <= 1.0 } else { base < 1.0 };
+        let step = if quarter { 0.25 } else { 1.0 };
         let next = (base + dir as f64 * step).clamp(0.0, 1000.0);
         self.doc.stroke_w = next;
         if !self.doc.selection.is_empty() {
@@ -6452,7 +6456,10 @@ impl App {
                     if let amalith_core::TextKind::Path(pt) = td.kind {
                         if let Some((arc, rel)) = pathtext::resolve(doc, id, &pt) {
                             let xf = self.doc.view.to_screen() * convert::affine(doc.world_transform(id));
-                            if pathtext::hit_bracket(&arc, &pt, rel, xf, self.pointer).is_some() {
+                            let xc = xf.as_coeffs();
+                            let screen_scale = (xc[0] * xc[0] + xc[1] * xc[1]).sqrt();
+                            let stem = pathtext::bracket_stem_len(td.style.size * screen_scale);
+                            if pathtext::hit_bracket(&arc, &pt, rel, xf, self.pointer, stem).is_some() {
                                 return Some(CanvasCursor::Grab);
                             }
                         }

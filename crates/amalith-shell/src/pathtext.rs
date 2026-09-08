@@ -399,7 +399,14 @@ pub struct ScreenBracket {
     pub tangent: vello::kurbo::Vec2,
 }
 
-pub fn screen_brackets(arc: &ArcLengthPath, pt: &PathTextData, xf: VAffine) -> Vec<ScreenBracket> {
+/// Perpendicular riser length (screen px) for the bracket ticks: tall
+/// enough to clear the glyphs regardless of font size, with the original
+/// fixed 24px as a floor for small text.
+pub fn bracket_stem_len(font_px: f64) -> f64 {
+    (font_px * 1.2).max(24.0)
+}
+
+pub fn screen_brackets(arc: &ArcLengthPath, pt: &PathTextData, xf: VAffine, stem: f64) -> Vec<ScreenBracket> {
     // Closed paths use the curve's visual center to choose the outside.
     // A fixed start/end normal breaks at the seam and pointed the end
     // bracket into circles.
@@ -429,7 +436,25 @@ pub fn screen_brackets(arc: &ArcLengthPath, pt: &PathTextData, xf: VAffine) -> V
                 (xf * VPoint::new(angle.cos(), angle.sin()) - xf * VPoint::ORIGIN).normalize();
             let normal =
                 (xf * VPoint::new(-angle.sin(), angle.cos()) - xf * VPoint::ORIGIN).normalize();
-            let base = xf * convert::point(p);
+            // A brand-new full-loop selection has start, end (and their
+            // midpoint, Center) all sitting on the very same curve point.
+            // Nudging only the tip left the three stems fanning out of one
+            // shared base — a crossing "X" right where they meet. Shifting
+            // the whole stem (base *and* tip) sideways instead gives Start
+            // and End daylight between them from the ground up — a small
+            // fixed gap, not tied to the (now font-scaled) stem length, so
+            // the pair reads as two handles sitting right next to each
+            // other rather than spread apart.
+            let lateral = if coincident_ends {
+                match which {
+                    Bracket::Start => 4.0,
+                    Bracket::End => -4.0,
+                    Bracket::Center => 0.0,
+                }
+            } else {
+                0.0
+            };
+            let base = xf * convert::point(p) + tangent * lateral;
             let direction = if let Some(center) = closed_center {
                 let outward = if normal.dot(base - center) >= 0.0 {
                     1.0
@@ -443,18 +468,7 @@ pub fn screen_brackets(arc: &ArcLengthPath, pt: &PathTextData, xf: VAffine) -> V
             ScreenBracket {
                 which,
                 base,
-                tip: base
-                    + normal * direction * 24.0
-                    + if coincident_ends {
-                        tangent
-                            * match which {
-                                Bracket::Start => -12.0,
-                                Bracket::End => 12.0,
-                                Bracket::Center => 0.0,
-                            }
-                    } else {
-                        vello::kurbo::Vec2::ZERO
-                    },
+                tip: base + normal * direction * stem,
                 tangent,
             }
         })
@@ -507,9 +521,10 @@ pub fn hit_bracket(
     rel_xf: amalith_core::Affine,
     view_xf: VAffine,
     screen_pointer: VPoint,
+    stem: f64,
 ) -> Option<Bracket> {
     let path_xf = view_xf * convert::affine(rel_xf);
-    screen_brackets(arc, pt, path_xf)
+    screen_brackets(arc, pt, path_xf, stem)
         .into_iter()
         .filter_map(|handle| {
             let axis = handle.tip - handle.base;
@@ -550,7 +565,8 @@ mod tests {
                 &pt,
                 amalith_core::Affine::IDENTITY,
                 xf,
-                VPoint::new(24.0, 50.0)
+                VPoint::new(24.0, 50.0),
+                24.0
             ),
             Some(Bracket::Center)
         );
@@ -560,7 +576,8 @@ mod tests {
                 &pt,
                 amalith_core::Affine::IDENTITY,
                 xf,
-                VPoint::new(38.0, 50.0)
+                VPoint::new(38.0, 50.0),
+                24.0
             ),
             None
         );
@@ -583,13 +600,13 @@ mod tests {
             flip: false,
         };
         let xf = VAffine::scale_non_uniform(-2.0, 3.0);
-        let center = screen_brackets(&arc, &pt, xf)
+        let center = screen_brackets(&arc, &pt, xf, 24.0)
             .into_iter()
             .find(|h| h.which == Bracket::Center)
             .unwrap();
         assert_eq!(center.tip, VPoint::new(-100.0, -24.0));
         assert_eq!(
-            hit_bracket(&arc, &pt, amalith_core::Affine::IDENTITY, xf, center.tip),
+            hit_bracket(&arc, &pt, amalith_core::Affine::IDENTITY, xf, center.tip, 24.0),
             Some(Bracket::Center)
         );
     }
@@ -696,7 +713,7 @@ mod tests {
             align: PathTextAlign::Baseline,
             flip: false,
         };
-        let brackets = screen_brackets(&arc, &original, VAffine::IDENTITY);
+        let brackets = screen_brackets(&arc, &original, VAffine::IDENTITY, 24.0);
         let start = brackets
             .iter()
             .find(|handle| handle.which == Bracket::Start)
@@ -715,7 +732,8 @@ mod tests {
                 &original,
                 amalith_core::Affine::IDENTITY,
                 VAffine::IDENTITY,
-                start.tip
+                start.tip,
+                24.0
             ),
             Some(Bracket::Start)
         );
@@ -725,7 +743,8 @@ mod tests {
                 &original,
                 amalith_core::Affine::IDENTITY,
                 VAffine::IDENTITY,
-                end.tip
+                end.tip,
+                24.0
             ),
             Some(Bracket::End)
         );

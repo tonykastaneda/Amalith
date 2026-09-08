@@ -260,17 +260,36 @@ impl App {
         }
         let layout = crate::textedit::td_layout(&mut self.text, td);
         let overflow = layout.lines().count() > 1 || layout.lines().next().is_some_and(|line| line.metrics().advance as f64 > live.end - live.start);
-        for handle in pathtext::screen_brackets(&arc, &live, m) {
+        // The bracket's riser (perpendicular to the path, base → tip)
+        // reads as taller than the glyphs it brackets, rescaling with font
+        // size / zoom instead of a fixed screen size. The crossbar at the
+        // tip (parallel to the path) stays a small fixed width — that's
+        // the part that must NOT grow, or it reads as wide instead of tall.
+        let mc = m.as_coeffs();
+        let screen_scale = (mc[0] * mc[0] + mc[1] * mc[1]).sqrt();
+        let font_px = td.style.size * screen_scale;
+        let stem = pathtext::bracket_stem_len(font_px);
+        let cap_half = 5.0;
+        for handle in pathtext::screen_brackets(&arc, &live, m, stem) {
             self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(handle.base, handle.tip));
             if overflow && handle.which == pathtext::Bracket::End {
-                let p = handle.tip;
+                // Lifted clear of the bracket tick (out along its own
+                // outward direction) so it doesn't sit on top of the
+                // draggable handle and steal clicks meant for it — same
+                // size/style as the Area-text overset out-port.
+                let dir = (handle.tip - handle.base).normalize();
+                let p = handle.tip + dir * 16.0;
+                let white = vello::peniko::Color::from_rgb8(0xff, 0xff, 0xff);
                 let red = vello::peniko::Color::from_rgb8(208, 48, 48);
-                self.content.stroke(&Stroke::new(1.5), ID, red, None, &Rect::new(p.x - 4.0, p.y - 4.0, p.x + 4.0, p.y + 4.0));
-                self.content.stroke(&Stroke::new(1.0), ID, red, None, &Line::new((p.x - 2.5, p.y), (p.x + 2.5, p.y)));
-                self.content.stroke(&Stroke::new(1.0), ID, red, None, &Line::new((p.x, p.y - 2.5), (p.x, p.y + 2.5)));
+                self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(handle.tip, p));
+                let r = Rect::from_center_size(p, (11.0, 11.0));
+                self.content.fill(Fill::NonZero, ID, white, None, &r);
+                self.content.stroke(&Stroke::new(1.25), ID, red, None, &r);
+                self.content.stroke(&Stroke::new(1.5), ID, red, None, &Line::new((p.x - 3.0, p.y), (p.x + 3.0, p.y)));
+                self.content.stroke(&Stroke::new(1.5), ID, red, None, &Line::new((p.x, p.y - 3.0), (p.x, p.y + 3.0)));
                 continue;
             }
-            let cap = handle.tangent * 5.0;
+            let cap = handle.tangent * cap_half;
             self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(handle.tip - cap, handle.tip + cap));
         }
     }

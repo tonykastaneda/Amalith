@@ -612,9 +612,12 @@ pub fn paint(
             if selection.len() == 1 {
                 if let Some(ObjectKind::Text(td)) = doc.object(selection[0]).map(|o| &o.kind) {
                     let is_area = matches!(td.kind, amalith_core::TextKind::Area { .. });
+                    let is_path = matches!(td.kind, amalith_core::TextKind::Path(_));
                     // Point/Area convert widget: a dot off the right edge.
                     // Filled = area, hollow = point. Double-click toggles.
-                    {
+                    // Path text is neither — that conversion doesn't apply
+                    // while typing on a path, so the widget is hidden.
+                    if !is_path {
                         let redge = Point::new(
                             (q[1].x + q[2].x) * 0.5,
                             (q[1].y + q[2].y) * 0.5,
