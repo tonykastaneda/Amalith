@@ -1122,7 +1122,9 @@ impl App {
                 // A shape tool rubber-bands a new object; the Line tool
                 // rubber-bands a single straight segment (same drag state,
                 // committed differently on release).
-                if self.active_tool.is_shape() || self.active_tool == Tool::Line {
+                if self.active_tool.is_shape()
+                    || matches!(self.active_tool, Tool::Line | Tool::Arc | Tool::Spiral)
+                {
                     self.drag = Drag::DrawShape {
                         tool: self.active_tool,
                         start_doc: dp,

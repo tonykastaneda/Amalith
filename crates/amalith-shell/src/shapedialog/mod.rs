@@ -26,11 +26,13 @@
 //! Adding a control to one shape stays inside that shape's file (or its
 //! `options` submodule) — nothing here or in `sizing` changes.
 
+mod arc;
 mod ellipse;
 mod polygon;
 mod rectangle;
 mod roundrect;
 mod sizing;
+mod spiral;
 mod star;
 
 use vello::kurbo::{Affine, Point, Rect};
@@ -68,8 +70,19 @@ pub(crate) trait Shape {
     fn geometry(&self, anchor: Point, v: &[f64]) -> Geometry;
     /// Store the committed row values back into [`Params`].
     fn write_params(&self, v: &[f64], p: &mut Params);
+    /// Prime this shape's own (non-row) state from the remembered
+    /// [`Params`] — called once, right after construction. Only needed by
+    /// a shape whose `Shape` impl isn't a zero-sized unit struct (i.e. one
+    /// with its own options controls holding real state, like Arc's Type /
+    /// Base Along / Fill Arc).
+    fn seed(&mut self, _p: &Params) {}
     /// Show the `sizing` layer's Width/Height constrain-link (rows 0 & 1)?
     fn has_link(&self) -> bool {
+        false
+    }
+    /// Force the created object's fill off regardless of the tool's
+    /// current default fill (Arc's "Fill Arc" checkbox, unchecked).
+    fn suppress_fill(&self) -> bool {
         false
     }
 
@@ -104,6 +117,8 @@ fn shape_for(tool: Tool) -> Box<dyn Shape> {
         Tool::Ellipse => Box::new(ellipse::Ellipse),
         Tool::Polygon => Box::new(polygon::Polygon),
         Tool::Star => Box::new(star::Star),
+        Tool::Arc => Box::new(arc::Arc::default()),
+        Tool::Spiral => Box::new(spiral::Spiral::default()),
         _ => Box::new(rectangle::Rectangle),
     }
 }
@@ -123,6 +138,11 @@ pub struct Params {
     pub ellipse: (f64, f64),
     pub polygon: (f64, f64),
     pub star: (f64, f64, f64),
+    /// `(Length X-Axis, Length Y-Axis, Slope -100..100, Type is Open,
+    /// Base Along X Axis, Fill Arc)`.
+    pub arc: (f64, f64, f64, bool, bool, bool),
+    /// `(Radius, Decay %, Segments, winds clockwise)`.
+    pub spiral: (f64, f64, f64, bool),
 }
 
 impl Default for Params {
@@ -133,6 +153,8 @@ impl Default for Params {
             ellipse: (100.0, 100.0),
             polygon: (50.0, 6.0),
             star: (19.0983, 50.0, 5.0),
+            arc: (100.0, 100.0, 50.0, true, true, false),
+            spiral: (50.0, 80.0, 10.0, true),
         }
     }
 }
@@ -166,7 +188,8 @@ pub struct ShapeDialog {
 
 impl ShapeDialog {
     pub fn open(tool: Tool, anchor_doc: Point, p: &Params) -> Self {
-        let shape = shape_for(tool);
+        let mut shape = shape_for(tool);
+        shape.seed(p);
         let sizing = Sizing::new(shape.rows(p), shape.has_link());
         Self {
             tool,
@@ -183,6 +206,8 @@ impl ShapeDialog {
             Tool::Ellipse => "Ellipse",
             Tool::Polygon => "Polygon",
             Tool::Star => "Star",
+            Tool::Arc => "Arc Segment Tool Options",
+            Tool::Spiral => "Spiral",
             _ => "Shape",
         }
     }
@@ -267,9 +292,17 @@ impl ShapeDialog {
         self.shape.write_params(&self.sizing.values(), p);
     }
 
-    /// The rect / path data for the shape, in document space.
+    /// Force the created object's fill off (Arc's "Fill Arc", unchecked).
+    pub fn suppress_fill(&self) -> bool {
+        self.shape.suppress_fill()
+    }
+
+    /// The rect / path data for the shape, in document space. Row values
+    /// pass through as typed — clamping to whatever's sane (non-negative,
+    /// a minimum size, …) is each shape's own `geometry()`'s job, since a
+    /// row isn't always a length: Arc's Slope is a signed -100..100.
     pub fn geometry(&self) -> Geometry {
-        let v: Vec<f64> = self.sizing.values().iter().map(|x| x.max(0.0)).collect();
+        let v = self.sizing.values();
         self.shape.geometry(self.anchor_doc, &v)
     }
 }

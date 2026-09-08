@@ -51,6 +51,7 @@ impl App {
             ("Copy", "Edit", MenuAction::Copy),
             ("Paste", "Edit", MenuAction::Paste),
             ("Duplicate", "Edit", MenuAction::Duplicate),
+            ("Transform Again", "Object", MenuAction::TransformAgain),
             ("Select All", "Edit", MenuAction::SelectAll),
             ("Bring Forward", "Arrange", MenuAction::BringForward),
             ("Bring to Front", "Arrange", MenuAction::BringToFront),

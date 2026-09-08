@@ -28,12 +28,26 @@ pub(crate) fn stack_height(n: usize) -> f64 {
     TOP_PAD + n as f64 * ROW_STRIDE
 }
 
+/// What a row's buffer means, for commit-time reformatting, and whether
+/// it gets an up/down stepper.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    /// Reformats with a `px` suffix on commit.
+    Length,
+    /// Integer, floored at 3, with an up/down stepper.
+    Count,
+    /// A plain signed decimal — no suffix, no stepper, no floor. For a row
+    /// that isn't a length or a count (Arc's Slope, -100..100).
+    Plain,
+    /// Reformats with a `%` suffix on commit, no stepper (Spiral's Decay).
+    Percent,
+}
+
 /// One editable row.
 pub(crate) struct Field {
     label: &'static str,
     buf: String,
-    /// Reformat with a `px` suffix on commit; integer + stepper otherwise.
-    length: bool,
+    kind: Kind,
 }
 
 impl Field {
@@ -42,7 +56,7 @@ impl Field {
         Self {
             label,
             buf: fmt_len(v),
-            length: true,
+            kind: Kind::Length,
         }
     }
     /// An integer-count row (min 3) with an up/down stepper.
@@ -50,7 +64,23 @@ impl Field {
         Self {
             label,
             buf: format!("{}", v.round().max(3.0) as i64),
-            length: false,
+            kind: Kind::Count,
+        }
+    }
+    /// A plain signed-decimal row — see [`Kind::Plain`].
+    pub(crate) fn plain(label: &'static str, v: f64) -> Self {
+        Self {
+            label,
+            buf: fmt_plain(v),
+            kind: Kind::Plain,
+        }
+    }
+    /// A percentage row — see [`Kind::Percent`].
+    pub(crate) fn percent(label: &'static str, v: f64) -> Self {
+        Self {
+            label,
+            buf: fmt_percent(v),
+            kind: Kind::Percent,
         }
     }
 }
@@ -125,7 +155,7 @@ impl Sizing {
             return Hit::Link;
         }
         for i in 0..self.fields.len() {
-            if !self.fields[i].length {
+            if self.fields[i].kind == Kind::Count {
                 let (up, down) = self.step_rects(body, i);
                 if up.contains(local) {
                     return Hit::Step(i, 1);
@@ -171,11 +201,16 @@ impl Sizing {
     }
 
     pub(crate) fn step(&mut self, i: usize, delta: f64) {
-        if i >= self.fields.len() {
-            return;
-        }
-        let v = (parse_num(&self.fields[i].buf).unwrap_or(3.0) + delta).max(3.0);
-        self.fields[i].buf = format!("{}", v.round() as i64);
+        let Some(f) = self.fields.get_mut(i) else { return };
+        let cur = parse_num(&f.buf).unwrap_or(0.0);
+        f.buf = match f.kind {
+            Kind::Length => fmt_len((cur + delta).max(0.0)),
+            Kind::Count => format!("{}", (cur + delta).max(3.0).round() as i64),
+            // No clamp here — a signed row has no universal range; the
+            // shape that reads it back (Arc's Slope, -100..100) clamps.
+            Kind::Plain => fmt_plain(cur + delta),
+            Kind::Percent => fmt_percent((cur + delta).max(0.0)),
+        };
         self.focus = i;
     }
 
@@ -194,13 +229,26 @@ impl Sizing {
     pub(crate) fn commit_focus(&mut self) {
         let f = &mut self.fields[self.focus];
         let v = parse_num(&f.buf);
-        if f.length {
-            if let Some(v) = v {
-                f.buf = fmt_len(v.max(0.0));
+        match f.kind {
+            Kind::Length => {
+                if let Some(v) = v {
+                    f.buf = fmt_len(v.max(0.0));
+                }
             }
-        } else {
-            let n = v.unwrap_or(3.0).round().max(3.0);
-            f.buf = format!("{}", n as i64);
+            Kind::Count => {
+                let n = v.unwrap_or(3.0).round().max(3.0);
+                f.buf = format!("{}", n as i64);
+            }
+            Kind::Plain => {
+                if let Some(v) = v {
+                    f.buf = fmt_plain(v);
+                }
+            }
+            Kind::Percent => {
+                if let Some(v) = v {
+                    f.buf = fmt_percent(v.max(0.0));
+                }
+            }
         }
         if self.linked && self.has_link && self.focus < 2 {
             let other = 1 - self.focus;
@@ -275,7 +323,7 @@ impl Sizing {
             );
 
             let mut tx = fr.x0 + 8.0;
-            if !f.length {
+            if f.kind == Kind::Count {
                 let (up, down) = self.step_rects(body, i);
                 tri(scene, up, true, theme.text_dim);
                 tri(scene, down, false, theme.text_dim);
@@ -362,5 +410,23 @@ fn fmt_len(v: f64) -> String {
         format!("{} px", r.round() as i64)
     } else {
         format!("{} px", r)
+    }
+}
+
+fn fmt_percent(v: f64) -> String {
+    let r = (v * 100.0).round() / 100.0;
+    if (r - r.round()).abs() < 1e-9 {
+        format!("{}%", r.round() as i64)
+    } else {
+        format!("{r}%")
+    }
+}
+
+fn fmt_plain(v: f64) -> String {
+    let r = (v * 10000.0).round() / 10000.0;
+    if (r - r.round()).abs() < 1e-9 {
+        format!("{}", r.round() as i64)
+    } else {
+        format!("{r}")
     }
 }

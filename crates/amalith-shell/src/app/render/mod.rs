@@ -89,30 +89,45 @@ impl App {
                 },
                 dup: self.alt_down,
                 xf: None,
+                dup_xf: false,
                 anchors: None,
                 handle: None,
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
             }),
-            Drag::Scale { preview, .. }
-            | Drag::Rotate { preview, .. }
-            | Drag::RotateTool {
-                preview, moved: true, ..
+            Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
+                ids: &self.doc.selection,
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: Some(preview),
+                dup_xf: false,
+                anchors: None,
+                handle: None,
+                text_boxes: &[],
+                path_text: None,
+                width_points: None,
+            }),
+            // Alt-drag with one of these dedicated transform tools shows
+            // a live ghost of the would-be copy (`dup_xf`) instead of
+            // moving the original — see `DragPreview::replacement`.
+            Drag::RotateTool {
+                preview, copy, moved: true, ..
             }
             | Drag::ReflectTool {
-                preview, moved: true, ..
+                preview, copy, moved: true, ..
             }
             | Drag::ShearTool {
-                preview, moved: true, ..
+                preview, copy, moved: true, ..
             }
             | Drag::ScaleTool {
-                preview, moved: true, ..
+                preview, copy, moved: true, ..
             } => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: Some(preview),
+                dup_xf: *copy,
                 anchors: None,
                 handle: None,
                 text_boxes: &[],
@@ -124,6 +139,7 @@ impl App {
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: None,
+                dup_xf: false,
                 anchors: None,
                 handle: None,
                 text_boxes: &resize_previews,
@@ -139,9 +155,14 @@ impl App {
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: None,
+                dup_xf: false,
                 anchors: Some((
                     self.doc.anchor_sel.as_slice(),
-                    convert::vec2_to_core(*last_doc - *start_doc),
+                    convert::vec2_to_core(if self.shift_down {
+                        snap8(*last_doc - *start_doc)
+                    } else {
+                        *last_doc - *start_doc
+                    }),
                 )),
                 handle: None,
                 text_boxes: &[],
@@ -159,6 +180,7 @@ impl App {
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: None,
+                dup_xf: false,
                 anchors: None,
                 handle: Some((
                     *object,
@@ -178,6 +200,7 @@ impl App {
                     delta: Vec2::ZERO,
                     dup: false,
                     xf: None,
+                    dup_xf: false,
                     anchors: None,
                     handle: None,
                     text_boxes: &[],
@@ -190,6 +213,7 @@ impl App {
                 delta: Vec2::ZERO,
                 dup: false,
                 xf: None,
+                dup_xf: false,
                 anchors: None,
                 handle: None,
                 text_boxes: &[],
@@ -316,7 +340,15 @@ impl App {
                 Some(handles::rect_quad(rect).map(|p| vt * p))
             });
         let pen_preview = if self.active_tool == Tool::Pen && !self.pen.is_empty() {
-            let hover = self.doc_point(self.pointer);
+            // Shift constrains the *next* segment's live preview the same
+            // way a click would place it — otherwise the rubber-band line
+            // shown while just moving the mouse (not yet dragging a
+            // handle) never matches what Shift is actually about to do.
+            let hover = constrained(
+                self.pen.last().map(|a| a.point),
+                self.doc_point(self.pointer),
+                self.shift_down,
+            );
             let near_close = self.pen.len() >= 3
                 && self
                     .pen

@@ -519,12 +519,13 @@ impl App {
                 pivot,
                 start_angle,
                 start_xf,
-                copy,
                 moved,
                 ..
             } => {
-                let (pivot, start_angle, copy, was_moved) =
-                    (*pivot, *start_angle, *copy, *moved);
+                let (pivot, start_angle, was_moved) = (*pivot, *start_angle, *moved);
+                // Read live, not the value captured at press — Alt can be
+                // pressed or released mid-drag, same as Illustrator.
+                let copy = self.alt_down;
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
                 let m = handles::rotate_transform(pivot, start_angle, dp, self.shift_down);
@@ -546,11 +547,11 @@ impl App {
                 pivot,
                 press,
                 start_xf,
-                copy,
                 moved,
                 ..
             } => {
-                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let (pivot, press, was_moved) = (*pivot, *press, *moved);
+                let copy = self.alt_down;
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
                 let mut axis_deg = handles::angle_to(pivot, dp).to_degrees();
@@ -568,11 +569,11 @@ impl App {
                 pivot,
                 press,
                 start_xf,
-                copy,
                 moved,
                 ..
             } => {
-                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let (pivot, press, was_moved) = (*pivot, *press, *moved);
+                let copy = self.alt_down;
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
                 // Bounded by |run|, not a raw full-circle angle_to: the
@@ -597,11 +598,11 @@ impl App {
                 pivot,
                 press,
                 start_xf,
-                copy,
                 moved,
                 ..
             } => {
-                let (pivot, press, copy, was_moved) = (*pivot, *press, *copy, *moved);
+                let (pivot, press, was_moved) = (*pivot, *press, *moved);
+                let copy = self.alt_down;
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
                 let press_doc = self.doc_point(press);
@@ -894,6 +895,7 @@ impl App {
                             delta,
                         });
                     }
+                    self.record_transform_again(amalith_core::Affine::translate(delta), self.alt_down);
                     self.request_main_redraw();
                 }
             }
@@ -947,7 +949,7 @@ impl App {
                 // exact-size dialog instead of dropping a zero-size shape.
                 // The window is spawned in `window_event` (no `event_loop`
                 // here).
-                if tool.is_shape()
+                if tool.has_exact_size_dialog()
                     && (cur_doc - start_doc).hypot() * self.doc.view.zoom < 3.0
                 {
                     self.pending_shape_dialog = Some((tool, start_doc));
@@ -967,7 +969,7 @@ impl App {
                             rect: r,
                             name: None,
                         },
-                        Tool::RoundedRect | Tool::Polygon | Tool::Star => {
+                        Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Arc | Tool::Spiral => {
                             match primitive_path(tool, r) {
                                 Some(path) => Command::CreatePath {
                                     layer,
@@ -1099,11 +1101,16 @@ impl App {
                 start_xf, preview, ..
             } => {
                 if preview != start_xf {
+                    let sample = preview.keys().next().copied();
+                    let delta = sample.and_then(|id| self.preview_delta(&preview, id));
                     let items = preview
                         .into_iter()
                         .map(|(id, a)| (id, convert::affine_to_core(a)))
                         .collect();
                     let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, false);
+                    }
                     self.request_main_redraw();
                 }
             }
@@ -1144,6 +1151,8 @@ impl App {
                     // A click, not a drag: re-place the reference point.
                     self.transform_pivot = Some(self.doc_point(self.pointer));
                 } else if preview != start_xf {
+                    let sample = self.doc.selection.first().copied();
+                    let delta = sample.and_then(|id| self.preview_delta(&preview, id));
                     if copy {
                         let ids: Vec<ObjectId> = self.doc.selection.clone();
                         if let Ok(new_ids) = self
@@ -1168,6 +1177,9 @@ impl App {
                             .map(|(id, a)| (id, convert::affine_to_core(a)))
                             .collect();
                         let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    }
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, copy);
                     }
                 }
                 self.request_main_redraw();
@@ -1179,6 +1191,8 @@ impl App {
                     // A click, not a drag: re-place the reference point.
                     self.transform_pivot = Some(self.doc_point(self.pointer));
                 } else if preview != start_xf {
+                    let sample = self.doc.selection.first().copied();
+                    let delta = sample.and_then(|id| self.preview_delta(&preview, id));
                     if copy {
                         let ids: Vec<ObjectId> = self.doc.selection.clone();
                         if let Ok(new_ids) = self
@@ -1204,6 +1218,9 @@ impl App {
                             .collect();
                         let _ = self.doc.editor.execute(Command::SetTransforms { items });
                     }
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, copy);
+                    }
                 }
                 self.request_main_redraw();
             }
@@ -1211,10 +1228,15 @@ impl App {
                 start_xf, preview, ..
             } => {
                 if preview != start_xf {
+                    let sample = self.doc.selection.first().copied();
+                    let delta = sample.and_then(|id| self.preview_delta(&preview, id));
                     // Text objects bake a uniform scale into their font
                     // size / box, so the point size actually changes (the
                     // rest just take the new transform).
                     self.commit_scaled(preview);
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, false);
+                    }
                     self.request_main_redraw();
                 }
             }
@@ -1301,7 +1323,8 @@ impl App {
                 moved,
             } => {
                 if moved && !self.doc.anchor_sel.is_empty() {
-                    let delta = convert::vec2_to_core(last_doc - start_doc);
+                    let d = last_doc - start_doc;
+                    let delta = convert::vec2_to_core(if self.shift_down { snap8(d) } else { d });
                     let _ = self.doc.editor.execute(Command::MoveAnchors {
                         anchors: self.doc.anchor_sel.clone(),
                         delta,

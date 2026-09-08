@@ -74,7 +74,12 @@ impl NativeMenu {
         let cut_i = mk("Cut", sup, Code::KeyX);
         let copy_i = mk("Copy", sup, Code::KeyC);
         let paste_i = mk("Paste", sup, Code::KeyV);
-        let dup_i = mk("Duplicate", sup, Code::KeyD);
+        // Illustrator gives Duplicate no default shortcut — Cmd+D is
+        // Transform Again's (Object menu, below), and Duplicate is
+        // reachable via Cmd+C, Cmd+F / Cmd+B (paste in front / behind)
+        // just as it is there.
+        let dup_i = MenuItem::new("Duplicate", true, None);
+        let transform_again_i = mk("Transform Again", sup, Code::KeyD);
         let all_i = mk("All", sup, Code::KeyA);
         let sel_artboard_i = mk("All on Active Artboard", sup_alt, Code::KeyA);
         let deselect_i = mk("Deselect", sup_shift, Code::KeyA);
@@ -209,7 +214,8 @@ impl NativeMenu {
         .expect("same menu");
         let clip_menu = Submenu::with_items("Clipping Mask", true, &[&clip_make_i, &clip_release_i])
             .expect("clip menu");
-        let object_menu = Submenu::with_items("Object", true, &[&clip_menu]).expect("object menu");
+        let object_menu = Submenu::with_items("Object", true, &[&transform_again_i, &sep(), &clip_menu])
+            .expect("object menu");
         let select_menu = Submenu::with_items(
             "Select",
             true,
@@ -334,6 +340,7 @@ impl NativeMenu {
             (copy_i.id().clone(), MenuAction::Copy),
             (paste_i.id().clone(), MenuAction::Paste),
             (dup_i.id().clone(), MenuAction::Duplicate),
+            (transform_again_i.id().clone(), MenuAction::TransformAgain),
             (all_i.id().clone(), MenuAction::SelectAll),
             (sel_artboard_i.id().clone(), MenuAction::SelectAllArtboard),
             (deselect_i.id().clone(), MenuAction::Deselect),

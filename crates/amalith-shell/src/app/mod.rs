@@ -494,6 +494,8 @@ enum MenuAction {
     Copy,
     Paste,
     Duplicate,
+    /// Object menu — repeats the last transform gesture (Cmd+D).
+    TransformAgain,
     SelectAll,
     /// Select menu.
     SelectAllArtboard,
@@ -871,6 +873,22 @@ pub(crate) enum PenHint {
     AddPoint,
 }
 
+/// One replayable "Transform Again" gesture. `delta` is the single
+/// document-space affine that gesture applied uniformly to every object
+/// in its selection — every drag tool here transforms a whole selection
+/// around one shared pivot, so this one delta reproduces it on a
+/// *different* (typically freshly re-duplicated) selection too.
+/// `duplicate` is whether the objects that produced it were copies made
+/// in that same gesture (an Alt-drag, or the Reflect/Shear dialog's
+/// Copy), so Transform Again keeps stamping out new copies each press
+/// (rotate-and-copy repeatedly into a circular array) rather than just
+/// re-nudging the same objects further.
+#[derive(Clone, Copy)]
+struct LastTransform {
+    delta: amalith_core::Affine,
+    duplicate: bool,
+}
+
 struct App {
     context: RenderContext,
     /// A headless vello renderer, made on first use by Export for Screens.
@@ -1003,6 +1021,12 @@ struct App {
     /// — whichever tool in that group was last used.
     last_rotate_tool: Tool,
     last_scale_tool: Tool,
+    /// The last transform gesture applied to a selection — a drag
+    /// move/rotate/reflect/shear/scale, an arrow-key nudge, or the exact
+    /// Reflect/Shear dialog's OK/Copy — for Cmd+D ("Transform Again") to
+    /// replay on the *current* selection. `None` until the first one
+    /// happens this session.
+    last_transform: Option<LastTransform>,
     /// A flyout-group slot press in progress: (when, its screen rect,
     /// which group) — a hold opens the labeled flyout, a quick release
     /// re-activates that group's last tool.
@@ -1289,6 +1313,7 @@ impl App {
             shape_flyout: None,
             last_rotate_tool: Tool::Rotate,
             last_scale_tool: Tool::Scale,
+            last_transform: None,
             tool_flyout_press: None,
             tool_flyout: None,
             pending_fit: true,
@@ -2903,6 +2928,61 @@ impl App {
                 objects: self.doc.selection.clone(),
                 delta,
             });
+            self.record_transform_again(amalith_core::Affine::translate(delta), false);
+            self.request_main_redraw();
+        }
+    }
+
+    /// Records `delta` (document-space, applied uniformly to every object
+    /// of the gesture that just committed) as what Cmd+D / "Transform
+    /// Again" replays next. Call right after a transform drag, the
+    /// Reflect/Shear dialog, or an arrow-key nudge of the object
+    /// selection commits successfully.
+    fn record_transform_again(&mut self, delta: amalith_core::Affine, duplicate: bool) {
+        self.last_transform = Some(LastTransform { delta, duplicate });
+    }
+
+    /// The document-space delta a drag-preview map (`preview`, keyed by
+    /// the *source* object even when the gesture also duplicated) applied
+    /// to go from `sample`'s current transform to its entry in `preview`
+    /// — every object in the map got the same one. `None` if `sample`
+    /// isn't in `preview` or no longer exists.
+    fn preview_delta(&self, preview: &HashMap<ObjectId, Affine>, sample: ObjectId) -> Option<amalith_core::Affine> {
+        let old = self.doc.editor.document().object(sample)?.transform;
+        let new = convert::affine_to_core(*preview.get(&sample)?);
+        Some(new * old.inverse())
+    }
+
+    /// Cmd+D — "Transform Again": re-applies the last recorded transform
+    /// gesture to the current selection. If that gesture duplicated (an
+    /// Alt-drag, or a dialog's Copy), this duplicates again first and
+    /// transforms *those* copies — so repeated presses keep stamping out
+    /// new ones (the classic rotate-and-copy-into-a-circle trick) instead
+    /// of just re-nudging the same objects further.
+    pub(in crate::app) fn transform_again(&mut self) {
+        let Some(t) = self.last_transform else { return };
+        if self.doc.selection.is_empty() {
+            return;
+        }
+        let targets = if t.duplicate {
+            let Ok(new_ids) = self
+                .doc.editor
+                .duplicate_objects(&self.doc.selection.clone(), amalith_core::Vec2::ZERO)
+            else {
+                return;
+            };
+            self.doc.selection = new_ids.clone();
+            new_ids
+        } else {
+            self.doc.selection.clone()
+        };
+        let doc = self.doc.editor.document();
+        let items: Vec<(ObjectId, amalith_core::Affine)> = targets
+            .iter()
+            .filter_map(|&id| Some((id, t.delta * doc.object(id)?.transform)))
+            .collect();
+        if !items.is_empty() {
+            let _ = self.doc.editor.execute(Command::SetTransforms { items });
             self.request_main_redraw();
         }
     }
@@ -3332,6 +3412,7 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            MenuAction::TransformAgain => self.transform_again(),
             MenuAction::SelectAll => self.select_all(),
             MenuAction::SelectAllArtboard => self.select_all_artboard(),
             MenuAction::Deselect => self.deselect(),
@@ -7412,6 +7493,36 @@ fn primitive_path(tool: Tool, r: amalith_core::Rect) -> Option<amalith_core::Pat
                 .collect();
             Some(PathData::polygon(&pts))
         }
+        // An open quarter-ellipse spanning the dragged rect's bottom-left
+        // to top-right corners, tangent to the left edge at the start and
+        // the top edge at the end — the classic ramp-shaped Arc glyph.
+        Tool::Arc => {
+            let k = 0.552_284_749_830_793_6;
+            let mut path = amalith_core::geom::BezPath::new();
+            path.move_to((r.x0, r.y1));
+            path.curve_to(
+                (r.x0, r.y1 - r.height() * k),
+                (r.x1 - r.width() * k, r.y0),
+                (r.x1, r.y0),
+            );
+            Some(PathData::from_bezpath(path))
+        }
+        // An elliptical spiral fit to the dragged rect: starts at full
+        // radius on the rect's right edge and winds inward, its radius
+        // decaying 20% every quarter turn — an open path, like
+        // Illustrator's own Spiral tool.
+        Tool::Spiral => {
+            let (turns, decay, steps_per_turn) = (3.0_f64, 0.8_f64, 48i64);
+            let total_steps = (turns * steps_per_turn as f64).round() as i64;
+            let pts: Vec<CP> = (0..=total_steps)
+                .map(|i| {
+                    let t = i as f64 / steps_per_turn as f64 * TAU;
+                    let k = decay.powf(t / FRAC_PI_2);
+                    CP::new(c.x + rx * k * t.cos(), c.y + ry * k * t.sin())
+                })
+                .collect();
+            Some(PathData::polyline(&pts))
+        }
         _ => None,
     }
 }
@@ -7605,6 +7716,8 @@ fn tab_label(panel: PanelId) -> String {
         "shapedlg.ellipse" => "Ellipse",
         "shapedlg.polygon" => "Polygon",
         "shapedlg.star" => "Star",
+        "shapedlg.arc" => "Arc Segment Tool Options",
+        "shapedlg.spiral" => "Spiral",
         "export-screens" => "Export for Screens",
         "xformdlg.reflect" => "Reflect",
         "xformdlg.shear" => "Shear",

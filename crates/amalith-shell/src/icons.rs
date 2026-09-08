@@ -60,6 +60,8 @@ pub enum Icon {
     Scale,
     Blend,
     Width,
+    Arc,
+    Spiral,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -75,7 +77,8 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
-        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width => "",
+        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
+        | Icon::Arc | Icon::Spiral => "",
     }
 }
 
@@ -127,6 +130,14 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Width {
         draw_width_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Arc {
+        draw_arc_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Spiral {
+        draw_spiral_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -294,6 +305,42 @@ fn draw_width_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     diamond.line_to((cx - d, cy - thick));
     diamond.close_path();
     scene.fill(Fill::NonZero, ID, color, None, &diamond);
+}
+
+/// A quarter-ellipse sweeping from the bottom-left up to the top-right —
+/// the Arc tool.
+fn draw_arc_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let x0 = box_.x0 + box_.width() * 0.22;
+    let x1 = box_.x1 - box_.width() * 0.22;
+    let y0 = box_.y0 + box_.height() * 0.22;
+    let y1 = box_.y1 - box_.height() * 0.22;
+    let k = 0.552_284_749_830_793_6;
+    let mut p = BezPath::new();
+    p.move_to((x0, y1));
+    p.curve_to((x0, y1 - (y1 - y0) * k), (x1 - (x1 - x0) * k, y0), (x1, y0));
+    scene.stroke(&Stroke::new((box_.width() * 0.09).max(1.6)), ID, color, None, &p);
+}
+
+/// A few decreasing concentric loops — the Spiral tool.
+fn draw_spiral_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let c = box_.center();
+    let (rx, ry) = (w * 0.34, h * 0.34);
+    let (turns, decay, steps_per_turn) = (2.4_f64, 0.72_f64, 48i64);
+    let total_steps = (turns * steps_per_turn as f64) as i64;
+    let mut p = BezPath::new();
+    for i in 0..=total_steps {
+        let t = i as f64 / steps_per_turn as f64 * std::f64::consts::TAU;
+        let k = decay.powf(t / std::f64::consts::FRAC_PI_2);
+        let pt = Point::new(c.x + rx * k * t.cos(), c.y + ry * k * t.sin());
+        if i == 0 {
+            p.move_to(pt);
+        } else {
+            p.line_to(pt);
+        }
+    }
+    scene.stroke(&Stroke::new((w * 0.06).max(1.2)), ID, color, None, &p);
 }
 
 /// A rounded square with a left→right light-to-dark ramp — the Gradient tool.

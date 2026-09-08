@@ -180,7 +180,16 @@ impl App {
             XformClose::Ok => {
                 let items = self.resolve_xform_items(&dlg);
                 if !items.is_empty() {
+                    let delta = items.first().and_then(|&(id, new)| {
+                        dlg.originals
+                            .iter()
+                            .find(|&&(oid, _)| oid == id)
+                            .map(|&(_, old)| new * old.inverse())
+                    });
                     let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, false);
+                    }
                 }
             }
             XformClose::Copy => {
@@ -192,6 +201,7 @@ impl App {
                 let ids: Vec<ObjectId> = dlg.originals.iter().map(|&(id, _)| id).collect();
                 if let Ok(new_ids) = self.doc.editor.duplicate_objects(&ids, amalith_core::Vec2::ZERO) {
                     let doc = self.doc.editor.document();
+                    let mut delta = None;
                     let items: Vec<(ObjectId, amalith_core::Affine)> = new_ids
                         .iter()
                         .zip(dlg.originals.iter())
@@ -201,11 +211,18 @@ impl App {
                                 amalith_core::ObjectParent::Layer(_) => amalith_core::Affine::IDENTITY,
                                 amalith_core::ObjectParent::Group(g) => doc.world_transform(g),
                             };
-                            Some((nid, dlg.resolve(local, parent)))
+                            let new = dlg.resolve(local, parent);
+                            if delta.is_none() {
+                                delta = Some(new * local.inverse());
+                            }
+                            Some((nid, new))
                         })
                         .collect();
                     if !items.is_empty() {
                         let _ = self.doc.editor.execute(Command::SetTransforms { items });
+                    }
+                    if let Some(delta) = delta {
+                        self.record_transform_again(delta, true);
                     }
                     self.doc.selection = new_ids;
                     self.sync_align_mode();

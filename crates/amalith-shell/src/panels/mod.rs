@@ -183,6 +183,8 @@ pub(crate) fn shape_dialog_tool(id: PanelId) -> Option<Tool> {
         "shapedlg.ellipse" => Tool::Ellipse,
         "shapedlg.polygon" => Tool::Polygon,
         "shapedlg.star" => Tool::Star,
+        "shapedlg.arc" => Tool::Arc,
+        "shapedlg.spiral" => Tool::Spiral,
         _ => return None,
     })
 }

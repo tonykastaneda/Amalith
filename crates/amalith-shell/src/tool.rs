@@ -25,10 +25,12 @@ pub enum Tool {
     Scale,
     Blend,
     Width,
+    Arc,
+    Spiral,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 21] = [
+    pub const ALL: [Tool; 23] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -50,14 +52,25 @@ impl Tool {
         Tool::Scale,
         Tool::Blend,
         Tool::Width,
+        Tool::Arc,
+        Tool::Spiral,
     ];
 
-    /// A drag-a-box shape tool.
+    /// A drag-a-box shape tool — the five that share the toolbar's Shape
+    /// flyout slot. Arc has its own exact-size dialog too (see
+    /// [`Self::has_exact_size_dialog`]) but isn't part of that flyout
+    /// group, so it's deliberately excluded here.
     pub fn is_shape(self) -> bool {
         matches!(
             self,
             Tool::Rectangle | Tool::RoundedRect | Tool::Ellipse | Tool::Polygon | Tool::Star
         )
+    }
+
+    /// A plain click (no drag) with this tool pops an exact-size dialog
+    /// instead of rubber-banding a shape.
+    pub fn has_exact_size_dialog(self) -> bool {
+        self.is_shape() || matches!(self, Tool::Arc | Tool::Spiral)
     }
 
     pub fn label(self) -> &'static str {
@@ -83,6 +96,8 @@ impl Tool {
             Tool::Scale => "Scale",
             Tool::Blend => "Blend",
             Tool::Width => "Width",
+            Tool::Arc => "Arc",
+            Tool::Spiral => "Spiral",
         }
     }
 
@@ -133,6 +148,8 @@ impl Tool {
             Tool::Scale => Icon::Scale,
             Tool::Blend => Icon::Blend,
             Tool::Width => Icon::Width,
+            Tool::Arc => Icon::Arc,
+            Tool::Spiral => Icon::Spiral,
         }
     }
 }

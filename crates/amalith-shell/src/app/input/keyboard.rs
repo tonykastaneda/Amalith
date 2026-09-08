@@ -521,15 +521,11 @@ impl App {
                     KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
                     KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
                     KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
-                    KeyCode::KeyD if !self.doc.selection.is_empty() => {
-                        if let Ok(ids) = self.doc.editor.duplicate_objects(
-                            &self.doc.selection,
-                            amalith_core::Vec2::new(16.0, 16.0),
-                        ) {
-                            self.doc.selection = ids;
-                        }
-                        self.request_main_redraw();
-                    }
+                    // Transform Again — Illustrator's real Cmd+D, not
+                    // Duplicate (that's Cmd+C, Cmd+F / Cmd+B here, same as
+                    // Illustrator itself, which gives Duplicate no default
+                    // shortcut of its own).
+                    KeyCode::KeyD => self.transform_again(),
                     KeyCode::KeyG if self.shift_down => {
                         if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
                             if !freed.is_empty() {

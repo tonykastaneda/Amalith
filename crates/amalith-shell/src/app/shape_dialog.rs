@@ -15,6 +15,8 @@ impl App {
             Tool::Ellipse => "shapedlg.ellipse",
             Tool::Polygon => "shapedlg.polygon",
             Tool::Star => "shapedlg.star",
+            Tool::Arc => "shapedlg.arc",
+            Tool::Spiral => "shapedlg.spiral",
             _ => "shapedlg.rect",
         })
     }
@@ -84,7 +86,7 @@ impl App {
     /// picker: movable by the tab strip, not dockable, not in the Window
     /// menu.
     pub(in crate::app) fn spawn_shape_dialog(&mut self, event_loop: &ActiveEventLoop, tool: Tool, anchor: Point) {
-        if !tool.is_shape() {
+        if !tool.has_exact_size_dialog() {
             return;
         }
         self.close_shape_dialog(false);
@@ -158,9 +160,16 @@ impl App {
                     name: None,
                 },
             };
+            let suppress_fill = dlg.suppress_fill();
             if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                 self.doc.selection = vec![id];
                 self.apply_new_appearance(id);
+                if suppress_fill {
+                    let _ = self.doc.editor.execute(Command::SetFill {
+                        objects: vec![id],
+                        paint: amalith_core::Paint::None,
+                    });
+                }
                 self.sync_align_mode();
             }
         }

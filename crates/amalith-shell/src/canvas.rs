@@ -82,12 +82,18 @@ pub fn zoom_percent_label(zoom: f64) -> String {
 ///   `delta`.
 /// - A scale/rotate supplies `xf`: a full replacement transform per
 ///   dragged object, which wins over `delta`/`dup`.
+/// - An Alt-drag with the Rotate/Reflect/Shear/Scale tool sets `dup_xf`
+///   alongside `xf`: the originals render untouched (`xf` stops
+///   overriding them) and every `xf` entry instead paints as an extra
+///   ghost pass at its own full transform — the would-be copy, shown
+///   live while the original stays exactly where it is.
 #[derive(Clone, Copy)]
 pub struct DragPreview<'a> {
     pub ids: &'a [ObjectId],
     pub delta: Vec2,
     pub dup: bool,
     pub xf: Option<&'a HashMap<ObjectId, Affine>>,
+    pub dup_xf: bool,
     /// Live anchor drag: `(selected anchors, document-space delta)`.
     pub anchors: Option<(&'a [(ObjectId, usize)], amalith_core::Vec2)>,
     /// Live handle drag: `(object, anchor ordinal, side, local-space delta)`.
@@ -162,8 +168,13 @@ impl DragPreview<'_> {
         }
     }
 
-    /// Full replacement transform for `id` during a scale/rotate.
+    /// Full replacement transform for `id` during a scale/rotate — `None`
+    /// while `dup_xf` is set, so the original renders at its own
+    /// untouched transform instead of jumping to the would-be copy's.
     fn replacement(&self, id: ObjectId) -> Option<Affine> {
+        if self.dup_xf {
+            return None;
+        }
         self.xf.and_then(|m| m.get(&id).copied())
     }
 
@@ -369,6 +380,30 @@ pub fn paint(
                 images,
                 outline,
             );
+        }
+    }
+
+    // Alt-drag with the Rotate/Reflect/Shear/Scale tool: the originals
+    // already rendered untouched above (`replacement` returns `None`
+    // while `dup_xf` is set) — draw the would-be copy as an extra ghost
+    // pass at each object's own full preview transform.
+    if let Some(d) = drag.filter(|d| d.dup_xf) {
+        if let Some(map) = d.xf {
+            for (&id, &xf) in map {
+                paint_object(
+                    scene,
+                    doc,
+                    id,
+                    vt * xf,
+                    view.zoom,
+                    cull,
+                    None,
+                    text,
+                    editing_text,
+                    images,
+                    outline,
+                );
+            }
         }
     }
 
@@ -1054,6 +1089,37 @@ fn shape_preview_path(tool: Tool, r: Rect) -> BezPath {
                     p.line_to(pt);
                 }
             }
+        }
+        // Arc and Spiral are open paths — closing the preview would draw
+        // a straight line back to the start that the committed shape
+        // never has, so both return early like RoundedRect above instead
+        // of falling into the unconditional `close_path()` below (which
+        // also `debug_assert`s on an empty path, the crash an untouched
+        // `_ => {}` here used to hit for these two tools).
+        Tool::Arc => {
+            let k = 0.552_284_749_830_793_6;
+            p.move_to((r.x0, r.y1));
+            p.curve_to(
+                (r.x0, r.y1 - r.height() * k),
+                (r.x1 - r.width() * k, r.y0),
+                (r.x1, r.y0),
+            );
+            return p;
+        }
+        Tool::Spiral => {
+            let (turns, decay, steps_per_turn) = (3.0_f64, 0.8_f64, 48i64);
+            let total_steps = (turns * steps_per_turn as f64).round() as i64;
+            for i in 0..=total_steps {
+                let t = i as f64 / steps_per_turn as f64 * TAU;
+                let k = decay.powf(t / FRAC_PI_2);
+                let pt = (cx + rx * k * t.cos(), cy + ry * k * t.sin());
+                if i == 0 {
+                    p.move_to(pt);
+                } else {
+                    p.line_to(pt);
+                }
+            }
+            return p;
         }
         _ => {}
     }
