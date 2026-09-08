@@ -48,6 +48,7 @@ pub mod lod;
 #[cfg(target_os = "macos")]
 pub mod macdrop;
 pub mod newdoc;
+pub mod offsetdlg;
 pub mod palette;
 pub mod panel_icon;
 pub mod panels;

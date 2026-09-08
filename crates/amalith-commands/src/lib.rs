@@ -35,7 +35,7 @@ mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
 pub use command::{Command, CommandOutcome, GradientRef, PasteStack, PathfinderOp};
-pub use pathfinder::has_visible_stroke;
+pub use pathfinder::{has_visible_stroke, offset_path};
 pub use editor::Editor;
 pub use error::CommandError;
 
@@ -86,6 +86,55 @@ mod tests {
         assert_eq!(copy.kind.path_data(), source.kind.path_data());
         assert_eq!(copy.transform, Affine::translate((120.0, 30.0)) * source.transform);
 
+    }
+
+    #[test]
+    fn offset_path_leaves_the_source_untouched_and_inserts_a_grown_sibling() {
+        use amalith_core::{PathData, Rect};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let path = PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0));
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreatePath { layer, path, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let before = editor.document().object(id).unwrap().kind.path_data().unwrap().local_bounds();
+
+        editor
+            .execute(Command::OffsetPath {
+                objects: vec![id],
+                offset: 5.0,
+                join: amalith_core::LineJoin::Miter,
+                miter_limit: 4.0,
+            })
+            .unwrap();
+
+        // The source is byte-for-byte untouched.
+        let source_after = editor.document().object(id).unwrap().kind.path_data().unwrap().local_bounds();
+        assert_eq!(source_after, before);
+
+        // A new sibling, directly behind it (lower paint-order index),
+        // holds the grown geometry.
+        let children = editor.document().children_of(amalith_core::ObjectParent::Layer(layer));
+        assert_eq!(children.len(), 2);
+        let new_id = children[0];
+        assert_ne!(new_id, id);
+        assert_eq!(children[1], id);
+        let grown = editor.document().object(new_id).unwrap().kind.path_data().unwrap().local_bounds();
+        assert!((grown.width() - (before.width() + 10.0)).abs() < 0.5);
+        assert!((grown.height() - (before.height() + 10.0)).abs() < 0.5);
+
+        editor.undo().unwrap();
+        let children = editor.document().children_of(amalith_core::ObjectParent::Layer(layer));
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], id);
     }
 
     #[test]

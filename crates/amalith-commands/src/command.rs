@@ -418,6 +418,15 @@ pub enum Command {
     ExpandStroke {
         objects: Vec<ObjectId>,
     },
+    /// Object ▸ Path ▸ Offset Path: replaces each listed path's geometry
+    /// with its boundary grown (`offset > 0`) or shrunk (`offset < 0`) by
+    /// `offset`, joined per `join` (used only for `LineJoin::Miter`).
+    OffsetPath {
+        objects: Vec<ObjectId>,
+        offset: f64,
+        join: amalith_core::LineJoin,
+        miter_limit: f64,
+    },
     /// Align / distribute `objects` in document space. `key` is the object
     /// that stays put when `to` is [`AlignTo::KeyObject`]. `artboard` is
     /// the frame when `to` is [`AlignTo::Artboard`]. `spacing` is the

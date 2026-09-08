@@ -25,6 +25,7 @@ mod input;
 mod isolation;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
+mod offset_dialog;
 mod render;
 mod shape_dialog;
 mod thumbnails;
@@ -53,9 +54,9 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
-    icons, layout, panels, pathtext, picker, prefs, recent, rulers, sample, select, settings,
-    shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog, workspaces,
-    xformdlg, Theme,
+    icons, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
+    settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
+    workspaces, xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
 pub(crate) use vello::peniko::{color::palette, Color, Fill};
@@ -496,6 +497,11 @@ enum MenuAction {
     Duplicate,
     /// Object menu — repeats the last transform gesture (Cmd+D).
     TransformAgain,
+    /// Object ▸ Path ▸ Offset Path… — needs an `ActiveEventLoop` to spawn
+    /// its floating dialog, which the native-menu callback doesn't have;
+    /// sets `pending_offset_dialog` for `about_to_wait` to pick up, same
+    /// as `ExportForScreens` already does for `pending_export`.
+    OffsetPath,
     SelectAll,
     /// Select menu.
     SelectAllArtboard,
@@ -950,9 +956,15 @@ struct App {
     /// Free-floating like the colour picker; never dockable, never in the
     /// Window menu.
     blend_dialog: Option<blenddlg::BlendDialog>,
+    /// The Offset Path dialog, opened from Object ▸ Path ▸ Offset Path.
+    /// Free-floating like the colour picker; never dockable, never in the
+    /// Window menu.
+    offset_dialog: Option<offsetdlg::OffsetDialog>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
+    /// Same reason as `pending_export`, for the Offset Path dialog.
+    pending_offset_dialog: bool,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -1284,6 +1296,8 @@ impl App {
             pending_export: false,
             xform_dialog: None,
             blend_dialog: None,
+            offset_dialog: None,
+            pending_offset_dialog: false,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -3413,6 +3427,7 @@ impl App {
                 }
             }
             MenuAction::TransformAgain => self.transform_again(),
+            MenuAction::OffsetPath => self.pending_offset_dialog = true,
             MenuAction::SelectAll => self.select_all(),
             MenuAction::SelectAllArtboard => self.select_all_artboard(),
             MenuAction::Deselect => self.deselect(),
@@ -5958,6 +5973,7 @@ impl App {
             export: None,
             xform_dialog: None,
             blend_dialog: None,
+            offset_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6013,6 +6029,7 @@ impl App {
             export: self.export.as_ref().map(|d| (d, false)),
             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, false)),
             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
+            offset_dialog: self.offset_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -7060,6 +7077,9 @@ impl ApplicationHandler for App {
         if std::mem::take(&mut self.pending_export) {
             self.spawn_export_dialog(event_loop);
         }
+        if std::mem::take(&mut self.pending_offset_dialog) {
+            self.spawn_offset_dialog(event_loop);
+        }
         if self.pending_fit {
             self.fit_view();
         }
@@ -7113,7 +7133,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() || self.offset_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -7381,6 +7401,7 @@ impl ApplicationHandler for App {
                     || self.picker.is_some()
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
+                    || self.offset_dialog.is_some()
                 {
                     self.cmd_down = m.state().super_key();
                     self.shift_down = m.state().shift_key();
@@ -7420,7 +7441,8 @@ impl ApplicationHandler for App {
                     || self.shape_dialog.is_some()
                     || self.export.is_some()
                     || self.xform_dialog.is_some()
-                    || self.blend_dialog.is_some() =>
+                    || self.blend_dialog.is_some()
+                    || self.offset_dialog.is_some() =>
             {
                 self.on_key(event);
             }
@@ -7431,7 +7453,8 @@ impl ApplicationHandler for App {
                 if Some(id) == self.main_id
                     || self.shape_dialog.is_some()
                     || self.xform_dialog.is_some()
-                    || self.blend_dialog.is_some() =>
+                    || self.blend_dialog.is_some()
+                    || self.offset_dialog.is_some() =>
             {
                 self.on_wheel(delta);
             }
@@ -7722,6 +7745,7 @@ fn tab_label(panel: PanelId) -> String {
         "xformdlg.reflect" => "Reflect",
         "xformdlg.shear" => "Shear",
         "blenddlg" => "Blend Options",
+        "offsetdlg" => "Offset Path",
         other => other,
     }
     .to_string()

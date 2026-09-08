@@ -330,6 +330,53 @@ impl App {
         }
     }
 
+    /// Offset Path's live Preview: for each target, computed fresh every
+    /// frame from that object's own untouched geometry (never the
+    /// document — the dialog doesn't touch it until OK). The offset
+    /// *result* paints with the object's own real fill/stroke, opaque —
+    /// standing in for what OK would actually create, the same way
+    /// Illustrator's own preview does — while the *original*'s boundary
+    /// draws as a thin accent contour on top of everything, so it stays
+    /// visible as a reference regardless of which one the fill covers.
+    pub(in crate::app) fn paint_offset_preview(&mut self) {
+        let Some(dlg) = &self.offset_dialog else { return };
+        if !dlg.preview {
+            return;
+        }
+        let (offset, join, miter_limit) = (dlg.resolved_offset(), dlg.join, dlg.resolved_miter_limit());
+        if offset.abs() < 1e-6 {
+            return;
+        }
+        let doc = self.doc.editor.document();
+        let vt = self.doc.view.to_screen();
+        let accent = self.theme.accent;
+        let zoom = self.doc.view.zoom.max(1e-6);
+        for (id, data) in &dlg.originals {
+            let Some(obj) = doc.object(*id) else {
+                continue;
+            };
+            let world = doc.world_transform(*id) * data.geometry.clone();
+            let Some(offset_pd) = amalith_commands::offset_path(&world, offset, join, miter_limit) else {
+                continue;
+            };
+            let screen_offset = vt * convert::bez_path(&offset_pd.geometry);
+            if let Some(c) = obj.appearance.fill.color().map(convert::color) {
+                self.content.fill(Fill::NonZero, ID, c, None, &screen_offset);
+            }
+            if let Some(c) = obj.appearance.stroke.color().map(convert::color) {
+                self.content.stroke(
+                    &Stroke::new((obj.appearance.stroke_width * zoom).max(0.5)),
+                    ID,
+                    c,
+                    None,
+                    &screen_offset,
+                );
+            }
+            let screen_original = vt * convert::bez_path(&world);
+            self.content.stroke(&Stroke::new(1.0), ID, accent, None, &screen_original);
+        }
+    }
+
     pub(in crate::app) fn paint_ctx_menu(&mut self) {
         let Some(menu) = &self.ctx_menu else {
             return;

@@ -10,6 +10,7 @@ use amalith_core::{
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
+use i_overlay::mesh::outline::offset::OutlineOffset;
 use kurbo::{flatten, stroke, BezPath, Cap, Join, PathEl, Point, Stroke, StrokeOpts};
 
 use crate::command::PathfinderOp;
@@ -282,6 +283,70 @@ pub fn has_visible_stroke(a: &Appearance) -> bool {
     a.stroke != Paint::None && a.stroke_width > 0.05
 }
 
+/// Object ▸ Path ▸ Offset Path: grows (`offset > 0`) or shrinks
+/// (`offset < 0`) a path's boundary by `offset`, joining corners per
+/// `join` (Illustrator's Miter/Round/Bevel).
+///
+/// A *closed* path goes through `i_overlay`'s own polygon-offset
+/// (`outline()`, the same self-intersection-resolving machinery its
+/// boolean ops already use here, in `apply` below): a naive per-corner
+/// miter join, offsetting each edge independently and connecting at the
+/// corners, leaves an inward offset's adjacent edges unclipped past each
+/// other at any convex corner — a real self-intersecting bowtie, not a
+/// simple polygon — and `i_overlay`'s offset resolves that properly,
+/// where a bounding-box/area heuristic on the raw points can't.
+///
+/// An *open* path instead goes through `kurbo::stroke` at `2 * |offset|`
+/// — offset outward on both sides into a single closed loop, joined at
+/// its two ends the same way as its corners — matching Illustrator's own
+/// result for an open path (not a parallel open curve). This case has no
+/// inner-vs-outer ambiguity to begin with (there's only ever the one
+/// loop), so the self-intersection problem above doesn't apply to it.
+pub fn offset_path(path: &BezPath, offset: f64, join: LineJoin, miter_limit: f64) -> Option<PathData> {
+    if offset.abs() < 1e-6 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    let is_closed = path.elements().iter().any(|e| matches!(e, PathEl::ClosePath));
+    if !is_closed {
+        let kurbo_join = match join {
+            LineJoin::Miter => Join::Miter,
+            LineJoin::Round => Join::Round,
+            LineJoin::Bevel => Join::Bevel,
+        };
+        let style = Stroke::new(offset.abs() * 2.0)
+            .with_caps(Cap::Butt)
+            .with_join(kurbo_join)
+            .with_miter_limit(miter_limit.max(1.0));
+        let outlined = stroke(path.clone(), &style, &StrokeOpts::default(), TOL);
+        return if outlined.elements().is_empty() {
+            None
+        } else {
+            Some(PathData::from_bezpath(outlined))
+        };
+    }
+    let contours = flatten_path(path);
+    if contours.is_empty() {
+        return None;
+    }
+    let mesh_join = match join {
+        // Illustrator's miter *limit* L caps a corner's spike length to
+        // L times the offset; for a symmetric corner of full angle φ,
+        // that spike ratio is 1/sin(φ/2), so the angle at which it first
+        // exceeds L is φ = 2·asin(1/L) — `i_overlay` takes that angle
+        // directly (corners sharper than it fall back to bevel) rather
+        // than the ratio itself.
+        LineJoin::Miter => {
+            i_overlay::mesh::style::LineJoin::Miter(2.0 * (1.0 / miter_limit.max(1.0)).asin())
+        }
+        LineJoin::Round => i_overlay::mesh::style::LineJoin::Round(0.35),
+        LineJoin::Bevel => i_overlay::mesh::style::LineJoin::Bevel,
+    };
+    let style = i_overlay::mesh::style::OutlineStyle::new(offset).line_join(mesh_join);
+    let shapes = contours.outline(&style);
+    let flat: Vec<Vec<[f64; 2]>> = shapes.into_iter().flatten().collect();
+    contours_to_path(&flat)
+}
+
 /// Outline a stroke into a filled path (Object ▸ Expand Stroke).
 pub fn expand_stroke(path: &BezPath, appearance: &Appearance) -> Option<PathData> {
     if !has_visible_stroke(appearance) {
@@ -374,5 +439,34 @@ mod tests {
         let bb = out.geometry.bounding_box();
         assert!(bb.width() > 40.0);
         assert!(bb.height() > 10.0);
+    }
+
+    #[test]
+    fn positive_offset_grows_a_square_by_the_offset_on_every_side() {
+        let path = PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0));
+        let out = offset_path(&path.geometry, 5.0, LineJoin::Miter, 4.0).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!((bb.width() - 30.0).abs() < 0.5, "width {}", bb.width());
+        assert!((bb.height() - 30.0).abs() < 0.5, "height {}", bb.height());
+    }
+
+    #[test]
+    fn negative_offset_shrinks_a_square_by_the_offset_on_every_side() {
+        let path = PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0));
+        let out = offset_path(&path.geometry, -5.0, LineJoin::Miter, 4.0).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!((bb.width() - 10.0).abs() < 0.5, "width {}", bb.width());
+        assert!((bb.height() - 10.0).abs() < 0.5, "height {}", bb.height());
+    }
+
+    #[test]
+    fn offsetting_an_open_path_wraps_both_sides_into_one_closed_loop() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((40.0, 0.0));
+        let out = offset_path(&path, 3.0, LineJoin::Round, 4.0).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!((bb.height() - 6.0).abs() < 0.5, "height {}", bb.height());
+        assert!(out.geometry.elements().iter().any(|e| matches!(e, PathEl::ClosePath)));
     }
 }

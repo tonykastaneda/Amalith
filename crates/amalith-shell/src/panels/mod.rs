@@ -167,6 +167,9 @@ pub struct Ctx<'a> {
     /// The Blend Options dialog + caret-blink phase, when the `blenddlg`
     /// float-only panel is being drawn / hit-tested.
     pub blend_dialog: Option<(&'a crate::blenddlg::BlendDialog, bool)>,
+    /// The Offset Path dialog + caret-blink phase, when the `offsetdlg`
+    /// float-only panel is being drawn / hit-tested.
+    pub offset_dialog: Option<(&'a crate::offsetdlg::OffsetDialog, bool)>,
     /// The gradient the Gradient panel edits (a clone of the pooled
     /// target), plus the selected stop index. `None` when the selection
     /// has no gradient paint.
@@ -375,6 +378,9 @@ pub enum Action {
     /// The whole Blend Options dialog hit-vocabulary passes through — the
     /// App applies it directly (row select, field focus, OK/Cancel).
     BlendHit(crate::blenddlg::Hit),
+    /// The whole Offset Path dialog hit-vocabulary passes through — the
+    /// App applies it directly (field focus, join pick, Preview, OK/Cancel).
+    OffsetHit(crate::offsetdlg::Hit),
     // --- Links panel ---
     /// A row was clicked — just highlights it.
     SelectAsset(AssetId),
@@ -481,6 +487,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::blenddlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        "offsetdlg" => {
+            if let Some((dlg, caret)) = ctx.offset_dialog {
+                crate::offsetdlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
         _ => {}
     }
 }
@@ -533,6 +544,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             None => Action::None,
         },
         "blenddlg" => Action::BlendHit(crate::blenddlg::hit(body, local)),
+        "offsetdlg" => match ctx.offset_dialog {
+            Some((dlg, _)) => Action::OffsetHit(crate::offsetdlg::hit(dlg, body, local)),
+            None => Action::None,
+        },
         _ => Action::None,
     }
 }
@@ -571,6 +586,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         "xformdlg.reflect" => crate::xformdlg::body_height(crate::xformdlg::Kind::Reflect),
         "xformdlg.shear" => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
         "blenddlg" => crate::blenddlg::body_height(),
+        "offsetdlg" => crate::offsetdlg::body_height(),
         s if shape_dialog_tool(PanelId(s)).is_some() => {
             crate::shapedialog::body_height(shape_dialog_tool(PanelId(s)).unwrap())
         }

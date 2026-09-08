@@ -31,6 +31,9 @@ impl App {
         if self.blend_wheel(dy) {
             return;
         }
+        if self.offset_wheel(dy) {
+            return;
+        }
         if self.shape_wheel(dy) {
             return;
         }

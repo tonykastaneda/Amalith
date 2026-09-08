@@ -240,6 +240,11 @@ impl App {
             self.blend_dialog_key(&event);
             return;
         }
+        // The Offset Path dialog takes every key while open.
+        if self.offset_dialog.is_some() {
+            self.offset_dialog_key(&event);
+            return;
+        }
         // The Export for Screens dialog takes every key while open.
         if self.export.is_some() {
             self.export_key(&event);

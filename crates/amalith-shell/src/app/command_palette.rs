@@ -52,6 +52,7 @@ impl App {
             ("Paste", "Edit", MenuAction::Paste),
             ("Duplicate", "Edit", MenuAction::Duplicate),
             ("Transform Again", "Object", MenuAction::TransformAgain),
+            ("Offset Path…", "Object", MenuAction::OffsetPath),
             ("Select All", "Edit", MenuAction::SelectAll),
             ("Bring Forward", "Arrange", MenuAction::BringForward),
             ("Bring to Front", "Arrange", MenuAction::BringToFront),

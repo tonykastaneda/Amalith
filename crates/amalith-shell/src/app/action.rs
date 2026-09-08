@@ -181,6 +181,39 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::OffsetHit(hit) => {
+                match hit {
+                    offsetdlg::Hit::Offset => {
+                        if let Some(dlg) = self.offset_dialog.as_mut() {
+                            dlg.focus = offsetdlg::Field::Offset;
+                        }
+                    }
+                    offsetdlg::Hit::Join(i) => {
+                        if let Some(dlg) = self.offset_dialog.as_mut() {
+                            dlg.join = [
+                                amalith_core::LineJoin::Miter,
+                                amalith_core::LineJoin::Round,
+                                amalith_core::LineJoin::Bevel,
+                            ][i];
+                        }
+                    }
+                    offsetdlg::Hit::MiterLimit => {
+                        if let Some(dlg) = self.offset_dialog.as_mut() {
+                            dlg.focus = offsetdlg::Field::MiterLimit;
+                        }
+                    }
+                    offsetdlg::Hit::Preview => {
+                        if let Some(dlg) = self.offset_dialog.as_mut() {
+                            dlg.preview = !dlg.preview;
+                        }
+                    }
+                    offsetdlg::Hit::Ok => self.close_offset_dialog(offset_dialog::OffsetClose::Ok),
+                    offsetdlg::Hit::Cancel => self.close_offset_dialog(offset_dialog::OffsetClose::Cancel),
+                    offsetdlg::Hit::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
             panels::Action::XformHit(hit) => {
                 if let xformdlg::Hit::Dial(field, _, center) = hit {
                     self.drag = Drag::XformDialAngle { field, center };

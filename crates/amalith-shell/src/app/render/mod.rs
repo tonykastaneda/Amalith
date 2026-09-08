@@ -686,6 +686,7 @@ impl App {
                             export: self.export.as_ref().map(|d| (d, caret_blink)),
                             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
+                            offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
@@ -754,6 +755,7 @@ impl App {
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
+                                offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -824,6 +826,7 @@ impl App {
                                 export: self.export.as_ref().map(|d| (d, caret_blink)),
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
+                                offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -900,6 +903,7 @@ impl App {
             self.paint_ctx_menu();
             self.paint_path_text_brackets();
             self.paint_width_points();
+            self.paint_offset_preview();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
             // Recent-file previews are rendered headlessly, one per frame,

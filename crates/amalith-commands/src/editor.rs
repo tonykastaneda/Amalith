@@ -315,6 +315,15 @@ impl Editor {
                 .first()
                 .map_or(CommandOutcome::None, |&id| CommandOutcome::Object(id)));
         }
+        // Same multi-id problem as `Paste`/`DuplicateObjects` above — see
+        // `Editor::offset_path`.
+        if let Command::OffsetPath { objects, offset, join, miter_limit } = command {
+            let new_ids = self.offset_path(&objects, offset, join, miter_limit)?;
+            let first = *new_ids
+                .first()
+                .expect("compile_offset_path always yields at least one id when it succeeds");
+            return Ok(CommandOutcome::Object(first));
+        }
         // Blend creation/option changes already regenerate their own
         // steps directly (`compile_blend_steps`); the live-rebuild pass
         // below is only for *other* commands whose edits happen to touch
@@ -1490,6 +1499,9 @@ impl Editor {
             Command::SetAssetSource { id, source } => vec![Edit::SetAssetSource { id, source }],
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
+            Command::OffsetPath { .. } => {
+                unreachable!("Editor::execute intercepts Command::OffsetPath before calling compile")
+            }
             Command::Align {
                 objects,
                 kind,
@@ -1764,6 +1776,86 @@ impl Editor {
             return Err(CommandError::NoStrokeToExpand);
         }
         Ok(edits)
+    }
+
+    /// Object ▸ Path ▸ Offset Path: for each path, inserts a *new* sibling
+    /// object — positioned directly *behind* it (paints first, i.e. one
+    /// index lower — see `Layer::children`'s stacking-order convention),
+    /// with its own appearance — holding the boundary grown/shrunk by
+    /// `offset` (see `pathfinder::offset_path`). The source path is left
+    /// completely untouched, matching Illustrator's own Offset Path (it
+    /// isn't a live effect that replaces the original). Non-path objects
+    /// in `objects` (and any individual offset that collapses to
+    /// nothing) are skipped rather than aborting the whole command; only
+    /// an entirely empty result errors. Returns the new id per offset
+    /// path created, in the same relative order as `objects` — the
+    /// multi-id complement `CommandOutcome`'s single `Object(id)` can't
+    /// carry (e.g. for the GUI to select every result), same reason as
+    /// `Editor::duplicate_objects`.
+    fn compile_offset_path(
+        &self,
+        objects: Vec<ObjectId>,
+        offset: f64,
+        join: amalith_core::LineJoin,
+        miter_limit: f64,
+    ) -> Result<(Vec<Edit>, Vec<ObjectId>), CommandError> {
+        let mut edits = Vec::new();
+        let mut new_ids = Vec::new();
+        for id in objects {
+            let Some(obj) = self.document.object(id) else { continue };
+            let Some(data) = obj.kind.path_data() else { continue };
+            let world = self.document.world_transform(id) * data.geometry.clone();
+            let Some(offset_pd) = pathfinder::offset_path(&world, offset, join, miter_limit) else {
+                continue;
+            };
+            let parent_world = match obj.parent {
+                ObjectParent::Group(g) => self.document.world_transform(g),
+                ObjectParent::Layer(_) => Affine::IDENTITY,
+            };
+            let local = PathData::from_bezpath(parent_world.inverse() * offset_pd.geometry);
+            let siblings = self.document.children_of(obj.parent);
+            let index = siblings.iter().position(|&x| x == id).unwrap_or(0);
+            let new_id = ObjectId::new();
+            let mut new_obj = Object::new(new_id, obj.parent, ObjectKind::Path(local));
+            new_obj.appearance = obj.appearance;
+            new_ids.push(new_id);
+            edits.push(Edit::InsertObject {
+                object: Box::new(new_obj),
+                index,
+            });
+        }
+        if edits.is_empty() {
+            return Err(CommandError::PathfinderEmpty);
+        }
+        Ok((edits, new_ids))
+    }
+
+    /// Object ▸ Path ▸ Offset Path: creates a new, independent sibling for
+    /// each path in `objects`, holding its boundary grown/shrunk by
+    /// `offset`, and returns every new id in the same relative order as
+    /// `objects` — the multi-id complement [`Editor::execute`]'s single-id
+    /// [`CommandOutcome`] can't carry (e.g. for the GUI to select every
+    /// result after OK, matching Illustrator). See `compile_offset_path`
+    /// for the exact geometry/placement rules; the source objects are
+    /// never touched. `Editor::execute(Command::OffsetPath { .. })` is
+    /// equivalent but only surfaces the first result's id.
+    pub fn offset_path(
+        &mut self,
+        objects: &[ObjectId],
+        offset: f64,
+        join: amalith_core::LineJoin,
+        miter_limit: f64,
+    ) -> Result<Vec<ObjectId>, CommandError> {
+        let (edits, new_ids) = self.compile_offset_path(objects.to_vec(), offset, join, miter_limit)?;
+        let mut inverses = Vec::with_capacity(edits.len());
+        for edit in edits {
+            let (inverse, _created) = edit::apply(edit, &mut self.document)?;
+            inverses.push(inverse);
+        }
+        inverses.reverse();
+        self.history.record(inverses);
+        self.bounds_cache.clear();
+        Ok(new_ids)
     }
 
     /// Builds the paste edits (root-first, then each group's descendants in

@@ -600,6 +600,7 @@ pub(in crate::app) fn paint_main(
         export: None,
         xform_dialog: None,
         blend_dialog: None,
+        offset_dialog: None,
         gradient: gradient.clone(),
         gradient_edit,
     };
