@@ -59,6 +59,7 @@ pub enum Icon {
     Shear,
     Scale,
     Blend,
+    Width,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -74,7 +75,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Artboard => ARTBOARD_SVG,
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
-        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend => "",
+        | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width => "",
     }
 }
 
@@ -122,6 +123,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Blend {
         draw_blend_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Width {
+        draw_width_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -261,6 +266,34 @@ fn draw_blend_glyph(scene: &mut Scene, box_: Rect, color: Color) {
         let p = Point::new(from.x + (c.x - from.x) * t, from.y + (c.y - from.y) * t);
         scene.fill(Fill::NonZero, ID, color, None, &Circle::new(p, w * 0.035));
     }
+}
+
+/// A horizontal ribbon that tapers thin → wide → thin, with a small
+/// diamond marking a width point mid-ribbon — the Width tool.
+fn draw_width_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x0 = box_.x0 + w * 0.16;
+    let x1 = box_.x1 - w * 0.16;
+    let cx = box_.center().x;
+    let cy = box_.center().y;
+    let thin = h * 0.04;
+    let thick = h * 0.20;
+    let mut ribbon = BezPath::new();
+    ribbon.move_to((x0, cy - thin));
+    ribbon.quad_to((cx, cy - thick), (x1, cy - thin));
+    ribbon.line_to((x1, cy + thin));
+    ribbon.quad_to((cx, cy + thick), (x0, cy + thin));
+    ribbon.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &ribbon);
+    let d = h * 0.11;
+    let mut diamond = BezPath::new();
+    diamond.move_to((cx, cy - thick - d));
+    diamond.line_to((cx + d, cy - thick));
+    diamond.line_to((cx, cy - thick + d));
+    diamond.line_to((cx - d, cy - thick));
+    diamond.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &diamond);
 }
 
 /// A rounded square with a left→right light-to-dark ramp — the Gradient tool.

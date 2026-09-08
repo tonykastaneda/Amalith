@@ -109,6 +109,10 @@ pub struct PathData {
     /// with what's actually on screen.
     #[serde(skip)]
     bounds: Rect,
+    /// Illustrator-style variable-width stroke points — see
+    /// [`crate::width`]. Empty for an ordinary uniform-width stroke.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub width_points: Vec<crate::width::WidthPoint>,
 }
 
 /// On-disk shape of [`PathData`]. Files written before the anchor model
@@ -119,16 +123,32 @@ pub struct PathData {
 enum PathDataRepr {
     /// Newer files: anchors are authoritative. Any `geometry` key present
     /// alongside is ignored and rebuilt.
-    Structured { subpaths: Vec<Subpath> },
+    Structured {
+        subpaths: Vec<Subpath>,
+        #[serde(default)]
+        width_points: Vec<crate::width::WidthPoint>,
+    },
     /// Pre-anchor-model files: only a flat `geometry` path.
-    Legacy { geometry: BezPath },
+    Legacy {
+        geometry: BezPath,
+        #[serde(default)]
+        width_points: Vec<crate::width::WidthPoint>,
+    },
 }
 
 impl From<PathDataRepr> for PathData {
     fn from(repr: PathDataRepr) -> Self {
         match repr {
-            PathDataRepr::Structured { subpaths } => Self::from_subpaths(subpaths),
-            PathDataRepr::Legacy { geometry } => Self::from_bezpath(geometry),
+            PathDataRepr::Structured { subpaths, width_points } => {
+                let mut pd = Self::from_subpaths(subpaths);
+                pd.width_points = width_points;
+                pd
+            }
+            PathDataRepr::Legacy { geometry, width_points } => {
+                let mut pd = Self::from_bezpath(geometry);
+                pd.width_points = width_points;
+                pd
+            }
         }
     }
 }
@@ -546,7 +566,7 @@ impl PathData {
     pub fn from_subpaths(subpaths: Vec<Subpath>) -> Self {
         let geometry = subpaths_to_bezpath(&subpaths);
         let bounds = crate::geom::bez_path_bounds(&geometry);
-        Self { subpaths, geometry, bounds }
+        Self { subpaths, geometry, bounds, width_points: Vec::new() }
     }
 
     /// Wraps an existing kurbo path, deriving the anchor model from it.
@@ -555,7 +575,7 @@ impl PathData {
     pub fn from_bezpath(geometry: BezPath) -> Self {
         let subpaths = bezpath_to_subpaths(&geometry);
         let bounds = crate::geom::bez_path_bounds(&geometry);
-        Self { subpaths, geometry, bounds }
+        Self { subpaths, geometry, bounds, width_points: Vec::new() }
     }
 
     /// The editable anchor model.
@@ -1275,5 +1295,25 @@ mod path_data_tests {
             assert_eq!(a.mode, b.mode);
         }
         assert_eq!(back.geometry.elements().len(), pd.geometry.elements().len());
+    }
+
+    #[test]
+    fn width_points_survive_a_json_roundtrip() {
+        let mut pd = PathData::polyline(&[
+            crate::geom::Point::new(0.0, 0.0),
+            crate::geom::Point::new(100.0, 0.0),
+        ]);
+        pd.width_points = vec![crate::width::WidthPoint { distance: 40.0, left: 6.0, right: 3.0 }];
+        let json = serde_json::to_string(&pd).unwrap();
+        let back: PathData = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.width_points, pd.width_points);
+
+        // A pre-width-points file (no `width_points` key at all) still
+        // loads, defaulting to an ordinary uniform-width stroke.
+        let legacy = PathData::polyline(&[crate::geom::Point::new(0.0, 0.0), crate::geom::Point::new(10.0, 0.0)]);
+        let legacy_json = serde_json::to_string(&legacy).unwrap();
+        assert!(!legacy_json.contains("width_points"));
+        let back: PathData = serde_json::from_str(&legacy_json).unwrap();
+        assert!(back.width_points.is_empty());
     }
 }

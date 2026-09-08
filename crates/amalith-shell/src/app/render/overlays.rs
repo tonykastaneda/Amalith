@@ -294,6 +294,42 @@ impl App {
         }
     }
 
+    /// Width-tool handles for the single selected path: a small diamond
+    /// at each width point's on-path location — dragging it only slides
+    /// the point along the path — plus its left/right half-widths as two
+    /// independently draggable dots on a line through it, perpendicular
+    /// to the path. Grab radius for all three matches
+    /// `width_tool::WIDTH_HANDLE_GRAB`.
+    pub(in crate::app) fn paint_width_points(&mut self) {
+        if self.active_tool != Tool::Width {
+            return;
+        }
+        let Some(t) = self.width_target() else { return };
+        let live = match &self.drag {
+            Drag::WidthPoint { object, points, .. } if *object == t.id => points.as_slice(),
+            _ => t.points.as_slice(),
+        };
+        let accent = self.theme.accent;
+        let white = vello::peniko::Color::from_rgb8(0xff, 0xff, 0xff);
+        for wp in live {
+            let (center, left_p, right_p) = width_tool::width_handle_points(&t, wp);
+            self.content.stroke(&Stroke::new(1.25), ID, accent, None, &Line::new(left_p, right_p));
+            let dot = |c: Point| vello::kurbo::Circle::new(c, 3.0);
+            self.content.fill(Fill::NonZero, ID, accent, None, &dot(left_p));
+            self.content.fill(Fill::NonZero, ID, accent, None, &dot(right_p));
+            // The draggable on-path handle: a filled diamond.
+            let d = 5.0;
+            let mut diamond = BezPath::new();
+            diamond.move_to((center.x, center.y - d));
+            diamond.line_to((center.x + d, center.y));
+            diamond.line_to((center.x, center.y + d));
+            diamond.line_to((center.x - d, center.y));
+            diamond.close_path();
+            self.content.fill(Fill::NonZero, ID, white, None, &diamond);
+            self.content.stroke(&Stroke::new(1.25), ID, accent, None, &diamond);
+        }
+    }
+
     pub(in crate::app) fn paint_ctx_menu(&mut self) {
         let Some(menu) = &self.ctx_menu else {
             return;

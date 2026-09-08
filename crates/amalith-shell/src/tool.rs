@@ -24,10 +24,11 @@ pub enum Tool {
     Shear,
     Scale,
     Blend,
+    Width,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 20] = [
+    pub const ALL: [Tool; 21] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -48,6 +49,7 @@ impl Tool {
         Tool::Shear,
         Tool::Scale,
         Tool::Blend,
+        Tool::Width,
     ];
 
     /// A drag-a-box shape tool.
@@ -80,6 +82,7 @@ impl Tool {
             Tool::Shear => "Shear",
             Tool::Scale => "Scale",
             Tool::Blend => "Blend",
+            Tool::Width => "Width",
         }
     }
 
@@ -102,6 +105,7 @@ impl Tool {
             Tool::Reflect => "O",
             Tool::Scale => "S",
             Tool::Blend => "W",
+            Tool::Width => "⇧W",
             _ => "",
         }
     }
@@ -128,6 +132,7 @@ impl Tool {
             Tool::Shear => Icon::Shear,
             Tool::Scale => Icon::Scale,
             Tool::Blend => Icon::Blend,
+            Tool::Width => Icon::Width,
         }
     }
 }

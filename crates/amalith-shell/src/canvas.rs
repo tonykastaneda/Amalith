@@ -97,6 +97,10 @@ pub struct DragPreview<'a> {
     pub text_boxes: &'a [TextBoxPreview],
     /// Live type-on-a-path bracket edit for one text object.
     pub path_text: Option<(ObjectId, amalith_core::PathTextData)>,
+    /// Live Width-tool edit: the whole working width-point profile for
+    /// one path object, overriding its committed `width_points` in the
+    /// ribbon this frame renders.
+    pub width_points: Option<(ObjectId, &'a [amalith_core::WidthPoint])>,
 }
 
 /// One area-text box being resized by a Selection-tool handle drag.
@@ -1303,7 +1307,11 @@ fn paint_object(
         resolve_grad(obj.appearance.fill)
     };
     let stroke_grad = resolve_grad(obj.appearance.stroke);
-    let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath| {
+    // A variable-width stroke (Width tool) renders as a filled ribbon —
+    // caps/joins/dashes are baked into that outline's own geometry rather
+    // than a vello `Stroke`, so a dashed variable-width stroke falls back
+    // to its ordinary uniform-width dashing for now (a disclosed v1 gap).
+    let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath, width_ribbon: Option<&vello::kurbo::BezPath>| {
         // Outline (wireframe) view: hairline contour only, no fill/stroke.
         if outline {
             scene.stroke(
@@ -1328,7 +1336,18 @@ fn paint_object(
         } else if let Some(c) = fill {
             scene.fill(Fill::NonZero, m, c, None, bp);
         }
-        if let Some((g, xf)) = &stroke_grad {
+        let ribbon = width_ribbon.filter(|_| !style.dashed);
+        if let Some(ribbon) = ribbon {
+            // `ribbon` is object-local space, like `bp` above — the CTM
+            // `m` transforms it, so the brush transform is just `*xf`
+            // (unlike `stroke_path` below, which bakes to world space
+            // first and so must fold `m` into the brush by hand).
+            if let Some((g, xf)) = &stroke_grad {
+                scene.fill(Fill::NonZero, m, g, Some(*xf), ribbon);
+            } else if let Some(c) = stroke {
+                scene.fill(Fill::NonZero, m, c, None, ribbon);
+            }
+        } else if let Some((g, xf)) = &stroke_grad {
             // Strokes bake to world space here (transform = IDENTITY), so
             // the brush transform must be composed with `m` too.
             stroke_path(scene, m, g.into(), Some(m * *xf), bp, sw, &style, closed, zoom);
@@ -1352,19 +1371,40 @@ fn paint_object(
             let hdrag = drag.and_then(|d| d.handle).filter(|&(o, ..)| o == id);
             if let Some((_, n, side, hd)) = hdrag {
                 let g = crate::anchors::deformed_handle(pd, n, side, hd);
-                paint_path(scene, &convert::bez_path(&g.geometry));
+                paint_path(scene, &convert::bez_path(&g.geometry), None);
             } else if let (false, Some((_, dv))) =
                 (idxs.is_empty(), drag.and_then(|d| d.anchors))
             {
                 let g = crate::anchors::deformed(pd, &idxs, dv);
-                paint_path(scene, &convert::bez_path(&g));
+                paint_path(scene, &convert::bez_path(&g), None);
             } else {
-                paint_path(scene, &convert::bez_path(&pd.geometry));
+                // A width-point ribbon is only computed for the settled
+                // geometry — an in-progress anchor/handle drag (the two
+                // branches above) falls back to the ordinary uniform
+                // stroke until the drag commits, rather than re-flattening
+                // and re-walking the ribbon every preview frame. A live
+                // Width-tool drag instead overrides the point list itself
+                // (the geometry doesn't change), so it still renders live.
+                let live_points = drag
+                    .and_then(|d| d.width_points)
+                    .filter(|(o, _)| *o == id)
+                    .map(|(_, pts)| pts);
+                let points = live_points.unwrap_or(&pd.width_points);
+                let ribbon = (!points.is_empty())
+                    .then(|| pd.flattened_points(0.05).into_iter().next())
+                    .flatten()
+                    .and_then(|pts| {
+                        let closed = pd.subpaths().first().is_some_and(|sp| sp.closed);
+                        let arc = amalith_core::ArcLengthPath::new(&pts, closed);
+                        amalith_core::width_outline(&arc, points, sw * 0.5)
+                    })
+                    .map(|r| convert::bez_path(&r));
+                paint_path(scene, &convert::bez_path(&pd.geometry), ribbon.as_ref());
             }
         }
         ObjectKind::CompoundPath(cp) => {
             for sub in &cp.subpaths {
-                paint_path(scene, &convert::bez_path(sub));
+                paint_path(scene, &convert::bez_path(sub), None);
             }
         }
         ObjectKind::Group(g) => {

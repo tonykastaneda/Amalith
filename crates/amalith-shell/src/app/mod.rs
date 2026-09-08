@@ -28,6 +28,7 @@ mod native_menu;
 mod render;
 mod shape_dialog;
 mod thumbnails;
+mod width_tool;
 mod xform_dialog;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -335,6 +336,18 @@ enum Drag {
     PathTextBracket {
         object: ObjectId,
         edit: pathtext::BracketDrag,
+    },
+    /// Width tool: dragging width point `index` of `object`'s stroke
+    /// profile. `points` is a working copy seeded from the object's
+    /// current profile at press time (with the pressed/new point already
+    /// in it) — every subsequent move updates `points[index]` in place
+    /// and hands the whole vec to `DragPreview` for a live ribbon; release
+    /// commits it in one `Command::SetWidthPoints`.
+    WidthPoint {
+        object: ObjectId,
+        points: Vec<amalith_core::WidthPoint>,
+        index: usize,
+        part: width_tool::WidthDragPart,
     },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
@@ -6366,7 +6379,7 @@ impl App {
             } else {
                 CanvasCursor::Grab
             }
-        } else if matches!(self.drag, Drag::PathTextBracket { .. }) {
+        } else if matches!(self.drag, Drag::PathTextBracket { .. } | Drag::WidthPoint { .. }) {
             CanvasCursor::Grabbing
         } else {
             match self.effective_tool() {

@@ -24,6 +24,7 @@ pub mod object;
 pub mod pathtext;
 pub mod swatch;
 pub mod units;
+pub mod width;
 pub mod xform;
 
 pub use appearance::{Appearance, LineCap, LineJoin, Paint, StrokeAlign, StrokeStyle};
@@ -47,4 +48,5 @@ pub use object::{
 };
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};
+pub use width::{width_at, width_outline, WidthPoint};
 pub use xform::{RefPoint, TransformValues};

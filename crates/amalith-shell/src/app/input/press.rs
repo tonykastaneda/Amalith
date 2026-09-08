@@ -801,6 +801,12 @@ impl App {
                     }
 
                 }
+                // Width tool: press near an existing width-point handle
+                // grabs it (Alt+click deletes it instead); press on the
+                // bare stroke elsewhere plants a new one and grabs that.
+                if self.active_tool == Tool::Width && self.width_tool_press() {
+                    return;
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under

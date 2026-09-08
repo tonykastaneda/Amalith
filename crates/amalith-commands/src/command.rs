@@ -215,6 +215,14 @@ pub enum Command {
     },
     /// Removes anchor `anchor` (flat ordinal) from `object`.
     DeleteAnchor { object: ObjectId, anchor: usize },
+    /// Replaces `object`'s variable-width stroke profile outright (the
+    /// Width tool's add / move / delete of a width point all compile to
+    /// this, with the shell recomputing the whole list each time). Empty
+    /// clears back to an ordinary uniform-width stroke.
+    SetWidthPoints {
+        object: ObjectId,
+        points: Vec<amalith_core::WidthPoint>,
+    },
     /// Duplicates one object as a top child of its existing parent and moves
     /// only the copy by `delta`.
     DuplicateObject {

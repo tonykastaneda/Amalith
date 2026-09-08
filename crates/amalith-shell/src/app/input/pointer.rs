@@ -443,6 +443,14 @@ impl App {
                 self.drag = Drag::PathTextBracket { object, edit };
                 self.request_main_redraw();
             }
+            Drag::WidthPoint { object, points, index, part } => {
+                let object = *object;
+                let mut points = points.clone();
+                let (index, part) = (*index, *part);
+                self.width_tool_move(object, &mut points, index, part);
+                self.drag = Drag::WidthPoint { object, points, index, part };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -983,7 +991,8 @@ impl App {
                         | Tool::Reflect
                         | Tool::Shear
                         | Tool::Scale
-                        | Tool::Blend => return,
+                        | Tool::Blend
+                        | Tool::Width => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1233,6 +1242,10 @@ impl App {
                     edit.update(&arc, pathtext::to_path_local(doc, object, self.doc_point(self.pointer)));
                 }
                 self.commit_path_text_bracket(object, edit);
+            }
+            Drag::WidthPoint { object, mut points, index, part } => {
+                self.width_tool_move(object, &mut points, index, part);
+                self.commit_width_point(object, points);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

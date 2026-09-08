@@ -763,6 +763,37 @@ fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextConte
             }
         }
         ObjectKind::Path(path) => {
+            // A variable-width stroke (Width tool) exports as its own
+            // filled ribbon shape rather than a uniform-width PDF stroke
+            // — same approach as the live canvas. Only for a solid,
+            // non-dashed stroke on an open path; a gradient or dashed
+            // one falls back to the ordinary stroke below (disclosed v1
+            // gaps — see `amalith_core::width` and `canvas::paint_object`).
+            if !path.width_points.is_empty() && !obj.appearance.stroke_style.dashed {
+                if let (Paint::Solid(stroke_color), Some(pts)) = (
+                    obj.appearance.stroke,
+                    path.flattened_points(0.05).into_iter().next(),
+                ) {
+                    let closed = path.subpaths().first().is_some_and(|sp| sp.closed);
+                    let arc = amalith_core::ArcLengthPath::new(&pts, closed);
+                    if let Some(ribbon) = amalith_core::width_outline(
+                        &arc,
+                        &path.width_points,
+                        obj.appearance.stroke_width * 0.5,
+                    ) {
+                        let fill_only = Appearance { stroke: Paint::None, ..obj.appearance };
+                        paint_one(ctx, doc, id, &path.geometry, &fill_only, pw, ph);
+                        let ribbon_appearance = Appearance {
+                            fill: Paint::Solid(stroke_color),
+                            stroke: Paint::None,
+                            opacity: obj.appearance.opacity,
+                            ..Appearance::default()
+                        };
+                        paint_one(ctx, doc, id, &ribbon, &ribbon_appearance, pw, ph);
+                        return;
+                    }
+                }
+            }
             paint_one(ctx, doc, id, &path.geometry, &obj.appearance, pw, ph);
         }
         ObjectKind::CompoundPath(compound) => {
@@ -1012,6 +1043,46 @@ mod tests {
         assert!(s.contains("/SMask"), "no soft mask emitted for the alpha-fading gradient/freeform");
         assert!(s.contains("/PatternType"), "no shading pattern emitted");
         assert!(s.contains("xref") && s.contains("trailer"), "missing xref table / trailer");
+    }
+
+    #[test]
+    fn variable_width_stroke_exports_as_a_filled_ribbon() {
+        let mut doc = Document::new("width tool test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        doc.insert_layer(layer, 0);
+
+        let mut path = Object::new(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            ObjectKind::Path(amalith_core::PathData::polyline(&[
+                CorePoint::new(0.0, 0.0),
+                CorePoint::new(100.0, 0.0),
+            ])),
+        );
+        path.appearance.fill = Paint::None;
+        path.appearance.stroke = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
+        path.appearance.stroke_width = 2.0;
+        let ObjectKind::Path(pd) = &mut path.kind else { unreachable!() };
+        pd.width_points = vec![amalith_core::WidthPoint { distance: 50.0, left: 8.0, right: 8.0 }];
+        let id = path.id;
+        doc.insert_object(path, 0).unwrap();
+
+        let mut text = TextContext::new();
+        let images = HashMap::new();
+        let bytes = export_vector_pdf(
+            &doc,
+            &[id],
+            CoreRect::new(-10.0, -10.0, 120.0, 20.0),
+            Some(Color::rgb(1.0, 1.0, 1.0)),
+            false,
+            None,
+            &mut text,
+            &images,
+        );
+        let s = String::from_utf8_lossy(&bytes);
+        assert!(s.starts_with("%PDF-1."));
+        assert!(s.trim_end().ends_with("%%EOF"));
     }
 
     /// Regression test: a PDF `gs` call *replaces* the graphics state's

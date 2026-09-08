@@ -89,6 +89,43 @@ mod tests {
     }
 
     #[test]
+    fn set_width_points_replaces_the_profile_and_undoes() {
+        use amalith_core::{PathData, Point, WidthPoint};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let path = PathData::polyline(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0)]);
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreatePath { layer, path, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert!(editor.document().object(id).unwrap().kind.path_data().unwrap().width_points.is_empty());
+
+        let points = vec![WidthPoint { distance: 40.0, left: 6.0, right: 6.0 }];
+        editor
+            .execute(Command::SetWidthPoints { object: id, points: points.clone() })
+            .unwrap();
+        assert_eq!(
+            editor.document().object(id).unwrap().kind.path_data().unwrap().width_points,
+            points
+        );
+
+        editor.undo().unwrap();
+        assert!(editor.document().object(id).unwrap().kind.path_data().unwrap().width_points.is_empty());
+        editor.redo().unwrap();
+        assert_eq!(
+            editor.document().object(id).unwrap().kind.path_data().unwrap().width_points,
+            points
+        );
+    }
+
+    #[test]
     fn create_artboard_undo_redo_roundtrip() {
         let mut editor = new_editor();
         let outcome = editor

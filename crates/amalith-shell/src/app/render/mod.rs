@@ -93,6 +93,7 @@ impl App {
                 handle: None,
                 text_boxes: &[],
                 path_text: None,
+                width_points: None,
             }),
             Drag::Scale { preview, .. }
             | Drag::Rotate { preview, .. }
@@ -116,6 +117,7 @@ impl App {
                 handle: None,
                 text_boxes: &[],
                 path_text: None,
+                width_points: None,
             }),
             Drag::ResizeTextBox { .. } => Some(DragPreview {
                 ids: &[],
@@ -126,6 +128,7 @@ impl App {
                 handle: None,
                 text_boxes: &resize_previews,
                 path_text: None,
+                width_points: None,
             }),
             Drag::MoveAnchors {
                 start_doc,
@@ -143,6 +146,7 @@ impl App {
                 handle: None,
                 text_boxes: &[],
                 path_text: None,
+                width_points: None,
             }),
             Drag::MoveHandle {
                 object,
@@ -164,6 +168,7 @@ impl App {
                 )),
                 text_boxes: &[],
                 path_text: None,
+                width_points: None,
             }),
             Drag::PathTextBracket { object, edit } => {
                 let live = pathtext::resolve(self.doc.editor.document(), *object, &edit.original)
@@ -177,8 +182,20 @@ impl App {
                     handle: None,
                     text_boxes: &[],
                     path_text: live.map(|pt| (*object, pt)),
+                    width_points: None,
                 })
             }
+            Drag::WidthPoint { object, points, .. } => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                anchors: None,
+                handle: None,
+                text_boxes: &[],
+                path_text: None,
+                width_points: Some((*object, points.as_slice())),
+            }),
             _ => None,
         };
         let draw_shape = match &self.drag {
@@ -850,6 +867,7 @@ impl App {
             self.paint_ruler_menu();
             self.paint_ctx_menu();
             self.paint_path_text_brackets();
+            self.paint_width_points();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
             // Recent-file previews are rendered headlessly, one per frame,

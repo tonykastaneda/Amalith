@@ -992,6 +992,11 @@ impl Editor {
                 data.edit_subpaths(|sp| amalith_core::delete_anchor(sp, anchor));
                 vec![Edit::SetPathData { id: object, data }]
             }
+            Command::SetWidthPoints { object, points } => {
+                let mut data = self.path_data(object)?;
+                data.width_points = points;
+                vec![Edit::SetPathData { id: object, data }]
+            }
             Command::DuplicateObject { object, delta } => {
                 let source = self
                     .document
