@@ -4,3 +4,8 @@
 .DS_Store
 /vendor
 /dist
+
+# Design source, not loaded at runtime (the app reads the exported
+# ab*.png files beside it) — keep it out of git; a re-export blew past
+# GitHub's 100MB push limit once already.
+crates/amalith-shell/assets/newdoc-art/CNDart.ai
