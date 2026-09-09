@@ -7,8 +7,8 @@
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
     Affine, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
-    GuideOrient, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect, StrokeStyle,
-    TextData, Unit, Vec2,
+    GuideOrient, Homography, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
+    StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -246,6 +246,22 @@ pub enum Command {
     },
     SetTransforms {
         items: Vec<(ObjectId, Affine)>,
+    },
+    /// Pushes every anchor point and bezier handle of each listed
+    /// object's path data through that object's own projective
+    /// transform — Free Transform's Perspective Distort and Free Distort
+    /// sub-modes both compile to this. Every object shares one
+    /// destination quad (the shell solved one homography in document
+    /// space for the whole drag), but each item here already carries
+    /// that homography re-expressed in *its own* local space — conjugated
+    /// by the object's world transform, since a homography solved in
+    /// document space isn't the right map for anchors stored before that
+    /// transform (see `amalith_core::warp::Homography::conjugate`).
+    /// Objects with no path data (images, groups, symbols, compound
+    /// paths) are left untouched, not an error — v1 doesn't warp raster
+    /// or composite content.
+    WarpPaths {
+        items: Vec<(ObjectId, Homography)>,
     },
     /// Nudges selected siblings in paint order. Positive steps move toward
     /// the front; negative steps move toward the back.

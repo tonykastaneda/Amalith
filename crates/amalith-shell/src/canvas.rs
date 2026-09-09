@@ -1156,7 +1156,13 @@ fn shape_preview_path(tool: Tool, r: Rect) -> BezPath {
 fn xf_for_quad(doc: &Document, selection: &[ObjectId], d: DragPreview<'_>) -> Affine {
     let id = selection[0];
     match (d.replacement(id), doc.object(id)) {
-        (Some(new), Some(obj)) => new * convert::affine(obj.transform).inverse(),
+        (Some(new), Some(obj)) => {
+            let parent = match obj.parent {
+                amalith_core::ObjectParent::Group(id) => convert::affine(doc.world_transform(id)),
+                amalith_core::ObjectParent::Layer(_) => Affine::IDENTITY,
+            };
+            parent * new * convert::affine(obj.transform).inverse() * parent.inverse()
+        },
         _ => Affine::IDENTITY,
     }
 }

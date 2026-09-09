@@ -27,10 +27,11 @@ pub enum Tool {
     Width,
     Arc,
     Spiral,
+    FreeTransform,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 23] = [
+    pub const ALL: [Tool; 24] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -54,6 +55,7 @@ impl Tool {
         Tool::Width,
         Tool::Arc,
         Tool::Spiral,
+        Tool::FreeTransform,
     ];
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
@@ -98,6 +100,7 @@ impl Tool {
             Tool::Width => "Width",
             Tool::Arc => "Arc",
             Tool::Spiral => "Spiral",
+            Tool::FreeTransform => "Free Transform",
         }
     }
 
@@ -121,6 +124,7 @@ impl Tool {
             Tool::Scale => "S",
             Tool::Blend => "W",
             Tool::Width => "⇧W",
+            Tool::FreeTransform => "E",
             _ => "",
         }
     }
@@ -150,6 +154,7 @@ impl Tool {
             Tool::Width => Icon::Width,
             Tool::Arc => Icon::Arc,
             Tool::Spiral => Icon::Spiral,
+            Tool::FreeTransform => Icon::FreeTransform,
         }
     }
 }

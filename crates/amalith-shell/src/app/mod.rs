@@ -19,6 +19,7 @@ mod action;
 mod blend_dialog;
 mod command_palette;
 mod export;
+mod free_transform;
 mod gradient;
 mod guides;
 mod input;
@@ -237,6 +238,19 @@ enum Drag {
         start_angle: f64,
         start_xf: HashMap<ObjectId, Affine>,
         preview: HashMap<ObjectId, Affine>,
+    },
+    /// Free Transform handle gesture. Captures affine and path targets at
+    /// press; modifiers can switch scale/shear to a projective warp live.
+    /// `warping` selects either `dst_quad` or the affine `preview` map.
+    Warp {
+        handle: Handle,
+        src_quad: [Point; 4],
+        dst_quad: [Point; 4],
+        objects: Vec<ObjectId>,
+        press_doc: Point,
+        start_xf: HashMap<ObjectId, Affine>,
+        preview: HashMap<ObjectId, Affine>,
+        warping: bool,
     },
     /// Dragging a new ruler guide out of a ruler strip. `pos` is the live
     /// document coordinate; released over the canvas it commits, released
@@ -1039,6 +1053,11 @@ struct App {
     /// — whichever tool in that group was last used.
     last_rotate_tool: Tool,
     last_scale_tool: Tool,
+    /// The Free Transform tool's on-canvas flyout: which sub-mode is
+    /// active, and whether Constrain is on. Both persist across tool
+    /// switches, like `last_shape_tool`.
+    free_transform_mode: free_transform::FreeTransformMode,
+    free_transform_constrain: bool,
     /// The last transform gesture applied to a selection — a drag
     /// move/rotate/reflect/shear/scale, an arrow-key nudge, or the exact
     /// Reflect/Shear dialog's OK/Copy — for Cmd+D ("Transform Again") to
@@ -1336,6 +1355,8 @@ impl App {
             shape_flyout: None,
             last_rotate_tool: Tool::Rotate,
             last_scale_tool: Tool::Scale,
+            free_transform_mode: free_transform::FreeTransformMode::Transform,
+            free_transform_constrain: false,
             last_transform: None,
             tool_flyout_press: None,
             tool_flyout: None,
@@ -6125,6 +6146,18 @@ impl App {
         {
             return None;
         }
+        if self.pointer_win == self.main_id {
+            if let Some(lay) = self.free_transform_flyout_layout() {
+                for (rect, label) in [
+                    (lay.constrain, "Constrain (Shift): proportional scale, 45° rotation, axis-locked distortion"),
+                    (lay.transform, "Free Transform: scale; Cmd/Ctrl+Alt on a side handle to shear"),
+                    (lay.perspective, "Perspective Distort: taper an edge horizontally or vertically"),
+                    (lay.free_distort, "Free Distort: move one corner; Shift locks its direction"),
+                ] {
+                    if rect.contains(self.pointer) { return Some(label.into()); }
+                }
+            }
+        }
         if self.pointer_win == self.main_id
             && self.pointer.y >= APP_BAR_H
             && self.pointer.y < APP_BAR_H + OPT_BAR_H
@@ -7437,7 +7470,7 @@ impl ApplicationHandler for App {
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some()
                 {
-                    self.cmd_down = m.state().super_key();
+                    self.cmd_down = if cfg!(target_os = "macos") { m.state().super_key() } else { m.state().control_key() };
                     self.shift_down = m.state().shift_key();
                     self.alt_down = m.state().alt_key();
                 }
@@ -7456,6 +7489,9 @@ impl ApplicationHandler for App {
                     // a cursor nudge.
                     if matches!(self.drag, Drag::PenHandle { .. }) {
                         self.drag_pen_handle();
+                    }
+                    if matches!(self.drag, Drag::Warp { .. }) {
+                        self.update_free_transform_drag();
                     }
                     // Zoom tool / ⌘Space: Alt flips the magnifier + ↔ −.
                     if self.effective_tool() == Tool::Zoom

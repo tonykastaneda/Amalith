@@ -2508,6 +2508,36 @@ mod tests {
         assert!(editor.document().object(id).unwrap().locked);
     }
 
+    #[test]
+    fn warp_nested_paths_is_one_undo_group_and_matches_world_map() {
+        let mut editor=new_editor();
+        let (a,b)=two_rects(&mut editor);
+        let CommandOutcome::Object(group)=editor.execute(Command::Group {ids:vec![a,b],name:None}).unwrap() else {panic!()};
+        let CommandOutcome::Object(outer)=editor.execute(Command::Group {ids:vec![group],name:None}).unwrap() else {panic!()};
+        for (id,m) in [(outer,Affine::translate((30.,40.))*Affine::rotate(0.4)),(group,Affine::new([2.,0.2,0.3,1.,0.,0.])),(b,Affine::translate((2.,5.))*Affine::rotate(-0.2))] {
+            editor.execute(Command::SetTransform {object:id,transform:m}).unwrap();
+        }
+        let before=[a,b].map(|id|editor.document().object(id).unwrap().clone());
+        let src=[amalith_core::Point::new(0.,0.),amalith_core::Point::new(400.,0.),amalith_core::Point::new(400.,400.),amalith_core::Point::new(0.,400.)];
+        let mut dst=src;dst[0]=amalith_core::Point::new(50.,10.);
+        let h=amalith_core::Homography::solve(src,dst);
+        let items=[a,b].map(|id| { let w=editor.document().world_transform(id);(id,h.conjugate(w,w.inverse())) }).to_vec();
+        editor.clear_history();
+        editor.execute(Command::WarpPaths {items}).unwrap();
+        let after=[a,b].map(|id|editor.document().object(id).unwrap().clone());
+        for (before,after) in before.iter().zip(&after) {
+            let w=editor.document().world_transform(before.id);
+            for (p,q) in before.kind.path_data().unwrap().subpaths()[0].anchors.iter().zip(&after.kind.path_data().unwrap().subpaths()[0].anchors) {
+                assert!((w*q.point-h.apply(w*p.point)).hypot()<1e-7);
+            }
+        }
+        editor.undo().unwrap();
+        for o in &before { assert_eq!(editor.document().object(o.id),Some(o)); }
+        assert_eq!(editor.undo(),Err(CommandError::NothingToUndo));
+        editor.redo().unwrap();
+        for o in &after { assert_eq!(editor.document().object(o.id),Some(o)); }
+    }
+
     fn two_rects(editor: &mut Editor) -> (ObjectId, ObjectId) {
         let CommandOutcome::Layer(layer) = editor
             .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })

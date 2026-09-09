@@ -24,6 +24,10 @@ pub fn vec2_to_core(v: vk::Vec2) -> core::Vec2 {
     core::Vec2::new(v.x, v.y)
 }
 
+pub fn point_to_core(p: vk::Point) -> core::Point {
+    core::Point::new(p.x, p.y)
+}
+
 pub fn affine_to_core(a: vk::Affine) -> core::Affine {
     core::Affine::new(a.as_coeffs())
 }

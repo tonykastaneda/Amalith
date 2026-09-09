@@ -399,13 +399,11 @@ impl App {
                 let (handle, start_bounds) = (*handle, *start_bounds);
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
-                let m = handles::scaled_transform(
-                    start_bounds,
-                    handle,
-                    dp,
-                    self.shift_down,
-                    self.alt_down,
-                );
+                // Free Transform's Constrain toggle forces the same
+                // uniform-scale behavior Shift gives every other tool.
+                let uniform = self.shift_down
+                    || (self.active_tool == Tool::FreeTransform && self.free_transform_constrain);
+                let m = handles::scaled_transform(start_bounds, handle, dp, uniform, self.alt_down);
                 let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
                 self.drag = Drag::Scale {
                     handle,
@@ -415,6 +413,7 @@ impl App {
                 };
                 self.request_main_redraw();
             }
+            Drag::Warp { .. } => self.update_free_transform_drag(),
             Drag::ResizeTextBox {
                 handle,
                 start_bounds,
@@ -460,8 +459,18 @@ impl App {
                 let (center, start_angle) = (*center, *start_angle);
                 let start_xf = start_xf.clone();
                 let dp = self.doc_point(self.pointer);
-                let m = handles::rotate_transform(center, start_angle, dp, self.shift_down);
-                let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
+                let constrained = self.shift_down || (self.active_tool == Tool::FreeTransform && self.free_transform_constrain);
+                let m = handles::rotate_transform(center, start_angle, dp, constrained);
+                let preview = start_xf.iter().map(|(&id, &s)| {
+                    let parent = if self.active_tool == Tool::FreeTransform {
+                        let doc = self.doc.editor.document();
+                        match doc.object(id).map(|o|o.parent) {
+                            Some(amalith_core::ObjectParent::Group(id)) => convert::affine(doc.world_transform(id)),
+                            _ => ID,
+                        }
+                    } else { ID };
+                    (id, parent.inverse()*m*parent*s)
+                }).collect();
                 self.drag = Drag::Rotate {
                     center,
                     start_angle,
@@ -757,6 +766,19 @@ impl App {
     }
 
     pub(in crate::app) fn on_release(&mut self) {
+        // Only catch up a Free Transform gesture that never got a single
+        // pointer-move event (a very fast click-drag-release can coalesce
+        // away every intermediate move on some platforms) — `dst_quad`
+        // still equalling `src_quad` is exactly that "never updated" state.
+        // If a move already ran, re-running this here would re-evaluate
+        // live modifier-key state fresh at this exact instant, which can
+        // differ from whatever was true during the last frame actually
+        // painted — silently committing a different mode/quad than what
+        // the user was just looking at. Trust the last-rendered state
+        // instead: what you saw is what commits.
+        if matches!(&self.drag, Drag::Warp { src_quad, dst_quad, .. } if src_quad == dst_quad) {
+            self.update_free_transform_drag();
+        }
         // End any About-window text-selection drag.
         if let Some(a) = &mut self.about {
             a.on_release();
@@ -994,7 +1016,8 @@ impl App {
                         | Tool::Shear
                         | Tool::Scale
                         | Tool::Blend
-                        | Tool::Width => return,
+                        | Tool::Width
+                        | Tool::FreeTransform => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1237,6 +1260,15 @@ impl App {
                     if let Some(delta) = delta {
                         self.record_transform_again(delta, false);
                     }
+                    self.request_main_redraw();
+                }
+            }
+            Drag::Warp { src_quad, dst_quad, objects, start_xf, preview, warping, .. } => {
+                if warping {
+                    self.commit_warp(src_quad, dst_quad, objects);
+                } else if start_xf != preview {
+                    let items = preview.into_iter().map(|(id,m)| (id,convert::affine_to_core(m))).collect();
+                    let _ = self.doc.editor.execute(Command::SetTransforms { items });
                     self.request_main_redraw();
                 }
             }

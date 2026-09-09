@@ -612,6 +612,14 @@ impl App {
                     }
                 }
 
+                // The Free Transform flyout: a click on one of its 4
+                // buttons switches mode / toggles Constrain; a click
+                // anywhere else (a corner handle included) falls through
+                // to the normal canvas logic below.
+                if self.free_transform_flyout_press() {
+                    return;
+                }
+
                 // The app bar swallows clicks (unless the picker is up).
                 if self.picker.is_none() && self.pointer.y < APP_BAR_H {
                     return;
@@ -1340,6 +1348,14 @@ impl App {
                         }
                     }
                     self.request_main_redraw();
+                    return;
+                }
+
+                // Capture all Free Transform handles to support modifier
+                // changes between scale, shear and distortion during a drag.
+                if self.active_tool == Tool::FreeTransform
+                    && self.free_transform_warp_press()
+                {
                     return;
                 }
 

@@ -160,6 +160,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Width => "Width",
         Tool::Arc => "Arc",
         Tool::Spiral => "Spiral",
+        Tool::FreeTransform => "FreeTransform",
     }
 }
 

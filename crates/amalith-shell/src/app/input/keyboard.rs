@@ -666,7 +666,9 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
-                        if !self.isolation.is_empty() {
+                        if self.cancel_free_transform_drag() {
+                            // Keep the selection and isolation context intact.
+                        } else if !self.isolation.is_empty() {
                             // Step out one isolation-mode level.
                             self.pop_isolation();
                         } else if self.text_load.is_some() {

@@ -1006,6 +1006,18 @@ impl Editor {
                 data.width_points = points;
                 vec![Edit::SetPathData { id: object, data }]
             }
+            Command::WarpPaths { items } => {
+                let mut edits = Vec::new();
+                for (id, homography) in items {
+                    // Objects without path data (images, groups, symbols,
+                    // compound paths) sit out this pass rather than
+                    // aborting the whole gesture for the objects that do.
+                    let Ok(data) = self.path_data(id) else { continue };
+                    let data = homography.warp_path(&data).ok_or(CommandError::InvalidWarp)?;
+                    edits.push(Edit::SetPathData { id, data });
+                }
+                edits
+            }
             Command::DuplicateObject { object, delta } => {
                 let source = self
                     .document

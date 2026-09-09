@@ -62,6 +62,7 @@ pub enum Icon {
     Width,
     Arc,
     Spiral,
+    FreeTransform,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -78,7 +79,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
-        | Icon::Arc | Icon::Spiral => "",
+        | Icon::Arc | Icon::Spiral | Icon::FreeTransform => "",
     }
 }
 
@@ -138,6 +139,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Spiral {
         draw_spiral_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::FreeTransform {
+        draw_free_transform_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -256,6 +261,42 @@ fn draw_scale_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     head.close_path();
     scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(small.center(), base));
     scene.fill(Fill::NonZero, ID, color, None, &head);
+}
+
+/// A dashed bounding box with a filled square handle at each corner —
+/// the Free Transform tool.
+fn draw_free_transform_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let r = Rect::new(
+        box_.x0 + w * 0.20,
+        box_.y0 + h * 0.20,
+        box_.x1 - w * 0.20,
+        box_.y1 - h * 0.20,
+    );
+    let sw = (w * 0.07).max(1.2);
+    let corners = [
+        Point::new(r.x0, r.y0),
+        Point::new(r.x1, r.y0),
+        Point::new(r.x1, r.y1),
+        Point::new(r.x0, r.y1),
+    ];
+    for i in 0..4 {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        let len = (b - a).hypot();
+        let dir = (b - a) / len;
+        let (dash, hole) = (len * 0.22, len * 0.14);
+        let mut t = 0.0;
+        while t < len {
+            let t1 = (t + dash).min(len);
+            scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a + dir * t, a + dir * t1));
+            t = t1 + hole;
+        }
+    }
+    let hs = w * 0.11;
+    for c in corners {
+        scene.fill(Fill::NonZero, ID, color, None, &Rect::from_center_size(c, (hs, hs)));
+    }
 }
 
 /// A circle with a square tucked behind it, three small dots ramping

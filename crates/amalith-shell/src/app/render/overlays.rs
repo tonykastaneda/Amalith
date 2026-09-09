@@ -330,6 +330,96 @@ impl App {
         }
     }
 
+    /// The Free Transform tool's on-canvas mode flyout: Constrain,
+    /// Transform, Perspective, Free Distort — a row of 4 small buttons
+    /// hanging just below the selection.
+    pub(in crate::app) fn paint_free_transform_flyout(&mut self) {
+        let Some(lay) = self.free_transform_flyout_layout() else { return };
+        let pointer = self.pointer;
+        let mode = self.free_transform_mode;
+        let constrain = self.free_transform_constrain;
+        let th = self.theme.clone();
+
+        self.content.fill(Fill::NonZero, ID, th.panel_bg, None, &lay.panel.to_rounded_rect(6.0));
+        self.content.stroke(&Stroke::new(1.0), ID, th.border, None, &lay.panel.to_rounded_rect(6.0));
+
+        let buttons = [
+            (lay.constrain, constrain && mode != free_transform::FreeTransformMode::Perspective),
+            (lay.transform, mode == free_transform::FreeTransformMode::Transform),
+            (lay.perspective, mode == free_transform::FreeTransformMode::Perspective),
+            (lay.free_distort, mode == free_transform::FreeTransformMode::FreeDistort),
+        ];
+        for (i, (r, selected)) in buttons.into_iter().enumerate() {
+            if selected {
+                self.content.fill(Fill::NonZero, ID, th.accent, None, &r.to_rounded_rect(4.0));
+            } else if r.contains(pointer) {
+                self.content
+                    .fill(Fill::NonZero, ID, th.accent.with_alpha(0.16), None, &r.to_rounded_rect(4.0));
+            }
+            self.content.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
+            let color = if i == 0 && mode == free_transform::FreeTransformMode::Perspective { th.text_dim.with_alpha(0.35) } else if selected { th.on_accent } else { th.text_dim };
+            let box_ = Rect::from_center_size(r.center(), (18.0, 18.0));
+            match i {
+                0 => paint_constrain_glyph(&mut self.content, box_, color),
+                1 => icons::draw(&mut self.content, icons::Icon::FreeTransform, box_, color),
+                2 => paint_perspective_glyph(&mut self.content, box_, color),
+                _ => paint_free_distort_glyph(&mut self.content, box_, color),
+            }
+        }
+    }
+
+    /// Free Transform's live Perspective/Free Distort preview: the quad
+    /// the drag has put the corners at so far, plus a warped stroke-only
+    /// outline of each affected object's real geometry — computed fresh
+    /// every frame from the object's own untouched geometry (the
+    /// document isn't touched until release, same convention as Offset
+    /// Path's own preview just below).
+    pub(in crate::app) fn paint_warp_preview(&mut self) {
+        let Drag::Warp { src_quad, dst_quad, objects, warping: true, .. } = &self.drag else { return };
+        let (src_quad, dst_quad) = (*src_quad, *dst_quad);
+        let objects = objects.clone();
+        let to_screen = self.doc.view.to_screen();
+        let accent = self.theme.accent;
+
+        let mut quad_path = BezPath::new();
+        let scr_quad = dst_quad.map(|p| to_screen * p);
+        quad_path.move_to(scr_quad[0]);
+        for p in &scr_quad[1..] {
+            quad_path.line_to(*p);
+        }
+        quad_path.close_path();
+        self.content.stroke(&Stroke::new(1.25), ID, accent, None, &quad_path);
+        for p in scr_quad {
+            let sq = Rect::from_center_size(p, (8.0, 8.0));
+            self.content.fill(Fill::NonZero, ID, Color::from_rgb8(0xff, 0xff, 0xff), None, &sq);
+            self.content.stroke(&Stroke::new(1.25), ID, accent, None, &sq);
+        }
+
+        if src_quad == dst_quad {
+            return;
+        }
+        let h_doc = amalith_core::Homography::solve(
+            src_quad.map(convert::point_to_core),
+            dst_quad.map(convert::point_to_core),
+        );
+        let document = self.doc.editor.document();
+        for id in objects {
+            let Some(object) = document.object(id) else { continue };
+            let Some(path_data) = object.kind.path_data() else { continue };
+            let world = document.world_transform(id);
+            // Warp the control points first, exactly like `Command::
+            // WarpPaths` will on release, then flatten the *warped*
+            // path — flattening the original curve and warping the
+            // resulting sample points instead would show a different
+            // curve than what actually commits, since a homography
+            // doesn't distribute over Bezier interpolation.
+            let local_h = h_doc.conjugate(world, world.inverse());
+            let Some(warped) = local_h.warp_path(path_data) else { continue; };
+            let path = convert::bez_path(&warped.geometry);
+            self.content.stroke(&Stroke::new(1.25 / self.doc.view.zoom), to_screen * convert::affine(world), accent, None, &path);
+        }
+    }
+
     /// Offset Path's live Preview: for each target, computed fresh every
     /// frame from that object's own untouched geometry (never the
     /// document — the dialog doesn't touch it until OK). The offset
@@ -623,4 +713,51 @@ pub(in crate::app) fn draw_tooltip(
         x + pad,
         y + bh - pad,
     );
+}
+
+/// A padlock — the Free Transform flyout's Constrain toggle.
+fn paint_constrain_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let body = Rect::new(box_.x0 + w * 0.18, box_.y0 + h * 0.46, box_.x1 - w * 0.18, box_.y1 - h * 0.10);
+    let sw = (w * 0.09).max(1.2);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &body.to_rounded_rect(1.5));
+    let c = Point::new(box_.center().x, body.y0);
+    let r = body.width() * 0.32;
+    scene.stroke(
+        &Stroke::new(sw),
+        ID,
+        color,
+        None,
+        &vello::kurbo::Arc::new(c, (r, r), std::f64::consts::PI, std::f64::consts::PI, 0.0),
+    );
+}
+
+/// A trapezoid narrower at the top — the Free Transform flyout's
+/// Perspective Distort mode.
+fn paint_perspective_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let top_in = w * 0.24;
+    let mut p = BezPath::new();
+    p.move_to((box_.x0 + top_in, box_.y0 + h * 0.22));
+    p.line_to((box_.x1 - top_in, box_.y0 + h * 0.22));
+    p.line_to((box_.x1 - w * 0.10, box_.y1 - h * 0.22));
+    p.line_to((box_.x0 + w * 0.10, box_.y1 - h * 0.22));
+    p.close_path();
+    scene.stroke(&Stroke::new((w * 0.09).max(1.2)), ID, color, None, &p);
+}
+
+/// An irregular quad — every corner offset by a different amount — the
+/// Free Transform flyout's Free Distort mode.
+fn paint_free_distort_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let mut p = BezPath::new();
+    p.move_to((box_.x0 + w * 0.30, box_.y0 + h * 0.14));
+    p.line_to((box_.x1 - w * 0.10, box_.y0 + h * 0.28));
+    p.line_to((box_.x1 - w * 0.22, box_.y1 - h * 0.10));
+    p.line_to((box_.x0 + w * 0.12, box_.y1 - h * 0.24));
+    p.close_path();
+    scene.stroke(&Stroke::new((w * 0.09).max(1.2)), ID, color, None, &p);
 }

@@ -4,6 +4,8 @@ use thiserror::Error;
 /// Errors from executing a [`crate::Command`] or from `undo`/`redo`.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum CommandError {
+    #[error("the distortion maps path geometry to infinity")]
+    InvalidWarp,
     #[error("no artboard with id {0}")]
     ArtboardNotFound(ArtboardId),
     #[error("no layer with id {0}")]

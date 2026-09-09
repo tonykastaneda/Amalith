@@ -96,7 +96,8 @@ impl App {
                 path_text: None,
                 width_points: None,
             }),
-            Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
+            Drag::Warp { preview, warping: false, .. }
+            | Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: Vec2::ZERO,
                 dup: false,
@@ -905,6 +906,8 @@ impl App {
             self.paint_path_text_brackets();
             self.paint_width_points();
             self.paint_offset_preview();
+            self.paint_warp_preview();
+            self.paint_free_transform_flyout();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
             // Recent-file previews are rendered headlessly, one per frame,
