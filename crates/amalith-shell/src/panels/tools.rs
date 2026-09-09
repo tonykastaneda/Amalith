@@ -26,8 +26,8 @@ fn metric_top() -> f64 { crate::metrics::with(|m| m.panels_tools_top) }
 /// Index of the Shape slot among [`slots`].
 const SHAPE_SLOT: usize = 5;
 /// Index of the Rotate/Reflect and Scale/Shear flyout-group slots.
-pub const ROTATE_GROUP_SLOT: usize = 11;
-pub const SCALE_GROUP_SLOT: usize = 12;
+pub const ROTATE_GROUP_SLOT: usize = 6;
+pub const SCALE_GROUP_SLOT: usize = 7;
 
 /// The primitive tools the Shape slot collects, in flyout order.
 pub const SHAPE_TOOLS: [Tool; 5] = [
@@ -40,22 +40,27 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
 
 /// The visible slots; the Shape slot shows `shape`'s icon, and the two
 /// flyout-group slots show whichever tool in that group was last used.
+/// Ordered to roughly track Illustrator's own toolbar (Selection ▸ Direct
+/// Selection ▸ Pen ▸ Type ▸ Line ▸ Shapes ▸ Rotate ▸ Scale ▸ Gradient ▸
+/// Eyedropper ▸ Blend ▸ Artboard ▸ Hand ▸ Zoom), with the tools that have
+/// no Illustrator-toolbar counterpart (Width, Arc, Spiral, Free Transform)
+/// tacked on at the end rather than left out.
 fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 18] {
     [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
-        Tool::Line,
         Tool::Text,
+        Tool::Line,
         shape,
+        rotate_group,
+        scale_group,
+        Tool::Gradient,
+        Tool::Eyedropper,
+        Tool::Blend,
         Tool::Artboard,
         Tool::Hand,
         Tool::Zoom,
-        Tool::Eyedropper,
-        Tool::Gradient,
-        rotate_group,
-        scale_group,
-        Tool::Blend,
         Tool::Width,
         Tool::Arc,
         Tool::Spiral,
