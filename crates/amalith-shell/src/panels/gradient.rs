@@ -11,17 +11,19 @@
 //! ramp to add a stop; drag a stop handle to move it, or off the bar to
 //! delete it; double-click a stop (or click its swatch) for the picker.
 
-use super::{Action, Ctx, ID, PAD};
+use crate::metrics::px as ui_px;
+
+use super::{Action, Ctx, ID, metric_pad};
 use crate::text::TextContext;
 use amalith_core::{Gradient, GradientKind};
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
-pub const NATURAL_H: f64 = 238.0;
+pub fn metric_natural_h() -> f64 { crate::metrics::with(|m| m.panels_gradient_natural_h) }
 
 pub fn natural_height() -> f64 {
-    NATURAL_H
+    metric_natural_h()
 }
 
 /// A numeric field the panel edits (typed, nudged, or scrolled).
@@ -37,13 +39,13 @@ pub enum GradField {
     Opacity,
 }
 
-const BAR_H: f64 = 26.0;
-const STOP_W: f64 = 16.0;
-const STOP_H: f64 = 15.0;
-const FIELD_H: f64 = 20.0;
-const CHEV_W: f64 = 15.0;
+fn metric_bar_h() -> f64 { crate::metrics::with(|m| m.panels_gradient_bar_h) }
+fn metric_stop_w() -> f64 { crate::metrics::with(|m| m.panels_gradient_stop_w) }
+fn metric_stop_h() -> f64 { crate::metrics::with(|m| m.panels_gradient_stop_h) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.panels_gradient_field_h) }
+fn metric_chev_w() -> f64 { crate::metrics::with(|m| m.panels_gradient_chev_w) }
 /// Drag a stop this far below the bar's bottom to drop it.
-pub const REMOVE_DROP: f64 = 30.0;
+pub fn metric_remove_drop() -> f64 { crate::metrics::with(|m| m.panels_gradient_remove_drop) }
 
 struct L {
     type_lin: Rect,
@@ -70,44 +72,44 @@ struct L {
 
 /// A `[▾][ value ][▴]` cluster whose right edge sits at `x1`.
 fn stepper(x1: f64, y: f64, w: f64) -> (Rect, Rect, Rect) {
-    let up = Rect::new(x1 - CHEV_W, y, x1, y + FIELD_H);
-    let val = Rect::new(x1 - CHEV_W - w, y, x1 - CHEV_W, y + FIELD_H);
-    let dn = Rect::new(val.x0 - CHEV_W, y, val.x0, y + FIELD_H);
+    let up = Rect::new(x1 - metric_chev_w(), y, x1, y + metric_field_h());
+    let val = Rect::new(x1 - metric_chev_w() - w, y, x1 - metric_chev_w(), y + metric_field_h());
+    let dn = Rect::new(val.x0 - metric_chev_w(), y, val.x0, y + metric_field_h());
     (dn, val, up)
 }
 
 fn layout(body: Rect) -> L {
-    let x0 = body.x0 + PAD;
-    let x1 = body.x1 - PAD;
-    let mut y = body.y0 + PAD;
+    let x0 = body.x0 + metric_pad();
+    let x1 = body.x1 - metric_pad();
+    let mut y = body.y0 + metric_pad();
 
     // Row 1 — type buttons.
-    let bt = 26.0;
+    let bt = ui_px(26.0);
     let type_lin = Rect::new(x0, y, x0 + bt, y + bt);
-    let type_rad = Rect::new(type_lin.x1 + 6.0, y, type_lin.x1 + 6.0 + bt, y + bt);
-    let type_free = Rect::new(type_rad.x1 + 6.0, y, type_rad.x1 + 6.0 + bt, y + bt);
+    let type_rad = Rect::new(type_lin.x1 + ui_px(6.0), y, type_lin.x1 + ui_px(6.0) + bt, y + bt);
+    let type_free = Rect::new(type_rad.x1 + ui_px(6.0), y, type_rad.x1 + ui_px(6.0) + bt, y + bt);
     let reverse = Rect::new(x1 - bt, y, x1, y + bt);
-    y += bt + 12.0;
+    y += bt + ui_px(12.0);
 
     // Row 2 — angle / aspect field (label left, stepper right).
-    let geom_label = Point::new(x0, y + 14.0);
-    let (geom_dn, geom_val, geom_up) = stepper(x1, y, 52.0);
-    y += FIELD_H + 14.0;
+    let geom_label = Point::new(x0, y + ui_px(14.0));
+    let (geom_dn, geom_val, geom_up) = stepper(x1, y, ui_px(52.0));
+    y += metric_field_h() + ui_px(14.0);
 
     // The ramp + handle track.
-    let bar = Rect::new(x0, y, x1, y + BAR_H);
-    let track = Rect::new(x0, bar.y1, x1, bar.y1 + STOP_H + 8.0);
-    y = track.y1 + 14.0;
+    let bar = Rect::new(x0, y, x1, y + metric_bar_h());
+    let track = Rect::new(x0, bar.y1, x1, bar.y1 + metric_stop_h() + ui_px(8.0));
+    y = track.y1 + ui_px(14.0);
 
     // Row 3 — swatch + Location.
-    let swatch = Rect::new(x0, y, x0 + FIELD_H, y + FIELD_H);
-    let loc_label = Point::new(swatch.x1 + 10.0, y + 14.0);
-    let (loc_dn, loc_val, loc_up) = stepper(x1, y, 52.0);
-    y += FIELD_H + 10.0;
+    let swatch = Rect::new(x0, y, x0 + metric_field_h(), y + metric_field_h());
+    let loc_label = Point::new(swatch.x1 + ui_px(10.0), y + ui_px(14.0));
+    let (loc_dn, loc_val, loc_up) = stepper(x1, y, ui_px(52.0));
+    y += metric_field_h() + ui_px(10.0);
 
     // Row 4 — Opacity.
-    let op_label = Point::new(x0, y + 14.0);
-    let (op_dn, op_val, op_up) = stepper(x1, y, 52.0);
+    let op_label = Point::new(x0, y + ui_px(14.0));
+    let (op_dn, op_val, op_up) = stepper(x1, y, ui_px(52.0));
 
     L {
         type_lin,
@@ -141,10 +143,10 @@ fn stop_x(bar: Rect, off: f32) -> f64 {
 fn stop_rect(bar: Rect, off: f32) -> Rect {
     let cx = stop_x(bar, off);
     Rect::new(
-        cx - STOP_W * 0.5,
-        bar.y1 + 2.0,
-        cx + STOP_W * 0.5,
-        bar.y1 + 2.0 + STOP_H,
+        cx - metric_stop_w() * 0.5,
+        bar.y1 + ui_px(2.0),
+        cx + metric_stop_w() * 0.5,
+        bar.y1 + ui_px(2.0) + metric_stop_h(),
     )
 }
 
@@ -158,11 +160,11 @@ fn midpoint_pos(g: &Gradient, i: usize) -> f32 {
 
 fn mid_rect(bar: Rect, pos: f32) -> Rect {
     let cx = stop_x(bar, pos);
-    Rect::new(cx - 5.0, bar.y0 - 8.0, cx + 5.0, bar.y0 + 1.0)
+    Rect::new(cx - ui_px(5.0), bar.y0 - ui_px(8.0), cx + ui_px(5.0), bar.y0 + 1.0)
 }
 
 fn checker(scene: &mut Scene, r: Rect) {
-    let s = 5.0;
+    let s = ui_px(5.0);
     let cols = (r.width() / s).ceil().max(1.0) as i64;
     let rows = (r.height() / s).ceil().max(1.0) as i64;
     scene.fill(Fill::NonZero, ID, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
@@ -177,7 +179,7 @@ fn checker(scene: &mut Scene, r: Rect) {
                 (r.x0 + (gx + 1) as f64 * s).min(r.x1),
                 (r.y0 + (gy + 1) as f64 * s).min(r.y1),
             );
-            scene.fill(Fill::NonZero, ID, Color::from_rgb8(0xcc, 0xcc, 0xcc), None, &c);
+            scene.fill(Fill::NonZero, ID, crate::canvas::TRANSPARENCY_CHECKER_DARK, None, &c);
         }
     }
 }
@@ -216,15 +218,15 @@ fn field_box(
         None,
         &r,
     );
-    text.draw(scene, s, 11.0, th.text, r.x0 + 4.0, r.y0 + 14.0);
+    text.draw(scene, s, 11.0, th.text, r.x0 + ui_px(4.0), r.y0 + ui_px(14.0));
     if editing {
-        let cx = r.x0 + 4.0 + text.measure(s, 11.0) + 1.0;
+        let cx = r.x0 + ui_px(4.0) + text.measure(s, 11.0) + 1.0;
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             th.text,
             None,
-            &vello::kurbo::Line::new((cx, r.y0 + 3.0), (cx, r.y1 - 3.0)),
+            &vello::kurbo::Line::new((cx, r.y0 + ui_px(3.0)), (cx, r.y1 - ui_px(3.0))),
         );
     }
 }
@@ -232,18 +234,18 @@ fn field_box(
 fn chevron(scene: &mut Scene, r: Rect, up: bool, hot: bool, th: &crate::theme::Theme) {
     let color = if hot { th.text } else { th.text_dim };
     scene.fill(Fill::NonZero, ID, th.strip_bg, None, &r);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r);
     let cx = r.center().x;
     let (ya, yb) = if up {
-        (r.center().y + 2.5, r.center().y - 2.5)
+        (r.center().y + ui_px(2.5), r.center().y - ui_px(2.5))
     } else {
-        (r.center().y - 2.5, r.center().y + 2.5)
+        (r.center().y - ui_px(2.5), r.center().y + ui_px(2.5))
     };
     let mut p = BezPath::new();
-    p.move_to((cx - 3.5, ya));
+    p.move_to((cx - ui_px(3.5), ya));
     p.line_to((cx, yb));
-    p.line_to((cx + 3.5, ya));
-    scene.stroke(&Stroke::new(1.3), ID, color, None, &p);
+    p.line_to((cx + ui_px(3.5), ya));
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &p);
 }
 
 fn value_of(g: &Gradient, field: GradField, sel: usize) -> String {
@@ -278,7 +280,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             None,
             &r,
         );
-        Rect::new(r.x0 + 4.0, r.y0 + 4.0, r.x1 - 4.0, r.y1 - 4.0)
+        Rect::new(r.x0 + ui_px(4.0), r.y0 + ui_px(4.0), r.x1 - ui_px(4.0), r.y1 - ui_px(4.0))
     };
     let li = type_btn(scene, l.type_lin, kind == Some(GradientKind::Linear));
     for i in 0..li.width().max(1.0) as i64 {
@@ -308,7 +310,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             ID,
             th.text_dim,
             None,
-            &Rect::from_center_size(p, (3.0, 3.0)).to_ellipse(),
+            &Rect::from_center_size(p, (ui_px(3.0), ui_px(3.0))).to_ellipse(),
         );
     }
 
@@ -316,21 +318,21 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     {
         let r = l.reverse;
         scene.fill(Fill::NonZero, ID, th.strip_bg, None, &r);
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r);
         let c = r.center();
         let col = if grad.is_some() { th.text } else { th.text_dim };
-        for (dy, left) in [(-3.0, true), (3.0, false)] {
+        for (dy, left) in [(-ui_px(3.0), true), (3.0, false)] {
             let mut a = BezPath::new();
-            let (x0, x1) = (c.x - 6.0, c.x + 6.0);
+            let (x0, x1) = (c.x - ui_px(6.0), c.x + ui_px(6.0));
             a.move_to((x0, c.y + dy));
             a.line_to((x1, c.y + dy));
             let tip = if left { x1 } else { x0 };
-            let dir = if left { -3.0 } else { 3.0 };
+            let dir = if left { -ui_px(3.0) } else { 3.0 };
             a.move_to((tip, c.y + dy));
-            a.line_to((tip + dir, c.y + dy - 2.5));
+            a.line_to((tip + dir, c.y + dy - ui_px(2.5)));
             a.move_to((tip, c.y + dy));
-            a.line_to((tip + dir, c.y + dy + 2.5));
-            scene.stroke(&Stroke::new(1.3), ID, col, None, &a);
+            a.line_to((tip + dir, c.y + dy + ui_px(2.5)));
+            scene.stroke(&Stroke::new(ui_px(1.3)), ID, col, None, &a);
         }
     }
 
@@ -365,14 +367,14 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     match grad {
         None => {
             checker(scene, l.bar);
-            scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.bar);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.bar);
             text.draw(
                 scene,
                 "No gradient. Click Linear or Radial above,",
                 10.5,
                 th.text_dim,
                 l.bar.x0,
-                l.track.y0 + 12.0,
+                l.track.y0 + ui_px(12.0),
             );
             text.draw(
                 scene,
@@ -380,19 +382,19 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
                 10.5,
                 th.text_dim,
                 l.bar.x0,
-                l.track.y0 + 26.0,
+                l.track.y0 + ui_px(26.0),
             );
         }
         Some(_) if freeform => {
             scene.fill(Fill::NonZero, ID, th.strip_bg, None, &l.bar);
-            scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.bar);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.bar);
             text.draw(
                 scene,
                 "Edit with the Gradient tool (G): drag a point to",
                 10.5,
                 th.text_dim,
                 l.bar.x0,
-                l.track.y0 + 12.0,
+                l.track.y0 + ui_px(12.0),
             );
             text.draw(
                 scene,
@@ -400,12 +402,12 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
                 10.5,
                 th.text_dim,
                 l.bar.x0,
-                l.track.y0 + 26.0,
+                l.track.y0 + ui_px(26.0),
             );
         }
         Some((g, sel)) => {
             paint_ramp(scene, l.bar, g);
-            scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.bar);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.bar);
 
             // Midpoint diamonds.
             for i in 0..g.stops.len().saturating_sub(1) {
@@ -418,7 +420,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
                 d.line_to((r.x0, c.y));
                 d.close_path();
                 scene.fill(Fill::NonZero, ID, th.strip_bg, None, &d);
-                scene.stroke(&Stroke::new(1.0), ID, th.text_dim, None, &d);
+                scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.text_dim, None, &d);
             }
 
             // Stop handles.
@@ -427,10 +429,10 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
                 let cx = r.center().x;
                 let mut h = BezPath::new();
                 h.move_to((cx, r.y0));
-                h.line_to((r.x1, r.y0 + 4.0));
+                h.line_to((r.x1, r.y0 + ui_px(4.0)));
                 h.line_to((r.x1, r.y1));
                 h.line_to((r.x0, r.y1));
-                h.line_to((r.x0, r.y0 + 4.0));
+                h.line_to((r.x0, r.y0 + ui_px(4.0)));
                 h.close_path();
                 let c = stop.color;
                 scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &h);
@@ -451,7 +453,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         let stop = g.stops.get(*sel).copied().unwrap_or(g.stops[0]);
         let c = stop.color;
         scene.fill(Fill::NonZero, ID, Color::new([c.r, c.g, c.b, 1.0]), None, &l.swatch);
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.swatch);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.swatch);
 
         text.draw(scene, "Location", 11.0, th.text_dim, l.loc_label.x, l.loc_label.y);
         let lv = live(GradField::Location)
@@ -533,7 +535,7 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
             // Midpoint diamond?
             for i in 0..g.stops.len().saturating_sub(1) {
                 if mid_rect(l.bar, midpoint_pos(g, i))
-                    .inflate(3.0, 3.0)
+                    .inflate(ui_px(3.0), ui_px(3.0))
                     .contains(p)
                 {
                     return Action::GradientMidDrag { index: i, bar: l.bar };
@@ -541,7 +543,7 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
             }
             // Stop handle?
             for (i, stop) in g.stops.iter().enumerate() {
-                if stop_rect(l.bar, stop.offset).inflate(3.0, 3.0).contains(p) {
+                if stop_rect(l.bar, stop.offset).inflate(ui_px(3.0), ui_px(3.0)).contains(p) {
                     return Action::GradientSelectStop { index: i, bar: l.bar };
                 }
             }
@@ -594,13 +596,13 @@ pub fn field_at(body: Rect, p: Point, kind: Option<GradientKind>) -> Option<Grad
     if kind == Some(GradientKind::Freeform) {
         return None;
     }
-    if kind == Some(GradientKind::Radial) && l.geom_val.inflate(CHEV_W, 3.0).contains(p) {
+    if kind == Some(GradientKind::Radial) && l.geom_val.inflate(metric_chev_w(), ui_px(3.0)).contains(p) {
         return Some(GradField::Aspect);
     }
-    if l.loc_val.inflate(CHEV_W, 3.0).contains(p) {
+    if l.loc_val.inflate(metric_chev_w(), ui_px(3.0)).contains(p) {
         return Some(GradField::Location);
     }
-    if l.op_val.inflate(CHEV_W, 3.0).contains(p) {
+    if l.op_val.inflate(metric_chev_w(), ui_px(3.0)).contains(p) {
         return Some(GradField::Opacity);
     }
     None

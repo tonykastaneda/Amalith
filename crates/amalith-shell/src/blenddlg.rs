@@ -9,6 +9,8 @@
 //! generic panel-paint pipeline hands every dialog (`xformdlg` and
 //! `shapedialog` hand-roll their own fields for the same reason).
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::{BlendSpacing, ObjectId};
 use vello::kurbo::{Circle, Point, Rect, Stroke};
 use vello::peniko::Fill;
@@ -17,12 +19,12 @@ use vello::Scene;
 use crate::text::TextContext;
 use crate::theme::Theme;
 
-pub const W: f64 = 240.0;
-const PAD: f64 = 14.0;
-const ROW_H: f64 = 26.0;
-const ROW_GAP: f64 = 4.0;
-const FIELD_H: f64 = 26.0;
-const BTN_H: f64 = 30.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.blenddlg_w) }
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.blenddlg_pad) }
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.blenddlg_row_h) }
+fn metric_row_gap() -> f64 { crate::metrics::with(|m| m.blenddlg_row_gap) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.blenddlg_field_h) }
+fn metric_btn_h() -> f64 { crate::metrics::with(|m| m.blenddlg_btn_h) }
 
 /// Which row is selected — the dialog's own choice, decoupled from
 /// [`BlendSpacing`] so switching rows before OK doesn't need a value yet.
@@ -121,7 +123,7 @@ impl BlendDialog {
 /// Body height (window-local, excluding the tab strip) — fixed
 /// regardless of `mode` so switching rows never resizes the window.
 pub fn body_height() -> f64 {
-    PAD + 3.0 * (ROW_H + ROW_GAP) + 8.0 + FIELD_H + 12.0 + BTN_H + PAD
+    metric_pad() + 3.0 * (metric_row_h() + metric_row_gap()) + ui_px(8.0) + metric_field_h() + ui_px(12.0) + metric_btn_h() + metric_pad()
 }
 
 struct Layout {
@@ -133,23 +135,23 @@ struct Layout {
 }
 
 fn layout(body: Rect) -> Layout {
-    let x0 = body.x0 + PAD;
-    let x1 = body.x1 - PAD;
-    let mut y = body.y0 + PAD;
+    let x0 = body.x0 + metric_pad();
+    let x1 = body.x1 - metric_pad();
+    let mut y = body.y0 + metric_pad();
     let rows = std::array::from_fn(|_| {
-        let r = Rect::new(x0, y, x1, y + ROW_H);
-        y += ROW_H + ROW_GAP;
+        let r = Rect::new(x0, y, x1, y + metric_row_h());
+        y += metric_row_h() + metric_row_gap();
         r
     });
-    y += 8.0;
-    let field = Rect::new(x0 + 90.0, y, x1, y + FIELD_H);
-    y += FIELD_H + 12.0;
+    y += ui_px(8.0);
+    let field = Rect::new(x0 + ui_px(90.0), y, x1, y + metric_field_h());
+    y += metric_field_h() + ui_px(12.0);
     // Preview checkbox (+ label) on the left, Cancel/OK on the right —
     // all one row, matching Illustrator's own Blend Options layout.
-    let preview = Rect::new(x0, y + (BTN_H - 16.0) / 2.0, x0 + 16.0, y + (BTN_H + 16.0) / 2.0);
-    let btn_w = 68.0;
-    let ok = Rect::new(x1 - btn_w, y, x1, y + BTN_H);
-    let cancel = Rect::new(ok.x0 - 8.0 - btn_w, y, ok.x0 - 8.0, y + BTN_H);
+    let preview = Rect::new(x0, y + (metric_btn_h() - ui_px(16.0)) / 2.0, x0 + ui_px(16.0), y + (metric_btn_h() + ui_px(16.0)) / 2.0);
+    let btn_w = ui_px(68.0);
+    let ok = Rect::new(x1 - btn_w, y, x1, y + metric_btn_h());
+    let cancel = Rect::new(ok.x0 - ui_px(8.0) - btn_w, y, ok.x0 - ui_px(8.0), y + metric_btn_h());
     Layout { rows, field, preview, ok, cancel }
 }
 
@@ -174,7 +176,7 @@ pub fn hit(body: Rect, p: Point) -> Hit {
         return Hit::Field;
     }
     // A little slop around the small checkbox glyph — easier to hit.
-    if lay.preview.inflate(6.0, 6.0).contains(p) {
+    if lay.preview.inflate(ui_px(6.0), ui_px(6.0)).contains(p) {
         return Hit::Preview;
     }
     if lay.ok.contains(p) {
@@ -202,13 +204,13 @@ pub fn paint(
     let modes = [Mode::SmoothColor, Mode::Steps, Mode::Distance];
     for (i, r) in lay.rows.iter().enumerate() {
         let on = modes[i] == dlg.mode;
-        let bullet_c = Point::new(r.x0 + 6.0, r.center().y);
+        let bullet_c = Point::new(r.x0 + ui_px(6.0), r.center().y);
         if on {
-            scene.fill(Fill::NonZero, ID, theme.accent, None, &Circle::new(bullet_c, 4.0));
+            scene.fill(Fill::NonZero, ID, theme.accent, None, &Circle::new(bullet_c, ui_px(4.0)));
         }
-        scene.stroke(&Stroke::new(1.2), ID, theme.text_dim, None, &Circle::new(bullet_c, 5.5));
+        scene.stroke(&Stroke::new(ui_px(1.2)), ID, theme.text_dim, None, &Circle::new(bullet_c, ui_px(5.5)));
         let col = if on { theme.text } else { theme.text_dim };
-        text.draw(scene, labels[i], 12.5, col, r.x0 + 18.0, r.center().y + 4.5);
+        text.draw(scene, labels[i], 12.5, col, r.x0 + ui_px(18.0), r.center().y + ui_px(4.5));
     }
     let enabled = dlg.mode != Mode::SmoothColor;
     let label = match dlg.mode {
@@ -216,11 +218,11 @@ pub fn paint(
         _ => "Distance:",
     };
     let label_col = if enabled { theme.text_dim } else { theme.text_dim.with_alpha(0.4) };
-    text.draw(scene, label, 12.0, label_col, body.x0 + PAD, lay.field.center().y + 4.5);
+    text.draw(scene, label, 12.0, label_col, body.x0 + metric_pad(), lay.field.center().y + ui_px(4.5));
     if enabled {
         scene.fill(Fill::NonZero, ID, theme.bg, None, &lay.field);
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             if dlg.focused { theme.accent } else { theme.text_dim.with_alpha(0.5) },
             None,
@@ -231,19 +233,19 @@ pub fn paint(
         } else {
             dlg.value.clone()
         };
-        text.draw(scene, &shown, 13.0, theme.text, lay.field.x0 + 10.0, lay.field.center().y + 4.5);
+        text.draw(scene, &shown, 13.0, theme.text, lay.field.x0 + ui_px(10.0), lay.field.center().y + ui_px(4.5));
         if dlg.mode == Mode::Distance {
             let px_w = text.measure("px", 11.5);
-            text.draw(scene, "px", 11.5, theme.text_dim, lay.field.x1 - px_w - 8.0, lay.field.center().y + 4.5);
+            text.draw(scene, "px", 11.5, theme.text_dim, lay.field.x1 - px_w - ui_px(8.0), lay.field.center().y + ui_px(4.5));
         }
     }
-    scene.stroke(&Stroke::new(1.2), ID, theme.text_dim, None, &lay.preview);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, theme.text_dim, None, &lay.preview);
     if dlg.preview {
         let inset = Rect::new(
-            lay.preview.x0 + 3.0,
-            lay.preview.y0 + 3.0,
-            lay.preview.x1 - 3.0,
-            lay.preview.y1 - 3.0,
+            lay.preview.x0 + ui_px(3.0),
+            lay.preview.y0 + ui_px(3.0),
+            lay.preview.x1 - ui_px(3.0),
+            lay.preview.y1 - ui_px(3.0),
         );
         scene.fill(Fill::NonZero, ID, theme.accent, None, &inset);
     }
@@ -252,8 +254,8 @@ pub fn paint(
         "Preview",
         12.0,
         theme.text,
-        lay.preview.x1 + 8.0,
-        lay.preview.center().y + 4.5,
+        lay.preview.x1 + ui_px(8.0),
+        lay.preview.center().y + ui_px(4.5),
     );
     crate::widgets::button(scene, text, theme, lay.cancel, "Cancel", false);
     crate::widgets::button(scene, text, theme, lay.ok, "OK", true);

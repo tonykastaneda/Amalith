@@ -3,6 +3,8 @@
 //! for the flyout), and Artboard — in a grid that reflows to 1 or 2
 //! columns with the panel width. Fill / stroke chips sit at the bottom.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::{Color as CoreColor, Paint};
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -13,14 +15,14 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
 
-use super::{Action, Ctx, PaintSlot, ID};
+use super::{Action, Ctx, PaintSlot, ID, MIXED_SWATCH_BG};
 
 const SLASH_RED: Color = Color::from_rgb8(0xff, 0x18, 0x18);
 
 /// One tool button, square.
-const CELL: f64 = 36.0;
+fn metric_cell() -> f64 { crate::metrics::with(|m| m.panels_tools_cell) }
 /// Gap above the grid.
-const TOP: f64 = 4.0;
+fn metric_top() -> f64 { crate::metrics::with(|m| m.panels_tools_top) }
 /// Index of the Shape slot among [`slots`].
 const SHAPE_SLOT: usize = 5;
 /// Index of the Rotate/Reflect and Scale/Shear flyout-group slots.
@@ -62,7 +64,7 @@ fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 18] {
 }
 
 fn cols(body: Rect) -> usize {
-    if body.width() >= 2.0 * CELL + 6.0 {
+    if body.width() >= 2.0 * metric_cell() + ui_px(6.0) {
         2
     } else {
         1
@@ -72,23 +74,23 @@ fn cols(body: Rect) -> usize {
 /// Shortest body that still shows every tool plus the fill / stroke chips,
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64) -> f64 {
-    let cols = if width >= 2.0 * CELL + 6.0 { 2 } else { 1 };
+    let cols = if width >= 2.0 * metric_cell() + ui_px(6.0) { 2 } else { 1 };
     let rows = 18usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
-    TOP + rows * CELL + 12.0 + PROXY_H
+    metric_top() + rows * metric_cell() + ui_px(12.0) + metric_proxy_h()
 }
 
 /// Vertical space the colour proxy reserves at the panel bottom.
-const PROXY_H: f64 = 105.0;
+fn metric_proxy_h() -> f64 { crate::metrics::with(|m| m.panels_tools_proxy_h) }
 
 /// Button rect for slot index `i`, row-major, grid centred in `body`.
 fn cell(body: Rect, i: usize, cols: usize) -> Rect {
-    let grid_w = cols as f64 * CELL;
+    let grid_w = cols as f64 * metric_cell();
     let x0 = body.x0 + (body.width() - grid_w).max(0.0) * 0.5;
     let (col, row) = (i % cols, i / cols);
-    let x = x0 + col as f64 * CELL;
-    let y = body.y0 + TOP + row as f64 * CELL;
-    Rect::new(x, y, x + CELL, y + CELL)
+    let x = x0 + col as f64 * metric_cell();
+    let y = body.y0 + metric_top() + row as f64 * metric_cell();
+    Rect::new(x, y, x + metric_cell(), y + metric_cell())
 }
 
 /// Screen rect of the Shape slot — the flyout anchors to it.
@@ -118,15 +120,15 @@ struct Proxy {
 
 fn proxy(body: Rect) -> Proxy {
     let cx = body.center().x;
-    let top = body.y1 - PROXY_H + 3.0;
-    let sw = 44.0;
-    let fill = Rect::new(cx - 34.0, top, cx - 34.0 + sw, top + sw);
-    let stroke = fill + vello::kurbo::Vec2::new(22.0, 22.0);
-    let swap = Rect::new(cx + 21.0, top + 1.0, cx + 36.0, top + 16.0);
-    let default = Rect::new(cx - 34.0, top + 51.0, cx - 19.0, top + 66.0);
-    let mode_y = stroke.y1 + 8.0;
-    let mode_w = 24.0;
-    let gap = 1.0;
+    let top = body.y1 - metric_proxy_h() + ui_px(3.0);
+    let sw = ui_px(44.0);
+    let fill = Rect::new(cx - ui_px(34.0), top, cx - ui_px(34.0) + sw, top + sw);
+    let stroke = fill + vello::kurbo::Vec2::new(ui_px(22.0), ui_px(22.0));
+    let swap = Rect::new(cx + ui_px(21.0), top + 1.0, cx + ui_px(36.0), top + ui_px(16.0));
+    let default = Rect::new(cx - ui_px(34.0), top + ui_px(51.0), cx - ui_px(19.0), top + ui_px(66.0));
+    let mode_y = stroke.y1 + ui_px(8.0);
+    let mode_w = ui_px(24.0);
+    let gap = ui_px(1.0);
     let mode_x = cx - (mode_w * 3.0 + gap * 2.0) * 0.5;
     let color = Rect::new(mode_x, mode_y, mode_x + mode_w, mode_y + mode_w);
     let gradient = color + vello::kurbo::Vec2::new(mode_w + gap, 0.0);
@@ -165,9 +167,9 @@ fn swatch(
 ) {
     let bg = theme.panel_bg;
     if mixed {
-        scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x3c, 0x3c, 0x3c), None, &r);
+        scene.fill(Fill::NonZero, ID, MIXED_SWATCH_BG, None, &r);
         super::mixed_marks(scene, text, r);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &r);
         return;
     }
     match paint {
@@ -179,7 +181,7 @@ fn swatch(
                 scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &r);
             } else {
                 scene.fill(Fill::NonZero, ID, Color::WHITE, None, &r);
-                let inset = Rect::new(r.x0 + 2.0, r.y0 + 2.0, r.x1 - 2.0, r.y1 - 2.0);
+                let inset = Rect::new(r.x0 + ui_px(2.0), r.y0 + ui_px(2.0), r.x1 - ui_px(2.0), r.y1 - ui_px(2.0));
                 scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &inset);
             }
         }
@@ -188,22 +190,22 @@ fn swatch(
                 super::gradient_ramp(scene, r);
             } else {
                 scene.fill(Fill::NonZero, ID, Color::WHITE, None, &r);
-                let inset = Rect::new(r.x0 + 2.0, r.y0 + 2.0, r.x1 - 2.0, r.y1 - 2.0);
+                let inset = Rect::new(r.x0 + ui_px(2.0), r.y0 + ui_px(2.0), r.x1 - ui_px(2.0), r.y1 - ui_px(2.0));
                 super::gradient_ramp(scene, inset);
             }
         }
     }
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &r);
     if hollow {
-        let inner = Rect::new(r.x0 + 12.0, r.y0 + 12.0, r.x1 - 12.0, r.y1 - 12.0);
+        let inner = Rect::new(r.x0 + ui_px(12.0), r.y0 + ui_px(12.0), r.x1 - ui_px(12.0), r.y1 - ui_px(12.0));
         scene.fill(Fill::NonZero, ID, bg, None, &inner);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &inner);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &inner);
     }
     if matches!(paint, Paint::None) {
         let mut slash = BezPath::new();
         slash.move_to((r.x0 + 1.0, r.y1 - 1.0));
         slash.line_to((r.x1 - 1.0, r.y0 + 1.0));
-        scene.stroke(&Stroke::new(2.0), ID, SLASH_RED, None, &slash);
+        scene.stroke(&Stroke::new(ui_px(2.0)), ID, SLASH_RED, None, &slash);
     }
 }
 
@@ -226,49 +228,49 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
     // Swap arrows (top-right): a right-angle elbow with a head at each end.
     let s = p.swap;
     let mut elbow = BezPath::new();
-    elbow.move_to((s.x0 + 3.0, s.y1 - 2.0));
-    elbow.line_to((s.x0 + 3.0, s.y0 + 4.0));
-    elbow.line_to((s.x1 - 3.0, s.y0 + 4.0));
+    elbow.move_to((s.x0 + ui_px(3.0), s.y1 - ui_px(2.0)));
+    elbow.line_to((s.x0 + ui_px(3.0), s.y0 + ui_px(4.0)));
+    elbow.line_to((s.x1 - ui_px(3.0), s.y0 + ui_px(4.0)));
     let dim = th.text_dim;
-    scene.stroke(&Stroke::new(1.6), ID, dim, None, &elbow);
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, dim, None, &elbow);
     let mut head = |tip: Point, a: Point, b: Point| {
         let mut h = BezPath::new();
         h.move_to(tip);
         h.line_to(a);
         h.move_to(tip);
         h.line_to(b);
-        scene.stroke(&Stroke::new(1.6), ID, dim, None, &h);
+        scene.stroke(&Stroke::new(ui_px(1.6)), ID, dim, None, &h);
     };
     head(
-        Point::new(s.x0 + 3.0, s.y1 - 2.0),
-        Point::new(s.x0, s.y1 - 5.0),
-        Point::new(s.x0 + 6.0, s.y1 - 5.0),
+        Point::new(s.x0 + ui_px(3.0), s.y1 - ui_px(2.0)),
+        Point::new(s.x0, s.y1 - ui_px(5.0)),
+        Point::new(s.x0 + ui_px(6.0), s.y1 - ui_px(5.0)),
     );
     head(
-        Point::new(s.x1 - 3.0, s.y0 + 4.0),
-        Point::new(s.x1 - 6.0, s.y0 + 1.0),
-        Point::new(s.x1 - 6.0, s.y0 + 7.0),
+        Point::new(s.x1 - ui_px(3.0), s.y0 + ui_px(4.0)),
+        Point::new(s.x1 - ui_px(6.0), s.y0 + 1.0),
+        Point::new(s.x1 - ui_px(6.0), s.y0 + ui_px(7.0)),
     );
 
     // Default button (bottom-left): a black square behind a white square.
     let d = p.default;
-    let back = Rect::new(d.x0 + 4.0, d.y0 + 4.0, d.x1, d.y1);
+    let back = Rect::new(d.x0 + ui_px(4.0), d.y0 + ui_px(4.0), d.x1, d.y1);
     scene.fill(Fill::NonZero, ID, Color::BLACK, None, &back);
-    scene.stroke(&Stroke::new(1.0), ID, th.text_dim, None, &back);
-    let front = Rect::new(d.x0, d.y0, d.x1 - 4.0, d.y1 - 4.0);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.text_dim, None, &back);
+    let front = Rect::new(d.x0, d.y0, d.x1 - ui_px(4.0), d.y1 - ui_px(4.0));
     scene.fill(Fill::NonZero, ID, Color::WHITE, None, &front);
-    scene.stroke(&Stroke::new(1.0), ID, th.text_dim, None, &front);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.text_dim, None, &front);
 
     // Fill/Stroke mode row: Color · Gradient (display-only) · None.
     let active_paint = if fill_active { fill } else { stroke };
     let mode_cell = |scene: &mut Scene, r: Rect| {
         scene.fill(Fill::NonZero, ID, th.panel_bg, None, &r);
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r);
-        let icon = Rect::new(r.x0 + 4.0, r.y0 + 4.0, r.x1 - 4.0, r.y1 - 4.0);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r);
+        let icon = Rect::new(r.x0 + ui_px(4.0), r.y0 + ui_px(4.0), r.x1 - ui_px(4.0), r.y1 - ui_px(4.0));
         scene.fill(Fill::NonZero, ID, Color::BLACK, None, &icon);
         icon
     };
-    let icon_inner = |r: Rect| Rect::new(r.x0 + 2.0, r.y0 + 2.0, r.x1 - 2.0, r.y1 - 2.0);
+    let icon_inner = |r: Rect| Rect::new(r.x0 + ui_px(2.0), r.y0 + ui_px(2.0), r.x1 - ui_px(2.0), r.y1 - ui_px(2.0));
 
     let color_icon = icon_inner(mode_cell(scene, p.color));
     let color = match active_paint {
@@ -300,7 +302,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
     let mut slash = BezPath::new();
     slash.move_to((none_icon.x0, none_icon.y1));
     slash.line_to((none_icon.x1, none_icon.y0));
-    scene.stroke(&Stroke::new(2.0), ID, SLASH_RED, None, &slash);
+    scene.stroke(&Stroke::new(ui_px(2.0)), ID, SLASH_RED, None, &slash);
 }
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
@@ -330,13 +332,13 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         } else {
             ctx.theme.text_dim
         };
-        icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (22.0, 22.0)), color);
+        icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (ui_px(22.0), ui_px(22.0))), color);
         if matches!(i, SHAPE_SLOT | ROTATE_GROUP_SLOT | SCALE_GROUP_SLOT) {
             // Bottom-right triangle: this slot has a flyout.
             let mut t = BezPath::new();
-            t.move_to((r.x1 - 6.0, r.y1 - 2.0));
-            t.line_to((r.x1 - 2.0, r.y1 - 2.0));
-            t.line_to((r.x1 - 2.0, r.y1 - 6.0));
+            t.move_to((r.x1 - ui_px(6.0), r.y1 - ui_px(2.0)));
+            t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(2.0)));
+            t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(6.0)));
             t.close_path();
             scene.fill(Fill::NonZero, ID, color, None, &t);
         }

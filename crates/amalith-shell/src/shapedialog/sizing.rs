@@ -6,6 +6,8 @@
 //! hit-testing / painting. It knows nothing about shapes; a shape just
 //! hands it a set of [`Field`]s and later reads the committed values back.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, BezPath, Circle, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
@@ -13,19 +15,19 @@ use vello::Scene;
 use crate::text::TextContext;
 use crate::theme::Theme;
 
-pub(crate) const PAD_X: f64 = 20.0;
-const TOP_PAD: f64 = 18.0;
-const FIELD_H: f64 = 24.0;
-const ROW_STRIDE: f64 = 42.0;
-const LABEL_W: f64 = 66.0;
+pub(crate) fn metric_pad_x() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_pad_x) }
+fn metric_top_pad() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_top_pad) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_field_h) }
+fn metric_row_stride() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_row_stride) }
+fn metric_label_w() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_label_w) }
 /// Width reserved on the right of the W/H rows for the constrain-link icon.
-const LINK_W: f64 = 26.0;
+fn metric_link_w() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_link_w) }
 /// Width of the up/down stepper inside an integer field.
-const STEP_W: f64 = 15.0;
+fn metric_step_w() -> f64 { crate::metrics::with(|m| m.shapedialog_sizing_step_w) }
 
 /// Height a stack of `n` rows occupies from the panel-body top.
 pub(crate) fn stack_height(n: usize) -> f64 {
-    TOP_PAD + n as f64 * ROW_STRIDE
+    metric_top_pad() + n as f64 * metric_row_stride()
 }
 
 /// What a row's buffer means, for commit-time reformatting, and whether
@@ -128,21 +130,21 @@ impl Sizing {
     // --- layout ----------------------------------------------------
 
     fn field_rect(&self, body: Rect, i: usize) -> Rect {
-        let y = body.y0 + TOP_PAD + i as f64 * ROW_STRIDE;
-        let right = body.x1 - PAD_X - if self.has_link && i < 2 { LINK_W } else { 0.0 };
-        Rect::new(body.x0 + PAD_X + LABEL_W + 8.0, y, right, y + FIELD_H)
+        let y = body.y0 + metric_top_pad() + i as f64 * metric_row_stride();
+        let right = body.x1 - metric_pad_x() - if self.has_link && i < 2 { metric_link_w() } else { 0.0 };
+        Rect::new(body.x0 + metric_pad_x() + metric_label_w() + ui_px(8.0), y, right, y + metric_field_h())
     }
 
     fn link_rect(&self, body: Rect) -> Rect {
         let f0 = self.field_rect(body, 0);
         let f1 = self.field_rect(body, 1);
-        let cx = body.x1 - PAD_X - LINK_W * 0.5;
-        Rect::new(cx - 8.0, f0.y0, cx + 8.0, f1.y1)
+        let cx = body.x1 - metric_pad_x() - metric_link_w() * 0.5;
+        Rect::new(cx - ui_px(8.0), f0.y0, cx + ui_px(8.0), f1.y1)
     }
 
     fn step_rects(&self, body: Rect, i: usize) -> (Rect, Rect) {
         let f = self.field_rect(body, i);
-        let sx = Rect::new(f.x0 + 1.0, f.y0 + 1.0, f.x0 + STEP_W, f.y1 - 1.0);
+        let sx = Rect::new(f.x0 + 1.0, f.y0 + 1.0, f.x0 + metric_step_w(), f.y1 - 1.0);
         let mid = sx.y0 + sx.height() * 0.5;
         (
             Rect::new(sx.x0, sx.y0, sx.x1, mid),
@@ -304,8 +306,8 @@ impl Sizing {
                 f.label,
                 12.5,
                 theme.text_dim,
-                fr.x0 - 8.0 - lw,
-                fr.y0 + FIELD_H * 0.5 + 4.5,
+                fr.x0 - ui_px(8.0) - lw,
+                fr.y0 + metric_field_h() * 0.5 + ui_px(4.5),
             );
             let focused = i == self.focus;
             scene.fill(
@@ -313,17 +315,17 @@ impl Sizing {
                 Affine::IDENTITY,
                 theme.bg,
                 None,
-                &fr.to_rounded_rect(3.0),
+                &fr.to_rounded_rect(ui_px(3.0)),
             );
             scene.stroke(
                 &Stroke::new(if focused { 1.5 } else { 1.0 }),
                 Affine::IDENTITY,
                 if focused { theme.accent } else { theme.border },
                 None,
-                &fr.to_rounded_rect(3.0),
+                &fr.to_rounded_rect(ui_px(3.0)),
             );
 
-            let mut tx = fr.x0 + 8.0;
+            let mut tx = fr.x0 + ui_px(8.0);
             if f.kind == Kind::Count {
                 let (up, down) = self.step_rects(body, i);
                 tri(scene, up, true, theme.text_dim);
@@ -333,11 +335,11 @@ impl Sizing {
                     Affine::IDENTITY,
                     theme.border,
                     None,
-                    &Rect::new(up.x1, fr.y0 + 3.0, up.x1 + 1.0, fr.y1 - 3.0),
+                    &Rect::new(up.x1, fr.y0 + ui_px(3.0), up.x1 + 1.0, fr.y1 - ui_px(3.0)),
                 );
-                tx = up.x1 + 8.0;
+                tx = up.x1 + ui_px(8.0);
             }
-            text.draw(scene, &f.buf, 12.5, theme.text, tx, fr.y0 + FIELD_H * 0.5 + 4.5);
+            text.draw(scene, &f.buf, 12.5, theme.text, tx, fr.y0 + metric_field_h() * 0.5 + ui_px(4.5));
             if focused && caret_on {
                 let cx = tx + text.measure(&f.buf, 12.5) + 1.0;
                 scene.fill(
@@ -345,7 +347,7 @@ impl Sizing {
                     Affine::IDENTITY,
                     theme.text,
                     None,
-                    &Rect::new(cx, fr.y0 + 4.0, cx + 1.4, fr.y1 - 4.0),
+                    &Rect::new(cx, fr.y0 + ui_px(4.0), cx + 1.4, fr.y1 - ui_px(4.0)),
                 );
             }
         }
@@ -363,18 +365,18 @@ impl Sizing {
         };
         let cx = r.x0 + r.width() * 0.5;
         let mut p = BezPath::new();
-        p.move_to((cx - 4.0, r.y0 + 2.0));
-        p.line_to((cx + 2.0, r.y0 + 2.0));
-        p.line_to((cx + 2.0, r.y1 - 2.0));
-        p.line_to((cx - 4.0, r.y1 - 2.0));
-        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, col, None, &p);
+        p.move_to((cx - ui_px(4.0), r.y0 + ui_px(2.0)));
+        p.line_to((cx + ui_px(2.0), r.y0 + ui_px(2.0)));
+        p.line_to((cx + ui_px(2.0), r.y1 - ui_px(2.0)));
+        p.line_to((cx - ui_px(4.0), r.y1 - ui_px(2.0)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), Affine::IDENTITY, col, None, &p);
         let mid = r.y0 + r.height() * 0.5;
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
             col,
             None,
-            &Circle::new((cx + 2.0, mid), if self.linked { 2.6 } else { 1.8 }),
+            &Circle::new((cx + ui_px(2.0), mid), if self.linked { 2.6 } else { 1.8 }),
         );
     }
 }
@@ -384,13 +386,13 @@ fn tri(scene: &mut Scene, cell: Rect, up: bool, color: Color) {
     let cy = cell.y0 + cell.height() * 0.5;
     let mut p = BezPath::new();
     if up {
-        p.move_to((cx - 3.0, cy + 1.6));
-        p.line_to((cx + 3.0, cy + 1.6));
-        p.line_to((cx, cy - 2.4));
+        p.move_to((cx - ui_px(3.0), cy + 1.6));
+        p.line_to((cx + ui_px(3.0), cy + 1.6));
+        p.line_to((cx, cy - ui_px(2.4)));
     } else {
-        p.move_to((cx - 3.0, cy - 1.6));
-        p.line_to((cx + 3.0, cy - 1.6));
-        p.line_to((cx, cy + 2.4));
+        p.move_to((cx - ui_px(3.0), cy - 1.6));
+        p.line_to((cx + ui_px(3.0), cy - 1.6));
+        p.line_to((cx, cy + ui_px(2.4)));
     }
     p.close_path();
     scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &p);

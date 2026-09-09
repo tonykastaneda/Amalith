@@ -1,5 +1,7 @@
 //! Pathfinder panel — Illustrator-style shape modes and pathfinders.
 
+use crate::metrics::px as ui_px;
+
 use amalith_commands::PathfinderOp;
 use vello::kurbo::{Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -7,10 +9,10 @@ use vello::Scene;
 
 use crate::text::TextContext;
 
-use super::{Action, Ctx, ID, PAD};
+use super::{Action, Ctx, ID, metric_pad};
 
-const BTN: f64 = 28.0;
-const GAP: f64 = 6.0;
+fn metric_btn() -> f64 { crate::metrics::with(|m| m.panels_pathfinder_btn) }
+fn metric_gap() -> f64 { crate::metrics::with(|m| m.panels_pathfinder_gap) }
 
 struct L {
     modes: [Rect; 4],
@@ -20,33 +22,33 @@ struct L {
 }
 
 fn layout(body: Rect) -> L {
-    let x0 = body.x0 + PAD;
-    let mut y = body.y0 + 28.0;
+    let x0 = body.x0 + metric_pad();
+    let mut y = body.y0 + ui_px(28.0);
     let modes = std::array::from_fn(|i| {
-        let x = x0 + i as f64 * (BTN + GAP);
-        Rect::new(x, y, x + BTN, y + BTN)
+        let x = x0 + i as f64 * (metric_btn() + metric_gap());
+        Rect::new(x, y, x + metric_btn(), y + metric_btn())
     });
     let expand = Rect::new(
-        x0 + 4.0 * (BTN + GAP),
+        x0 + 4.0 * (metric_btn() + metric_gap()),
         y,
-        x0 + 4.0 * (BTN + GAP) + 64.0,
-        y + BTN,
+        x0 + 4.0 * (metric_btn() + metric_gap()) + ui_px(64.0),
+        y + metric_btn(),
     );
-    y += BTN + 28.0;
+    y += metric_btn() + ui_px(28.0);
     let finders = std::array::from_fn(|i| {
-        let x = x0 + i as f64 * (BTN + GAP);
-        Rect::new(x, y, x + BTN, y + BTN)
+        let x = x0 + i as f64 * (metric_btn() + metric_gap());
+        Rect::new(x, y, x + metric_btn(), y + metric_btn())
     });
     L {
         modes,
         expand,
         finders,
-        bottom: y + BTN + PAD,
+        bottom: y + metric_btn() + metric_pad(),
     }
 }
 
 pub fn natural_height() -> f64 {
-    layout(Rect::new(0.0, 0.0, 280.0, 400.0)).bottom
+    layout(Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0))).bottom
 }
 
 fn can_expand(ctx: &Ctx) -> bool {
@@ -65,8 +67,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         "Shape Modes:",
         11.0,
         th.text_dim,
-        body.x0 + PAD,
-        body.y0 + 18.0,
+        body.x0 + metric_pad(),
+        body.y0 + ui_px(18.0),
     );
     let mode_ops = [
         PathfinderOp::Unite,
@@ -80,7 +82,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     }
     if can_expand(ctx) {
         let hot = l.expand.contains(ctx.pointer);
-        let rr = l.expand.to_rounded_rect(4.0);
+        let rr = l.expand.to_rounded_rect(ui_px(4.0));
         scene.fill(
             Fill::NonZero,
             ID,
@@ -88,7 +90,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             None,
             &rr,
         );
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
         let w = text.measure("Expand", 11.0);
         text.draw(
             scene,
@@ -96,7 +98,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             11.0,
             th.text,
             l.expand.center().x - w * 0.5,
-            l.expand.center().y + 4.0,
+            l.expand.center().y + ui_px(4.0),
         );
     }
 
@@ -105,8 +107,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         "Pathfinders:",
         11.0,
         th.text_dim,
-        body.x0 + PAD,
-        l.finders[0].y0 - 8.0,
+        body.x0 + metric_pad(),
+        l.finders[0].y0 - ui_px(8.0),
     );
     let finder_ops = [
         PathfinderOp::Divide,
@@ -123,7 +125,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
 }
 
 fn paint_btn(scene: &mut Scene, r: Rect, th: &crate::theme::Theme, hot: bool, _on: bool) {
-    let rr = r.to_rounded_rect(4.0);
+    let rr = r.to_rounded_rect(ui_px(4.0));
     scene.fill(
         Fill::NonZero,
         ID,
@@ -131,18 +133,18 @@ fn paint_btn(scene: &mut Scene, r: Rect, th: &crate::theme::Theme, hot: bool, _o
         None,
         &rr,
     );
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
 }
 
 fn two_sq(r: Rect) -> (Rect, Rect) {
-    let s = 11.0;
-    let a = Rect::new(r.x0 + 4.0, r.y0 + 5.0, r.x0 + 4.0 + s, r.y0 + 5.0 + s);
-    let b = a + vello::kurbo::Vec2::new(7.0, 6.0);
+    let s = ui_px(11.0);
+    let a = Rect::new(r.x0 + ui_px(4.0), r.y0 + ui_px(5.0), r.x0 + ui_px(4.0) + s, r.y0 + ui_px(5.0) + s);
+    let b = a + vello::kurbo::Vec2::new(ui_px(7.0), ui_px(6.0));
     (a, b)
 }
 
 fn fill_sq(scene: &mut Scene, r: Rect, c: Color) {
-    scene.fill(Fill::NonZero, ID, c, None, &r.to_rounded_rect(1.5));
+    scene.fill(Fill::NonZero, ID, c, None, &r.to_rounded_rect(ui_px(1.5)));
 }
 
 fn paint_mode_icon(scene: &mut Scene, r: Rect, op: PathfinderOp, ink: Color, bg: Color) {
@@ -155,11 +157,11 @@ fn paint_mode_icon(scene: &mut Scene, r: Rect, op: PathfinderOp, ink: Color, bg:
         }
         PathfinderOp::MinusFront => {
             fill_sq(scene, a, ink);
-            scene.stroke(&Stroke::new(1.0), ID, dim, None, &b);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, dim, None, &b);
         }
         PathfinderOp::Intersect => {
-            scene.stroke(&Stroke::new(1.0), ID, dim, None, &a);
-            scene.stroke(&Stroke::new(1.0), ID, dim, None, &b);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, dim, None, &a);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, dim, None, &b);
             let hit = a.intersect(b);
             if hit.width() > 0.0 && hit.height() > 0.0 {
                 fill_sq(scene, hit, ink);
@@ -182,8 +184,8 @@ fn paint_finder_icon(scene: &mut Scene, r: Rect, op: PathfinderOp, ink: Color) {
     let dim = ink.with_alpha(0.4);
     match op {
         PathfinderOp::Divide => {
-            scene.stroke(&Stroke::new(1.0), ID, ink, None, &a);
-            scene.stroke(&Stroke::new(1.0), ID, ink, None, &b);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, ink, None, &a);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, ink, None, &b);
         }
         PathfinderOp::Trim => {
             fill_sq(scene, a, dim);
@@ -194,15 +196,15 @@ fn paint_finder_icon(scene: &mut Scene, r: Rect, op: PathfinderOp, ink: Color) {
             fill_sq(scene, b, ink);
         }
         PathfinderOp::Crop => {
-            scene.stroke(&Stroke::new(1.0), ID, dim, None, &a);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, dim, None, &a);
             fill_sq(scene, b, ink);
         }
         PathfinderOp::Outline => {
-            scene.stroke(&Stroke::new(1.2), ID, ink, None, &a);
-            scene.stroke(&Stroke::new(1.2), ID, ink, None, &b);
+            scene.stroke(&Stroke::new(ui_px(1.2)), ID, ink, None, &a);
+            scene.stroke(&Stroke::new(ui_px(1.2)), ID, ink, None, &b);
         }
         PathfinderOp::MinusBack => {
-            scene.stroke(&Stroke::new(1.0), ID, dim, None, &a);
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, dim, None, &a);
             fill_sq(scene, b, ink);
         }
         _ => {}

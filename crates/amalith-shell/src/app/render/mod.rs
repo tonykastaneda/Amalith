@@ -36,7 +36,8 @@ impl App {
         };
         let width = host.surface.config.width;
         let height = host.surface.config.height;
-        let scale = self.scale;
+        let dpi = host.dpi;
+        let scale = dpi.factor();
         let (wl, hl) = (width as f64 / scale, height as f64 / scale);
         let role = host.role;
 
@@ -670,9 +671,9 @@ impl App {
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
-                            layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                            layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                             layer_drop: None,
-                            links_scroll: self.panel_scroll_of(PanelId("links")),
+                            links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                             selected_asset: self.doc.selected_asset,
                             color_mode: self.color_mode,
                             cmyk_profile: self.cmyk_profile.as_ref(),
@@ -735,13 +736,13 @@ impl App {
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
-                                layer_scroll: self.panel_scroll_of(PanelId("layers")),
-                                layer_drop: if pid == PanelId("layers") {
+                                layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
+                                layer_drop: if pid == PanelId(PanelKind::Layers) {
                                     self.layer_drop.map(|(_, _, row, into)| (row, into))
                                 } else {
                                     None
                                 },
-                                links_scroll: self.panel_scroll_of(PanelId("links")),
+                                links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
                                 color_mode: self.color_mode,
                                 cmyk_profile: self.cmyk_profile.as_ref(),
@@ -771,7 +772,7 @@ impl App {
                         if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {
                             let (row_rect, pid) = (row.rect, row.panel);
                             let bounds = layout::flyout_rect(row_rect, Rect::new(0.0, 0.0, wl, hl));
-                            let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
+                            let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
                             let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
                             chrome::paint_flyout_chrome(
                                 &mut self.content,
@@ -810,9 +811,9 @@ impl App {
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
-                                layer_scroll: self.panel_scroll_of(PanelId("layers")),
+                                layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: None,
-                                links_scroll: self.panel_scroll_of(PanelId("links")),
+                                links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
                                 color_mode: self.color_mode,
                                 cmyk_profile: self.cmyk_profile.as_ref(),
@@ -889,7 +890,7 @@ impl App {
                 }
                 self.content.pop_layer();
             }
-            if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId("picker"))) {
+            if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId(PanelKind::Picker))) {
                 picker::paint(
                     &mut self.content,
                     &pk,
@@ -1014,7 +1015,7 @@ impl App {
             );
         }
         self.scene.reset();
-        self.scene.append(&self.content, Some(Affine::scale(scale)));
+        self.scene.append(&self.content, Some(dpi.transform()));
 
         {
             let host = self.hosts.get_mut(&id).unwrap();

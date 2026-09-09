@@ -1,6 +1,8 @@
 //! The Character cluster — font family, style, and size — shown when text
 //! is the editing focus. Clicks open the shared font dropdowns.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -13,7 +15,7 @@ use super::{baseline, draw_combo, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Character,
     applies: |ctx| ctx.text_context,
-    measure: |_| 575.0,
+    measure: |_| ui_px(575.0),
     paint,
     hit,
 };
@@ -28,16 +30,16 @@ struct Parts {
 
 fn parts(r: Rect) -> Parts {
     let cy = r.center().y;
-    let combo = |x: f64, w: f64| Rect::new(x, cy - 11.5, x + w, cy + 11.5);
-    let mut x = r.x0 + 85.0; // after "Character:"
-    let family = combo(x, 225.0);
-    x += 225.0 + 14.0;
-    let style = combo(x, 133.0);
-    x += 133.0 + 16.0;
-    let size_up = Rect::new(x, cy - 11.5, x + 15.0, cy);
-    let size_down = Rect::new(x, cy, x + 15.0, cy + 11.5);
-    x += 15.0 + 5.0;
-    let size_field = combo(x, 99.0);
+    let combo = |x: f64, w: f64| Rect::new(x, cy - ui_px(11.5), x + w, cy + ui_px(11.5));
+    let mut x = r.x0 + ui_px(85.0); // after "Character:"
+    let family = combo(x, ui_px(225.0));
+    x += ui_px(225.0) + ui_px(14.0);
+    let style = combo(x, ui_px(133.0));
+    x += ui_px(133.0) + ui_px(16.0);
+    let size_up = Rect::new(x, cy - ui_px(11.5), x + ui_px(15.0), cy);
+    let size_down = Rect::new(x, cy, x + ui_px(15.0), cy + ui_px(11.5));
+    x += ui_px(15.0) + ui_px(5.0);
+    let size_field = combo(x, ui_px(99.0));
     Parts {
         family,
         style,
@@ -59,7 +61,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     let col = Rect::new(p.size_up.x0, p.size_up.y0, p.size_up.x1, p.size_down.y1);
     scene.fill(Fill::NonZero, ID, theme.bg, None, &col);
     scene.stroke(
-        &Stroke::new(1.0),
+        &Stroke::new(ui_px(1.0)),
         ID,
         theme.text_dim.with_alpha(0.5),
         None,
@@ -67,15 +69,15 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     );
     let cx = col.x0 + col.width() * 0.5;
     let mut up = BezPath::new();
-    up.move_to((cx - 3.0, p.size_up.y1 - 3.0));
-    up.line_to((cx + 3.0, p.size_up.y1 - 3.0));
-    up.line_to((cx, p.size_up.y0 + 3.0));
+    up.move_to((cx - ui_px(3.0), p.size_up.y1 - ui_px(3.0)));
+    up.line_to((cx + ui_px(3.0), p.size_up.y1 - ui_px(3.0)));
+    up.line_to((cx, p.size_up.y0 + ui_px(3.0)));
     up.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &up);
     let mut dn = BezPath::new();
-    dn.move_to((cx - 3.0, p.size_down.y0 + 3.0));
-    dn.line_to((cx + 3.0, p.size_down.y0 + 3.0));
-    dn.line_to((cx, p.size_down.y1 - 3.0));
+    dn.move_to((cx - ui_px(3.0), p.size_down.y0 + ui_px(3.0)));
+    dn.line_to((cx + ui_px(3.0), p.size_down.y0 + ui_px(3.0)));
+    dn.line_to((cx, p.size_down.y1 - ui_px(3.0)));
     dn.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &dn);
 

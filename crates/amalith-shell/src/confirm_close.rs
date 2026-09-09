@@ -4,6 +4,8 @@
 //! over the main canvas, the same modal pattern as
 //! `about.rs`/`workspace_dialog.rs`.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
@@ -13,25 +15,25 @@ use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
 const SCRIM: Color = Color::from_rgba8(0, 0, 0, 140);
-const CARD_W: f64 = 380.0;
-const CARD_H: f64 = 128.0;
+fn metric_card_w() -> f64 { crate::metrics::with(|m| m.confirm_close_card_w) }
+fn metric_card_h() -> f64 { crate::metrics::with(|m| m.confirm_close_card_h) }
 
 fn card_rect(viewport: Rect) -> Rect {
     let c = viewport.center();
-    Rect::new(c.x - CARD_W / 2.0, c.y - CARD_H / 2.0, c.x + CARD_W / 2.0, c.y + CARD_H / 2.0)
+    Rect::new(c.x - metric_card_w() / 2.0, c.y - metric_card_h() / 2.0, c.x + metric_card_w() / 2.0, c.y + metric_card_h() / 2.0)
 }
 
 /// Cancel, Don't Save, Save — left to right, matching the usual macOS
 /// convention (destructive action in the middle, default/primary action
 /// rightmost).
 fn button_rects(card: Rect) -> (Rect, Rect, Rect) {
-    let h = 28.0;
-    let y0 = card.y1 - 20.0 - h;
-    let y1 = card.y1 - 20.0;
-    let save = Rect::new(card.x1 - 20.0 - 76.0, y0, card.x1 - 20.0, y1);
-    let dont_save_w = 96.0;
-    let dont_save = Rect::new(save.x0 - 10.0 - dont_save_w, y0, save.x0 - 10.0, y1);
-    let cancel = Rect::new(card.x0 + 20.0, y0, card.x0 + 20.0 + 76.0, y1);
+    let h = ui_px(28.0);
+    let y0 = card.y1 - ui_px(20.0) - h;
+    let y1 = card.y1 - ui_px(20.0);
+    let save = Rect::new(card.x1 - ui_px(20.0) - ui_px(76.0), y0, card.x1 - ui_px(20.0), y1);
+    let dont_save_w = ui_px(96.0);
+    let dont_save = Rect::new(save.x0 - ui_px(10.0) - dont_save_w, y0, save.x0 - ui_px(10.0), y1);
+    let cancel = Rect::new(card.x0 + ui_px(20.0), y0, card.x0 + ui_px(20.0) + ui_px(76.0), y1);
     (cancel, dont_save, save)
 }
 
@@ -64,14 +66,14 @@ pub fn hit(viewport: Rect, p: Point) -> Hit {
 pub fn paint(scene: &mut Scene, text: &mut TextContext, viewport: Rect, name: &str, theme: &Theme) {
     scene.fill(Fill::NonZero, ID, SCRIM, None, &viewport);
     let card = card_rect(viewport);
-    let rr = card.to_rounded_rect(10.0);
+    let rr = card.to_rounded_rect(ui_px(10.0));
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &rr);
 
     let title = format!("Save changes to \u{201c}{name}\u{201d} before closing?");
-    text.draw(scene, &title, 13.5, theme.text, card.x0 + 20.0, card.y0 + 34.0);
+    text.draw(scene, &title, 13.5, theme.text, card.x0 + ui_px(20.0), card.y0 + ui_px(34.0));
     let body = "Your changes will be lost if you don\u{2019}t save them.";
-    text.draw(scene, body, 12.0, theme.text_dim, card.x0 + 20.0, card.y0 + 58.0);
+    text.draw(scene, body, 12.0, theme.text_dim, card.x0 + ui_px(20.0), card.y0 + ui_px(58.0));
 
     let (cancel, dont_save, save) = button_rects(card);
     crate::widgets::button(scene, text, theme, cancel, "Cancel", false);

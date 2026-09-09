@@ -2,6 +2,8 @@
 //! stroke, a recent-colors row, and a hue spectrum. The hamburger switches
 //! the slider set (and Invert / Complement).
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::Paint;
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, ColorStop, Fill, Gradient};
@@ -11,17 +13,16 @@ use crate::colormanage::CmykProfile;
 use crate::picker::{hsv_to_rgb, rgb_to_hsv};
 use crate::text::TextContext;
 
-use super::{draw_paint_swatch, Action, Ctx, MenuEntry, PaintSlot, ID, PAD};
+use super::{draw_paint_swatch, Action, Ctx, MenuEntry, PaintSlot, ID, NO_PAINT_SLASH, metric_pad};
 
-pub(super) const NATURAL_H: f64 = 232.0;
+pub(super) fn metric_natural_h() -> f64 { crate::metrics::with(|m| m.panels_color_natural_h) }
 const RECENT_N: usize = 12;
-const RECENT_H: f64 = 16.0;
-const CHIP: f64 = 26.0;
-const SLIDER_H: f64 = 28.0;
-const TRACK_H: f64 = 8.0;
-const FIELD_W: f64 = 58.0;
-const SPEC_H: f64 = 16.0;
-const SLASH: Color = Color::from_rgb8(0xd0, 0x30, 0x30);
+fn metric_recent_h() -> f64 { crate::metrics::with(|m| m.panels_color_recent_h) }
+fn metric_chip() -> f64 { crate::metrics::with(|m| m.panels_color_chip) }
+fn metric_slider_h() -> f64 { crate::metrics::with(|m| m.panels_color_slider_h) }
+fn metric_track_h() -> f64 { crate::metrics::with(|m| m.panels_color_track_h) }
+fn metric_field_w() -> f64 { crate::metrics::with(|m| m.panels_color_field_w) }
+fn metric_spec_h() -> f64 { crate::metrics::with(|m| m.panels_color_spec_h) }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ColorSpace {
@@ -107,39 +108,39 @@ fn labels(mode: ColorSpace) -> &'static [&'static str] {
 }
 
 fn layout(body: Rect, mode: ColorSpace, recent_n: usize) -> Lay {
-    let x0 = body.x0 + PAD;
-    let x1 = body.x1 - PAD;
-    let mut y = body.y0 + 8.0;
-    y += 14.0; // "Recent Colors" caption
-    let bar = Rect::new(x0, y, x1, y + RECENT_H);
+    let x0 = body.x0 + metric_pad();
+    let x1 = body.x1 - metric_pad();
+    let mut y = body.y0 + ui_px(8.0);
+    y += ui_px(14.0); // "Recent Colors" caption
+    let bar = Rect::new(x0, y, x1, y + metric_recent_h());
     let n = recent_n.max(1).min(RECENT_N);
-    let sw = ((bar.width() - 4.0) / RECENT_N as f64).clamp(8.0, 18.0);
+    let sw = ((bar.width() - ui_px(4.0)) / RECENT_N as f64).clamp(ui_px(8.0), ui_px(18.0));
     let recent: Vec<Rect> = (0..n)
         .map(|i| {
-            let x = bar.x0 + 2.0 + i as f64 * sw;
-            Rect::new(x, bar.y0 + 2.0, x + sw - 2.0, bar.y1 - 2.0)
+            let x = bar.x0 + ui_px(2.0) + i as f64 * sw;
+            Rect::new(x, bar.y0 + ui_px(2.0), x + sw - ui_px(2.0), bar.y1 - ui_px(2.0))
         })
         .collect();
-    y = bar.y1 + 14.0;
+    y = bar.y1 + ui_px(14.0);
 
-    let fill = Rect::new(x0, y, x0 + CHIP, y + CHIP);
-    let stroke = Rect::new(fill.x0 + 12.0, fill.y0 + 12.0, fill.x0 + 12.0 + CHIP, fill.y0 + 12.0 + CHIP);
-    let swap = Rect::new(stroke.x1 + 4.0, fill.y0, stroke.x1 + 20.0, fill.y0 + 16.0);
-    let none = Rect::new(x0, stroke.y1 + 8.0, x0 + 16.0, stroke.y1 + 24.0);
-    let default = Rect::new(none.x1 + 8.0, none.y0, none.x1 + 24.0, none.y1);
+    let fill = Rect::new(x0, y, x0 + metric_chip(), y + metric_chip());
+    let stroke = Rect::new(fill.x0 + ui_px(12.0), fill.y0 + ui_px(12.0), fill.x0 + ui_px(12.0) + metric_chip(), fill.y0 + ui_px(12.0) + metric_chip());
+    let swap = Rect::new(stroke.x1 + ui_px(4.0), fill.y0, stroke.x1 + ui_px(20.0), fill.y0 + ui_px(16.0));
+    let none = Rect::new(x0, stroke.y1 + ui_px(8.0), x0 + ui_px(16.0), stroke.y1 + ui_px(24.0));
+    let default = Rect::new(none.x1 + ui_px(8.0), none.y0, none.x1 + ui_px(24.0), none.y1);
 
-    let slider_x = x0 + 56.0;
+    let slider_x = x0 + ui_px(56.0);
     let nch = n_channels(mode);
-    let spec_y = (body.y1 - PAD - SPEC_H).max(y + nch as f64 * SLIDER_H + 36.0);
+    let spec_y = (body.y1 - metric_pad() - metric_spec_h()).max(y + nch as f64 * metric_slider_h() + ui_px(36.0));
     let tracks: Vec<Rect> = (0..nch)
         .map(|i| {
-            let ty = y + i as f64 * SLIDER_H + (SLIDER_H - TRACK_H) * 0.5;
-            Rect::new(slider_x + 18.0, ty, x1 - FIELD_W - 8.0, ty + TRACK_H)
+            let ty = y + i as f64 * metric_slider_h() + (metric_slider_h() - metric_track_h()) * 0.5;
+            Rect::new(slider_x + ui_px(18.0), ty, x1 - metric_field_w() - ui_px(8.0), ty + metric_track_h())
         })
         .collect();
-    let last_y = y + nch as f64 * SLIDER_H;
-    let hex = Rect::new(x1 - FIELD_W, last_y + 4.0, x1, last_y + 24.0);
-    let spectrum = Rect::new(x0, spec_y, x1, spec_y + SPEC_H);
+    let last_y = y + nch as f64 * metric_slider_h();
+    let hex = Rect::new(x1 - metric_field_w(), last_y + ui_px(4.0), x1, last_y + ui_px(24.0));
+    let spectrum = Rect::new(x0, spec_y, x1, spec_y + metric_spec_h());
 
     Lay {
         recent,
@@ -355,8 +356,8 @@ fn draw_thumb(scene: &mut Scene, track: Rect, t: f32, color: Color) {
     let y = track.y1 + 1.0;
     let mut tri = BezPath::new();
     tri.move_to((x, y));
-    tri.line_to((x - 5.0, y + 7.0));
-    tri.line_to((x + 5.0, y + 7.0));
+    tri.line_to((x - ui_px(5.0), y + ui_px(7.0)));
+    tri.line_to((x + ui_px(5.0), y + ui_px(7.0)));
     tri.close_path();
     scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &tri);
 }
@@ -377,14 +378,14 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         "Recent Colors",
         11.5,
         th.text_dim,
-        body.x0 + PAD,
-        body.y0 + 18.0,
+        body.x0 + metric_pad(),
+        body.y0 + ui_px(18.0),
     );
     let bar = Rect::new(
-        l.recent.first().map(|s| s.x0 - 2.0).unwrap_or(body.x0 + PAD),
-        l.recent.first().map(|s| s.y0 - 2.0).unwrap_or(body.y0),
-        body.x1 - PAD,
-        l.recent.first().map(|s| s.y1 + 2.0).unwrap_or(body.y0),
+        l.recent.first().map(|s| s.x0 - ui_px(2.0)).unwrap_or(body.x0 + metric_pad()),
+        l.recent.first().map(|s| s.y0 - ui_px(2.0)).unwrap_or(body.y0),
+        body.x1 - metric_pad(),
+        l.recent.first().map(|s| s.y1 + ui_px(2.0)).unwrap_or(body.y0),
     );
     scene.fill(Fill::NonZero, ID, th.bg, None, &bar);
     for (i, slot) in l.recent.iter().enumerate() {
@@ -422,37 +423,37 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     // Swap arrows.
     let sc = l.swap.center();
     let mut swap = BezPath::new();
-    swap.move_to((sc.x - 5.0, sc.y - 3.0));
-    swap.line_to((sc.x + 2.0, sc.y - 3.0));
-    swap.move_to((sc.x - 1.0, sc.y - 6.0));
-    swap.line_to((sc.x + 4.0, sc.y - 3.0));
+    swap.move_to((sc.x - ui_px(5.0), sc.y - ui_px(3.0)));
+    swap.line_to((sc.x + ui_px(2.0), sc.y - ui_px(3.0)));
+    swap.move_to((sc.x - 1.0, sc.y - ui_px(6.0)));
+    swap.line_to((sc.x + ui_px(4.0), sc.y - ui_px(3.0)));
     swap.line_to((sc.x - 1.0, sc.y));
-    swap.move_to((sc.x + 5.0, sc.y + 3.0));
-    swap.line_to((sc.x - 2.0, sc.y + 3.0));
+    swap.move_to((sc.x + ui_px(5.0), sc.y + ui_px(3.0)));
+    swap.line_to((sc.x - ui_px(2.0), sc.y + ui_px(3.0)));
     swap.move_to((sc.x + 1.0, sc.y));
-    swap.line_to((sc.x - 4.0, sc.y + 3.0));
-    swap.line_to((sc.x + 1.0, sc.y + 6.0));
-    scene.stroke(&Stroke::new(1.3), ID, th.text_dim, None, &swap);
+    swap.line_to((sc.x - ui_px(4.0), sc.y + ui_px(3.0)));
+    swap.line_to((sc.x + 1.0, sc.y + ui_px(6.0)));
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, th.text_dim, None, &swap);
 
     // None
     scene.fill(Fill::NonZero, ID, Color::WHITE, None, &l.none);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.none);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.none);
     let mut slash = BezPath::new();
     slash.move_to((l.none.x0 + 1.0, l.none.y1 - 1.0));
     slash.line_to((l.none.x1 - 1.0, l.none.y0 + 1.0));
-    scene.stroke(&Stroke::new(1.6), ID, SLASH, None, &slash);
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, NO_PAINT_SLASH, None, &slash);
 
     // Default: white fill / black stroke mini.
     scene.fill(Fill::NonZero, ID, Color::WHITE, None, &l.default);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.default);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.default);
     scene.fill(
         Fill::NonZero,
         ID,
         Color::BLACK,
         None,
         &Rect::new(
-            l.default.x0 + 7.0,
-            l.default.y0 + 7.0,
+            l.default.x0 + ui_px(7.0),
+            l.default.y0 + ui_px(7.0),
             l.default.x1 - 1.0,
             l.default.y1 - 1.0,
         ),
@@ -466,31 +467,31 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             label,
             12.0,
             th.text_dim,
-            track.x0 - 16.0,
-            track.y0 + 8.0,
+            track.x0 - ui_px(16.0),
+            track.y0 + ui_px(8.0),
         );
         let t = vals.get(i).copied().unwrap_or(0.0);
         let grad = track_gradient(ctx.color_mode, i, r, g, b, *track, ctx.cmyk_profile);
         scene.fill(Fill::NonZero, ID, &grad, None, track);
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, track);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, track);
         draw_thumb(scene, *track, t, th.text);
-        let field = Rect::new(track.x1 + 8.0, track.y0 - 6.0, body.x1 - PAD, track.y0 + TRACK_H + 6.0);
-        scene.fill(Fill::NonZero, ID, th.bg, None, &field.to_rounded_rect(3.0));
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &field.to_rounded_rect(3.0));
+        let field = Rect::new(track.x1 + ui_px(8.0), track.y0 - ui_px(6.0), body.x1 - metric_pad(), track.y0 + metric_track_h() + ui_px(6.0));
+        scene.fill(Fill::NonZero, ID, th.bg, None, &field.to_rounded_rect(ui_px(3.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &field.to_rounded_rect(ui_px(3.0)));
         if let Some(s) = labels_v.get(i) {
-            text.draw(scene, s, 11.5, th.text, field.x0 + 6.0, field.y0 + 14.0);
+            text.draw(scene, s, 11.5, th.text, field.x0 + ui_px(6.0), field.y0 + ui_px(14.0));
         }
     }
 
-    scene.fill(Fill::NonZero, ID, th.bg, None, &l.hex.to_rounded_rect(3.0));
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.hex.to_rounded_rect(3.0));
+    scene.fill(Fill::NonZero, ID, th.bg, None, &l.hex.to_rounded_rect(ui_px(3.0)));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.hex.to_rounded_rect(ui_px(3.0)));
     let hex = format!(
         "# {:02X}{:02X}{:02X}",
         (r * 255.0).round() as u8,
         (g * 255.0).round() as u8,
         (b * 255.0).round() as u8
     );
-    text.draw(scene, &hex, 11.5, th.text, l.hex.x0 + 6.0, l.hex.y0 + 14.0);
+    text.draw(scene, &hex, 11.5, th.text, l.hex.x0 + ui_px(6.0), l.hex.y0 + ui_px(14.0));
 
     let sy = l.spectrum.y0 + l.spectrum.height() * 0.5;
     let spec = Gradient::new_linear((l.spectrum.x0, sy), (l.spectrum.x1, sy)).with_stops([
@@ -503,7 +504,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         hue_stop(1.0, 1.0),
     ]);
     scene.fill(Fill::NonZero, ID, &spec, None, &l.spectrum);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &l.spectrum);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &l.spectrum);
 }
 
 pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
@@ -533,7 +534,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::DefaultPaints;
     }
     for (i, track) in l.tracks.iter().enumerate() {
-        let grab = track.inflate(0.0, 10.0);
+        let grab = track.inflate(0.0, ui_px(10.0));
         if grab.contains(local) {
             let t = ((local.x - track.x0) / track.width()).clamp(0.0, 1.0) as f32;
             return Action::ColorScrub {

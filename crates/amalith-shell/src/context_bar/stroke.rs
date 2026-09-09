@@ -1,6 +1,8 @@
 //! The stroke Weight field, labelled "Stroke" — the label opens the
 //! Stroke flyout. Shown alongside `fill_stroke`.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Line, Point, Rect, Stroke};
 use vello::Scene;
 
@@ -12,7 +14,7 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Stroke,
     applies: |ctx| !ctx.text_context,
-    measure: |_| 136.0,
+    measure: |_| ui_px(136.0),
     paint,
     hit,
 };
@@ -20,8 +22,8 @@ pub(super) const SEGMENT: Segment = Segment {
 /// (link, weight field, up, down) rects.
 fn parts(r: Rect) -> (Rect, Rect, Rect, Rect) {
     let cy = r.center().y;
-    let link = Rect::new(r.x0 - 4.0, cy - 10.5, r.x0 + 48.0, cy + 10.5);
-    let (f, up, down) = field(r.x0 + 53.0, cy, 64.0);
+    let link = Rect::new(r.x0 - ui_px(4.0), cy - ui_px(10.5), r.x0 + ui_px(48.0), cy + ui_px(10.5));
+    let (f, up, down) = field(r.x0 + ui_px(53.0), cy, ui_px(64.0));
     (link, f, up, down)
 }
 
@@ -37,11 +39,11 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     text.draw(scene, "Stroke", 13.0, link_color, r.x0, base);
     let uw = text.measure("Stroke", 13.0);
     scene.stroke(
-        &Stroke::new(1.0),
+        &Stroke::new(ui_px(1.0)),
         ID,
         link_color.with_alpha(if ctx.stroke_open { 1.0 } else { 0.5 }),
         None,
-        &Line::new((r.x0, base + 2.0), (r.x0 + uw, base + 2.0)),
+        &Line::new((r.x0, base + ui_px(2.0)), (r.x0 + uw, base + ui_px(2.0))),
     );
 
     let editing = ctx.stroke_weight_edit.is_some();

@@ -183,3 +183,75 @@ impl ToolGroup {
         self.tools().contains(&t)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Tool::ALL` is a hand-written fixed-size array with no compiler tie
+    /// to the enum's variant list — see
+    /// `01-prefaction-and-tool-all-sync-easy.md`. A forgotten variant here
+    /// still compiles; the tool just quietly has no default shortcut, no
+    /// toolbar slot, and never shows up in any `Tool::ALL`-indexed array
+    /// (`Settings::tool_keys` chief among them). `covered` is built via an
+    /// exhaustive match with no wildcard, so this test itself fails to
+    /// *compile* — not just fails to pass — the moment a variant is added
+    /// to `Tool` and forgotten here.
+    #[test]
+    fn tool_all_covers_every_variant_exactly_once() {
+        fn covered(t: Tool) -> bool {
+            match t {
+                Tool::Select
+                | Tool::DirectSelect
+                | Tool::Pen
+                | Tool::Line
+                | Tool::Text
+                | Tool::Rectangle
+                | Tool::RoundedRect
+                | Tool::Ellipse
+                | Tool::Polygon
+                | Tool::Star
+                | Tool::Artboard
+                | Tool::Hand
+                | Tool::Zoom
+                | Tool::Eyedropper
+                | Tool::Gradient
+                | Tool::Rotate
+                | Tool::Reflect
+                | Tool::Shear
+                | Tool::Scale
+                | Tool::Blend
+                | Tool::Width
+                | Tool::Arc
+                | Tool::Spiral
+                | Tool::FreeTransform => true,
+            }
+        }
+        for t in Tool::ALL {
+            assert!(covered(t), "{t:?} missing from the exhaustive check above");
+        }
+        let mut seen: Vec<Tool> = Vec::new();
+        for t in Tool::ALL {
+            assert!(!seen.contains(&t), "{t:?} appears more than once in Tool::ALL");
+            seen.push(t);
+        }
+    }
+
+    /// Same guarantee for the smaller `ToolGroup::ALL`.
+    #[test]
+    fn tool_group_all_covers_every_variant_exactly_once() {
+        fn covered(g: ToolGroup) -> bool {
+            match g {
+                ToolGroup::RotateReflect | ToolGroup::ScaleShear => true,
+            }
+        }
+        for g in ToolGroup::ALL {
+            assert!(covered(g), "{g:?} missing from the exhaustive check above");
+        }
+        let mut seen: Vec<ToolGroup> = Vec::new();
+        for g in ToolGroup::ALL {
+            assert!(!seen.contains(&g), "{g:?} appears more than once in ToolGroup::ALL");
+            seen.push(g);
+        }
+    }
+}

@@ -1,6 +1,8 @@
 //! The Opacity field — the same code whether a shape, a path, or text is
 //! selected, so it sits in every context.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Point, Rect};
 use vello::Scene;
 
@@ -12,14 +14,14 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Opacity,
     applies: |_| true,
-    measure: |_| 129.0,
+    measure: |_| ui_px(129.0),
     paint,
     hit,
 };
 
 /// (opacity field, up, down) rects.
 fn parts(r: Rect) -> (Rect, Rect, Rect) {
-    field(r.x0 + 60.0, r.center().y, 53.0)
+    field(r.x0 + ui_px(60.0), r.center().y, ui_px(53.0))
 }
 
 fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {

@@ -17,8 +17,8 @@ impl App {
     /// The float-only panel id standing in for `kind`'s dialog.
     pub(in crate::app) fn xform_panel_id(kind: xformdlg::Kind) -> PanelId {
         PanelId(match kind {
-            xformdlg::Kind::Reflect => "xformdlg.reflect",
-            xformdlg::Kind::Shear => "xformdlg.shear",
+            xformdlg::Kind::Reflect => PanelKind::XformdlgReflect,
+            xformdlg::Kind::Shear => PanelKind::XformdlgShear,
         })
     }
 
@@ -61,7 +61,7 @@ impl App {
         self.apply_xform_preview();
 
         let pid = Self::xform_panel_id(kind);
-        let fw = xformdlg::W;
+        let fw = xformdlg::metric_w();
         let fh = xformdlg::body_height(kind) + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();
@@ -104,7 +104,7 @@ impl App {
         let pid = Self::xform_panel_id(kind);
         let fid = self.dock.floating_id_of(pid)?;
         let h = self.theme.tab_strip_h + xformdlg::body_height(kind);
-        let bounds = Rect::new(0.0, 0.0, xformdlg::W, h);
+        let bounds = Rect::new(0.0, 0.0, xformdlg::metric_w(), h);
         Some(self.build_master_frame(fid, bounds).body)
     }
 

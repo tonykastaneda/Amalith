@@ -17,6 +17,8 @@
 //! previews are rendered headlessly and cached to disk — see `app/thumbnails.rs`;
 //! this module only paints whatever preview it's handed via `set_thumbnail`.
 
+use crate::metrics::px as ui_px;
+
 use std::path::{Path, PathBuf};
 
 use vello::kurbo::{Affine, BezPath, Rect, RoundedRect, Stroke, Vec2};
@@ -42,9 +44,9 @@ pub const NEWS_URL: &str = "https://amalith.app/news";
 pub const DOCS_URL: &str = "https://amalith.app/docs";
 
 const SPLIT: f64 = 0.39;
-const PAD: f64 = 56.0;
-const MARK_SIZE: f64 = 148.0;
-const BADGE: f64 = 46.0;
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.home_pad) }
+fn metric_mark_size() -> f64 { crate::metrics::with(|m| m.home_mark_size) }
+fn metric_badge() -> f64 { crate::metrics::with(|m| m.home_badge) }
 
 const BG_LEFT: Color = Color::from_rgb8(27, 27, 29);
 const BG_RIGHT: Color = Color::from_rgb8(17, 17, 19);
@@ -59,11 +61,11 @@ const BAR_BG: Color = Color::from_rgb8(24, 24, 26);
 /// Always fill at least this many cells (New Document + recents + blanks).
 const MIN_SLOTS: usize = 9;
 /// Column count settles around this tile width as the window resizes.
-const TARGET_TILE: f64 = 172.0;
-const MIN_TILE: f64 = 128.0;
-const MAX_TILE: f64 = 224.0;
+fn metric_target_tile() -> f64 { crate::metrics::with(|m| m.home_target_tile) }
+fn metric_min_tile() -> f64 { crate::metrics::with(|m| m.home_min_tile) }
+fn metric_max_tile() -> f64 { crate::metrics::with(|m| m.home_max_tile) }
 /// Height of the solid Open / Import bar along the bottom of the panel.
-const TOOLBAR_H: f64 = 76.0;
+fn metric_toolbar_h() -> f64 { crate::metrics::with(|m| m.home_toolbar_h) }
 
 /// What a press on the Home screen landed on.
 pub enum Hit {
@@ -310,16 +312,16 @@ impl Home {
         // The header block (mark, wordmark, version) is centred in the panel.
         let cx = split / 2.0;
 
-        let mark_y = 104.0;
+        let mark_y = ui_px(104.0);
         image_into(
             scene,
             &self.mark,
-            Rect::from_origin_size((cx - MARK_SIZE / 2.0, mark_y), (MARK_SIZE, MARK_SIZE)),
+            Rect::from_origin_size((cx - metric_mark_size() / 2.0, mark_y), (metric_mark_size(), metric_mark_size())),
         );
 
         // "Welcome to Amalith" wordmark.
-        let wm_top = mark_y + MARK_SIZE + 46.0;
-        let wm_w = (split - PAD * 2.0).clamp(220.0, 430.0);
+        let wm_top = mark_y + metric_mark_size() + ui_px(46.0);
+        let wm_w = (split - metric_pad() * 2.0).clamp(ui_px(220.0), ui_px(430.0));
         let wm_h = wm_w * self.welcome.height as f64 / self.welcome.width as f64;
         image_into(
             scene,
@@ -329,24 +331,24 @@ impl Home {
 
         let ver = "Ver. Alpha";
         let ver_w = tcx.measure(ver, 15.0);
-        let ver_baseline = wm_top + wm_h + 30.0;
+        let ver_baseline = wm_top + wm_h + ui_px(30.0);
         tcx.draw(scene, ver, 15.0, DIM, cx - ver_w / 2.0, ver_baseline);
 
         // Divider sits a fixed gap below the header.
-        let dy = (ver_baseline + 8.0 + 56.0).round();
+        let dy = (ver_baseline + ui_px(8.0) + ui_px(56.0)).round();
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
             DIVIDER,
             None,
-            &Rect::new(PAD, dy, split - PAD, dy + 1.0),
+            &Rect::new(metric_pad(), dy, split - metric_pad(), dy + 1.0),
         );
 
         // Link rows. The YouTube tutorials row is hidden for now; its hit
         // rect stays empty so `on_press` can never resolve to it.
         self.hit_youtube = Rect::ZERO;
-        let y0 = dy + 46.0;
-        let stride = BADGE + 32.0;
+        let y0 = dy + ui_px(46.0);
+        let stride = metric_badge() + ui_px(32.0);
         self.hit_news = link_row(
             scene,
             tcx,
@@ -385,21 +387,21 @@ impl Home {
         wl: f64,
         hl: f64,
     ) {
-        let area_x = split + 92.0;
-        let area_top = 92.0;
-        let area_right = wl - 56.0;
-        let scroll_w = 10.0;
-        let area_w = (area_right - area_x - scroll_w).max(240.0);
-        let area_bottom = hl - TOOLBAR_H;
+        let area_x = split + ui_px(92.0);
+        let area_top = ui_px(92.0);
+        let area_right = wl - ui_px(56.0);
+        let scroll_w = ui_px(10.0);
+        let area_w = (area_right - area_x - scroll_w).max(ui_px(240.0));
+        let area_bottom = hl - metric_toolbar_h();
 
         // Column count settles around `TARGET_TILE`, so the grid actually
         // reflows (more/fewer columns, not just resized ones) as the
         // window is resized, instead of being pinned at a fixed count.
-        let gap = 30.0;
-        let cols = (((area_w + gap) / (TARGET_TILE + gap)).round() as usize).max(1);
-        let tile = ((area_w - gap * (cols as f64 - 1.0)) / cols as f64).clamp(MIN_TILE, MAX_TILE);
-        let label_gap = 12.0;
-        let cell_h = tile + label_gap + 24.0;
+        let gap = ui_px(30.0);
+        let cols = (((area_w + gap) / (metric_target_tile() + gap)).round() as usize).max(1);
+        let tile = ((area_w - gap * (cols as f64 - 1.0)) / cols as f64).clamp(metric_min_tile(), metric_max_tile());
+        let label_gap = ui_px(12.0);
+        let cell_h = tile + label_gap + ui_px(24.0);
         let row_stride = cell_h + gap;
 
         let filled = 1 + self.recents.len();
@@ -421,7 +423,7 @@ impl Home {
             let row = idx / cols;
             let x = area_x + col as f64 * (tile + gap);
             let y = area_top + row as f64 * row_stride - self.scroll;
-            if y + tile < area_top - 8.0 || y > area_bottom + 8.0 {
+            if y + tile < area_top - ui_px(8.0) || y > area_bottom + ui_px(8.0) {
                 continue;
             }
             let tile_rect = Rect::from_origin_size((x, y), (tile, tile));
@@ -439,11 +441,11 @@ impl Home {
                 scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &rr);
                 if let ThumbState::Ready(img) = &self.recents[idx - 1].2 {
                     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &rr);
-                    image_contain(scene, img, tile_rect.inset(-12.0));
+                    image_contain(scene, img, tile_rect.inset(ui_px(-ui_px(12.0))));
                     scene.pop_layer();
                 }
                 if is_sel {
-                    scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, theme.accent, None, &rr);
+                    scene.stroke(&Stroke::new(ui_px(2.0)), Affine::IDENTITY, theme.accent, None, &rr);
                 }
                 let name = self.recents[idx - 1].1.clone();
                 label(scene, tcx, theme, &name, tile_rect, label_gap, is_sel);
@@ -460,23 +462,23 @@ impl Home {
         }
 
         if self.max_scroll > 0.0 {
-            let track = Rect::new(wl - 22.0, area_top, wl - 16.0, area_bottom);
+            let track = Rect::new(wl - ui_px(22.0), area_top, wl - ui_px(16.0), area_bottom);
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
                 Color::from_rgb8(28, 28, 30),
                 None,
-                &track.to_rounded_rect(3.0),
+                &track.to_rounded_rect(ui_px(3.0)),
             );
             let frac = (viewport_h / content_h).clamp(0.12, 1.0);
-            let th = (track.height() * frac).max(28.0);
+            let th = (track.height() * frac).max(ui_px(28.0));
             let ty = track.y0 + (track.height() - th) * (self.scroll / self.max_scroll);
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
                 SCROLL_THUMB,
                 None,
-                &Rect::new(track.x0, ty, track.x1, ty + th).to_rounded_rect(3.0),
+                &Rect::new(track.x0, ty, track.x1, ty + th).to_rounded_rect(ui_px(3.0)),
             );
         }
 
@@ -497,12 +499,12 @@ impl Home {
 
         // Same button dimensions as the New Document dialog's Create /
         // Cancel pair (`newdoc::layout`).
-        let btn_h = 34.0;
-        let btn_gap = 12.0;
-        let btn_y = area_bottom + (TOOLBAR_H - btn_h) / 2.0;
-        let open_rect = Rect::new(area_right - 104.0, btn_y, area_right, btn_y + btn_h);
+        let btn_h = ui_px(34.0);
+        let btn_gap = ui_px(12.0);
+        let btn_y = area_bottom + (metric_toolbar_h() - btn_h) / 2.0;
+        let open_rect = Rect::new(area_right - ui_px(104.0), btn_y, area_right, btn_y + btn_h);
         let import_rect = Rect::new(
-            open_rect.x0 - btn_gap - 92.0,
+            open_rect.x0 - btn_gap - ui_px(92.0),
             btn_y,
             open_rect.x0 - btn_gap,
             btn_y + btn_h,
@@ -535,16 +537,16 @@ fn link_row(
     title: &str,
     sub: &str,
 ) -> Rect {
-    let box_ = Rect::from_origin_size((PAD, y), (BADGE, BADGE));
+    let box_ = Rect::from_origin_size((metric_pad(), y), (metric_badge(), metric_badge()));
     match badge {
         Badge::Img(img) => image_into(scene, img, box_),
         Badge::News => draw_news_badge(scene, box_),
         Badge::Docs => draw_docs_badge(scene, box_),
     }
-    let tx = PAD + BADGE + 18.0;
-    tcx.draw(scene, title, 15.0, INK, tx, y + 20.0);
-    tcx.draw(scene, sub, 12.0, DIM, tx, y + 39.0);
-    Rect::new(PAD - 6.0, y - 6.0, split - PAD, y + BADGE + 6.0)
+    let tx = metric_pad() + metric_badge() + ui_px(18.0);
+    tcx.draw(scene, title, 15.0, INK, tx, y + ui_px(20.0));
+    tcx.draw(scene, sub, 12.0, DIM, tx, y + ui_px(39.0));
+    Rect::new(metric_pad() - ui_px(6.0), y - ui_px(6.0), split - metric_pad(), y + metric_badge() + ui_px(6.0))
 }
 
 /// Rounded-grey badge background shared by the drawn glyphs.
@@ -561,8 +563,8 @@ fn badge_bg(scene: &mut Scene, box_: Rect) {
 /// A newspaper: framed page, masthead bar, three text lines.
 fn draw_news_badge(scene: &mut Scene, box_: Rect) {
     badge_bg(scene, box_);
-    let g = box_.inset(-12.0);
-    let stroke = Stroke::new(1.6);
+    let g = box_.inset(ui_px(-ui_px(12.0)));
+    let stroke = Stroke::new(ui_px(1.6));
     scene.stroke(
         &stroke,
         Affine::IDENTITY,
@@ -576,18 +578,18 @@ fn draw_news_badge(scene: &mut Scene, box_: Rect) {
         Affine::IDENTITY,
         INK,
         None,
-        &Rect::new(g.x0 + 3.0, g.y0 + 3.0, g.x1 - 3.0, g.y0 + 7.0),
+        &Rect::new(g.x0 + ui_px(3.0), g.y0 + ui_px(3.0), g.x1 - ui_px(3.0), g.y0 + ui_px(7.0)),
     );
     // Text lines.
     for i in 0..3 {
-        let ly = g.y0 + 12.0 + i as f64 * 4.5;
-        let x1 = if i == 2 { g.x1 - 7.0 } else { g.x1 - 3.0 };
+        let ly = g.y0 + ui_px(12.0) + i as f64 * ui_px(4.5);
+        let x1 = if i == 2 { g.x1 - ui_px(7.0) } else { g.x1 - ui_px(3.0) };
         scene.stroke(
-            &Stroke::new(1.4),
+            &Stroke::new(ui_px(1.4)),
             Affine::IDENTITY,
             INK,
             None,
-            &line_path((g.x0 + 3.0, ly), (x1, ly)),
+            &line_path((g.x0 + ui_px(3.0), ly), (x1, ly)),
         );
     }
 }
@@ -595,8 +597,8 @@ fn draw_news_badge(scene: &mut Scene, box_: Rect) {
 /// A document page with a folded top-right corner and three text lines.
 fn draw_docs_badge(scene: &mut Scene, box_: Rect) {
     badge_bg(scene, box_);
-    let g = box_.inset(-13.0);
-    let fold = 7.0;
+    let g = box_.inset(ui_px(-ui_px(13.0)));
+    let fold = ui_px(7.0);
     let mut page = BezPath::new();
     page.move_to((g.x0, g.y0));
     page.line_to((g.x1 - fold, g.y0));
@@ -604,23 +606,23 @@ fn draw_docs_badge(scene: &mut Scene, box_: Rect) {
     page.line_to((g.x1, g.y1));
     page.line_to((g.x0, g.y1));
     page.close_path();
-    scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, INK, None, &page);
+    scene.stroke(&Stroke::new(ui_px(1.6)), Affine::IDENTITY, INK, None, &page);
     // Folded corner.
     let mut corner = BezPath::new();
     corner.move_to((g.x1 - fold, g.y0));
     corner.line_to((g.x1 - fold, g.y0 + fold));
     corner.line_to((g.x1, g.y0 + fold));
-    scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, INK, None, &corner);
+    scene.stroke(&Stroke::new(ui_px(1.4)), Affine::IDENTITY, INK, None, &corner);
     // Text lines.
     for i in 0..3 {
-        let ly = g.y0 + 13.0 + i as f64 * 5.0;
-        let x1 = if i == 2 { g.x1 - 6.0 } else { g.x1 - 4.0 };
+        let ly = g.y0 + ui_px(13.0) + i as f64 * ui_px(5.0);
+        let x1 = if i == 2 { g.x1 - ui_px(6.0) } else { g.x1 - ui_px(4.0) };
         scene.stroke(
-            &Stroke::new(1.4),
+            &Stroke::new(ui_px(1.4)),
             Affine::IDENTITY,
             INK,
             None,
-            &line_path((g.x0 + 4.0, ly), (x1, ly)),
+            &line_path((g.x0 + ui_px(4.0), ly), (x1, ly)),
         );
     }
 }
@@ -645,9 +647,9 @@ fn label(
 ) {
     let w = tcx.measure(s, 14.0);
     let cx = tile.x0 + tile.width() / 2.0;
-    let baseline = tile.y1 + gap + 14.0;
+    let baseline = tile.y1 + gap + ui_px(14.0);
     if selected {
-        let pill = Rect::new(cx - w / 2.0 - 8.0, baseline - 15.0, cx + w / 2.0 + 8.0, baseline + 5.0);
+        let pill = Rect::new(cx - w / 2.0 - ui_px(8.0), baseline - ui_px(15.0), cx + w / 2.0 + ui_px(8.0), baseline + ui_px(5.0));
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,

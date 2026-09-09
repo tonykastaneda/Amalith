@@ -9,17 +9,19 @@
 //! Greyed for now (v2): kerning mode, vertical / horizontal scale,
 //! baseline shift, character rotation.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 use crate::text::TextContext;
 
-use super::{Action, Ctx, FontMenu, TextFlag, ID, PAD};
+use super::{Action, Ctx, FontMenu, TextFlag, ID, metric_pad};
 
-const ROW_H: f64 = 30.0;
-const GAP: f64 = 8.0;
-const FIELD_H: f64 = 24.0;
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.panels_character_row_h) }
+fn metric_gap() -> f64 { crate::metrics::with(|m| m.panels_character_gap) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.panels_character_field_h) }
 
 /// Preset font sizes for the Size dropdown.
 pub const SIZE_PRESETS: [f64; 16] = [
@@ -73,46 +75,46 @@ struct Field {
 }
 
 fn field(x: f64, y: f64, w: f64) -> Field {
-    let box_ = Rect::new(x, y, x + w, y + FIELD_H);
-    let sx = box_.x1 - 16.0;
+    let box_ = Rect::new(x, y, x + w, y + metric_field_h());
+    let sx = box_.x1 - ui_px(16.0);
     Field {
         box_,
-        value: Rect::new(x + 22.0, y, sx - 2.0, y + FIELD_H),
-        up: Rect::new(sx, y + 1.0, box_.x1, y + FIELD_H / 2.0),
-        down: Rect::new(sx, y + FIELD_H / 2.0, box_.x1, y + FIELD_H - 1.0),
+        value: Rect::new(x + ui_px(22.0), y, sx - ui_px(2.0), y + metric_field_h()),
+        up: Rect::new(sx, y + 1.0, box_.x1, y + metric_field_h() / 2.0),
+        down: Rect::new(sx, y + metric_field_h() / 2.0, box_.x1, y + metric_field_h() - 1.0),
     }
 }
 
 fn layout(body: Rect) -> L {
-    let x = body.x0 + PAD;
-    let w = body.width() - PAD * 2.0;
-    let half = (w - GAP) / 2.0;
+    let x = body.x0 + metric_pad();
+    let w = body.width() - metric_pad() * 2.0;
+    let half = (w - metric_gap()) / 2.0;
     // Leave room under the tab strip for the header hint.
-    let mut y = body.y0 + 30.0;
-    let full = |y: f64| Rect::new(x, y, x + w, y + FIELD_H);
+    let mut y = body.y0 + ui_px(30.0);
+    let full = |y: f64| Rect::new(x, y, x + w, y + metric_field_h());
 
     let family = full(y);
-    y += FIELD_H + GAP;
+    y += metric_field_h() + metric_gap();
     let style = full(y);
-    y += FIELD_H + 14.0;
+    y += metric_field_h() + ui_px(14.0);
 
-    let row = |y: f64| (field(x, y, half), field(x + half + GAP, y, half));
+    let row = |y: f64| (field(x, y, half), field(x + half + metric_gap(), y, half));
     let (size, leading) = row(y);
-    y += ROW_H;
+    y += metric_row_h();
     let (kerning, tracking) = row(y);
-    y += ROW_H;
+    y += metric_row_h();
     let (vscale, hscale) = row(y);
-    y += ROW_H;
+    y += metric_row_h();
     let (baseline, rotation) = row(y);
-    y += ROW_H + 10.0;
+    y += metric_row_h() + ui_px(10.0);
 
-    let tw = 30.0;
+    let tw = ui_px(30.0);
     let tgap = (w - tw * 6.0) / 5.0;
     let toggles = std::array::from_fn(|i| {
         let tx = x + i as f64 * (tw + tgap);
-        Rect::new(tx, y, tx + tw, y + 26.0)
+        Rect::new(tx, y, tx + tw, y + ui_px(26.0))
     });
-    let bottom = y + 26.0 + PAD;
+    let bottom = y + ui_px(26.0) + metric_pad();
 
     L {
         family,
@@ -135,7 +137,7 @@ fn layout(body: Rect) -> L {
 /// down over its own contents.
 pub fn natural_height() -> f64 {
     // Width doesn't affect the vertical layout; any sane value works.
-    let l = layout(Rect::new(0.0, 0.0, 240.0, 4000.0));
+    let l = layout(Rect::new(0.0, 0.0, ui_px(240.0), ui_px(4000.0)));
     l.bottom
 }
 
@@ -164,7 +166,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     } else {
         "Character — new text"
     };
-    text.draw(scene, hint, 10.0, th.text_dim, body.x0 + PAD, body.y0 + 18.0);
+    text.draw(scene, hint, 10.0, th.text_dim, body.x0 + metric_pad(), body.y0 + ui_px(18.0));
 
     combo(scene, text, th, l.family, &s.family, ctx.pointer);
     combo(
@@ -226,8 +228,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         } else {
             th.bg
         };
-        scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
+        scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r.to_rounded_rect(ui_px(4.0)));
         // Dark glyph over the gold accent, light otherwise.
         let col = if on {
             th.on_accent
@@ -241,7 +243,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             11.0,
             col,
             r.center().x - w / 2.0,
-            r.center().y + 4.0,
+            r.center().y + ui_px(4.0),
         );
     }
 }
@@ -266,12 +268,12 @@ fn combo(
     value: &str,
     pointer: Point,
 ) {
-    let rr = r.to_rounded_rect(4.0);
+    let rr = r.to_rounded_rect(ui_px(4.0));
     let bg = if r.contains(pointer) { th.strip_bg } else { th.bg };
     scene.fill(Fill::NonZero, ID, bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
-    text.draw(scene, value, 12.0, th.text, r.x0 + 8.0, r.center().y + 4.0);
-    caret_down(scene, Point::new(r.x1 - 12.0, r.center().y), th.text_dim);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
+    text.draw(scene, value, 12.0, th.text, r.x0 + ui_px(8.0), r.center().y + ui_px(4.0));
+    caret_down(scene, Point::new(r.x1 - ui_px(12.0), r.center().y), th.text_dim);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -285,13 +287,13 @@ fn stepper(
     enabled: bool,
     pointer: Point,
 ) {
-    let rr = f.box_.to_rounded_rect(4.0);
+    let rr = f.box_.to_rounded_rect(ui_px(4.0));
     scene.fill(Fill::NonZero, ID, th.bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
     let label_col = if enabled { th.text_dim } else { th.border };
-    text.draw(scene, glyph, 10.0, label_col, f.box_.x0 + 4.0, f.box_.center().y + 4.0);
+    text.draw(scene, glyph, 10.0, label_col, f.box_.x0 + ui_px(4.0), f.box_.center().y + ui_px(4.0));
     let val_col = if enabled { th.text } else { th.text_dim };
-    text.draw(scene, value, 12.0, val_col, f.value.x0, f.box_.center().y + 4.0);
+    text.draw(scene, value, 12.0, val_col, f.value.x0, f.box_.center().y + ui_px(4.0));
     if enabled {
         let up_hot = f.up.contains(pointer);
         let dn_hot = f.down.contains(pointer);
@@ -301,7 +303,7 @@ fn stepper(
 }
 
 fn tri(scene: &mut Scene, c: Point, up: bool, color: Color) {
-    let d = 3.0;
+    let d = ui_px(3.0);
     let mut p = BezPath::new();
     if up {
         p.move_to((c.x - d, c.y + d * 0.6));
@@ -317,7 +319,7 @@ fn tri(scene: &mut Scene, c: Point, up: bool, color: Color) {
 }
 
 fn caret_down(scene: &mut Scene, c: Point, color: Color) {
-    let d = 3.0;
+    let d = ui_px(3.0);
     let mut p = BezPath::new();
     p.move_to((c.x - d, c.y - d * 0.6));
     p.line_to((c.x + d, c.y - d * 0.6));

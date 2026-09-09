@@ -4,6 +4,8 @@
 //! offset_dialog.rs` is the App-side glue (spawning the floating window,
 //! closing it, keyboard), mirroring `blenddlg.rs` / `app/blend_dialog.rs`.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::{LineJoin, ObjectId, PathData};
 use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::Fill;
@@ -12,12 +14,12 @@ use vello::Scene;
 use crate::text::TextContext;
 use crate::theme::Theme;
 
-pub const W: f64 = 270.0;
-const PAD: f64 = 16.0;
-const FIELD_H: f64 = 26.0;
-const ROW_GAP: f64 = 12.0;
-const LABEL_W: f64 = 90.0;
-const BTN_H: f64 = 30.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.offsetdlg_w) }
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.offsetdlg_pad) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.offsetdlg_field_h) }
+fn metric_row_gap() -> f64 { crate::metrics::with(|m| m.offsetdlg_row_gap) }
+fn metric_label_w() -> f64 { crate::metrics::with(|m| m.offsetdlg_label_w) }
+fn metric_btn_h() -> f64 { crate::metrics::with(|m| m.offsetdlg_btn_h) }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -108,7 +110,7 @@ fn trim_num(v: f64) -> String {
 /// Body height (window-local, excluding the tab strip) — fixed
 /// regardless of `join` so switching it never resizes the window.
 pub fn body_height() -> f64 {
-    PAD + 3.0 * (FIELD_H + ROW_GAP) + 6.0 + BTN_H + PAD
+    metric_pad() + 3.0 * (metric_field_h() + metric_row_gap()) + ui_px(6.0) + metric_btn_h() + metric_pad()
 }
 
 struct Layout {
@@ -121,12 +123,12 @@ struct Layout {
 }
 
 fn layout(body: Rect) -> Layout {
-    let x0 = body.x0 + PAD;
-    let x1 = body.x1 - PAD;
-    let mut y = body.y0 + PAD;
-    let offset_field = Rect::new(x0 + LABEL_W, y, x1, y + FIELD_H);
-    y += FIELD_H + ROW_GAP;
-    let join_row = Rect::new(x0 + LABEL_W, y, x1, y + FIELD_H);
+    let x0 = body.x0 + metric_pad();
+    let x1 = body.x1 - metric_pad();
+    let mut y = body.y0 + metric_pad();
+    let offset_field = Rect::new(x0 + metric_label_w(), y, x1, y + metric_field_h());
+    y += metric_field_h() + metric_row_gap();
+    let join_row = Rect::new(x0 + metric_label_w(), y, x1, y + metric_field_h());
     let seg_w = join_row.width() / 3.0;
     let join_seg = std::array::from_fn(|i| {
         Rect::new(
@@ -136,13 +138,13 @@ fn layout(body: Rect) -> Layout {
             join_row.y1,
         )
     });
-    y += FIELD_H + ROW_GAP;
-    let miter_field = Rect::new(x0 + LABEL_W, y, x1, y + FIELD_H);
-    y += FIELD_H + ROW_GAP + 6.0;
-    let preview = Rect::new(x0, y + (BTN_H - 16.0) * 0.5, x0 + 16.0, y + (BTN_H + 16.0) * 0.5);
-    let btn_w = 68.0;
-    let ok = Rect::new(x1 - btn_w, y, x1, y + BTN_H);
-    let cancel = Rect::new(ok.x0 - 8.0 - btn_w, y, ok.x0 - 8.0, y + BTN_H);
+    y += metric_field_h() + metric_row_gap();
+    let miter_field = Rect::new(x0 + metric_label_w(), y, x1, y + metric_field_h());
+    y += metric_field_h() + metric_row_gap() + ui_px(6.0);
+    let preview = Rect::new(x0, y + (metric_btn_h() - ui_px(16.0)) * 0.5, x0 + ui_px(16.0), y + (metric_btn_h() + ui_px(16.0)) * 0.5);
+    let btn_w = ui_px(68.0);
+    let ok = Rect::new(x1 - btn_w, y, x1, y + metric_btn_h());
+    let cancel = Rect::new(ok.x0 - ui_px(8.0) - btn_w, y, ok.x0 - ui_px(8.0), y + metric_btn_h());
     Layout { offset_field, join_seg, miter_field, preview, ok, cancel }
 }
 
@@ -171,7 +173,7 @@ pub fn hit(dlg: &OffsetDialog, body: Rect, p: Point) -> Hit {
     if dlg.join == LineJoin::Miter && lay.miter_field.contains(p) {
         return Hit::MiterLimit;
     }
-    if lay.preview.inflate(6.0, 6.0).contains(p) {
+    if lay.preview.inflate(ui_px(6.0), ui_px(6.0)).contains(p) {
         return Hit::Preview;
     }
     if lay.ok.contains(p) {
@@ -198,7 +200,7 @@ pub fn paint(
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &body);
     let lay = layout(body);
 
-    text.draw(scene, "Offset:", 12.5, theme.text_dim, body.x0 + PAD, lay.offset_field.center().y + 4.5);
+    text.draw(scene, "Offset:", 12.5, theme.text_dim, body.x0 + metric_pad(), lay.offset_field.center().y + ui_px(4.5));
     scene.fill(Fill::NonZero, ID, theme.bg, None, &lay.offset_field);
     scene.stroke(
         &Stroke::new(if dlg.focus == Field::Offset { 1.5 } else { 1.0 }),
@@ -212,23 +214,23 @@ pub fn paint(
     } else {
         dlg.offset.clone()
     };
-    text.draw(scene, &offset_shown, 13.0, theme.text, lay.offset_field.x0 + 10.0, lay.offset_field.center().y + 4.5);
+    text.draw(scene, &offset_shown, 13.0, theme.text, lay.offset_field.x0 + ui_px(10.0), lay.offset_field.center().y + ui_px(4.5));
     let px_w = text.measure("px", 11.5);
-    text.draw(scene, "px", 11.5, theme.text_dim, lay.offset_field.x1 - px_w - 8.0, lay.offset_field.center().y + 4.5);
+    text.draw(scene, "px", 11.5, theme.text_dim, lay.offset_field.x1 - px_w - ui_px(8.0), lay.offset_field.center().y + ui_px(4.5));
 
-    text.draw(scene, "Joins:", 12.5, theme.text_dim, body.x0 + PAD, lay.join_seg[0].center().y + 4.5);
+    text.draw(scene, "Joins:", 12.5, theme.text_dim, body.x0 + metric_pad(), lay.join_seg[0].center().y + ui_px(4.5));
     for (i, r) in lay.join_seg.iter().enumerate() {
         let on = JOINS[i] == dlg.join;
         scene.fill(Fill::NonZero, ID, if on { theme.accent } else { theme.bg }, None, r);
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.5), None, r);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim.with_alpha(0.5), None, r);
         let col = if on { theme.on_accent } else { theme.text_dim };
         let w = text.measure(JOIN_LABELS[i], 11.5);
-        text.draw(scene, JOIN_LABELS[i], 11.5, col, r.center().x - w * 0.5, r.center().y + 4.0);
+        text.draw(scene, JOIN_LABELS[i], 11.5, col, r.center().x - w * 0.5, r.center().y + ui_px(4.0));
     }
 
     let miter_enabled = dlg.join == LineJoin::Miter;
     let miter_label_col = if miter_enabled { theme.text_dim } else { theme.text_dim.with_alpha(0.4) };
-    text.draw(scene, "Miter limit:", 12.5, miter_label_col, body.x0 + PAD, lay.miter_field.center().y + 4.5);
+    text.draw(scene, "Miter limit:", 12.5, miter_label_col, body.x0 + metric_pad(), lay.miter_field.center().y + ui_px(4.5));
     if miter_enabled {
         scene.fill(Fill::NonZero, ID, theme.bg, None, &lay.miter_field);
         scene.stroke(
@@ -243,15 +245,15 @@ pub fn paint(
         } else {
             dlg.miter_limit.clone()
         };
-        text.draw(scene, &shown, 13.0, theme.text, lay.miter_field.x0 + 10.0, lay.miter_field.center().y + 4.5);
+        text.draw(scene, &shown, 13.0, theme.text, lay.miter_field.x0 + ui_px(10.0), lay.miter_field.center().y + ui_px(4.5));
     }
 
-    scene.stroke(&Stroke::new(1.2), ID, theme.text_dim, None, &lay.preview);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, theme.text_dim, None, &lay.preview);
     if dlg.preview {
-        let inset = lay.preview.inflate(-3.0, -3.0);
+        let inset = lay.preview.inflate(ui_px(-ui_px(3.0)), ui_px(-ui_px(3.0)));
         scene.fill(Fill::NonZero, ID, theme.accent, None, &inset);
     }
-    text.draw(scene, "Preview", 12.0, theme.text, lay.preview.x1 + 8.0, lay.preview.center().y + 4.5);
+    text.draw(scene, "Preview", 12.0, theme.text, lay.preview.x1 + ui_px(8.0), lay.preview.center().y + ui_px(4.5));
 
     crate::widgets::button(scene, text, theme, lay.cancel, "Cancel", false);
     crate::widgets::button(scene, text, theme, lay.ok, "OK", true);

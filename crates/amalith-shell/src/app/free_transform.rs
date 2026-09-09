@@ -24,10 +24,10 @@ enum FlyoutButton {
     FreeDistort,
 }
 
-const FT_BTN_W: f64 = 30.0;
-const FT_BTN_H: f64 = 26.0;
-const FT_BTN_GAP: f64 = 4.0;
-const FT_PAD: f64 = 6.0;
+fn metric_ft_btn_w() -> f64 { crate::metrics::with(|m| m.app_free_transform_ft_btn_w) }
+fn metric_ft_btn_h() -> f64 { crate::metrics::with(|m| m.app_free_transform_ft_btn_h) }
+fn metric_ft_btn_gap() -> f64 { crate::metrics::with(|m| m.app_free_transform_ft_btn_gap) }
+fn metric_ft_pad() -> f64 { crate::metrics::with(|m| m.app_free_transform_ft_pad) }
 
 /// The flyout's screen rects, anchored below the selection's bbox.
 pub(in crate::app) struct FreeTransformFlyout {
@@ -179,16 +179,16 @@ impl App {
             x1 = x1.max(p.x);
             y1 = y1.max(p.y);
         }
-        let w = 4.0 * FT_BTN_W + 3.0 * FT_BTN_GAP + 2.0 * FT_PAD;
-        let h = FT_BTN_H + 2.0 * FT_PAD;
+        let w = 4.0 * metric_ft_btn_w() + 3.0 * metric_ft_btn_gap() + 2.0 * metric_ft_pad();
+        let h = metric_ft_btn_h() + 2.0 * metric_ft_pad();
         let viewport = self.canvas_viewport();
         let cx = (x0 + x1) * 0.5;
         let x = (cx - w * 0.5).max(viewport.x0 + 4.0).min((viewport.x1 - w - 4.0).max(viewport.x0 + 4.0));
         let y = (y1 + 10.0).max(viewport.y0 + 4.0).min((viewport.y1 - h - 4.0).max(viewport.y0 + 4.0));
         let panel = Rect::new(x, y, x + w, y + h);
         let row: [Rect; 4] = std::array::from_fn(|i| {
-            let bx = panel.x0 + FT_PAD + i as f64 * (FT_BTN_W + FT_BTN_GAP);
-            Rect::new(bx, panel.y0 + FT_PAD, bx + FT_BTN_W, panel.y0 + FT_PAD + FT_BTN_H)
+            let bx = panel.x0 + metric_ft_pad() + i as f64 * (metric_ft_btn_w() + metric_ft_btn_gap());
+            Rect::new(bx, panel.y0 + metric_ft_pad(), bx + metric_ft_btn_w(), panel.y0 + metric_ft_pad() + metric_ft_btn_h())
         });
         Some(FreeTransformFlyout {
             panel,

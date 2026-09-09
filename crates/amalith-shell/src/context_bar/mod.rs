@@ -18,6 +18,8 @@
 //! [`crate::panels::Action`] (the shared UI-action vocabulary the shell's
 //! `apply_panel_action` dispatches), exactly like a panel body.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -39,7 +41,7 @@ mod xform;
 
 const ID: vello::kurbo::Affine = vello::kurbo::Affine::IDENTITY;
 /// Gap between adjacent segments; a hairline separator sits in the middle.
-const GAP: f64 = 25.0;
+fn metric_gap() -> f64 { crate::metrics::with(|m| m.context_bar_gap) }
 
 /// The read-only slice of shell state a context-bar segment draws from.
 /// Built once per paint / hit — the one construction site is the price of
@@ -138,7 +140,7 @@ const SEGMENTS: &[Segment] = &[
 /// overflow its right edge.
 fn placed<'s>(bar: Rect, ctx: &Ctx) -> Vec<(&'s Segment, Rect)> {
     let mut out = Vec::new();
-    let mut x = bar.x0 + 12.0;
+    let mut x = bar.x0 + ui_px(12.0);
     // An artboard selection replaces the whole bar with its own segment;
     // the object segments (which show stored defaults even with nothing
     // selected) must not bleed through.
@@ -151,11 +153,11 @@ fn placed<'s>(bar: Rect, ctx: &Ctx) -> Vec<(&'s Segment, Rect)> {
             continue;
         }
         let w = (seg.measure)(ctx);
-        if x + w > bar.x1 - 18.0 {
+        if x + w > bar.x1 - ui_px(18.0) {
             break;
         }
         out.push((seg, Rect::new(x, bar.y0, x + w, bar.y1)));
-        x += w + GAP;
+        x += w + metric_gap();
     }
     out
 }
@@ -177,7 +179,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, bar: Rect, ctx: &Ctx) {
                 ID,
                 ctx.theme.border,
                 None,
-                &Rect::new(r.x0 - GAP * 0.5, bar.y0 + 7.0, r.x0 - GAP * 0.5 + 1.0, bar.y1 - 7.0),
+                &Rect::new(r.x0 - metric_gap() * 0.5, bar.y0 + ui_px(7.0), r.x0 - metric_gap() * 0.5 + 1.0, bar.y1 - ui_px(7.0)),
             );
         }
         (seg.paint)(scene, text, r, ctx);
@@ -245,15 +247,15 @@ pub fn tip(bar: Rect, local: Point, ctx: &Ctx) -> Option<String> {
 
 /// Baseline y for 13px label text centred in `bar`.
 fn baseline(bar: Rect) -> f64 {
-    bar.y0 + bar.height() * 0.5 + 4.5
+    bar.y0 + bar.height() * 0.5 + ui_px(4.5)
 }
 
 /// A boxed numeric readout plus an up / down stepper column. Returns the
 /// (field, up, down) rects so `hit` can reuse the same geometry.
 fn field(x: f64, cy: f64, w: f64) -> (Rect, Rect, Rect) {
-    let field = Rect::new(x, cy - 11.5, x + w, cy + 11.5);
-    let up = Rect::new(field.x1, cy - 11.5, field.x1 + 15.0, cy);
-    let down = Rect::new(field.x1, cy, field.x1 + 15.0, cy + 11.5);
+    let field = Rect::new(x, cy - ui_px(11.5), x + w, cy + ui_px(11.5));
+    let up = Rect::new(field.x1, cy - ui_px(11.5), field.x1 + ui_px(15.0), cy);
+    let down = Rect::new(field.x1, cy, field.x1 + ui_px(15.0), cy + ui_px(11.5));
     (field, up, down)
 }
 
@@ -274,7 +276,7 @@ fn draw_field(
     scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
     if highlight {
         let w = text.measure(value, 13.0);
-        let band = Rect::new(field.x0 + 5.0, field.y0 + 3.0, (field.x0 + 9.0 + w).min(field.x1 - 3.0), field.y1 - 3.0);
+        let band = Rect::new(field.x0 + ui_px(5.0), field.y0 + ui_px(3.0), (field.x0 + ui_px(9.0) + w).min(field.x1 - ui_px(3.0)), field.y1 - ui_px(3.0));
         crate::widgets::draw_field_highlight(scene, theme, band);
     }
     scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &field);
@@ -283,21 +285,21 @@ fn draw_field(
         value,
         13.0,
         theme.text,
-        field.x0 + 7.0,
-        field.y0 + field.height() * 0.5 + 4.5,
+        field.x0 + ui_px(7.0),
+        field.y0 + field.height() * 0.5 + ui_px(4.5),
     );
     let col = Rect::new(up.x0, up.y0, up.x1, down.y1);
     scene.fill(Fill::NonZero, ID, theme.bg, None, &col);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &col);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &col);
     let cx = col.x0 + col.width() * 0.5;
-    tri(scene, cx, up.y1 - 3.0, up.y0 + 3.0, theme);
-    tri(scene, cx, down.y0 + 3.0, down.y1 - 3.0, theme);
+    tri(scene, cx, up.y1 - ui_px(3.0), up.y0 + ui_px(3.0), theme);
+    tri(scene, cx, down.y0 + ui_px(3.0), down.y1 - ui_px(3.0), theme);
 }
 
 fn tri(scene: &mut Scene, cx: f64, base_y: f64, tip_y: f64, theme: &Theme) {
     let mut p = BezPath::new();
-    p.move_to((cx - 3.0, base_y));
-    p.line_to((cx + 3.0, base_y));
+    p.move_to((cx - ui_px(3.0), base_y));
+    p.line_to((cx + ui_px(3.0), base_y));
     p.line_to((cx, tip_y));
     p.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &p);
@@ -307,21 +309,21 @@ fn tri(scene: &mut Scene, cx: f64, base_y: f64, tip_y: f64, theme: &Theme) {
 fn draw_combo(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str) {
     let border = theme.text_dim.with_alpha(0.5);
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &r);
     text.draw(
         scene,
         value,
         13.0,
         theme.text,
-        r.x0 + 8.0,
-        r.y0 + r.height() * 0.5 + 4.5,
+        r.x0 + ui_px(8.0),
+        r.y0 + r.height() * 0.5 + ui_px(4.5),
     );
-    let cx = r.x1 - 10.0;
+    let cx = r.x1 - ui_px(10.0);
     let cy = r.center().y;
     let mut t = BezPath::new();
-    t.move_to((cx - 3.0, cy - 2.0));
-    t.line_to((cx + 3.0, cy - 2.0));
-    t.line_to((cx, cy + 2.5));
+    t.move_to((cx - ui_px(3.0), cy - ui_px(2.0)));
+    t.line_to((cx + ui_px(3.0), cy - ui_px(2.0)));
+    t.line_to((cx, cy + ui_px(2.5)));
     t.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &t);
 }

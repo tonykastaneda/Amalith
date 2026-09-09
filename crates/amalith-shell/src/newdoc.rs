@@ -3,6 +3,8 @@
 //! [`paint`] renders from those rects, and [`hit`] maps a click back to a
 //! [`Hit`]. `main.rs` owns the [`NewDocForm`] state and drives it.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::{ColorMode, Length, PreviewMode, RasterEffects, Unit};
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
@@ -13,7 +15,7 @@ use crate::text_field::TextField;
 use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
-const FH: f64 = 30.0;
+fn metric_fh() -> f64 { crate::metrics::with(|m| m.newdoc_fh) }
 
 /// Amalith brand yellow (`#f4be18`) — the fallback fill for the left art
 /// panel when the artwork can't be decoded.
@@ -382,7 +384,7 @@ fn menu_len(m: Menu) -> usize {
 }
 
 /// Every interactive rect in the modal.
-const FOOTER_H: f64 = 62.0;
+fn metric_footer_h() -> f64 { crate::metrics::with(|m| m.newdoc_footer_h) }
 
 /// The form's interactive rects. Produced content-local by
 /// [`build_content`] (y from the content top), then [`L::shifted`] into
@@ -448,15 +450,15 @@ impl L {
     fn items(&self, m: Menu, scroll_rect: Rect) -> Vec<Rect> {
         let t = self.trigger(m);
         let n = menu_len(m);
-        let up = t.y1 + n as f64 * FH > scroll_rect.y1;
+        let up = t.y1 + n as f64 * metric_fh() > scroll_rect.y1;
         (0..n)
             .map(|i| {
                 let y = if up {
-                    t.y0 - (i as f64 + 1.0) * FH
+                    t.y0 - (i as f64 + 1.0) * metric_fh()
                 } else {
-                    t.y1 + i as f64 * FH
+                    t.y1 + i as f64 * metric_fh()
                 };
-                Rect::new(t.x0, y, t.x1, y + FH)
+                Rect::new(t.x0, y, t.x1, y + metric_fh())
             })
             .collect()
     }
@@ -484,27 +486,27 @@ pub struct Layout {
 pub fn layout(win: Rect, raw_scroll: f64) -> Layout {
     // The whole form is a fixed-width column pinned to the right edge of
     // the window; everything left of it is the art placeholder.
-    let pw = 500.0_f64.min(win.width() * 0.46).max(340.0);
+    let pw = ui_px(500.0).min(win.width() * 0.46).max(ui_px(340.0));
     let panel = Rect::new((win.x1 - pw).max(win.x0), win.y0, win.x1, win.y1);
     let art = Rect::new(win.x0, win.y0, panel.x0, win.y1);
 
-    let x = panel.x0 + 34.0;
-    let cw = panel.width() - 34.0 - 26.0; // leave room for the scrollbar
+    let x = panel.x0 + ui_px(34.0);
+    let cw = panel.width() - ui_px(34.0) - ui_px(26.0); // leave room for the scrollbar
     let (content, content_h) = build_content(x, cw);
 
-    let scroll_rect = Rect::new(panel.x0, panel.y0, panel.x1, panel.y1 - FOOTER_H);
-    let max_scroll = (content_h + 24.0 - scroll_rect.height()).max(0.0);
+    let scroll_rect = Rect::new(panel.x0, panel.y0, panel.x1, panel.y1 - metric_footer_h());
+    let max_scroll = (content_h + ui_px(24.0) - scroll_rect.height()).max(0.0);
     let scroll = raw_scroll.clamp(0.0, max_scroll);
-    let l = content.shifted(scroll_rect.y0 + 20.0 - scroll);
+    let l = content.shifted(scroll_rect.y0 + ui_px(20.0) - scroll);
 
     // Create / Cancel pinned to the window's bottom-right corner.
     let create = Rect::new(
-        panel.x1 - 24.0 - 104.0,
-        panel.y1 - 16.0 - 34.0,
-        panel.x1 - 24.0,
-        panel.y1 - 16.0,
+        panel.x1 - ui_px(24.0) - ui_px(104.0),
+        panel.y1 - ui_px(16.0) - ui_px(34.0),
+        panel.x1 - ui_px(24.0),
+        panel.y1 - ui_px(16.0),
     );
-    let close = Rect::new(create.x0 - 12.0 - 92.0, create.y0, create.x0 - 12.0, create.y1);
+    let close = Rect::new(create.x0 - ui_px(12.0) - ui_px(92.0), create.y0, create.x0 - ui_px(12.0), create.y1);
 
     Layout {
         panel,
@@ -522,55 +524,55 @@ pub fn layout(win: Rect, raw_scroll: f64) -> Layout {
 /// Content-local rects (y from the content top) plus total content height.
 fn build_content(x: f64, cw: f64) -> (L, f64) {
     let right = x + cw;
-    let field = |y: f64, x0: f64, x1: f64| Rect::new(x0, y, x1, y + FH);
+    let field = |y: f64, x0: f64, x1: f64| Rect::new(x0, y, x1, y + metric_fh());
 
-    let mut y = 28.0; // room for the "PRESET DETAILS" caption
+    let mut y = ui_px(28.0); // room for the "PRESET DETAILS" caption
     let name = field(y, x, right);
-    y += FH + 30.0; // + hairline
+    y += metric_fh() + ui_px(30.0); // + hairline
 
-    y += 22.0;
+    y += ui_px(22.0);
     let col_w = cw * 0.42;
     let width = field(y, x, x + col_w);
-    let unit = field(y, x + col_w + 18.0, right);
-    y += FH + 28.0;
+    let unit = field(y, x + col_w + ui_px(18.0), right);
+    y += metric_fh() + ui_px(28.0);
 
-    y += 22.0;
+    y += ui_px(22.0);
     let height = field(y, x, x + col_w);
-    let ox = x + col_w + 18.0;
-    let orient_p = Rect::new(ox, y, ox + 30.0, y + 30.0);
-    let orient_l = Rect::new(ox + 40.0, y, ox + 70.0, y + 30.0);
-    let ab_plus = Rect::new(right - 26.0, y, right, y + 30.0);
-    let ab_field = Rect::new(ab_plus.x0 - 10.0 - 56.0, y, ab_plus.x0 - 10.0, y + 30.0);
-    let ab_minus = Rect::new(ab_field.x0 - 10.0 - 26.0, y, ab_field.x0 - 10.0, y + 30.0);
-    y += 30.0 + 34.0;
+    let ox = x + col_w + ui_px(18.0);
+    let orient_p = Rect::new(ox, y, ox + ui_px(30.0), y + ui_px(30.0));
+    let orient_l = Rect::new(ox + ui_px(40.0), y, ox + ui_px(70.0), y + ui_px(30.0));
+    let ab_plus = Rect::new(right - ui_px(26.0), y, right, y + ui_px(30.0));
+    let ab_field = Rect::new(ab_plus.x0 - ui_px(10.0) - ui_px(56.0), y, ab_plus.x0 - ui_px(10.0), y + ui_px(30.0));
+    let ab_minus = Rect::new(ab_field.x0 - ui_px(10.0) - ui_px(26.0), y, ab_field.x0 - ui_px(10.0), y + ui_px(30.0));
+    y += ui_px(30.0) + ui_px(34.0);
 
     let bleed_header_y = y;
-    y += 26.0; // header
-    y += 22.0; // Top / Bottom labels
-    let half = (cw - 18.0) * 0.5;
+    y += ui_px(26.0); // header
+    y += ui_px(22.0); // Top / Bottom labels
+    let half = (cw - ui_px(18.0)) * 0.5;
     let bt = field(y, x, x + half);
-    let bb = field(y, x + half + 18.0, right);
-    y += FH + 28.0;
-    y += 22.0; // Left / Right labels
+    let bb = field(y, x + half + ui_px(18.0), right);
+    y += metric_fh() + ui_px(28.0);
+    y += ui_px(22.0); // Left / Right labels
     let bl = field(y, x, x + half);
-    let br = field(y, x + half + 18.0, right);
-    y += FH + 20.0;
+    let br = field(y, x + half + ui_px(18.0), right);
+    y += metric_fh() + ui_px(20.0);
 
-    let link = Rect::new(x, y, x + 220.0, y + 20.0);
-    y += 20.0 + 26.0;
+    let link = Rect::new(x, y, x + ui_px(220.0), y + ui_px(20.0));
+    y += ui_px(20.0) + ui_px(26.0);
 
-    y += 22.0;
+    y += ui_px(22.0);
     let color = field(y, x, right);
-    y += FH + 28.0;
-    y += 22.0;
+    y += metric_fh() + ui_px(28.0);
+    y += ui_px(22.0);
     let raster = field(y, x, right);
-    y += FH + 28.0;
-    y += 22.0;
+    y += metric_fh() + ui_px(28.0);
+    y += ui_px(22.0);
     let preview = field(y, x, right);
-    y += FH + 26.0;
+    y += metric_fh() + ui_px(26.0);
 
-    let more = Rect::new(x, y, x + 136.0, y + 30.0);
-    y += 30.0 + 12.0;
+    let more = Rect::new(x, y, x + ui_px(136.0), y + ui_px(30.0));
+    y += ui_px(30.0) + ui_px(12.0);
 
     (
         L {
@@ -718,18 +720,18 @@ pub fn paint(
     );
 
     let caption = |scene: &mut Scene, text: &mut TextContext, s: &str, r: Rect| {
-        text.draw(scene, s, 11.5, dim, r.x0, r.y0 - 8.0);
+        text.draw(scene, s, 11.5, dim, r.x0, r.y0 - ui_px(8.0));
     };
 
     // --- scrollable content -------------------------------------------
     scene.push_clip_layer(Fill::NonZero, ID, &lay.scroll_rect);
 
-    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.name.y0 - 16.0);
+    text.draw(scene, "PRESET DETAILS", 10.5, dim, x, l.name.y0 - ui_px(16.0));
     {
         let fc = form.focus == Some(Field::Name);
         field_box(scene, text, theme, l.name, form.field(Field::Name), fc, caret_on);
     }
-    let hy = l.name.y1 + 15.0;
+    let hy = l.name.y1 + ui_px(15.0);
     scene.fill(
         Fill::NonZero,
         ID,
@@ -756,7 +758,7 @@ pub fn paint(
     draw_orient(scene, theme, l.orient_p, l.orient_l, portrait);
     draw_stepper(scene, text, theme, l.ab_minus, l.ab_field, l.ab_plus, form.artboards);
 
-    text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed_header_y + 12.0);
+    text.draw(scene, "Bleed", 12.0, theme.text, x, l.bleed_header_y + ui_px(12.0));
     let bl = ["Top", "Bottom", "Left", "Right"];
     let bfields = [
         Field::BleedTop,
@@ -788,7 +790,7 @@ pub fn paint(
         let y1 = items.iter().map(|r| r.y1).fold(f64::MIN, f64::max);
         let listbox = Rect::new(items[0].x0, y0, items[0].x1, y1);
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &listbox);
-        scene.stroke(&Stroke::new(1.0), ID, theme.accent, None, &listbox);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.accent, None, &listbox);
         let labels: Vec<&str> = match m {
             Menu::Unit => UNITS.iter().map(|u| unit_label(*u)).collect(),
             Menu::Color => COLORS.iter().map(|c| color_label(*c)).collect(),
@@ -796,7 +798,7 @@ pub fn paint(
             Menu::Preview => PREVIEWS.iter().map(|p| preview_label(*p)).collect(),
         };
         for (r, s) in items.iter().zip(labels) {
-            text.draw(scene, s, 12.0, theme.text, r.x0 + 10.0, r.y0 + FH * 0.5 + 4.0);
+            text.draw(scene, s, 12.0, theme.text, r.x0 + ui_px(10.0), r.y0 + metric_fh() * 0.5 + ui_px(4.0));
         }
     }
 
@@ -805,13 +807,13 @@ pub fn paint(
     // --- scrollbar ---------------------------------------------------
     if lay.max_scroll > 0.0 {
         let track = Rect::new(
-            lay.panel.x1 - 9.0,
-            lay.scroll_rect.y0 + 4.0,
-            lay.panel.x1 - 4.0,
-            lay.scroll_rect.y1 - 4.0,
+            lay.panel.x1 - ui_px(9.0),
+            lay.scroll_rect.y0 + ui_px(4.0),
+            lay.panel.x1 - ui_px(4.0),
+            lay.scroll_rect.y1 - ui_px(4.0),
         );
-        let frac = (lay.scroll_rect.height() / (lay.content_h + 16.0)).min(1.0);
-        let th = (track.height() * frac).max(28.0);
+        let frac = (lay.scroll_rect.height() / (lay.content_h + ui_px(16.0))).min(1.0);
+        let th = (track.height() * frac).max(ui_px(28.0));
         let ty = track.y0 + (track.height() - th) * (lay.scroll / lay.max_scroll);
         scene.fill(
             Fill::NonZero,
@@ -825,7 +827,7 @@ pub fn paint(
     // --- pinned footer ---------------------------------------------------
     let footer = Rect::new(
         lay.panel.x0,
-        lay.panel.y1 - FOOTER_H,
+        lay.panel.y1 - metric_footer_h(),
         lay.panel.x1,
         lay.panel.y1,
     );
@@ -858,27 +860,27 @@ fn field_box(
     } else {
         theme.text_dim.with_alpha(0.5)
     };
-    scene.stroke(&Stroke::new(1.0), ID, border, None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &r);
     tf.paint(scene, text, theme, r, "", focused && caret_on);
 }
 
 fn draw_dropdown(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, value: &str) {
     scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r);
-    scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.5), None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim.with_alpha(0.5), None, &r);
     text.draw(
         scene,
         value,
         12.0,
         theme.text,
-        r.x0 + 10.0,
-        r.y0 + r.height() * 0.5 + 4.0,
+        r.x0 + ui_px(10.0),
+        r.y0 + r.height() * 0.5 + ui_px(4.0),
     );
-    let cx = r.x1 - 16.0;
+    let cx = r.x1 - ui_px(16.0);
     let cy = r.y0 + r.height() * 0.5;
     let mut tri = BezPath::new();
-    tri.move_to((cx - 4.0, cy - 2.5));
-    tri.line_to((cx + 4.0, cy - 2.5));
-    tri.line_to((cx, cy + 3.0));
+    tri.move_to((cx - ui_px(4.0), cy - ui_px(2.5)));
+    tri.line_to((cx + ui_px(4.0), cy - ui_px(2.5)));
+    tri.line_to((cx, cy + ui_px(3.0)));
     tri.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &tri);
 }
@@ -892,7 +894,7 @@ fn draw_orient(scene: &mut Scene, theme: &Theme, p: Rect, land: Rect, portrait: 
         };
         scene.fill(Fill::NonZero, ID, fill, None, &r);
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             theme.text_dim.with_alpha(0.6),
             None,
@@ -900,12 +902,12 @@ fn draw_orient(scene: &mut Scene, theme: &Theme, p: Rect, land: Rect, portrait: 
         );
         // A little page glyph.
         let g = if r == p {
-            Rect::from_center_size(r.center(), (8.0, 11.0))
+            Rect::from_center_size(r.center(), (ui_px(8.0), ui_px(11.0)))
         } else {
-            Rect::from_center_size(r.center(), (12.0, 8.0))
+            Rect::from_center_size(r.center(), (ui_px(12.0), ui_px(8.0)))
         };
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             if on {
                 Color::from_rgb8(0xff, 0xff, 0xff)
@@ -929,7 +931,7 @@ fn draw_stepper(
 ) {
     for (r, s) in [(minus, "-"), (plus, "+")] {
         scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r);
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.6), None, &r);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim.with_alpha(0.6), None, &r);
         let w = text.measure(s, 14.0);
         text.draw(
             scene,
@@ -937,11 +939,11 @@ fn draw_stepper(
             14.0,
             theme.text,
             r.x0 + (r.width() - w) * 0.5,
-            r.y0 + r.height() * 0.5 + 5.0,
+            r.y0 + r.height() * 0.5 + ui_px(5.0),
         );
     }
     scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-    scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.5), None, &field);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim.with_alpha(0.5), None, &field);
     let s = n.to_string();
     let w = text.measure(&s, 12.5);
     text.draw(
@@ -950,7 +952,7 @@ fn draw_stepper(
         12.5,
         theme.text,
         field.x0 + (field.width() - w) * 0.5,
-        field.y0 + field.height() * 0.5 + 4.5,
+        field.y0 + field.height() * 0.5 + ui_px(4.5),
     );
 }
 
@@ -962,16 +964,16 @@ fn draw_check(
     label: &str,
     on: bool,
 ) {
-    let box_ = Rect::new(r.x0, r.y0 + 2.0, r.x0 + 16.0, r.y0 + 18.0);
+    let box_ = Rect::new(r.x0, r.y0 + ui_px(2.0), r.x0 + ui_px(16.0), r.y0 + ui_px(18.0));
     scene.fill(Fill::NonZero, ID, theme.bg, None, &box_);
-    scene.stroke(&Stroke::new(1.0), ID, theme.text_dim, None, &box_);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim, None, &box_);
     if on {
         let mut tick = BezPath::new();
-        tick.move_to((box_.x0 + 3.0, box_.y0 + 8.0));
-        tick.line_to((box_.x0 + 7.0, box_.y0 + 12.0));
-        tick.line_to((box_.x0 + 13.0, box_.y0 + 4.0));
-        scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &tick);
+        tick.move_to((box_.x0 + ui_px(3.0), box_.y0 + ui_px(8.0)));
+        tick.line_to((box_.x0 + ui_px(7.0), box_.y0 + ui_px(12.0)));
+        tick.line_to((box_.x0 + ui_px(13.0), box_.y0 + ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(2.0)), ID, theme.accent, None, &tick);
     }
-    text.draw(scene, label, 12.0, theme.text_dim, box_.x1 + 8.0, r.y0 + 14.0);
+    text.draw(scene, label, 12.0, theme.text_dim, box_.x1 + ui_px(8.0), r.y0 + ui_px(14.0));
 }
 

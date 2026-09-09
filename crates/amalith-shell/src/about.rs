@@ -11,6 +11,8 @@
 //! opens the repo in the browser; `Credits` flips the panel between the
 //! trademark notice and the dedication.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, Rect, RoundedRect, Vec2};
 use vello::peniko::{Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
 use vello::Scene;
@@ -53,21 +55,21 @@ life we have built together. Without her patience, belief, and unwavering \
 support, Amalith would not exist.";
 
 /// Card size in logical points.
-pub const WIDTH: f64 = 900.0;
-pub const HEIGHT: f64 = 633.0;
+pub fn metric_width() -> f64 { crate::metrics::with(|m| m.about_width) }
+pub fn metric_height() -> f64 { crate::metrics::with(|m| m.about_height) }
 
-const CORNER_RADIUS: f64 = 12.0;
+fn metric_corner_radius() -> f64 { crate::metrics::with(|m| m.about_corner_radius) }
 /// Left (black) panel width as a fraction of the card.
 const SPLIT: f64 = 0.39;
-const PAD_X: f64 = 40.0;
-const LOGO_Y: f64 = 40.0;
-const LOGO_W: f64 = 196.0;
-const BODY_TOP: f64 = 128.0;
+fn metric_pad_x() -> f64 { crate::metrics::with(|m| m.about_pad_x) }
+fn metric_logo_y() -> f64 { crate::metrics::with(|m| m.about_logo_y) }
+fn metric_logo_w() -> f64 { crate::metrics::with(|m| m.about_logo_w) }
+fn metric_body_top() -> f64 { crate::metrics::with(|m| m.about_body_top) }
 const BODY_SIZE: f32 = 13.0;
 const LINE_H: f32 = 1.5;
 const LINK_SIZE: f32 = 13.0;
-const LINK_GAP: f64 = 22.0;
-const WRAP_W: f32 = (WIDTH * SPLIT) as f32 - PAD_X as f32 - 24.0;
+fn metric_link_gap() -> f64 { crate::metrics::with(|m| m.about_link_gap) }
+fn metric_wrap_w() -> f32 { crate::metrics::with(|m| m.about_wrap_w) }
 
 const SCRIM: Color = Color::from_rgba8(0, 0, 0, 140);
 const BG: Color = Color::from_rgb8(10, 10, 12);
@@ -139,12 +141,12 @@ impl About {
     }
 
     fn body_layout(&self, tcx: &mut TextContext) -> Layout<Brush> {
-        tcx.wrap(self.body(), BODY_SIZE, INK, WRAP_W, LINE_H)
+        tcx.wrap(self.body(), BODY_SIZE, INK, metric_wrap_w(), LINE_H)
     }
 
     /// The card rectangle, in window coordinates.
     pub fn card_rect(&self) -> Rect {
-        Rect::from_origin_size(self.origin.to_point(), (WIDTH, HEIGHT))
+        Rect::from_origin_size(self.origin.to_point(), (metric_width(), metric_height()))
     }
 
     /// Pointer position in the body text's local space.
@@ -230,40 +232,40 @@ impl About {
             &Rect::new(0.0, 0.0, wl, hl),
         );
 
-        let ox = ((wl - WIDTH) / 2.0).round().max(0.0);
-        let oy = ((hl - HEIGHT) / 2.0).round().max(0.0);
+        let ox = ((wl - metric_width()) / 2.0).round().max(0.0);
+        let oy = ((hl - metric_height()) / 2.0).round().max(0.0);
         self.origin = Vec2::new(ox, oy);
         let o = Affine::translate((ox, oy));
 
-        let card = RoundedRect::new(ox, oy, ox + WIDTH, oy + HEIGHT, CORNER_RADIUS);
+        let card = RoundedRect::new(ox, oy, ox + metric_width(), oy + metric_height(), metric_corner_radius());
         scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &card);
 
         // Black card, then the illustration over the right panel.
-        scene.fill(Fill::NonZero, o, BG, None, &Rect::new(0.0, 0.0, WIDTH, HEIGHT));
-        let px = (WIDTH * SPLIT).round();
+        scene.fill(Fill::NonZero, o, BG, None, &Rect::new(0.0, 0.0, metric_width(), metric_height()));
+        let px = (metric_width() * SPLIT).round();
         scene.draw_image(
             &self.art,
             o * Affine::translate((px, 0.0))
                 * Affine::scale_non_uniform(
-                    (WIDTH - px) / self.art.width as f64,
-                    HEIGHT / self.art.height as f64,
+                    (metric_width() - px) / self.art.width as f64,
+                    metric_height() / self.art.height as f64,
                 ),
         );
 
         // Wordmark.
-        let logo_h = LOGO_W * self.logo.height as f64 / self.logo.width as f64;
+        let logo_h = metric_logo_w() * self.logo.height as f64 / self.logo.width as f64;
         scene.draw_image(
             &self.logo,
-            o * Affine::translate((PAD_X, LOGO_Y))
+            o * Affine::translate((metric_pad_x(), metric_logo_y()))
                 * Affine::scale_non_uniform(
-                    LOGO_W / self.logo.width as f64,
+                    metric_logo_w() / self.logo.width as f64,
                     logo_h / self.logo.height as f64,
                 ),
         );
 
         // Body text, selection highlight under it.
         let layout = self.body_layout(tcx);
-        self.text_origin = self.origin + Vec2::new(PAD_X, BODY_TOP);
+        self.text_origin = self.origin + Vec2::new(metric_pad_x(), metric_body_top());
         if let Some(sel) = self.sel {
             for (bb, _) in sel.geometry(&layout) {
                 scene.fill(
@@ -278,9 +280,9 @@ impl About {
         tcx.draw_layout(scene, &layout, INK, self.text_origin.x, self.text_origin.y);
 
         // Links along the bottom.
-        let base = oy + HEIGHT - 42.0;
-        self.hit_github = draw_link(scene, tcx, "Github", ox + PAD_X, base);
-        let tx = self.hit_github.x1 + LINK_GAP;
+        let base = oy + metric_height() - ui_px(42.0);
+        self.hit_github = draw_link(scene, tcx, "Github", ox + metric_pad_x(), base);
+        let tx = self.hit_github.x1 + metric_link_gap();
         let label = if self.credits { "About" } else { "Credits" };
         self.hit_toggle = draw_link(scene, tcx, label, tx, base);
 
@@ -297,9 +299,9 @@ fn draw_link(scene: &mut Scene, tcx: &mut TextContext, label: &str, x: f64, base
         Affine::IDENTITY,
         LINK,
         None,
-        &Rect::new(x, baseline + 3.0, x + w, baseline + 4.0),
+        &Rect::new(x, baseline + ui_px(3.0), x + w, baseline + ui_px(4.0)),
     );
-    Rect::new(x - 4.0, baseline - LINK_SIZE as f64, x + w + 4.0, baseline + 6.0)
+    Rect::new(x - ui_px(4.0), baseline - LINK_SIZE as f64, x + w + ui_px(4.0), baseline + ui_px(6.0))
 }
 
 /// Open `url` in the platform's default browser.

@@ -1,5 +1,7 @@
 //! Selection-count readout — "No Selection" / "N Selected". Always shown.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::Rect;
 use vello::Scene;
 
@@ -11,7 +13,7 @@ use super::{baseline, Ctx, SegKind, Segment};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Status,
     applies: |_| true,
-    measure: |_| 106.0,
+    measure: |_| ui_px(106.0),
     paint,
     hit: |_, _, _| Action::None,
 };

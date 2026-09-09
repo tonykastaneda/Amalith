@@ -7,6 +7,8 @@
 //! motion, and clipboard for free. It owns only the text + caret; the
 //! caller draws the box and decides what Enter / Esc / Tab mean.
 
+use crate::metrics::px as ui_px;
+
 use parley::PlainEditor;
 use vello::kurbo::{Affine, Point, Rect};
 use vello::peniko::{Brush, Fill};
@@ -41,6 +43,7 @@ pub struct TextField {
     ed: PlainEditor<Brush>,
     /// Screen rect of the whole box from the last `paint`, for hit-testing.
     rect: Rect,
+    ui_scale: f32,
 }
 
 impl TextField {
@@ -51,6 +54,7 @@ impl TextField {
         Self {
             ed,
             rect: Rect::ZERO,
+            ui_scale: 1.0,
         }
     }
 
@@ -98,8 +102,8 @@ impl TextField {
 
     fn local(&self, p: Point) -> (f32, f32) {
         (
-            (p.x - self.rect.x0 - INSET) as f32,
-            (p.y - self.rect.y0 - self.rect.height() * 0.5 + FONT_PX as f64 * 0.5) as f32,
+            (p.x - self.rect.x0 - ui_px(INSET)) as f32,
+            (p.y - self.rect.y0 - self.rect.height() * 0.5 + FONT_PX as f64 * self.ui_scale as f64 * 0.5) as f32,
         )
     }
 
@@ -235,8 +239,12 @@ impl TextField {
         caret_on: bool,
     ) {
         self.rect = box_;
-        let inner = Rect::new(box_.x0 + INSET, box_.y0, box_.x1 - INSET, box_.y1);
-        let baseline_y = box_.y0 + box_.height() * 0.5 - FONT_PX as f64 * 0.5;
+        if self.ui_scale != tcx.ui_scale() {
+            self.ui_scale = tcx.ui_scale();
+            self.ed.edit_styles().insert(parley::StyleProperty::FontSize(FONT_PX * self.ui_scale));
+        }
+        let inner = Rect::new(box_.x0 + ui_px(INSET), box_.y0, box_.x1 - ui_px(INSET), box_.y1);
+        let baseline_y = box_.y0 + box_.height() * 0.5 - FONT_PX as f64 * self.ui_scale as f64 * 0.5;
         let xf = Affine::translate((inner.x0, baseline_y));
 
         if self.is_empty() {
@@ -246,7 +254,7 @@ impl TextField {
                 FONT_PX,
                 theme.text_dim,
                 inner.x0,
-                box_.y0 + box_.height() * 0.5 + 4.5,
+                box_.y0 + box_.height() * 0.5 + ui_px(4.5),
             );
             return;
         }

@@ -7,6 +7,8 @@
 //! the command list (display text here, the real action kept parallel in
 //! `App`) and runs whatever row the palette reports as chosen.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
@@ -16,11 +18,11 @@ use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
 
-const PW: f64 = 560.0;
-const FIELD_H: f64 = 42.0;
-const ROW_H: f64 = 30.0;
+fn metric_pw() -> f64 { crate::metrics::with(|m| m.palette_pw) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.palette_field_h) }
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.palette_row_h) }
 const MAX_ROWS: usize = 9;
-const PAD: f64 = 8.0;
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.palette_pad) }
 const TOP_FRAC: f64 = 0.13;
 
 /// One searchable row's display text. `hint` is the small right-aligned
@@ -150,52 +152,52 @@ impl Palette {
         );
 
         let visible = self.filtered.len().min(MAX_ROWS);
-        let body_h = FIELD_H + PAD + visible as f64 * ROW_H + PAD;
-        let x0 = ((wl - PW) * 0.5).round().max(0.0);
+        let body_h = metric_field_h() + metric_pad() + visible as f64 * metric_row_h() + metric_pad();
+        let x0 = ((wl - metric_pw()) * 0.5).round().max(0.0);
         let y0 = (hl * TOP_FRAC).round();
-        self.panel = Rect::new(x0, y0, x0 + PW, y0 + body_h);
-        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &self.panel.to_rounded_rect(10.0));
+        self.panel = Rect::new(x0, y0, x0 + metric_pw(), y0 + body_h);
+        scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &self.panel.to_rounded_rect(ui_px(10.0)));
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             theme.border,
             None,
-            &self.panel.to_rounded_rect(10.0),
+            &self.panel.to_rounded_rect(ui_px(10.0)),
         );
 
         // Search field — a real editable text field.
-        let field = Rect::new(x0 + PAD, y0 + PAD, x0 + PW - PAD, y0 + FIELD_H - PAD * 0.5);
-        scene.fill(Fill::NonZero, ID, theme.bg, None, &field.to_rounded_rect(6.0));
+        let field = Rect::new(x0 + metric_pad(), y0 + metric_pad(), x0 + metric_pw() - metric_pad(), y0 + metric_field_h() - metric_pad() * 0.5);
+        scene.fill(Fill::NonZero, ID, theme.bg, None, &field.to_rounded_rect(ui_px(6.0)));
         self.field.paint(scene, text, theme, field, "Search commands…", true);
         scene.fill(
             Fill::NonZero,
             ID,
             theme.border,
             None,
-            &Rect::new(x0 + PAD, field.y1 + PAD * 0.5, x0 + PW - PAD, field.y1 + PAD * 0.5 + 1.0),
+            &Rect::new(x0 + metric_pad(), field.y1 + metric_pad() * 0.5, x0 + metric_pw() - metric_pad(), field.y1 + metric_pad() * 0.5 + 1.0),
         );
 
         // Rows.
         self.rows.clear();
-        let list_top = y0 + FIELD_H + PAD;
+        let list_top = y0 + metric_field_h() + metric_pad();
         if self.filtered.is_empty() {
             text.draw(
                 scene,
                 "No matching commands",
                 13.0,
                 theme.text_dim,
-                x0 + PAD + 12.0,
-                list_top + ROW_H * 0.5 + 4.0,
+                x0 + metric_pad() + ui_px(12.0),
+                list_top + metric_row_h() * 0.5 + ui_px(4.0),
             );
         }
         for row in 0..visible {
             let fi = self.top + row;
             let Some(&orig) = self.filtered.get(fi) else { break };
             let e = &self.entries[orig];
-            let r = Rect::new(x0 + PAD * 0.5, list_top + row as f64 * ROW_H, x0 + PW - PAD * 0.5, list_top + (row as f64 + 1.0) * ROW_H);
+            let r = Rect::new(x0 + metric_pad() * 0.5, list_top + row as f64 * metric_row_h(), x0 + metric_pw() - metric_pad() * 0.5, list_top + (row as f64 + 1.0) * metric_row_h());
             let on = fi == self.sel;
             if on {
-                scene.fill(Fill::NonZero, ID, theme.accent, None, &r.to_rounded_rect(5.0));
+                scene.fill(Fill::NonZero, ID, theme.accent, None, &r.to_rounded_rect(ui_px(5.0)));
             }
             let title_col = if on { theme.on_accent } else { theme.text };
             let hint_col = if on {
@@ -203,19 +205,19 @@ impl Palette {
             } else {
                 theme.text_dim
             };
-            text.draw(scene, &e.title, 13.5, title_col, r.x0 + 12.0, r.center().y + 4.5);
+            text.draw(scene, &e.title, 13.5, title_col, r.x0 + ui_px(12.0), r.center().y + ui_px(4.5));
             if !e.hint.is_empty() {
                 let hw = text.measure(&e.hint, 11.5);
-                text.draw(scene, &e.hint, 11.5, hint_col, r.x1 - 12.0 - hw, r.center().y + 4.0);
+                text.draw(scene, &e.hint, 11.5, hint_col, r.x1 - ui_px(12.0) - hw, r.center().y + ui_px(4.0));
             }
             self.rows.push((r, orig));
         }
 
         // Scroll indicator.
         if self.filtered.len() > MAX_ROWS {
-            let track = Rect::new(self.panel.x1 - 5.0, list_top, self.panel.x1 - 2.0, list_top + MAX_ROWS as f64 * ROW_H);
+            let track = Rect::new(self.panel.x1 - ui_px(5.0), list_top, self.panel.x1 - ui_px(2.0), list_top + MAX_ROWS as f64 * metric_row_h());
             let frac = MAX_ROWS as f64 / self.filtered.len() as f64;
-            let th = (track.height() * frac).max(20.0);
+            let th = (track.height() * frac).max(ui_px(20.0));
             let denom = (self.filtered.len() - MAX_ROWS) as f64;
             let ty = track.y0 + (track.height() - th) * (self.top as f64 / denom);
             scene.fill(
@@ -223,7 +225,7 @@ impl Palette {
                 ID,
                 Color::from_rgba8(0x9a, 0x9a, 0x9a, 0x88),
                 None,
-                &Rect::new(track.x0, ty, track.x1, ty + th).to_rounded_rect(1.5),
+                &Rect::new(track.x0, ty, track.x1, ty + th).to_rounded_rect(ui_px(1.5)),
             );
         }
     }

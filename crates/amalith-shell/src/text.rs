@@ -66,6 +66,7 @@ impl TextLayoutKey {
 
 /// Owns the font database and parley's reusable layout buffers.
 pub struct TextContext {
+    ui_scale: f32,
     fonts: FontContext,
     layout: LayoutContext<Brush>,
     /// Memoized single-line layouts, keyed by `(text, size.to_bits(),
@@ -88,12 +89,19 @@ impl Default for TextContext {
 impl TextContext {
     pub fn new() -> Self {
         Self {
+            ui_scale: 1.0,
             fonts: FontContext::new(),
             layout: LayoutContext::new(),
             cache: HashMap::new(),
             td_cache: HashMap::new(),
         }
     }
+
+    pub fn set_ui_scale(&mut self, scale: f64) {
+        self.ui_scale = crate::metrics::normalize_scale(scale) as f32;
+    }
+
+    pub fn ui_scale(&self) -> f32 { self.ui_scale }
 
     /// Lend the font DB and layout scratch buffers together — for
     /// `parley::PlainEditor` (see [`crate::textedit`]).
@@ -120,6 +128,7 @@ impl TextContext {
     /// and reused every frame — parley shaping is the bulk of per-frame
     /// text cost.
     fn build(&mut self, text: &str, size: f32, bold: bool) -> &Layout<Brush> {
+        let size = size * self.ui_scale;
         let key = (text.to_owned(), size.to_bits(), bold);
         if !self.cache.contains_key(&key) {
             if self.cache.len() >= 1024 {
@@ -160,6 +169,7 @@ impl TextContext {
         wrap_width: f32,
         line_height: f32,
     ) -> Layout<Brush> {
+        let size = size * self.ui_scale;
         let mut builder = self.layout.ranged_builder(&mut self.fonts, text, 1.0, true);
         builder.push_default(StyleProperty::FontSize(size));
         builder.push_default(StyleProperty::LineHeight(LineHeight::FontSizeRelative(
@@ -237,6 +247,15 @@ impl TextContext {
         self.draw_weighted(scene, text, size, color, x, y, false);
     }
 
+    /// Fixed logical-size annotations (rulers and canvas labels).
+    pub fn draw_fixed(&mut self, scene: &mut Scene, text: &str, size: f32, color: Color, x: f64, y: f64) {
+        self.draw(scene, text, size / self.ui_scale, color, x, y);
+    }
+
+    pub fn draw_bold_fixed(&mut self, scene: &mut Scene, text: &str, size: f32, color: Color, x: f64, y: f64) {
+        self.draw_bold(scene, text, size / self.ui_scale, color, x, y);
+    }
+
     /// Like [`Self::draw`] but bold.
     pub fn draw_bold(
         &mut self,
@@ -279,7 +298,11 @@ impl TextContext {
     /// Draw `text` as a column of upright glyphs, each centred on `cx`
     /// and stacked `row_h` px apart starting with its baseline at `y`.
     /// One layout, one `draw_glyphs` call — for the vertical ruler.
-    pub fn draw_column(
+    pub fn draw_column(&mut self, scene: &mut Scene, text: &str, size: f32, color: Color, cx: f64, y: f64, row_h: f64) {
+        self.draw_column_fixed(scene, text, size * self.ui_scale, color, cx, y, row_h);
+    }
+
+    pub fn draw_column_fixed(
         &mut self,
         scene: &mut Scene,
         text: &str,
@@ -289,7 +312,7 @@ impl TextContext {
         y: f64,
         row_h: f64,
     ) {
-        let layout = self.build(text, size, false);
+        let layout = self.build(text, size / self.ui_scale, false);
         for line in layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {

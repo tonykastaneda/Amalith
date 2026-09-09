@@ -1,6 +1,8 @@
 //! The main document view: canvas, rails, tab strip, app bar, context
 //! bar, and the drag/flyout overlays layered over them.
 
+use crate::metrics::px as ui_px;
+
 use super::super::*;
 
 /// How a ruler guide line should be drawn this frame.
@@ -146,7 +148,7 @@ pub(in crate::app) fn paint_main(
     // Full canvas region between the rails; the rulers (when on) sit in a
     // strip along its top / left, and content is inset to match
     // `App::canvas_viewport`.
-    let full = Rect::new(left_x, CHROME_TOP, right_x.max(left_x), height);
+    let full = Rect::new(left_x, metric_chrome_top(), right_x.max(left_x), height);
     let viewport = if rulers {
         Rect::new(full.x0 + rulers::THICK, full.y0 + rulers::THICK, full.x1, full.y1)
     } else {
@@ -526,25 +528,25 @@ pub(in crate::app) fn paint_main(
                 ID,
                 theme.accent,
                 None,
-                &Rect::new(whole.x0, whole.y1 - 2.0, whole.x1, whole.y1),
+                &Rect::new(whole.x0, whole.y1 - ui_px(2.0), whole.x1, whole.y1),
             );
         }
         // Close ×.
         let xc = close.center();
         let cc = if is_active { theme.text } else { theme.text_dim };
         let mut xg = BezPath::new();
-        xg.move_to((xc.x - 4.0, xc.y - 4.0));
-        xg.line_to((xc.x + 4.0, xc.y + 4.0));
-        xg.move_to((xc.x + 4.0, xc.y - 4.0));
-        xg.line_to((xc.x - 4.0, xc.y + 4.0));
-        scene.stroke(&Stroke::new(1.3), ID, cc, None, &xg);
+        xg.move_to((xc.x - ui_px(4.0), xc.y - ui_px(4.0)));
+        xg.line_to((xc.x + ui_px(4.0), xc.y + ui_px(4.0)));
+        xg.move_to((xc.x + ui_px(4.0), xc.y - ui_px(4.0)));
+        xg.line_to((xc.x - ui_px(4.0), xc.y + ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.3)), ID, cc, None, &xg);
         text.draw(
             scene,
             &tab_labels[i],
             12.6,
             if is_active { theme.text } else { theme.text_dim },
-            close.x1 + 6.0,
-            tab_strip.y0 + TAB_BAR_H * 0.5 + 4.0,
+            close.x1 + ui_px(6.0),
+            tab_strip.y0 + metric_tab_bar_h() * 0.5 + ui_px(4.0),
         );
         // Divider between tabs.
         if i + 1 < tab_labels.len() {
@@ -553,7 +555,7 @@ pub(in crate::app) fn paint_main(
                 ID,
                 theme.border,
                 None,
-                &Rect::new(whole.x1, tab_strip.y0 + 5.0, whole.x1 + 1.0, tab_strip.y1 - 5.0),
+                &Rect::new(whole.x1, tab_strip.y0 + ui_px(5.0), whole.x1 + 1.0, tab_strip.y1 - ui_px(5.0)),
             );
         }
     }
@@ -585,9 +587,9 @@ pub(in crate::app) fn paint_main(
         font_families,
         layer_query,
         layer_search_focused,
-        layer_scroll: panel_scroll.get(&PanelId("layers")).copied().unwrap_or(0.0),
+        layer_scroll: panel_scroll.get(&PanelId(PanelKind::Layers)).copied().unwrap_or(0.0),
         layer_drop,
-        links_scroll: panel_scroll.get(&PanelId("links")).copied().unwrap_or(0.0),
+        links_scroll: panel_scroll.get(&PanelId(PanelKind::Links)).copied().unwrap_or(0.0),
         selected_asset,
         color_mode,
         cmyk_profile,
@@ -620,7 +622,7 @@ pub(in crate::app) fn paint_main(
                 theme,
                 &mut |p| {
                     text.measure(&tab_label(p), 12.0) + theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-                        + chrome::PANEL_TAB_CLOSE_W
+                        + chrome::metric_panel_tab_close_w()
                 },
                 // Docked masters are never the bespoke float-alone kind
                 // (the colour picker, a shape dialog, Export for Screens
@@ -676,8 +678,8 @@ pub(in crate::app) fn paint_main(
             }
             // Bar on the canvas-facing edge — the whole-Master resize handle.
             let edge_rect = match side {
-                Side::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
-                Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
+                Side::Left => Rect::new(rect.x1 - metric_rail_edge(), rect.y0, rect.x1, rect.y1),
+                Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + metric_rail_edge(), rect.y1),
             };
             scene.fill(Fill::NonZero, ID, theme.splitter, None, &edge_rect);
 
@@ -695,10 +697,10 @@ pub(in crate::app) fn paint_main(
     }
     if let Some((row, pid, side)) = open_flyout {
         let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
-        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
-        let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
+        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
         chrome::paint_flyout_chrome(scene, bounds, header, close, &tab_label(pid), theme, text);
-        let body = Rect::new(bounds.x0 + 8.0, header.y1 + 8.0, bounds.x1 - 8.0, bounds.y1 - 8.0);
+        let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
         scene.push_clip_layer(Fill::NonZero, ID, &body);
         panels::paint(scene, text, pid, body, &ctx);
         scene.pop_layer();
@@ -810,7 +812,7 @@ pub(in crate::app) fn paint_main(
         if tool == Tool::Select && over_selectable {
             let c = vello::kurbo::Point::new(x0 + sz * 0.88, y0 + sz * 0.9);
             let a = 3.2;
-            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            let ink = crate::icons::CURSOR_INK;
             let halo = vello::peniko::Color::WHITE;
             scene.fill(
                 Fill::NonZero,
@@ -832,7 +834,7 @@ pub(in crate::app) fn paint_main(
             use vello::kurbo::{Line, Stroke};
             let c = vello::kurbo::Point::new(x0 + sz * 0.78, y0 + sz * 0.30);
             let a = 4.0;
-            let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+            let ink = crate::icons::CURSOR_INK;
             let halo = vello::peniko::Color::WHITE;
             for (col, w) in [(halo, 4.0), (ink, 2.0)] {
                 scene.stroke(&Stroke::new(w), Affine::IDENTITY, col, None,
@@ -899,7 +901,7 @@ pub(in crate::app) fn paint_main(
                     Rect::new(x0, y0, x0 + sz, y0 + sz),
                 );
                 use vello::kurbo::Stroke;
-                let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+                let ink = crate::icons::CURSOR_INK;
                 let paper = vello::peniko::Color::WHITE;
                 let bx = x0 + sz * 0.58;
                 let by = y0 + sz * 0.34;
@@ -913,7 +915,7 @@ pub(in crate::app) fn paint_main(
             CanvasCursor::LoadedText => {
                 // A little page-of-text glyph at the pointer.
                 use vello::kurbo::{Line, Stroke};
-                let ink = vello::peniko::Color::from_rgb8(0x1a, 0x1a, 0x1a);
+                let ink = crate::icons::CURSOR_INK;
                 let paper = vello::peniko::Color::WHITE;
                 let x0 = pointer.x + 2.0;
                 let y0 = pointer.y + 2.0;
@@ -940,15 +942,15 @@ pub(in crate::app) fn paint_main(
     // Top app bar (drawn last so nothing bleeds over it). macOS keeps the
     // traffic lights floating over its left end. On Windows APP_BAR_H is 0
     // — the native title bar and menu bar own this space — so skip it.
-    if APP_BAR_H > 0.0 {
-        let bar = Rect::new(0.0, 0.0, width, APP_BAR_H);
+    if metric_app_bar_h() > 0.0 {
+        let bar = Rect::new(0.0, 0.0, width, metric_app_bar_h());
         scene.fill(Fill::NonZero, ID, theme.app_bar, None, &bar);
         scene.fill(
             Fill::NonZero,
             ID,
             theme.border,
             None,
-            &Rect::new(0.0, APP_BAR_H - 1.0, width, APP_BAR_H),
+            &Rect::new(0.0, metric_app_bar_h() - 1.0, width, metric_app_bar_h()),
         );
         // The name sits in this strip only where the OS title bar is
         // hidden (macOS). Elsewhere the native title bar already shows it.
@@ -962,7 +964,7 @@ pub(in crate::app) fn paint_main(
                 12.5,
                 Color::from_rgb8(0xcd, 0xcd, 0xcd),
                 (width - tw) * 0.5,
-                APP_BAR_H * 0.5 + 4.5,
+                metric_app_bar_h() * 0.5 + ui_px(4.5),
             );
         }
         if let Some(status) = status {
@@ -972,8 +974,8 @@ pub(in crate::app) fn paint_main(
                 status,
                 11.5,
                 Color::from_rgb8(0x9a, 0x9a, 0x9a),
-                width - sw - 12.0,
-                APP_BAR_H * 0.5 + 4.0,
+                width - sw - ui_px(12.0),
+                metric_app_bar_h() * 0.5 + ui_px(4.0),
             );
         }
     }
@@ -985,9 +987,9 @@ pub(in crate::app) fn paint_main(
 /// Scale/Shear group flyouts.
 fn paint_flyout_bg(scene: &mut Scene, theme: &Theme, anchor: Rect, n: usize) {
     let last = tool_flyout_row(anchor, n - 1);
-    let bg = Rect::new(anchor.x1 + 4.0, anchor.y0 - 3.0, last.x1 + 3.0, last.y1 + 3.0);
-    scene.fill(Fill::NonZero, ID, theme.bg, None, &bg.to_rounded_rect(5.0));
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &bg.to_rounded_rect(5.0));
+    let bg = Rect::new(anchor.x1 + ui_px(4.0), anchor.y0 - ui_px(3.0), last.x1 + ui_px(3.0), last.y1 + ui_px(3.0));
+    scene.fill(Fill::NonZero, ID, theme.bg, None, &bg.to_rounded_rect(ui_px(5.0)));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &bg.to_rounded_rect(ui_px(5.0)));
 }
 
 /// One labeled flyout row: icon + name + shortcut, with a small marker
@@ -1006,19 +1008,19 @@ fn paint_flyout_row(
         scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &r);
     }
     if on {
-        let bullet = Rect::from_center_size(Point::new(r.x0 + 12.0, r.center().y), (5.0, 5.0));
+        let bullet = Rect::from_center_size(Point::new(r.x0 + ui_px(12.0), r.center().y), (ui_px(5.0), ui_px(5.0)));
         scene.fill(Fill::NonZero, ID, theme.text_dim, None, &bullet);
     }
     let ink = if on { theme.accent } else { theme.text_dim };
-    let icon_box = Rect::from_center_size(Point::new(r.x0 + 32.0, r.center().y), (20.0, 20.0));
+    let icon_box = Rect::from_center_size(Point::new(r.x0 + ui_px(32.0), r.center().y), (ui_px(20.0), ui_px(20.0)));
     icons::draw(scene, t.icon(), icon_box, ink);
     let label_col = if on { theme.accent } else { theme.text };
     let label = format!("{} Tool", t.label());
-    text.draw(scene, &label, 12.5, label_col, r.x0 + 48.0, r.center().y + 4.5);
+    text.draw(scene, &label, 12.5, label_col, r.x0 + ui_px(48.0), r.center().y + ui_px(4.5));
     let key = t.key();
     if !key.is_empty() {
         let s = format!("({key})");
         let sw = text.measure(&s, 11.0);
-        text.draw(scene, &s, 11.0, theme.text_dim, r.x1 - sw - 10.0, r.center().y + 4.0);
+        text.draw(scene, &s, 11.0, theme.text_dim, r.x1 - sw - ui_px(10.0), r.center().y + ui_px(4.0));
     }
 }

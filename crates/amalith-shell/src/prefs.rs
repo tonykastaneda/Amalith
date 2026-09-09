@@ -5,6 +5,8 @@
 //! v1 has one category (General) with a few genuinely-wired settings; more
 //! categories slot into [`CATEGORIES`] as they gain real controls.
 
+use crate::metrics::px as ui_px;
+
 use std::fmt;
 
 use vello::kurbo::{Affine, Point, Rect, Stroke};
@@ -174,7 +176,7 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
 }
 
 /// A non-tool command that carries a user-remappable shortcut.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PrefAction {
     SwapPaints,
     DefaultPaints,
@@ -253,6 +255,8 @@ pub enum BindTarget {
 /// working copy and only writes back on OK.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Settings {
+    /// Chrome size, independent of monitor DPI and document zoom.
+    pub ui_scale: f64,
     /// Arrow-key nudge distance in px (Shift ×10).
     pub nudge_step: f64,
     /// Whether hover tooltips are shown.
@@ -272,6 +276,10 @@ pub struct Settings {
     /// Debug: inset (logical px) from the viewport where off-screen
     /// objects stop being drawn / decoded. Larger = cull further out.
     pub cull_inset: f64,
+    /// Selection handle / grab-radius size — Illustrator's own separate
+    /// "Selection & Anchor Display" preference. Independent of
+    /// `ui_scale`; see [`crate::handle_scale`].
+    pub handle_size: crate::handle_scale::HandleSize,
 }
 
 impl Settings {
@@ -286,6 +294,7 @@ impl Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            ui_scale: 1.0,
             nudge_step: 1.0,
             show_tooltips: true,
             home_on_last_close: true,
@@ -295,6 +304,7 @@ impl Default for Settings {
             show_fps: true,
             show_cull_outline: false,
             cull_inset: crate::canvas::CULL_INSET,
+            handle_size: crate::handle_scale::HandleSize::default(),
         }
     }
 }
@@ -311,10 +321,10 @@ pub const ACCENTS: [(&str, [u8; 3]); 6] = [
 
 pub const CATEGORIES: [&str; 4] = ["General", "Keyboard", "Scripts", "Debug"];
 
-const W: f64 = 660.0;
-const H: f64 = 440.0;
-const SIDEBAR_W: f64 = 168.0;
-const PAD: f64 = 22.0;
+fn metric_w() -> f64 { crate::metrics::with(|m| m.prefs_w) }
+fn metric_h() -> f64 { crate::metrics::with(|m| m.prefs_h) }
+fn metric_sidebar_w() -> f64 { crate::metrics::with(|m| m.prefs_sidebar_w) }
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.prefs_pad) }
 
 pub struct Prefs {
     pub working: Settings,
@@ -336,6 +346,8 @@ pub struct Prefs {
     cull_up: Rect,
     cull_down: Rect,
     accent_swatches: Vec<(Rect, [u8; 3])>,
+    scale_buttons: Vec<(Rect, f64)>,
+    handle_size_buttons: Vec<(Rect, crate::handle_scale::HandleSize)>,
     /// Keyboard page: (row rect, which binding it edits).
     bind_rows: Vec<(Rect, BindTarget)>,
     /// The binding currently capturing a keypress, if any.
@@ -369,6 +381,8 @@ pub enum Hit {
     ToggleCullOutline,
     SetCullInset(f64),
     SetAccent([u8; 3]),
+    SetUiScale(f64),
+    SetHandleSize(crate::handle_scale::HandleSize),
     /// Keyboard page: start capturing a key for this binding.
     StartRecording(BindTarget),
     /// Keyboard page: restore the factory shortcuts.
@@ -418,6 +432,8 @@ impl Prefs {
             cull_up: Rect::ZERO,
             cull_down: Rect::ZERO,
             accent_swatches: Vec::new(),
+            scale_buttons: Vec::new(),
+            handle_size_buttons: Vec::new(),
             bind_rows: Vec::new(),
             recording: None,
             page_scroll: crate::scroll_view::ScrollView::new(),
@@ -456,7 +472,7 @@ impl Prefs {
     }
 
     fn card(&self) -> Rect {
-        Rect::from_origin_size(self.origin, (W, H))
+        Rect::from_origin_size(self.origin, (metric_w(), metric_h()))
     }
 
     pub fn on_press(&mut self, p: Point) -> Hit {
@@ -504,6 +520,12 @@ impl Prefs {
         if self.cull_down.contains(p) {
             return Hit::SetCullInset((self.working.cull_inset - 8.0).max(0.0));
         }
+        for (r, scale) in &self.scale_buttons {
+            if r.contains(p) { return Hit::SetUiScale(*scale); }
+        }
+        for (r, size) in &self.handle_size_buttons {
+            if r.contains(p) { return Hit::SetHandleSize(*size); }
+        }
         for (r, rgb) in &self.accent_swatches {
             if r.contains(p) {
                 return Hit::SetAccent(*rgb);
@@ -541,31 +563,31 @@ impl Prefs {
             None,
             &Rect::new(0.0, 0.0, wl, hl),
         );
-        let ox = ((wl - W) / 2.0).round().max(0.0);
-        let oy = ((hl - H) / 2.0).round().max(0.0);
+        let ox = ((wl - metric_w()) / 2.0).round().max(0.0);
+        let oy = ((hl - metric_h()) / 2.0).round().max(0.0);
         self.origin = Point::new(ox, oy);
         let card = self.card();
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.panel_bg, None, &card.to_rounded_rect(8.0));
-        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &card.to_rounded_rect(8.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.panel_bg, None, &card.to_rounded_rect(ui_px(8.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &card.to_rounded_rect(ui_px(8.0)));
 
         // Title bar.
         let tw = tcx.measure("Preferences", 13.0);
-        tcx.draw(scene, "Preferences", 13.0, theme.text, card.center().x - tw / 2.0, oy + 22.0);
+        tcx.draw(scene, "Preferences", 13.0, theme.text, card.center().x - tw / 2.0, oy + ui_px(22.0));
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
             theme.border,
             None,
-            &Rect::new(ox, oy + 36.0, ox + W, oy + 37.0),
+            &Rect::new(ox, oy + ui_px(36.0), ox + metric_w(), oy + ui_px(37.0)),
         );
 
         // Category sidebar.
         self.cat_rows.clear();
-        let mut y = oy + 48.0;
+        let mut y = oy + ui_px(48.0);
         for (i, name) in CATEGORIES.iter().enumerate() {
-            let row = Rect::new(ox + 8.0, y, ox + SIDEBAR_W - 8.0, y + 26.0);
+            let row = Rect::new(ox + ui_px(8.0), y, ox + metric_sidebar_w() - ui_px(8.0), y + ui_px(26.0));
             if i == self.category {
-                scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &row.to_rounded_rect(4.0));
+                scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &row.to_rounded_rect(ui_px(4.0)));
             } else if row.contains(Point::ZERO) {
                 // no-op
             }
@@ -574,22 +596,24 @@ impl Prefs {
             } else {
                 theme.text
             };
-            tcx.draw(scene, name, 12.5, col, row.x0 + 10.0, row.y0 + 17.0);
+            tcx.draw(scene, name, 12.5, col, row.x0 + ui_px(10.0), row.y0 + ui_px(17.0));
             self.cat_rows.push(row);
-            y += 28.0;
+            y += ui_px(28.0);
         }
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
             theme.border,
             None,
-            &Rect::new(ox + SIDEBAR_W, oy + 37.0, ox + SIDEBAR_W + 1.0, oy + H - 52.0),
+            &Rect::new(ox + metric_sidebar_w(), oy + ui_px(37.0), ox + metric_sidebar_w() + 1.0, oy + metric_h() - ui_px(52.0)),
         );
 
-        let px = ox + SIDEBAR_W + PAD;
+        let px = ox + metric_sidebar_w() + metric_pad();
 
         // Rects from the page that isn't shown must not stay hittable.
         self.accent_swatches.clear();
+        self.scale_buttons.clear();
+        self.handle_size_buttons.clear();
         self.bind_rows.clear();
         self.inc_up = Rect::ZERO;
         self.inc_down = Rect::ZERO;
@@ -607,9 +631,9 @@ impl Prefs {
         self.preset_items.clear();
 
         let footer = |s: &mut Self, scene: &mut Scene, tcx: &mut TextContext| {
-            let by = oy + H - 40.0;
-            s.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
-            s.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+            let by = oy + metric_h() - ui_px(40.0);
+            s.ok = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(76.0), by, "OK", true);
+            s.cancel = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(174.0), by, "Cancel", false);
         };
 
         if self.category == 1 {
@@ -631,31 +655,31 @@ impl Prefs {
         }
 
         // General page.
-        let mut cy = oy + 60.0;
+        let mut cy = oy + ui_px(60.0);
         tcx.draw(scene, "General", 13.0, theme.text, px, cy);
-        cy += 30.0;
+        cy += ui_px(30.0);
 
-        tcx.draw(scene, "Keyboard Increment", 12.0, theme.text_dim, px, cy + 14.0);
-        let fx = px + 170.0;
-        let field = Rect::new(fx, cy, fx + 90.0, cy + 22.0);
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(4.0));
+        tcx.draw(scene, "Keyboard Increment", 12.0, theme.text_dim, px, cy + ui_px(14.0));
+        let fx = px + ui_px(170.0);
+        let field = Rect::new(fx, cy, fx + ui_px(90.0), cy + ui_px(22.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(ui_px(4.0)));
         tcx.draw(
             scene,
             &format!("{} pt", trim(self.working.nudge_step)),
             12.0,
             theme.text,
-            fx + 8.0,
-            cy + 15.0,
+            fx + ui_px(8.0),
+            cy + ui_px(15.0),
         );
-        self.inc_up = Rect::new(field.x1 - 16.0, cy + 1.0, field.x1, cy + 11.0);
-        self.inc_down = Rect::new(field.x1 - 16.0, cy + 11.0, field.x1, cy + 21.0);
+        self.inc_up = Rect::new(field.x1 - ui_px(16.0), cy + 1.0, field.x1, cy + ui_px(11.0));
+        self.inc_down = Rect::new(field.x1 - ui_px(16.0), cy + ui_px(11.0), field.x1, cy + ui_px(21.0));
         tri(scene, self.inc_up.center(), true, theme.text_dim);
         tri(scene, self.inc_down.center(), false, theme.text_dim);
-        cy += 44.0;
+        cy += ui_px(44.0);
 
         self.check_tips = checkbox(scene, tcx, theme, px, cy, "Show Tool Tips", self.working.show_tooltips);
-        cy += 30.0;
+        cy += ui_px(30.0);
         self.check_home = checkbox(
             scene,
             tcx,
@@ -665,37 +689,60 @@ impl Prefs {
             "Show the Home Screen when the last document closes",
             self.working.home_on_last_close,
         );
-        cy += 40.0;
+        cy += ui_px(40.0);
 
         // Accent colour swatches.
-        tcx.draw(scene, "Accent Color", 12.0, theme.text_dim, px, cy + 12.0);
-        let mut sx = px + 170.0;
+        tcx.draw(scene, "Accent Color", 12.0, theme.text_dim, px, cy + ui_px(12.0));
+        let mut sx = px + ui_px(170.0);
         for (_, rgb) in ACCENTS {
-            let sw = Rect::new(sx, cy, sx + 20.0, cy + 20.0);
+            let sw = Rect::new(sx, cy, sx + ui_px(20.0), cy + ui_px(20.0));
             scene.fill(
                 Fill::NonZero,
                 Affine::IDENTITY,
                 Color::from_rgb8(rgb[0], rgb[1], rgb[2]),
                 None,
-                &sw.to_rounded_rect(4.0),
+                &sw.to_rounded_rect(ui_px(4.0)),
             );
             if rgb == self.working.accent {
                 scene.stroke(
-                    &Stroke::new(2.0),
+                    &Stroke::new(ui_px(2.0)),
                     Affine::IDENTITY,
                     theme.text,
                     None,
-                    &sw.inflate(2.5, 2.5).to_rounded_rect(6.0),
+                    &sw.inflate(ui_px(2.5), ui_px(2.5)).to_rounded_rect(ui_px(6.0)),
                 );
             }
             self.accent_swatches.push((sw, rgb));
-            sx += 30.0;
+            sx += ui_px(30.0);
         }
 
+        cy += ui_px(42.0);
+        tcx.draw(scene, "UI Scale", 12.0, theme.text_dim, px, cy + ui_px(16.0));
+        for (i, scale) in [1.0, 1.25, 1.5].into_iter().enumerate() {
+            let x = px + ui_px(170.0) + i as f64 * ui_px(78.0);
+            let r = Rect::new(x, cy, x + ui_px(70.0), cy + ui_px(26.0));
+            crate::widgets::button(scene, tcx, theme, r, &format!("{:.0}%", scale * 100.0), self.working.ui_scale == scale);
+            self.scale_buttons.push((r, scale));
+        }
+        tcx.draw(scene, "Native menu size follows system settings.", 11.0, theme.text_dim, px, cy + ui_px(48.0));
+
+        // Selection & anchor handle size — its own preference, independent
+        // of UI Scale above (Illustrator's own Selection & Anchor Display
+        // preference is likewise separate from its general UI scaling).
+        cy += ui_px(60.0);
+        tcx.draw(scene, "Handle Size", 12.0, theme.text_dim, px, cy + ui_px(16.0));
+        for (i, size) in crate::handle_scale::HandleSize::ALL.into_iter().enumerate() {
+            let x = px + ui_px(170.0) + i as f64 * ui_px(78.0);
+            let r = Rect::new(x, cy, x + ui_px(70.0), cy + ui_px(26.0));
+            crate::widgets::button(scene, tcx, theme, r, size.label(), self.working.handle_size == size);
+            self.handle_size_buttons.push((r, size));
+        }
+        tcx.draw(scene, "Selection handles and their grab radius on the canvas.", 11.0, theme.text_dim, px, cy + ui_px(48.0));
+
         // Footer buttons.
-        let by = oy + H - 40.0;
-        self.ok = button(scene, tcx, theme, ox + W - PAD - 76.0, by, "OK", true);
-        self.cancel = button(scene, tcx, theme, ox + W - PAD - 174.0, by, "Cancel", false);
+        let by = oy + metric_h() - ui_px(40.0);
+        self.ok = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(76.0), by, "OK", true);
+        self.cancel = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(174.0), by, "Cancel", false);
     }
 
     /// The Keyboard page — one row per tool with its current shortcut.
@@ -707,19 +754,19 @@ impl Prefs {
         px: f64,
         oy: f64,
     ) {
-        let row_w = W - SIDEBAR_W - PAD * 2.0;
+        let row_w = metric_w() - metric_sidebar_w() - metric_pad() * 2.0;
 
         // Preset row.
-        tcx.draw(scene, "Preset", 12.0, theme.text_dim, px, oy + 62.0);
-        let chip = Rect::new(px + 52.0, oy + 46.0, px + 52.0 + 210.0, oy + 70.0);
+        tcx.draw(scene, "Preset", 12.0, theme.text_dim, px, oy + ui_px(62.0));
+        let chip = Rect::new(px + ui_px(52.0), oy + ui_px(46.0), px + ui_px(52.0) + ui_px(210.0), oy + ui_px(70.0));
         let naming = self.naming.is_some();
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(4.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(ui_px(4.0)));
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             Affine::IDENTITY,
             if naming { theme.accent } else { theme.border },
             None,
-            &chip.to_rounded_rect(4.0),
+            &chip.to_rounded_rect(ui_px(4.0)),
         );
         if let Some(field) = &mut self.naming {
             field.paint(scene, tcx, theme, chip, "name preset", true);
@@ -729,42 +776,42 @@ impl Prefs {
                 &self.working_keymaps.active,
                 12.0,
                 theme.text,
-                chip.x0 + 10.0,
-                chip.y0 + 16.0,
+                chip.x0 + ui_px(10.0),
+                chip.y0 + ui_px(16.0),
             );
-            tri(scene, Point::new(chip.x1 - 14.0, chip.center().y), false, theme.text_dim);
+            tri(scene, Point::new(chip.x1 - ui_px(14.0), chip.center().y), false, theme.text_dim);
             self.preset_trigger = chip;
         }
         // "+" — save the current edits as a new preset.
-        let add = Rect::new(chip.x1 + 8.0, chip.y0, chip.x1 + 8.0 + 26.0, chip.y1);
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &add.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &add.to_rounded_rect(4.0));
+        let add = Rect::new(chip.x1 + ui_px(8.0), chip.y0, chip.x1 + ui_px(8.0) + ui_px(26.0), chip.y1);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &add.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &add.to_rounded_rect(ui_px(4.0)));
         let plus = if naming { "OK" } else { "+" };
         let pw = tcx.measure(plus, 13.0);
-        tcx.draw(scene, plus, 13.0, theme.text, add.center().x - pw / 2.0, add.center().y + 4.5);
+        tcx.draw(scene, plus, 13.0, theme.text, add.center().x - pw / 2.0, add.center().y + ui_px(4.5));
         self.preset_add = add;
 
-        tcx.draw(scene, "Tool Shortcuts", 13.0, theme.text, px, oy + 96.0);
+        tcx.draw(scene, "Tool Shortcuts", 13.0, theme.text, px, oy + ui_px(96.0));
         tcx.draw(
             scene,
             "Click a shortcut, then press a key. Shift is allowed.",
             11.0,
             theme.text_dim,
             px,
-            oy + 116.0,
+            oy + ui_px(116.0),
         );
 
         let recording = self.recording;
         // Reset sits in the fixed footer row so the list never hides it.
-        self.reset_keys = button(scene, tcx, theme, px, oy + H - 40.0, "Reset", false);
+        self.reset_keys = button(scene, tcx, theme, px, oy + metric_h() - ui_px(40.0), "Reset", false);
 
         let n_tools = Tool::ALL.len();
         let n_acts = PrefAction::ALL.len();
-        let content_h = n_tools as f64 * 27.0 + 26.0 + n_acts as f64 * 27.0 + 6.0;
-        let view = Rect::new(px - 6.0, oy + 128.0, px + row_w + 14.0, oy + H - 52.0);
+        let content_h = n_tools as f64 * ui_px(27.0) + ui_px(26.0) + n_acts as f64 * ui_px(27.0) + ui_px(6.0);
+        let view = Rect::new(px - ui_px(6.0), oy + ui_px(128.0), px + row_w + ui_px(14.0), oy + metric_h() - ui_px(52.0));
         let sc = self.begin_scroll_list(scene, theme, view, content_h);
 
-        let mut y = view.y0 + 2.0 - sc;
+        let mut y = view.y0 + ui_px(2.0) - sc;
         for i in 0..n_tools {
             kb_row(
                 scene, tcx, theme, px, row_w, y,
@@ -775,11 +822,11 @@ impl Prefs {
                 view,
                 &mut self.bind_rows,
             );
-            y += 27.0;
+            y += ui_px(27.0);
         }
-        y += 6.0;
-        tcx.draw(scene, "Colours", 13.0, theme.text, px, y + 4.0);
-        y += 20.0;
+        y += ui_px(6.0);
+        tcx.draw(scene, "Colours", 13.0, theme.text, px, y + ui_px(4.0));
+        y += ui_px(20.0);
         for i in 0..n_acts {
             kb_row(
                 scene, tcx, theme, px, row_w, y,
@@ -790,7 +837,7 @@ impl Prefs {
                 view,
                 &mut self.bind_rows,
             );
-            y += 27.0;
+            y += ui_px(27.0);
         }
         scene.pop_layer();
 
@@ -798,15 +845,15 @@ impl Prefs {
         if self.preset_menu_open && self.naming.is_none() {
             let names = self.working_keymaps.names();
             let t = self.preset_trigger;
-            let box_ = Rect::new(t.x0, t.y1 + 2.0, t.x1, t.y1 + 2.0 + names.len() as f64 * 24.0);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_bg, None, &box_.to_rounded_rect(4.0));
-            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.accent, None, &box_.to_rounded_rect(4.0));
+            let box_ = Rect::new(t.x0, t.y1 + ui_px(2.0), t.x1, t.y1 + ui_px(2.0) + names.len() as f64 * ui_px(24.0));
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_bg, None, &box_.to_rounded_rect(ui_px(4.0)));
+            scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.accent, None, &box_.to_rounded_rect(ui_px(4.0)));
             for (i, name) in names.iter().enumerate() {
-                let r = Rect::new(box_.x0, box_.y0 + i as f64 * 24.0, box_.x1, box_.y0 + (i as f64 + 1.0) * 24.0);
+                let r = Rect::new(box_.x0, box_.y0 + i as f64 * ui_px(24.0), box_.x1, box_.y0 + (i as f64 + 1.0) * 24.0);
                 if name == &self.working_keymaps.active {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent.with_alpha(0.18), None, &r);
                 }
-                tcx.draw(scene, name, 12.0, theme.text, r.x0 + 10.0, r.y0 + 16.0);
+                tcx.draw(scene, name, 12.0, theme.text, r.x0 + ui_px(10.0), r.y0 + ui_px(16.0));
                 self.preset_items.push(r);
             }
         }
@@ -835,35 +882,35 @@ impl Prefs {
         px: f64,
         oy: f64,
     ) {
-        let mut cy = oy + 60.0;
+        let mut cy = oy + ui_px(60.0);
         tcx.draw(scene, "Scripts", 13.0, theme.text, px, cy);
-        cy += 12.0;
+        cy += ui_px(12.0);
         tcx.draw(
             scene,
             "Point Amalith at a folder of scripts you keep yourself — updates can't touch it.",
             11.0,
             theme.text_dim,
             px,
-            cy + 12.0,
+            cy + ui_px(12.0),
         );
-        cy += 30.0;
+        cy += ui_px(30.0);
 
-        tcx.draw(scene, "Folder", 12.0, theme.text_dim, px, cy + 14.0);
+        tcx.draw(scene, "Folder", 12.0, theme.text_dim, px, cy + ui_px(14.0));
         let path_str = self
             .working_scripts
             .dir
             .as_ref()
             .map(|d| elide_left(&d.display().to_string(), 52))
             .unwrap_or_else(|| "None chosen".to_string());
-        tcx.draw(scene, &path_str, 11.5, theme.text, px + 58.0, cy + 14.0);
-        cy += 26.0;
+        tcx.draw(scene, &path_str, 11.5, theme.text, px + ui_px(58.0), cy + ui_px(14.0));
+        cy += ui_px(26.0);
         self.scripts_choose = button(scene, tcx, theme, px, cy, "Choose…", true);
         self.scripts_clear = if self.working_scripts.dir.is_some() {
-            button(scene, tcx, theme, px + 100.0, cy, "Clear", false)
+            button(scene, tcx, theme, px + ui_px(100.0), cy, "Clear", false)
         } else {
             Rect::ZERO
         };
-        cy += 42.0;
+        cy += ui_px(42.0);
 
         if self.working_scripts.dir.is_none() {
             return;
@@ -875,34 +922,34 @@ impl Prefs {
                 11.5,
                 theme.text_dim,
                 px,
-                cy + 4.0,
+                cy + ui_px(4.0),
             );
             return;
         }
 
-        tcx.draw(scene, "Shortcuts", 13.0, theme.text, px, cy + 4.0);
+        tcx.draw(scene, "Shortcuts", 13.0, theme.text, px, cy + ui_px(4.0));
         tcx.draw(
             scene,
             "Click a shortcut, then press a key (Cmd / Shift allowed).",
             11.0,
             theme.text_dim,
             px,
-            cy + 22.0,
+            cy + ui_px(22.0),
         );
-        let list_top = cy + 34.0;
+        let list_top = cy + ui_px(34.0);
 
-        let row_w = W - SIDEBAR_W - PAD * 2.0;
+        let row_w = metric_w() - metric_sidebar_w() - metric_pad() * 2.0;
         let recording = self.recording;
         let names: Vec<String> = self
             .script_paths
             .iter()
             .map(|p| crate::scripts::label(p))
             .collect();
-        let content_h = names.len() as f64 * 27.0 + 4.0;
-        let view = Rect::new(px - 6.0, list_top, px + row_w + 14.0, oy + H - 52.0);
+        let content_h = names.len() as f64 * ui_px(27.0) + ui_px(4.0);
+        let view = Rect::new(px - ui_px(6.0), list_top, px + row_w + ui_px(14.0), oy + metric_h() - ui_px(52.0));
         let sc = self.begin_scroll_list(scene, theme, view, content_h);
 
-        let mut y = view.y0 + 2.0 - sc;
+        let mut y = view.y0 + ui_px(2.0) - sc;
         for (i, name) in names.iter().enumerate() {
             let chord = self.working_scripts.chord_for(name);
             kb_row(
@@ -912,7 +959,7 @@ impl Prefs {
                 view,
                 &mut self.bind_rows,
             );
-            y += 27.0;
+            y += ui_px(27.0);
         }
         scene.pop_layer();
     }
@@ -926,9 +973,9 @@ impl Prefs {
         px: f64,
         oy: f64,
     ) {
-        let mut cy = oy + 60.0;
+        let mut cy = oy + ui_px(60.0);
         tcx.draw(scene, "Debug", 13.0, theme.text, px, cy);
-        cy += 30.0;
+        cy += ui_px(30.0);
 
         self.check_fps = checkbox(
             scene,
@@ -939,7 +986,7 @@ impl Prefs {
             "Show FPS Counter",
             self.working.show_fps,
         );
-        cy += 30.0;
+        cy += ui_px(30.0);
 
         self.check_cull = checkbox(
             scene,
@@ -950,26 +997,26 @@ impl Prefs {
             "Show Cull Outline",
             self.working.show_cull_outline,
         );
-        cy += 36.0;
+        cy += ui_px(36.0);
 
-        tcx.draw(scene, "Cull Distance", 12.0, theme.text_dim, px, cy + 14.0);
-        let fx = px + 170.0;
-        let field = Rect::new(fx, cy, fx + 90.0, cy + 22.0);
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(4.0));
+        tcx.draw(scene, "Cull Distance", 12.0, theme.text_dim, px, cy + ui_px(14.0));
+        let fx = px + ui_px(170.0);
+        let field = Rect::new(fx, cy, fx + ui_px(90.0), cy + ui_px(22.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(ui_px(4.0)));
         tcx.draw(
             scene,
             &format!("{} px", trim(self.working.cull_inset)),
             12.0,
             theme.text,
-            fx + 8.0,
-            cy + 15.0,
+            fx + ui_px(8.0),
+            cy + ui_px(15.0),
         );
-        self.cull_up = Rect::new(field.x1 - 16.0, cy + 1.0, field.x1, cy + 11.0);
-        self.cull_down = Rect::new(field.x1 - 16.0, cy + 11.0, field.x1, cy + 21.0);
+        self.cull_up = Rect::new(field.x1 - ui_px(16.0), cy + 1.0, field.x1, cy + ui_px(11.0));
+        self.cull_down = Rect::new(field.x1 - ui_px(16.0), cy + ui_px(11.0), field.x1, cy + ui_px(21.0));
         tri(scene, self.cull_up.center(), true, theme.text_dim);
         tri(scene, self.cull_down.center(), false, theme.text_dim);
-        cy += 42.0;
+        cy += ui_px(42.0);
 
         tcx.draw(
             scene,
@@ -977,7 +1024,7 @@ impl Prefs {
             11.0,
             theme.text_dim,
             px,
-            cy + 4.0,
+            cy + ui_px(4.0),
         );
         tcx.draw(
             scene,
@@ -985,7 +1032,7 @@ impl Prefs {
             11.0,
             theme.text_dim,
             px,
-            cy + 20.0,
+            cy + ui_px(20.0),
         );
         tcx.draw(
             scene,
@@ -993,7 +1040,7 @@ impl Prefs {
             11.0,
             theme.text_dim,
             px,
-            cy + 36.0,
+            cy + ui_px(36.0),
         );
     }
 }
@@ -1015,7 +1062,7 @@ fn kb_row(
     viewport: Rect,
     bind_rows: &mut Vec<(Rect, BindTarget)>,
 ) {
-    let row = Rect::new(px, cy, px + row_w, cy + 24.0);
+    let row = Rect::new(px, cy, px + row_w, cy + ui_px(24.0));
     let hot = recording == Some(target);
     if hot {
         scene.fill(
@@ -1023,24 +1070,24 @@ fn kb_row(
             Affine::IDENTITY,
             theme.accent.with_alpha(0.18),
             None,
-            &row.to_rounded_rect(4.0),
+            &row.to_rounded_rect(ui_px(4.0)),
         );
     }
-    tcx.draw(scene, name, 12.0, theme.text, px + 4.0, cy + 16.0);
-    let chip = Rect::new(row.x1 - 120.0, cy + 1.0, row.x1, cy + 23.0);
+    tcx.draw(scene, name, 12.0, theme.text, px + ui_px(4.0), cy + ui_px(16.0));
+    let chip = Rect::new(row.x1 - ui_px(120.0), cy + 1.0, row.x1, cy + ui_px(23.0));
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
         theme.bg,
         None,
-        &chip.to_rounded_rect(4.0),
+        &chip.to_rounded_rect(ui_px(4.0)),
     );
     scene.stroke(
-        &Stroke::new(1.0),
+        &Stroke::new(ui_px(1.0)),
         Affine::IDENTITY,
         if hot { theme.accent } else { theme.border },
         None,
-        &chip.to_rounded_rect(4.0),
+        &chip.to_rounded_rect(ui_px(4.0)),
     );
     let label = if hot {
         "Press a key…".to_string()
@@ -1054,7 +1101,7 @@ fn kb_row(
         11.5,
         if hot { theme.accent } else { theme.text },
         chip.center().x - lw / 2.0,
-        cy + 16.0,
+        cy + ui_px(16.0),
     );
     // Only rows fully inside the scroll viewport are clickable, so a row
     // peeking under the header / footer can't be hit.
@@ -1083,7 +1130,7 @@ fn elide_left(s: &str, max: usize) -> String {
 }
 
 fn tri(scene: &mut Scene, c: Point, up: bool, color: Color) {
-    let d = 3.0;
+    let d = ui_px(3.0);
     let mut p = vello::kurbo::BezPath::new();
     if up {
         p.move_to((c.x - d, c.y + d * 0.6));
@@ -1107,31 +1154,31 @@ fn checkbox(
     label: &str,
     on: bool,
 ) -> Rect {
-    let box_ = Rect::new(x, y, x + 16.0, y + 16.0);
+    let box_ = Rect::new(x, y, x + ui_px(16.0), y + ui_px(16.0));
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,
         if on { theme.accent } else { theme.bg },
         None,
-        &box_.to_rounded_rect(3.0),
+        &box_.to_rounded_rect(ui_px(3.0)),
     );
-    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &box_.to_rounded_rect(3.0));
+    scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &box_.to_rounded_rect(ui_px(3.0)));
     if on {
         let mut tick = vello::kurbo::BezPath::new();
-        tick.move_to((x + 3.5, y + 8.5));
-        tick.line_to((x + 6.5, y + 11.5));
-        tick.line_to((x + 12.5, y + 4.5));
+        tick.move_to((x + ui_px(3.5), y + ui_px(8.5)));
+        tick.line_to((x + ui_px(6.5), y + ui_px(11.5)));
+        tick.line_to((x + ui_px(12.5), y + ui_px(4.5)));
         scene.stroke(
-            &Stroke::new(1.8),
+            &Stroke::new(ui_px(1.8)),
             Affine::IDENTITY,
             theme.on_accent,
             None,
             &tick,
         );
     }
-    tcx.draw(scene, label, 12.0, theme.text, x + 24.0, y + 13.0);
+    tcx.draw(scene, label, 12.0, theme.text, x + ui_px(24.0), y + ui_px(13.0));
     // Whole-row hit rect.
-    Rect::new(x, y - 2.0, x + 24.0 + tcx.measure(label, 12.0), y + 18.0)
+    Rect::new(x, y - ui_px(2.0), x + ui_px(24.0) + tcx.measure(label, 12.0), y + ui_px(18.0))
 }
 
 /// `x, y` size-convenience wrapper over `widgets::button` — every call site
@@ -1146,7 +1193,130 @@ fn button(
     label: &str,
     primary: bool,
 ) -> Rect {
-    let r = Rect::new(x, y, x + 86.0, y + 26.0);
+    let r = Rect::new(x, y, x + ui_px(86.0), y + ui_px(26.0));
     crate::widgets::button(scene, tcx, theme, r, label, primary);
     r
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+    use crate::window_dpi::WindowDpi;
+
+    #[test]
+    fn scale_buttons_share_painted_hit_geometry_at_each_dpi() {
+        struct Reset;
+        impl Drop for Reset { fn drop(&mut self) { crate::metrics::apply(1.0); } }
+        let _reset = Reset;
+        for scale in [1.0, 1.25, 1.5] {
+            crate::metrics::apply(scale);
+            let mut prefs = Prefs::new(Settings::default(), Default::default(), Default::default());
+            let mut theme = Theme::default();
+            theme.set_ui_scale(scale);
+            let mut text = TextContext::new();
+            text.set_ui_scale(scale);
+            prefs.paint(&mut Scene::new(), &mut text, &theme, 1800.0, 1000.0);
+            let buttons = prefs.scale_buttons.clone();
+            assert_eq!(buttons.len(), 3);
+            for pair in buttons.windows(2) { assert!(pair[0].0.x1 < pair[1].0.x0); }
+            for (rect, value) in buttons {
+                assert!(prefs.card().contains(rect.center()));
+                for factor in [1.0, 1.5, 2.0] {
+                    let dpi = WindowDpi::new(factor);
+                    let physical = dpi.transform() * rect.center();
+                    assert!(matches!(prefs.on_press(dpi.point(physical.x, physical.y)), Hit::SetUiScale(v) if v == value));
+                }
+            }
+            prefs.category = 1;
+            prefs.paint(&mut Scene::new(), &mut text, &theme, 1800.0, 1000.0);
+            assert!(prefs.scale_buttons.is_empty(), "hidden page cannot retain clickable controls");
+        }
+    }
+
+    /// The Handle Size segmented control (`10-selection-anchor-size-preference-medium.md`)
+    /// must satisfy the same painted-geometry-matches-hit-geometry contract
+    /// as UI Scale's, and stay off `Settings.ui_scale` entirely: painting
+    /// at every DPI/UI-scale combination must always click through to the
+    /// same `HandleSize`, and must never collide with the UI Scale row
+    /// above it.
+    #[test]
+    fn handle_size_buttons_share_painted_hit_geometry_and_stay_off_ui_scale() {
+        struct Reset;
+        impl Drop for Reset { fn drop(&mut self) { crate::metrics::apply(1.0); } }
+        let _reset = Reset;
+        for scale in [1.0, 1.25, 1.5] {
+            crate::metrics::apply(scale);
+            let mut prefs = Prefs::new(Settings::default(), Default::default(), Default::default());
+            let mut theme = Theme::default();
+            theme.set_ui_scale(scale);
+            let mut text = TextContext::new();
+            text.set_ui_scale(scale);
+            prefs.paint(&mut Scene::new(), &mut text, &theme, 1800.0, 1000.0);
+            let scale_buttons = prefs.scale_buttons.clone();
+            let buttons = prefs.handle_size_buttons.clone();
+            assert_eq!(buttons.len(), 3);
+            for pair in buttons.windows(2) { assert!(pair[0].0.x1 < pair[1].0.x0); }
+            // Two distinct preference rows — their rects must not overlap
+            // vertically (a real regression if the layout math above ever
+            // collides the two rows).
+            for &(scale_rect, _) in &scale_buttons {
+                for &(size_rect, _) in &buttons {
+                    assert!(
+                        scale_rect.y1 <= size_rect.y0 || size_rect.y1 <= scale_rect.y0,
+                        "UI Scale and Handle Size rows must not overlap"
+                    );
+                }
+            }
+            for (rect, value) in buttons {
+                assert!(prefs.card().contains(rect.center()));
+                for factor in [1.0, 1.5, 2.0] {
+                    let dpi = WindowDpi::new(factor);
+                    let physical = dpi.transform() * rect.center();
+                    assert!(matches!(prefs.on_press(dpi.point(physical.x, physical.y)), Hit::SetHandleSize(v) if v == value));
+                }
+            }
+            prefs.category = 1;
+            prefs.paint(&mut Scene::new(), &mut text, &theme, 1800.0, 1000.0);
+            assert!(prefs.handle_size_buttons.is_empty(), "hidden page cannot retain clickable controls");
+        }
+        // Independent of `ui_scale`: picking a HandleSize must not touch it.
+        let mut prefs = Prefs::new(Settings::default(), Default::default(), Default::default());
+        let before = prefs.working.ui_scale;
+        prefs.working.handle_size = crate::handle_scale::HandleSize::Large;
+        assert_eq!(prefs.working.ui_scale, before, "HandleSize must stay independent of ui_scale");
+    }
+
+    /// `PrefAction::ALL` is a hand-maintained array with no compiler tie to
+    /// the enum's variant list — see
+    /// `01-prefaction-and-tool-all-sync-easy.md`. A variant missing from
+    /// `ALL` still compiles: it just gets no default keybinding, no row on
+    /// the Preferences ▸ Keyboard page, and no persistence round-trip.
+    /// `covered` is an exhaustive match with no wildcard, so this test
+    /// fails to *compile* the moment a variant is added to `PrefAction`
+    /// and forgotten here.
+    #[test]
+    fn pref_action_all_covers_every_variant_exactly_once() {
+        fn covered(a: PrefAction) -> bool {
+            match a {
+                PrefAction::SwapPaints
+                | PrefAction::DefaultPaints
+                | PrefAction::Place
+                | PrefAction::CommandPalette
+                | PrefAction::TrackingDecrease
+                | PrefAction::TrackingIncrease
+                | PrefAction::LeadingDecrease
+                | PrefAction::LeadingIncrease
+                | PrefAction::BaselineShiftUp
+                | PrefAction::BaselineShiftDown => true,
+            }
+        }
+        for a in PrefAction::ALL {
+            assert!(covered(a), "{a:?} missing from the exhaustive check above");
+        }
+        let mut seen: Vec<PrefAction> = Vec::new();
+        for a in PrefAction::ALL {
+            assert!(!seen.contains(&a), "{a:?} appears more than once in PrefAction::ALL");
+            seen.push(a);
+        }
+    }
 }

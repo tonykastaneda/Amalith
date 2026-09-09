@@ -8,14 +8,14 @@
 use super::*;
 
 impl App {
-    pub(in crate::app) const RM_W: f64 = 168.0;
-    pub(in crate::app) const RM_ROW: f64 = 24.0;
-    pub(in crate::app) const RM_PAD: f64 = 6.0;
+    pub(in crate::app) fn metric_rm_w() -> f64 { crate::metrics::with(|m| m.app_guides_rm_w) }
+    pub(in crate::app) fn metric_rm_row() -> f64 { crate::metrics::with(|m| m.app_guides_rm_row) }
+    pub(in crate::app) fn metric_rm_pad() -> f64 { crate::metrics::with(|m| m.app_guides_rm_pad) }
 
     pub(in crate::app) fn ruler_menu_rect(anchor: Point) -> Rect {
         let n = amalith_core::Unit::ALL.len() as f64;
-        let h = Self::RM_PAD * 2.0 + Self::RM_ROW * n;
-        Rect::new(anchor.x, anchor.y, anchor.x + Self::RM_W, anchor.y + h)
+        let h = Self::metric_rm_pad() * 2.0 + Self::metric_rm_row() * n;
+        Rect::new(anchor.x, anchor.y, anchor.x + Self::metric_rm_w(), anchor.y + h)
     }
 
     /// A press while the ruler unit menu is open. Consumes it.
@@ -25,7 +25,7 @@ impl App {
         };
         let fly = Self::ruler_menu_rect(anchor);
         if fly.contains(p) {
-            let i = ((p.y - fly.y0 - Self::RM_PAD) / Self::RM_ROW).floor();
+            let i = ((p.y - fly.y0 - Self::metric_rm_pad()) / Self::metric_rm_row()).floor();
             if i >= 0.0 {
                 if let Some(&unit) = amalith_core::Unit::ALL.get(i as usize) {
                     let _ = self

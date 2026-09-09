@@ -6,7 +6,7 @@
 use super::*;
 
 /// The float-only panel id for the Export for Screens dialog.
-pub(in crate::app) const EXPORT_PID: PanelId = PanelId("export-screens");
+pub(in crate::app) const EXPORT_PID: PanelId = PanelId(PanelKind::ExportScreens);
 
 impl App {
     /// Queue the dialog to open on the next `about_to_wait` (the menu /
@@ -48,8 +48,8 @@ impl App {
         self.export = Some(crate::export::ExportForScreens::new(items, dest));
         self.text_blink = Instant::now();
 
-        let fw = crate::export::W;
-        let fh = crate::export::H + self.theme.tab_strip_h;
+        let fw = crate::export::metric_w();
+        let fh = crate::export::metric_h() + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();
         let pos = Point::new(
@@ -281,6 +281,7 @@ impl App {
             &self.image_cache,
             self.outline_mode,
             &mut self.text,
+            self.theme.accent,
         );
         let rgba = self
             .render_scene_to_rgba(&scene, w, h)

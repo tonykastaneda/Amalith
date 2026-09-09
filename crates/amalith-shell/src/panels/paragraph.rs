@@ -8,6 +8,8 @@
 //! space before / after, hyphenate toggle. Bullet / numbered lists are
 //! greyed for now.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::TextAlign;
 use vello::kurbo::{BezPath, Line, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -15,12 +17,12 @@ use vello::Scene;
 
 use crate::text::TextContext;
 
-use super::{Action, Ctx, ParaField, ID, PAD};
+use super::{Action, Ctx, ParaField, ID, metric_pad};
 
-const BTN: f64 = 27.0;
-const BGAP: f64 = 3.0;
-const FIELD_H: f64 = 24.0;
-const ROW: f64 = 32.0;
+fn metric_btn() -> f64 { crate::metrics::with(|m| m.panels_paragraph_btn) }
+fn metric_bgap() -> f64 { crate::metrics::with(|m| m.panels_paragraph_bgap) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.panels_paragraph_field_h) }
+fn metric_row() -> f64 { crate::metrics::with(|m| m.panels_paragraph_row) }
 
 /// Alignment buttons, left to right.
 const ALIGNS: [TextAlign; 7] = [
@@ -40,12 +42,12 @@ struct Field {
 }
 
 fn field(x: f64, y: f64, w: f64) -> Field {
-    let box_ = Rect::new(x, y, x + w, y + FIELD_H);
-    let sx = box_.x1 - 15.0;
+    let box_ = Rect::new(x, y, x + w, y + metric_field_h());
+    let sx = box_.x1 - ui_px(15.0);
     Field {
         box_,
-        up: Rect::new(sx, y + 1.0, box_.x1, y + FIELD_H / 2.0),
-        down: Rect::new(sx, y + FIELD_H / 2.0, box_.x1, y + FIELD_H - 1.0),
+        up: Rect::new(sx, y + 1.0, box_.x1, y + metric_field_h() / 2.0),
+        down: Rect::new(sx, y + metric_field_h() / 2.0, box_.x1, y + metric_field_h() - 1.0),
     }
 }
 
@@ -65,42 +67,42 @@ struct L {
 }
 
 fn layout(body: Rect) -> L {
-    let x = body.x0 + PAD;
-    let w = body.width() - PAD * 2.0;
-    let half = (w - 8.0) / 2.0;
-    let mut y = body.y0 + PAD + 4.0;
+    let x = body.x0 + metric_pad();
+    let w = body.width() - metric_pad() * 2.0;
+    let half = (w - ui_px(8.0)) / 2.0;
+    let mut y = body.y0 + metric_pad() + ui_px(4.0);
 
     // Seven alignment buttons, evenly spread across the width.
-    let cell = (w - BGAP * 6.0) / 7.0;
+    let cell = (w - metric_bgap() * 6.0) / 7.0;
     let aligns = std::array::from_fn(|i| {
-        let bx = x + i as f64 * (cell + BGAP);
-        Rect::new(bx, y, bx + cell, y + BTN)
+        let bx = x + i as f64 * (cell + metric_bgap());
+        Rect::new(bx, y, bx + cell, y + metric_btn())
     });
-    y += BTN + 12.0;
+    y += metric_btn() + ui_px(12.0);
 
     // List style dropdowns (greyed).
-    let list_bullet = Rect::new(x, y, x + 46.0, y + FIELD_H);
-    let list_number = Rect::new(x + 54.0, y, x + 100.0, y + FIELD_H);
-    y += FIELD_H + 12.0;
+    let list_bullet = Rect::new(x, y, x + ui_px(46.0), y + metric_field_h());
+    let list_number = Rect::new(x + ui_px(54.0), y, x + ui_px(100.0), y + metric_field_h());
+    y += metric_field_h() + ui_px(12.0);
 
     let rule_a = Rect::new(x, y, x + w, y + 1.0);
-    y += 13.0;
+    y += ui_px(13.0);
 
     let indent_start = field(x, y, half);
-    let indent_end = field(x + half + 8.0, y, half);
-    y += ROW;
+    let indent_end = field(x + half + ui_px(8.0), y, half);
+    y += metric_row();
     let indent_first = field(x, y, half);
-    y += ROW;
+    y += metric_row();
 
     let rule_b = Rect::new(x, y, x + w, y + 1.0);
-    y += 13.0;
+    y += ui_px(13.0);
 
     let space_before = field(x, y, half);
-    let space_after = field(x + half + 8.0, y, half);
-    y += ROW + 6.0;
+    let space_after = field(x + half + ui_px(8.0), y, half);
+    y += metric_row() + ui_px(6.0);
 
-    let hyphenate = Rect::new(x, y, x + 16.0, y + 16.0);
-    let bottom = y + 16.0 + PAD;
+    let hyphenate = Rect::new(x, y, x + ui_px(16.0), y + ui_px(16.0));
+    let bottom = y + ui_px(16.0) + metric_pad();
 
     L {
         aligns,
@@ -119,7 +121,7 @@ fn layout(body: Rect) -> L {
 }
 
 pub fn natural_height() -> f64 {
-    layout(Rect::new(0.0, 0.0, 240.0, 4000.0)).bottom
+    layout(Rect::new(0.0, 0.0, ui_px(240.0), ui_px(4000.0))).bottom
 }
 
 fn fmt_pt(v: f64) -> String {
@@ -146,20 +148,20 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         } else {
             th.bg
         };
-        scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
+        scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r.to_rounded_rect(ui_px(4.0)));
         align_glyph(scene, *r, a, if on { th.on_accent } else { th.text });
     }
 
     // List dropdowns — display only for now.
     for r in [l.list_bullet, l.list_number] {
-        scene.fill(Fill::NonZero, ID, th.bg, None, &r.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
-        let c = Point::new(r.x1 - 9.0, r.center().y);
+        scene.fill(Fill::NonZero, ID, th.bg, None, &r.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r.to_rounded_rect(ui_px(4.0)));
+        let c = Point::new(r.x1 - ui_px(9.0), r.center().y);
         let mut t = BezPath::new();
-        t.move_to((c.x - 3.0, c.y - 2.0));
-        t.line_to((c.x + 3.0, c.y - 2.0));
-        t.line_to((c.x, c.y + 2.5));
+        t.move_to((c.x - ui_px(3.0), c.y - ui_px(2.0)));
+        t.line_to((c.x + ui_px(3.0), c.y - ui_px(2.0)));
+        t.line_to((c.x, c.y + ui_px(2.5)));
         t.close_path();
         scene.fill(Fill::NonZero, ID, th.text_dim.with_alpha(0.5), None, &t);
     }
@@ -177,16 +179,16 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
 
     // Hyphenate checkbox.
     let hc = l.hyphenate;
-    scene.fill(Fill::NonZero, ID, th.bg, None, &hc.to_rounded_rect(3.0));
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &hc.to_rounded_rect(3.0));
+    scene.fill(Fill::NonZero, ID, th.bg, None, &hc.to_rounded_rect(ui_px(3.0)));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &hc.to_rounded_rect(ui_px(3.0)));
     if p.hyphenate {
         let mut check = BezPath::new();
-        check.move_to((hc.x0 + 3.5, hc.center().y));
-        check.line_to((hc.x0 + 6.5, hc.y1 - 4.0));
-        check.line_to((hc.x1 - 3.0, hc.y0 + 4.0));
-        scene.stroke(&Stroke::new(1.8), ID, th.accent, None, &check);
+        check.move_to((hc.x0 + ui_px(3.5), hc.center().y));
+        check.line_to((hc.x0 + ui_px(6.5), hc.y1 - ui_px(4.0)));
+        check.line_to((hc.x1 - ui_px(3.0), hc.y0 + ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.8)), ID, th.accent, None, &check);
     }
-    text.draw(scene, "Hyphenate", 12.0, th.text, hc.x1 + 8.0, hc.center().y + 4.0);
+    text.draw(scene, "Hyphenate", 12.0, th.text, hc.x1 + ui_px(8.0), hc.center().y + ui_px(4.0));
 }
 
 #[derive(Clone, Copy)]
@@ -207,11 +209,11 @@ fn stepper(
     value: &str,
     pointer: Point,
 ) {
-    let rr = f.box_.to_rounded_rect(4.0);
+    let rr = f.box_.to_rounded_rect(ui_px(4.0));
     scene.fill(Fill::NonZero, ID, th.bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
     indent_glyph(scene, f.box_, icon, th.text_dim);
-    text.draw(scene, value, 12.0, th.text, f.box_.x0 + 20.0, f.box_.center().y + 4.0);
+    text.draw(scene, value, 12.0, th.text, f.box_.x0 + ui_px(20.0), f.box_.center().y + ui_px(4.0));
     let up_hot = f.up.contains(pointer);
     let dn_hot = f.down.contains(pointer);
     tri(scene, f.up.center(), true, if up_hot { th.text } else { th.text_dim });
@@ -220,60 +222,60 @@ fn stepper(
 
 /// A small left-of-value glyph telling the fields apart.
 fn indent_glyph(scene: &mut Scene, box_: Rect, icon: IndentIcon, ink: Color) {
-    let cx = box_.x0 + 10.0;
+    let cx = box_.x0 + ui_px(10.0);
     let cy = box_.center().y;
-    let s = Stroke::new(1.2);
+    let s = Stroke::new(ui_px(1.2));
     let bars = |scene: &mut Scene, from_left: bool| {
         for (i, wf) in [0.9f64, 0.6, 0.8].into_iter().enumerate() {
-            let y = cy - 4.0 + i as f64 * 4.0;
+            let y = cy - ui_px(4.0) + i as f64 * ui_px(4.0);
             let (x0, x1) = if from_left {
-                (cx - 4.0, cx - 4.0 + 8.0 * wf)
+                (cx - ui_px(4.0), cx - ui_px(4.0) + 8.0 * wf)
             } else {
-                (cx + 4.0 - 8.0 * wf, cx + 4.0)
+                (cx + ui_px(4.0) - 8.0 * wf, cx + ui_px(4.0))
             };
             scene.stroke(&s, ID, ink, None, &Line::new((x0, y), (x1, y)));
         }
     };
     match icon {
         IndentIcon::Left => {
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 6.0, cy - 6.0), (cx - 6.0, cy + 6.0)));
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - ui_px(6.0), cy - ui_px(6.0)), (cx - ui_px(6.0), cy + ui_px(6.0))));
             bars(scene, true);
         }
         IndentIcon::Right => {
-            scene.stroke(&s, ID, ink, None, &Line::new((cx + 6.0, cy - 6.0), (cx + 6.0, cy + 6.0)));
+            scene.stroke(&s, ID, ink, None, &Line::new((cx + ui_px(6.0), cy - ui_px(6.0)), (cx + ui_px(6.0), cy + ui_px(6.0))));
             bars(scene, false);
         }
         IndentIcon::First => {
-            let y = cy - 4.0;
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 1.0, y), (cx + 4.0, y)));
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 4.0, y + 4.0), (cx + 4.0, y + 4.0)));
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 4.0, y + 8.0), (cx + 4.0, y + 8.0)));
+            let y = cy - ui_px(4.0);
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - 1.0, y), (cx + ui_px(4.0), y)));
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - ui_px(4.0), y + ui_px(4.0)), (cx + ui_px(4.0), y + ui_px(4.0))));
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - ui_px(4.0), y + ui_px(8.0)), (cx + ui_px(4.0), y + ui_px(8.0))));
         }
         IndentIcon::Before => {
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 5.0, cy - 5.0), (cx + 5.0, cy - 5.0)));
-            arrow(scene, cx, cy + 4.0, true, ink);
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - ui_px(5.0), cy - ui_px(5.0)), (cx + ui_px(5.0), cy - ui_px(5.0))));
+            arrow(scene, cx, cy + ui_px(4.0), true, ink);
         }
         IndentIcon::After => {
-            scene.stroke(&s, ID, ink, None, &Line::new((cx - 5.0, cy + 5.0), (cx + 5.0, cy + 5.0)));
-            arrow(scene, cx, cy - 4.0, false, ink);
+            scene.stroke(&s, ID, ink, None, &Line::new((cx - ui_px(5.0), cy + ui_px(5.0)), (cx + ui_px(5.0), cy + ui_px(5.0))));
+            arrow(scene, cx, cy - ui_px(4.0), false, ink);
         }
     }
 }
 
 fn arrow(scene: &mut Scene, cx: f64, cy: f64, down: bool, ink: Color) {
     let d = if down { 1.0 } else { -1.0 };
-    let s = Stroke::new(1.2);
+    let s = Stroke::new(ui_px(1.2));
     scene.stroke(&s, ID, ink, None, &Line::new((cx, cy - 4.0 * d), (cx, cy + 4.0 * d)));
     let mut head = BezPath::new();
-    head.move_to((cx - 2.5, cy));
+    head.move_to((cx - ui_px(2.5), cy));
     head.line_to((cx, cy + 4.0 * d));
-    head.line_to((cx + 2.5, cy));
+    head.line_to((cx + ui_px(2.5), cy));
     scene.stroke(&s, ID, ink, None, &head);
 }
 
 /// The horizontal-line "text lines" glyph on an alignment button.
 fn align_glyph(scene: &mut Scene, r: Rect, a: TextAlign, ink: Color) {
-    let s = Stroke::new(1.3);
+    let s = Stroke::new(ui_px(1.3));
     let cx = r.center().x;
     let full = r.width() * 0.62;
     let widths: [f64; 4] = if a.is_justified() {
@@ -299,16 +301,16 @@ fn align_glyph(scene: &mut Scene, r: Rect, a: TextAlign, ink: Color) {
 }
 
 fn list_icon(scene: &mut Scene, r: Rect, bullet: bool, ink: Color) {
-    let s = Stroke::new(1.1);
+    let s = Stroke::new(ui_px(1.1));
     for i in 0..3 {
-        let y = r.y0 + 6.0 + i as f64 * 5.0;
+        let y = r.y0 + ui_px(6.0) + i as f64 * ui_px(5.0);
         if bullet {
             scene.fill(
                 Fill::NonZero,
                 ID,
                 ink,
                 None,
-                &Rect::from_center_size(Point::new(r.x0 + 6.0, y), (2.4, 2.4)),
+                &Rect::from_center_size(Point::new(r.x0 + ui_px(6.0), y), (ui_px(2.4), ui_px(2.4))),
             );
         } else {
             scene.stroke(
@@ -316,15 +318,15 @@ fn list_icon(scene: &mut Scene, r: Rect, bullet: bool, ink: Color) {
                 ID,
                 ink,
                 None,
-                &Line::new((r.x0 + 4.0, y - 1.5), (r.x0 + 4.0, y + 1.5)),
+                &Line::new((r.x0 + ui_px(4.0), y - 1.5), (r.x0 + ui_px(4.0), y + 1.5)),
             );
         }
-        scene.stroke(&s, ID, ink, None, &Line::new((r.x0 + 12.0, y), (r.x0 + 26.0, y)));
+        scene.stroke(&s, ID, ink, None, &Line::new((r.x0 + ui_px(12.0), y), (r.x0 + ui_px(26.0), y)));
     }
 }
 
 fn tri(scene: &mut Scene, c: Point, up: bool, color: Color) {
-    let d = 3.0;
+    let d = ui_px(3.0);
     let mut p = BezPath::new();
     if up {
         p.move_to((c.x - d, c.y + d * 0.6));
@@ -355,7 +357,7 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
         (&l.space_after, ParaField::SpaceAfter, pg.space_after),
     ] {
         // First-line indent may go negative (hanging); the rest floor at 0.
-        let lo = if field == ParaField::IndentFirst { -10000.0 } else { 0.0 };
+        let lo = if field == ParaField::IndentFirst { -ui_px(10000.0) } else { 0.0 };
         if f.up.contains(p) {
             return Action::SetParagraphMetric(field, (cur + 1.0).max(lo));
         }
@@ -363,7 +365,7 @@ pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
             return Action::SetParagraphMetric(field, (cur - 1.0).max(lo));
         }
     }
-    let hyph_row = Rect::new(l.hyphenate.x0, l.hyphenate.y0, l.hyphenate.x0 + 110.0, l.hyphenate.y1);
+    let hyph_row = Rect::new(l.hyphenate.x0, l.hyphenate.y0, l.hyphenate.x0 + ui_px(110.0), l.hyphenate.y1);
     if hyph_row.contains(p) {
         return Action::ToggleHyphenate;
     }

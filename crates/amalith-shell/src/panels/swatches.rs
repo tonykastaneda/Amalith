@@ -1,6 +1,8 @@
 //! Swatches panel: the fill / stroke chips, a stroke-width row, and the
 //! preset colour grid.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::{Color as CoreColor, Paint};
 use vello::kurbo::{Point, Rect};
 use vello::peniko::{Color, Fill};
@@ -8,7 +10,7 @@ use vello::Scene;
 
 use crate::text::TextContext;
 
-use super::{draw_paint_swatch, palette, Action, Ctx, PaintSlot, ID, PAD, SWATCH};
+use super::{draw_paint_swatch, palette, Action, Ctx, PaintSlot, ID, metric_pad, metric_swatch};
 
 const STROKE_WIDTHS: [f64; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
 
@@ -20,29 +22,29 @@ struct SwatchLayout {
 }
 
 fn swatch_layout(body: Rect) -> SwatchLayout {
-    let fill = Rect::new(body.x0 + PAD, body.y0 + 10.0, body.x0 + PAD + 24.0, body.y0 + 34.0);
-    let stroke = fill.with_origin(Point::new(fill.x0 + 14.0, fill.y0 + 14.0));
+    let fill = Rect::new(body.x0 + metric_pad(), body.y0 + ui_px(10.0), body.x0 + metric_pad() + ui_px(24.0), body.y0 + ui_px(34.0));
+    let stroke = fill.with_origin(Point::new(fill.x0 + ui_px(14.0), fill.y0 + ui_px(14.0)));
 
-    let wx = stroke.x1 + 18.0;
+    let wx = stroke.x1 + ui_px(18.0);
     let widths = STROKE_WIDTHS
         .iter()
         .enumerate()
         .map(|(i, w)| {
-            let x = wx + i as f64 * 26.0;
-            (*w, Rect::new(x, body.y0 + 14.0, x + 22.0, body.y0 + 36.0))
+            let x = wx + i as f64 * ui_px(26.0);
+            (*w, Rect::new(x, body.y0 + ui_px(14.0), x + ui_px(22.0), body.y0 + ui_px(36.0)))
         })
         .collect();
 
-    let top = body.y0 + 56.0;
-    let cols = (((body.width() - PAD * 2.0) / (SWATCH + 4.0)).floor() as usize).max(1);
+    let top = body.y0 + ui_px(56.0);
+    let cols = (((body.width() - metric_pad() * 2.0) / (metric_swatch() + ui_px(4.0))).floor() as usize).max(1);
     let swatches = palette()
         .into_iter()
         .enumerate()
         .map(|(i, p)| {
             let (col, row) = (i % cols, i / cols);
-            let x = body.x0 + PAD + col as f64 * (SWATCH + 4.0);
-            let y = top + row as f64 * (SWATCH + 4.0);
-            (p, Rect::new(x, y, x + SWATCH, y + SWATCH))
+            let x = body.x0 + metric_pad() + col as f64 * (metric_swatch() + ui_px(4.0));
+            let y = top + row as f64 * (metric_swatch() + ui_px(4.0));
+            (p, Rect::new(x, y, x + metric_swatch(), y + metric_swatch()))
         })
         .collect();
 
@@ -95,8 +97,8 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             &format!("{}", *w as i64),
             11.0,
             if on { white } else { ctx.theme.text_dim },
-            r.x0 + 6.0,
-            r.y0 + 15.0,
+            r.x0 + ui_px(6.0),
+            r.y0 + ui_px(15.0),
         );
     }
 

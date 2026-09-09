@@ -3,6 +3,8 @@
 //! Illustrator-style Links/Embedded-image manager (no CC Libraries; see
 //! `crate::canvas::link_status` for the Ok/Modified/Missing classifier).
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::Document;
 use vello::kurbo::{Circle, Line, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -12,22 +14,22 @@ use crate::canvas::{link_status, LinkStatus};
 use crate::text::TextContext;
 use crate::theme::Theme;
 
-use super::{Action, Ctx, MenuEntry, FOOTER_H, ID, PAD, ROW_H};
+use super::{Action, Ctx, MenuEntry, metric_footer_h, ID, metric_pad, metric_row_h};
 
 /// The scrollable row list (between the top and the footer — no search
 /// strip, unlike Layers).
 fn list_rect(body: Rect) -> Rect {
-    Rect::new(body.x0, body.y0, body.x1, body.y1 - FOOTER_H)
+    Rect::new(body.x0, body.y0, body.x1, body.y1 - metric_footer_h())
 }
 
 fn clamp_scroll(raw: f64, n_rows: usize, list_h: f64) -> f64 {
-    let max = (n_rows as f64 * ROW_H - list_h).max(0.0);
+    let max = (n_rows as f64 * metric_row_h() - list_h).max(0.0);
     raw.clamp(0.0, max)
 }
 
 /// Full height the Links panel wants: every row + footer.
 pub(super) fn content_height(doc: &Document) -> f64 {
-    doc.assets().len() as f64 * ROW_H + FOOTER_H
+    doc.assets().len() as f64 * metric_row_h() + metric_footer_h()
 }
 
 fn status_color(status: LinkStatus, theme: &Theme) -> Color {
@@ -60,50 +62,50 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
             "No linked or embedded images",
             12.0,
             ctx.theme.text_dim,
-            body.x0 + PAD,
-            list.y0 + ROW_H * 0.5 + 4.0,
+            body.x0 + metric_pad(),
+            list.y0 + metric_row_h() * 0.5 + ui_px(4.0),
         );
     }
     for (i, asset) in assets.iter().enumerate() {
-        let ry = list.y0 + i as f64 * ROW_H - scroll;
-        if ry + ROW_H < list.y0 || ry > list.y1 {
+        let ry = list.y0 + i as f64 * metric_row_h() - scroll;
+        if ry + metric_row_h() < list.y0 || ry > list.y1 {
             continue;
         }
-        let r = Rect::new(list.x0, ry, list.x1, ry + ROW_H);
+        let r = Rect::new(list.x0, ry, list.x1, ry + metric_row_h());
         if ctx.selected_asset == Some(asset.id) {
             scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.22), None, &r);
         }
         let status = link_status(&asset.source);
-        let baseline = r.y0 + ROW_H * 0.5 + 4.0;
+        let baseline = r.y0 + metric_row_h() * 0.5 + ui_px(4.0);
         scene.fill(
             Fill::NonZero,
             ID,
             status_color(status, ctx.theme),
             None,
-            &Circle::new((list.x0 + PAD + 4.0, r.center().y), 3.5),
+            &Circle::new((list.x0 + metric_pad() + ui_px(4.0), r.center().y), ui_px(3.5)),
         );
-        text.draw(scene, &asset.name, 12.0, ctx.theme.text, list.x0 + PAD + 16.0, baseline);
+        text.draw(scene, &asset.name, 12.0, ctx.theme.text, list.x0 + metric_pad() + ui_px(16.0), baseline);
         let label = status_label(status);
         let w = text.measure(label, 11.0);
-        text.draw(scene, label, 11.0, ctx.theme.text_dim, r.x1 - PAD - w, baseline);
+        text.draw(scene, label, 11.0, ctx.theme.text_dim, r.x1 - metric_pad() - w, baseline);
     }
     for i in 1..assets.len() {
-        let y = list.y0 + i as f64 * ROW_H - scroll;
-        scene.stroke(&Stroke::new(1.0), ID, ctx.theme.border, None, &Line::new((list.x0, y), (list.x1, y)));
+        let y = list.y0 + i as f64 * metric_row_h() - scroll;
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.border, None, &Line::new((list.x0, y), (list.x1, y)));
     }
     scene.pop_layer();
 
-    let content_h = assets.len() as f64 * ROW_H;
+    let content_h = assets.len() as f64 * metric_row_h();
     if content_h > list.height() + 0.5 {
         let frac = (list.height() / content_h).min(1.0);
-        let th = (list.height() * frac).max(24.0);
+        let th = (list.height() * frac).max(ui_px(24.0));
         let ty = list.y0 + (list.height() - th) * (scroll / (content_h - list.height()));
         scene.fill(
             Fill::NonZero,
             ID,
             ctx.theme.text_dim.with_alpha(0.5),
             None,
-            &Rect::new(list.x1 - 4.0, ty, list.x1 - 1.0, ty + th).to_rounded_rect(1.5),
+            &Rect::new(list.x1 - ui_px(4.0), ty, list.x1 - 1.0, ty + th).to_rounded_rect(ui_px(1.5)),
         );
     }
 
@@ -112,13 +114,13 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
 
 /// (Relink, Go to Link, Update Link) rects, right-aligned along the footer.
 fn footer_buttons(body: Rect) -> [Rect; 3] {
-    let w = 88.0;
-    let gap = 8.0;
-    let cy = body.y1 - FOOTER_H * 0.5;
-    let mut x1 = body.x1 - PAD;
+    let w = ui_px(88.0);
+    let gap = ui_px(8.0);
+    let cy = body.y1 - metric_footer_h() * 0.5;
+    let mut x1 = body.x1 - metric_pad();
     let mut rects = [Rect::ZERO; 3];
     for k in (0..3).rev() {
-        let r = Rect::new(x1 - w, cy - 11.0, x1, cy + 11.0);
+        let r = Rect::new(x1 - w, cy - ui_px(11.0), x1, cy + ui_px(11.0));
         rects[k] = r;
         x1 = r.x0 - gap;
     }
@@ -126,7 +128,7 @@ fn footer_buttons(body: Rect) -> [Rect; 3] {
 }
 
 fn paint_footer(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
-    let strip = Rect::new(body.x0, body.y1 - FOOTER_H, body.x1, body.y1);
+    let strip = Rect::new(body.x0, body.y1 - metric_footer_h(), body.x1, body.y1);
     scene.fill(Fill::NonZero, ID, ctx.theme.strip_bg, None, &strip);
     scene.fill(
         Fill::NonZero,
@@ -166,18 +168,18 @@ fn button(
         theme.text_dim
     };
     scene.stroke(
-        &Stroke::new(1.0),
+        &Stroke::new(ui_px(1.0)),
         ID,
         ink.with_alpha(if enabled { 0.6 } else { 0.4 }),
         None,
-        &r.to_rounded_rect(4.0),
+        &r.to_rounded_rect(ui_px(4.0)),
     );
     let w = text.measure(label, 11.0);
-    text.draw(scene, label, 11.0, ink, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + 4.0);
+    text.draw(scene, label, 11.0, ink, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + ui_px(4.0));
 }
 
 pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
-    if local.y >= body.y1 - FOOTER_H {
+    if local.y >= body.y1 - metric_footer_h() {
         let [relink, goto, update] = footer_buttons(body);
         let Some(id) = ctx.selected_asset else { return Action::None };
         let is_linked = ctx.doc.asset(id).is_some_and(|a| a.is_linked());
@@ -195,7 +197,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     let list = list_rect(body);
     let assets = ctx.doc.assets();
     let scroll = clamp_scroll(ctx.links_scroll, assets.len(), list.height());
-    let i = ((local.y - list.y0 + scroll) / ROW_H).floor();
+    let i = ((local.y - list.y0 + scroll) / metric_row_h()).floor();
     if i < 0.0 {
         return Action::None;
     }

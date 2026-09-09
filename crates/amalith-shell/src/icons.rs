@@ -10,9 +10,14 @@ use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 /// Transform-cursor ink: a wide white halo under a near-black body, so it
-/// reads on the pasteboard and on a white artboard alike.
+/// reads on the pasteboard and on a white artboard alike. Deliberately not
+/// a `Theme` field — on-document cursor glyphs read against arbitrary
+/// document content, not the app chrome, so they stay fixed regardless of
+/// the user's accent color. Shared with every other on-document cursor
+/// badge in `app/render/main_view.rs`, which draws the same near-black
+/// ink over the same white halo.
 const CURSOR_HALO: Color = Color::from_rgb8(0xff, 0xff, 0xff);
-const CURSOR_BODY: Color = Color::from_rgb8(0x1a, 0x1a, 0x1a);
+pub(crate) const CURSOR_INK: Color = Color::from_rgb8(0x1a, 0x1a, 0x1a);
 
 const ID: Affine = Affine::IDENTITY;
 
@@ -715,7 +720,7 @@ pub fn draw_fit_up_cursor(scene: &mut Scene, center: Point) {
         scene.fill(Fill::NonZero, ID, col, None, &bar);
     };
     pass(CURSOR_HALO, 3.0);
-    pass(CURSOR_BODY, 1.5);
+    pass(CURSOR_INK, 1.5);
 }
 
 pub fn draw_scale_cursor(scene: &mut Scene, center: Point, angle: f64) {
@@ -746,7 +751,7 @@ pub fn draw_scale_cursor(scene: &mut Scene, center: Point, angle: f64) {
         }
     };
     pass(CURSOR_HALO, 3.0);
-    pass(CURSOR_BODY, 1.5);
+    pass(CURSOR_INK, 1.5);
 }
 
 /// Illustrator-style rotate cursor: a ~115° arc with a tangent arrowhead
@@ -781,7 +786,7 @@ pub fn draw_rotate_cursor(scene: &mut Scene, center: Point, angle: f64) {
         }
     };
     pass(CURSOR_HALO, 3.0);
-    pass(CURSOR_BODY, 1.5);
+    pass(CURSOR_INK, 1.5);
 }
 
 #[derive(Clone, Copy, Default)]

@@ -8,7 +8,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use amalith_commands::{Command, CommandOutcome};
 
 use crate::prefs::{self, KeyChord};
-use crate::dock::PanelId;
+use crate::dock::{PanelId, PanelKind};
 use crate::textedit;
 use crate::tool::Tool;
 
@@ -221,7 +221,7 @@ impl App {
                     _ => {}
                 }
             }
-            if !self.dock.contains(PanelId("picker")) {
+            if !self.dock.contains(PanelId(PanelKind::Picker)) {
                 return;
             }
         }

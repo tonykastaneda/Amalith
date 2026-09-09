@@ -15,7 +15,7 @@ pub(in crate::app) struct NativeMenu {
     items: Vec<(muda::MenuId, MenuAction)>,
     /// Windows-menu checkmarks, keyed by panel id, updated as panels
     /// open/close.
-    window_checks: Vec<(&'static str, muda::CheckMenuItem)>,
+    window_checks: Vec<(PanelKind, muda::CheckMenuItem)>,
     /// View ▸ Guides checkmarks — (show-guides, lock-guides).
     guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     /// File ▸ Document Color Mode checkmarks — (CMYK, RGB).
@@ -60,87 +60,194 @@ impl NativeMenu {
         let sup_alt = Some(prim | Modifiers::ALT);
         let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
 
-        let new_i = mk("New", sup, Code::KeyN);
-        let open_i = mk("Open…", sup, Code::KeyO);
-        let close_i = mk("Close", sup, Code::KeyW);
-        let close_all_i = mk("Close All", sup_alt, Code::KeyW);
-        let save_i = mk("Save", sup, Code::KeyS);
-        let save_as_i = mk("Save As…", sup_shift, Code::KeyS);
-        let revert_i = MenuItem::new("Revert", true, None);
-        let import_i = mk("Import SVG…", sup_shift, Code::KeyI);
-        let place_i = mk("Place…", sup_shift, Code::KeyP);
-        let export_screens_i = mk("Export for Screens…", sup_alt, Code::KeyE);
-        let cmyk_i = CheckMenuItem::new("CMYK Color", true, false, None);
-        let rgb_i = CheckMenuItem::new("RGB Color", true, false, None);
-        let undo_i = mk("Undo", sup, Code::KeyZ);
-        let redo_i = mk("Redo", sup_shift, Code::KeyZ);
-        let cut_i = mk("Cut", sup, Code::KeyX);
-        let copy_i = mk("Copy", sup, Code::KeyC);
-        let paste_i = mk("Paste", sup, Code::KeyV);
+        // The `MenuId → MenuAction` map, built as each item is created
+        // instead of separately re-typed afterward — see
+        // `09-native-menu-action-registry-medium.md`. `reg` is the one
+        // place a click handler gets wired up; an item that never passes
+        // through it can't end up in the map, so it can't end up in the
+        // old failure mode this whole file used to risk: a menu item that
+        // renders, looks clickable, and silently does nothing.
+        let mut items: Vec<(muda::MenuId, MenuAction)> = Vec::new();
+        fn reg<T: muda::IsMenuItem>(
+            items: &mut Vec<(muda::MenuId, MenuAction)>,
+            item: T,
+            action: MenuAction,
+        ) -> T {
+            items.push((item.id().clone(), action));
+            item
+        }
+
+        let new_i = reg(&mut items, mk("New", sup, Code::KeyN), MenuAction::New);
+        let open_i = reg(&mut items, mk("Open…", sup, Code::KeyO), MenuAction::Open);
+        let close_i = reg(&mut items, mk("Close", sup, Code::KeyW), MenuAction::Close);
+        let close_all_i = reg(&mut items, mk("Close All", sup_alt, Code::KeyW), MenuAction::CloseAll);
+        let save_i = reg(&mut items, mk("Save", sup, Code::KeyS), MenuAction::Save);
+        let save_as_i = reg(&mut items, mk("Save As…", sup_shift, Code::KeyS), MenuAction::SaveAs);
+        let revert_i = reg(&mut items, MenuItem::new("Revert", true, None), MenuAction::Revert);
+        let import_i = reg(&mut items, mk("Import SVG…", sup_shift, Code::KeyI), MenuAction::ImportSvg);
+        let place_i = reg(&mut items, mk("Place…", sup_shift, Code::KeyP), MenuAction::Place);
+        let export_screens_i = reg(
+            &mut items,
+            mk("Export for Screens…", sup_alt, Code::KeyE),
+            MenuAction::ExportForScreens,
+        );
+        let cmyk_i = reg(
+            &mut items,
+            CheckMenuItem::new("CMYK Color", true, false, None),
+            MenuAction::SetColorMode(amalith_core::ColorMode::Cmyk),
+        );
+        let rgb_i = reg(
+            &mut items,
+            CheckMenuItem::new("RGB Color", true, false, None),
+            MenuAction::SetColorMode(amalith_core::ColorMode::Rgb),
+        );
+        let undo_i = reg(&mut items, mk("Undo", sup, Code::KeyZ), MenuAction::Undo);
+        let redo_i = reg(&mut items, mk("Redo", sup_shift, Code::KeyZ), MenuAction::Redo);
+        let cut_i = reg(&mut items, mk("Cut", sup, Code::KeyX), MenuAction::Cut);
+        let copy_i = reg(&mut items, mk("Copy", sup, Code::KeyC), MenuAction::Copy);
+        let paste_i = reg(&mut items, mk("Paste", sup, Code::KeyV), MenuAction::Paste);
         // Illustrator gives Duplicate no default shortcut — Cmd+D is
         // Transform Again's (Object menu, below), and Duplicate is
         // reachable via Cmd+C, Cmd+F / Cmd+B (paste in front / behind)
         // just as it is there.
-        let dup_i = MenuItem::new("Duplicate", true, None);
-        let transform_again_i = mk("Transform Again", sup, Code::KeyD);
-        let offset_path_i = MenuItem::new("Offset Path…", true, None);
-        let lock_selection_i = mk("Selection", sup, Code::Digit2);
-        let unlock_all_i = mk("Unlock All", sup_alt, Code::Digit2);
-        let all_i = mk("All", sup, Code::KeyA);
-        let sel_artboard_i = mk("All on Active Artboard", sup_alt, Code::KeyA);
-        let deselect_i = mk("Deselect", sup_shift, Code::KeyA);
-        let next_above_i = mk("Next Object Above", sup_alt, Code::BracketRight);
-        let next_below_i = mk("Next Object Below", sup_alt, Code::BracketLeft);
-        let same_fillstroke_i = MenuItem::new("Fill & Stroke", true, None);
-        let same_fill_i = MenuItem::new("Fill Color", true, None);
-        let same_opacity_i = MenuItem::new("Opacity", true, None);
-        let same_stroke_i = MenuItem::new("Stroke Color", true, None);
-        let same_weight_i = MenuItem::new("Stroke Weight", true, None);
-        let same_font_i = MenuItem::new("Font Family", true, None);
-        let same_size_i = MenuItem::new("Font Size", true, None);
-        let clip_make_i = MenuItem::new("Make", false, Some(Accelerator::new(sup, Code::Digit7)));
-        let clip_release_i =
-            MenuItem::new("Release", false, Some(Accelerator::new(sup_alt, Code::Digit7)));
-        let forward_i = mk("Bring Forward", sup, Code::BracketRight);
-        let front_i = mk("Bring to Front", sup_shift, Code::BracketRight);
-        let backward_i = mk("Send Backward", sup, Code::BracketLeft);
-        let back_i = mk("Send to Back", sup_shift, Code::BracketLeft);
-        let zoom_in_i = mk("Zoom In", sup, Code::Equal);
-        let zoom_out_i = mk("Zoom Out", sup, Code::Minus);
-        let fit_artboard_i = mk("Fit Artboard in Window", sup, Code::Digit0);
-        let fit_all_i = mk("Fit All in Window", sup_alt, Code::Digit0);
-        let outline_i = CheckMenuItem::new(
-            "Outline",
-            true,
-            outline,
-            Some(Accelerator::new(sup, Code::KeyY)),
+        let dup_i = reg(&mut items, MenuItem::new("Duplicate", true, None), MenuAction::Duplicate);
+        let transform_again_i = reg(
+            &mut items,
+            mk("Transform Again", sup, Code::KeyD),
+            MenuAction::TransformAgain,
         );
-        let transparency_grid_i = CheckMenuItem::new(
-            "Show Transparency Grid",
-            true,
-            transparency_grid,
-            Some(Accelerator::new(sup_shift, Code::KeyD)),
+        let offset_path_i = reg(
+            &mut items,
+            MenuItem::new("Offset Path…", true, None),
+            MenuAction::OffsetPath,
         );
-        let guides_show_i = CheckMenuItem::new(
-            "Show Guides",
-            true,
-            !guides_hidden,
-            Some(Accelerator::new(sup, Code::Semicolon)),
+        let lock_selection_i = reg(&mut items, mk("Selection", sup, Code::Digit2), MenuAction::LockSelection);
+        let unlock_all_i = reg(&mut items, mk("Unlock All", sup_alt, Code::Digit2), MenuAction::UnlockAll);
+        let all_i = reg(&mut items, mk("All", sup, Code::KeyA), MenuAction::SelectAll);
+        let sel_artboard_i = reg(
+            &mut items,
+            mk("All on Active Artboard", sup_alt, Code::KeyA),
+            MenuAction::SelectAllArtboard,
         );
-        let guides_lock_i = CheckMenuItem::new(
-            "Lock Guides",
-            true,
-            guides_locked,
-            Some(Accelerator::new(sup_alt, Code::Semicolon)),
+        let deselect_i = reg(&mut items, mk("Deselect", sup_shift, Code::KeyA), MenuAction::Deselect);
+        let next_above_i = reg(
+            &mut items,
+            mk("Next Object Above", sup_alt, Code::BracketRight),
+            MenuAction::SelectNextAbove,
         );
-        let clear_guides_i = MenuItem::new("Clear Guides", true, None);
+        let next_below_i = reg(
+            &mut items,
+            mk("Next Object Below", sup_alt, Code::BracketLeft),
+            MenuAction::SelectNextBelow,
+        );
+        let same_fillstroke_i = reg(
+            &mut items,
+            MenuItem::new("Fill & Stroke", true, None),
+            MenuAction::SelectSame(SameKind::FillStroke),
+        );
+        let same_fill_i = reg(
+            &mut items,
+            MenuItem::new("Fill Color", true, None),
+            MenuAction::SelectSame(SameKind::FillColor),
+        );
+        let same_opacity_i = reg(
+            &mut items,
+            MenuItem::new("Opacity", true, None),
+            MenuAction::SelectSame(SameKind::Opacity),
+        );
+        let same_stroke_i = reg(
+            &mut items,
+            MenuItem::new("Stroke Color", true, None),
+            MenuAction::SelectSame(SameKind::StrokeColor),
+        );
+        let same_weight_i = reg(
+            &mut items,
+            MenuItem::new("Stroke Weight", true, None),
+            MenuAction::SelectSame(SameKind::StrokeWeight),
+        );
+        let same_font_i = reg(
+            &mut items,
+            MenuItem::new("Font Family", true, None),
+            MenuAction::SelectSame(SameKind::FontFamily),
+        );
+        let same_size_i = reg(
+            &mut items,
+            MenuItem::new("Font Size", true, None),
+            MenuAction::SelectSame(SameKind::FontSize),
+        );
+        let clip_make_i = reg(
+            &mut items,
+            MenuItem::new("Make", false, Some(Accelerator::new(sup, Code::Digit7))),
+            MenuAction::ClipMake,
+        );
+        let clip_release_i = reg(
+            &mut items,
+            MenuItem::new("Release", false, Some(Accelerator::new(sup_alt, Code::Digit7))),
+            MenuAction::ClipRelease,
+        );
+        let forward_i = reg(&mut items, mk("Bring Forward", sup, Code::BracketRight), MenuAction::BringForward);
+        let front_i = reg(
+            &mut items,
+            mk("Bring to Front", sup_shift, Code::BracketRight),
+            MenuAction::BringToFront,
+        );
+        let backward_i = reg(&mut items, mk("Send Backward", sup, Code::BracketLeft), MenuAction::SendBackward);
+        let back_i = reg(&mut items, mk("Send to Back", sup_shift, Code::BracketLeft), MenuAction::SendToBack);
+        let zoom_in_i = reg(&mut items, mk("Zoom In", sup, Code::Equal), MenuAction::ZoomIn);
+        let zoom_out_i = reg(&mut items, mk("Zoom Out", sup, Code::Minus), MenuAction::ZoomOut);
+        let fit_artboard_i = reg(
+            &mut items,
+            mk("Fit Artboard in Window", sup, Code::Digit0),
+            MenuAction::FitArtboard,
+        );
+        let fit_all_i = reg(&mut items, mk("Fit All in Window", sup_alt, Code::Digit0), MenuAction::FitAll);
+        let outline_i = reg(
+            &mut items,
+            CheckMenuItem::new("Outline", true, outline, Some(Accelerator::new(sup, Code::KeyY))),
+            MenuAction::ToggleOutline,
+        );
+        let transparency_grid_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Show Transparency Grid",
+                true,
+                transparency_grid,
+                Some(Accelerator::new(sup_shift, Code::KeyD)),
+            ),
+            MenuAction::ToggleTransparencyGrid,
+        );
+        let guides_show_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Show Guides",
+                true,
+                !guides_hidden,
+                Some(Accelerator::new(sup, Code::Semicolon)),
+            ),
+            MenuAction::ToggleGuides,
+        );
+        let guides_lock_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Lock Guides",
+                true,
+                guides_locked,
+                Some(Accelerator::new(sup_alt, Code::Semicolon)),
+            ),
+            MenuAction::ToggleGuideLock,
+        );
+        let clear_guides_i = reg(
+            &mut items,
+            MenuItem::new("Clear Guides", true, None),
+            MenuAction::ClearGuides,
+        );
 
         let sep = PredefinedMenuItem::separator;
-        let about_i = MenuItem::new("About Amalith", true, None);
-        let prefs_i = MenuItem::new(
-            "Preferences…",
-            true,
-            Some(Accelerator::new(sup, Code::Comma)),
+        let about_i = reg(&mut items, MenuItem::new("About Amalith", true, None), MenuAction::About);
+        let prefs_i = reg(
+            &mut items,
+            MenuItem::new("Preferences…", true, Some(Accelerator::new(sup, Code::Comma))),
+            MenuAction::Preferences,
         );
         // macOS has a real "Quit" that ends the process cleanly. Windows
         // has no app menu convention and `PostQuitMessage` doesn't stop
@@ -149,9 +256,9 @@ impl NativeMenu {
         // `App::exiting` gets a chance to save the layout — the macOS
         // predefined Quit terminates without unwinding winit's loop.
         #[cfg(target_os = "macos")]
-        let quit_i = mk("Quit Amalith", sup, Code::KeyQ);
+        let quit_i = reg(&mut items, mk("Quit Amalith", sup, Code::KeyQ), MenuAction::Quit);
         #[cfg(not(target_os = "macos"))]
-        let quit_i = MenuItem::new("Exit", true, None);
+        let quit_i = reg(&mut items, MenuItem::new("Exit", true, None), MenuAction::Quit);
         let app = Submenu::with_items(
             "Amalith",
             true,
@@ -159,16 +266,35 @@ impl NativeMenu {
         )
         .expect("app menu");
         // File ▸ Scripts — a user-pointed folder, its scripts listed here.
-        let add_scripts_i = MenuItem::new("Add Scripts Folder…", true, None);
-        let reveal_scripts_i = MenuItem::new("Reveal Scripts Folder", true, None);
-        let remove_scripts_i = MenuItem::new("Remove Scripts Folder", true, None);
+        let add_scripts_i = reg(
+            &mut items,
+            MenuItem::new("Add Scripts Folder…", true, None),
+            MenuAction::AddScriptsFolder,
+        );
+        let reveal_scripts_i = reg(
+            &mut items,
+            MenuItem::new("Reveal Scripts Folder", true, None),
+            MenuAction::RevealScriptsFolder,
+        );
+        let remove_scripts_i = reg(
+            &mut items,
+            MenuItem::new("Remove Scripts Folder", true, None),
+            MenuAction::RemoveScriptsFolder,
+        );
         let script_items: Vec<(MenuItem, std::path::PathBuf)> = scripts
             .dir
             .as_deref()
             .map(crate::scripts::list)
             .unwrap_or_default()
             .into_iter()
-            .map(|p| (MenuItem::new(crate::scripts::label(&p), true, None), p))
+            .map(|p| {
+                let mi = reg(
+                    &mut items,
+                    MenuItem::new(crate::scripts::label(&p), true, None),
+                    MenuAction::RunScript(p.clone()),
+                );
+                (mi, p)
+            })
             .collect();
         let scripts_sep = sep();
         let scripts_menu = {
@@ -254,7 +380,11 @@ impl NativeMenu {
         .expect("select menu");
         // Type menu — the convert item's label + enabled state track the
         // selection (see `NativeMenu::sync_type`).
-        let convert_text_i = MenuItem::new("Convert to Area Type", false, None);
+        let convert_text_i = reg(
+            &mut items,
+            MenuItem::new("Convert to Area Type", false, None),
+            MenuAction::ConvertTextKind,
+        );
         let type_menu = Submenu::with_items("Type", true, &[&convert_text_i]).expect("type menu");
         let view = Submenu::with_items(
             "View",
@@ -281,11 +411,29 @@ impl NativeMenu {
         let workspace_names = workspaces.names();
         let workspace_checks: Vec<CheckMenuItem> = workspace_names
             .iter()
-            .map(|name| CheckMenuItem::new(name, true, *name == workspaces.active, None))
+            .map(|name| {
+                reg(
+                    &mut items,
+                    CheckMenuItem::new(name, true, *name == workspaces.active, None),
+                    MenuAction::PickWorkspace(name.clone()),
+                )
+            })
             .collect();
-        let reset_workspace_i = MenuItem::new(format!("Reset {}", workspaces.active), true, None);
-        let new_workspace_i = MenuItem::new("New Workspace…", true, None);
-        let manage_workspaces_i = MenuItem::new("Manage Workspaces…", true, None);
+        let reset_workspace_i = reg(
+            &mut items,
+            MenuItem::new(format!("Reset {}", workspaces.active), true, None),
+            MenuAction::ResetWorkspace,
+        );
+        let new_workspace_i = reg(
+            &mut items,
+            MenuItem::new("New Workspace…", true, None),
+            MenuAction::NewWorkspace,
+        );
+        let manage_workspaces_i = reg(
+            &mut items,
+            MenuItem::new("Manage Workspaces…", true, None),
+            MenuAction::ManageWorkspaces,
+        );
         let workspace_sep = sep();
         let mut workspace_refs: Vec<&dyn muda::IsMenuItem> =
             workspace_checks.iter().map(|i| i as &dyn muda::IsMenuItem).collect();
@@ -295,9 +443,16 @@ impl NativeMenu {
         workspace_refs.push(&manage_workspaces_i);
         let workspace_menu = Submenu::with_items("Workspace", true, &workspace_refs).expect("workspace menu");
 
-        let window_checks: Vec<(&'static str, CheckMenuItem)> = WINDOW_PANELS
+        let window_checks: Vec<(PanelKind, CheckMenuItem)> = WINDOW_PANELS
             .iter()
-            .map(|(id, label)| (*id, CheckMenuItem::new(*label, true, false, None)))
+            .map(|kind| {
+                let mi = reg(
+                    &mut items,
+                    CheckMenuItem::new(kind.label(), true, false, None),
+                    MenuAction::TogglePanel(*kind),
+                );
+                (*kind, mi)
+            })
             .collect();
         let windows_sep = sep();
         let mut window_refs: Vec<&dyn muda::IsMenuItem> = vec![&workspace_menu, &windows_sep];
@@ -308,7 +463,7 @@ impl NativeMenu {
 
         // A menu literally titled "Help" gets AppKit's search field for
         // free on macOS; on Windows it's just the one link.
-        let help_docs_i = MenuItem::new("Amalith Help", true, None);
+        let help_docs_i = reg(&mut items, MenuItem::new("Amalith Help", true, None), MenuAction::HelpDocs);
         let help_menu = Submenu::with_items("Help", true, &[&help_docs_i]).expect("help menu");
 
         let menu = Menu::new();
@@ -341,78 +496,6 @@ impl NativeMenu {
             }
         }
 
-        let items = vec![
-            (about_i.id().clone(), MenuAction::About),
-            (prefs_i.id().clone(), MenuAction::Preferences),
-            (new_i.id().clone(), MenuAction::New),
-            (open_i.id().clone(), MenuAction::Open),
-            (close_i.id().clone(), MenuAction::Close),
-            (close_all_i.id().clone(), MenuAction::CloseAll),
-            (revert_i.id().clone(), MenuAction::Revert),
-            (cmyk_i.id().clone(), MenuAction::SetColorMode(amalith_core::ColorMode::Cmyk)),
-            (rgb_i.id().clone(), MenuAction::SetColorMode(amalith_core::ColorMode::Rgb)),
-            (save_i.id().clone(), MenuAction::Save),
-            (save_as_i.id().clone(), MenuAction::SaveAs),
-            (import_i.id().clone(), MenuAction::ImportSvg),
-            (place_i.id().clone(), MenuAction::Place),
-            (export_screens_i.id().clone(), MenuAction::ExportForScreens),
-            (undo_i.id().clone(), MenuAction::Undo),
-            (redo_i.id().clone(), MenuAction::Redo),
-            (cut_i.id().clone(), MenuAction::Cut),
-            (copy_i.id().clone(), MenuAction::Copy),
-            (paste_i.id().clone(), MenuAction::Paste),
-            (dup_i.id().clone(), MenuAction::Duplicate),
-            (transform_again_i.id().clone(), MenuAction::TransformAgain),
-            (offset_path_i.id().clone(), MenuAction::OffsetPath),
-            (lock_selection_i.id().clone(), MenuAction::LockSelection),
-            (unlock_all_i.id().clone(), MenuAction::UnlockAll),
-            (all_i.id().clone(), MenuAction::SelectAll),
-            (sel_artboard_i.id().clone(), MenuAction::SelectAllArtboard),
-            (deselect_i.id().clone(), MenuAction::Deselect),
-            (next_above_i.id().clone(), MenuAction::SelectNextAbove),
-            (next_below_i.id().clone(), MenuAction::SelectNextBelow),
-            (same_fillstroke_i.id().clone(), MenuAction::SelectSame(SameKind::FillStroke)),
-            (same_fill_i.id().clone(), MenuAction::SelectSame(SameKind::FillColor)),
-            (same_opacity_i.id().clone(), MenuAction::SelectSame(SameKind::Opacity)),
-            (same_stroke_i.id().clone(), MenuAction::SelectSame(SameKind::StrokeColor)),
-            (same_weight_i.id().clone(), MenuAction::SelectSame(SameKind::StrokeWeight)),
-            (same_font_i.id().clone(), MenuAction::SelectSame(SameKind::FontFamily)),
-            (same_size_i.id().clone(), MenuAction::SelectSame(SameKind::FontSize)),
-            (forward_i.id().clone(), MenuAction::BringForward),
-            (front_i.id().clone(), MenuAction::BringToFront),
-            (backward_i.id().clone(), MenuAction::SendBackward),
-            (back_i.id().clone(), MenuAction::SendToBack),
-            (zoom_in_i.id().clone(), MenuAction::ZoomIn),
-            (zoom_out_i.id().clone(), MenuAction::ZoomOut),
-            (fit_artboard_i.id().clone(), MenuAction::FitArtboard),
-            (fit_all_i.id().clone(), MenuAction::FitAll),
-            (outline_i.id().clone(), MenuAction::ToggleOutline),
-            (transparency_grid_i.id().clone(), MenuAction::ToggleTransparencyGrid),
-            (convert_text_i.id().clone(), MenuAction::ConvertTextKind),
-            (help_docs_i.id().clone(), MenuAction::HelpDocs),
-            (clip_make_i.id().clone(), MenuAction::ClipMake),
-            (clip_release_i.id().clone(), MenuAction::ClipRelease),
-            (guides_show_i.id().clone(), MenuAction::ToggleGuides),
-            (guides_lock_i.id().clone(), MenuAction::ToggleGuideLock),
-            (clear_guides_i.id().clone(), MenuAction::ClearGuides),
-            (add_scripts_i.id().clone(), MenuAction::AddScriptsFolder),
-            (reveal_scripts_i.id().clone(), MenuAction::RevealScriptsFolder),
-            (remove_scripts_i.id().clone(), MenuAction::RemoveScriptsFolder),
-        ];
-        let mut items = items;
-        for (item, path) in &script_items {
-            items.push((item.id().clone(), MenuAction::RunScript(path.clone())));
-        }
-        for (id, item) in &window_checks {
-            items.push((item.id().clone(), MenuAction::TogglePanel(id)));
-        }
-        for (name, item) in workspace_names.iter().zip(&workspace_checks) {
-            items.push((item.id().clone(), MenuAction::PickWorkspace(name.clone())));
-        }
-        items.push((reset_workspace_i.id().clone(), MenuAction::ResetWorkspace));
-        items.push((new_workspace_i.id().clone(), MenuAction::NewWorkspace));
-        items.push((manage_workspaces_i.id().clone(), MenuAction::ManageWorkspaces));
-        items.push((quit_i.id().clone(), MenuAction::Quit));
         Self {
             items,
             window_checks,
@@ -465,7 +548,7 @@ impl NativeMenu {
     /// Tick / untick each Window-menu entry to match the live dock.
     pub(in crate::app) fn sync_window(&self, dock: &DockModel) {
         for (id, item) in &self.window_checks {
-            item.set_checked(dock.contains(PanelId(id)));
+            item.set_checked(dock.contains(PanelId(*id)));
         }
     }
 

@@ -13,7 +13,7 @@ pub(in crate::app) enum BlendClose {
 
 impl App {
     pub(in crate::app) fn blend_panel_id() -> PanelId {
-        PanelId("blenddlg")
+        PanelId(PanelKind::Blenddlg)
     }
 
     /// Open Blend Options for `group` — a no-op if it isn't a blend group.
@@ -28,7 +28,7 @@ impl App {
         self.text_blink = Instant::now();
 
         let pid = Self::blend_panel_id();
-        let fw = blenddlg::W;
+        let fw = blenddlg::metric_w();
         let fh = blenddlg::body_height() + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();
@@ -67,7 +67,7 @@ impl App {
         let pid = Self::blend_panel_id();
         let fid = self.dock.floating_id_of(pid)?;
         let h = self.theme.tab_strip_h + blenddlg::body_height();
-        let bounds = Rect::new(0.0, 0.0, blenddlg::W, h);
+        let bounds = Rect::new(0.0, 0.0, blenddlg::metric_w(), h);
         Some(self.build_master_frame(fid, bounds).body)
     }
 

@@ -18,24 +18,199 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Every real panel the app knows about — the 12 dockable Window-menu
+/// panels, the color picker, and the 12 float-only dialog panels (7 shape
+/// dialogs, 2 xform dialogs, export, blend, offset). This is the
+/// compiler-enforced replacement for what used to be a bare string
+/// (`PanelId(&'static str)`) matched by convention across a dozen files —
+/// see `Sys-Refactor/13-panel-registry-refactor-hard.md` for the full
+/// writeup of why that was a problem and what this fixes.
+///
+/// `Unknown` exists purely so a saved layout containing an old/future/
+/// typo'd panel id still round-trips instead of failing to load, matching
+/// the previous string-based behavior exactly (a stray id used to just
+/// silently draw a generic icon and do nothing) — every dispatch site gets
+/// exactly one arm for it, everything else stays individually
+/// compiler-enforced.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PanelKind {
+    Tools,
+    Layers,
+    Links,
+    Artboards,
+    Swatches,
+    Character,
+    Paragraph,
+    Color,
+    Gradient,
+    Transform,
+    Pathfinder,
+    Align,
+    Picker,
+    ExportScreens,
+    ShapedlgRect,
+    ShapedlgRound,
+    ShapedlgEllipse,
+    ShapedlgPolygon,
+    ShapedlgStar,
+    ShapedlgArc,
+    ShapedlgSpiral,
+    XformdlgReflect,
+    XformdlgShear,
+    Blenddlg,
+    Offsetdlg,
+    Unknown(&'static str),
+}
+
+impl PanelKind {
+    /// Every real panel kind, in the order the Window ▸ Panels menu's
+    /// alphabetical listing doesn't care about (that ordering lives in
+    /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
+    pub const ALL: [PanelKind; 25] = [
+        PanelKind::Tools,
+        PanelKind::Layers,
+        PanelKind::Links,
+        PanelKind::Artboards,
+        PanelKind::Swatches,
+        PanelKind::Character,
+        PanelKind::Paragraph,
+        PanelKind::Color,
+        PanelKind::Gradient,
+        PanelKind::Transform,
+        PanelKind::Pathfinder,
+        PanelKind::Align,
+        PanelKind::Picker,
+        PanelKind::ExportScreens,
+        PanelKind::ShapedlgRect,
+        PanelKind::ShapedlgRound,
+        PanelKind::ShapedlgEllipse,
+        PanelKind::ShapedlgPolygon,
+        PanelKind::ShapedlgStar,
+        PanelKind::ShapedlgArc,
+        PanelKind::ShapedlgSpiral,
+        PanelKind::XformdlgReflect,
+        PanelKind::XformdlgShear,
+        PanelKind::Blenddlg,
+        PanelKind::Offsetdlg,
+    ];
+
+    /// The stable on-disk id — identical to the string literals every
+    /// dispatch site used to match on directly, so existing saved
+    /// `layout.json`/`workspaces.json` files keep deserializing correctly.
+    /// This and [`Self::from_id_str`] are the only place these literals
+    /// live now.
+    pub fn id_str(self) -> &'static str {
+        match self {
+            PanelKind::Tools => "tools",
+            PanelKind::Layers => "layers",
+            PanelKind::Links => "links",
+            PanelKind::Artboards => "artboards",
+            PanelKind::Swatches => "swatches",
+            PanelKind::Character => "character",
+            PanelKind::Paragraph => "paragraph",
+            PanelKind::Color => "color",
+            PanelKind::Gradient => "gradient",
+            PanelKind::Transform => "transform",
+            PanelKind::Pathfinder => "pathfinder",
+            PanelKind::Align => "align",
+            PanelKind::Picker => "picker",
+            PanelKind::ExportScreens => "export-screens",
+            PanelKind::ShapedlgRect => "shapedlg.rect",
+            PanelKind::ShapedlgRound => "shapedlg.round",
+            PanelKind::ShapedlgEllipse => "shapedlg.ellipse",
+            PanelKind::ShapedlgPolygon => "shapedlg.polygon",
+            PanelKind::ShapedlgStar => "shapedlg.star",
+            PanelKind::ShapedlgArc => "shapedlg.arc",
+            PanelKind::ShapedlgSpiral => "shapedlg.spiral",
+            PanelKind::XformdlgReflect => "xformdlg.reflect",
+            PanelKind::XformdlgShear => "xformdlg.shear",
+            PanelKind::Blenddlg => "blenddlg",
+            PanelKind::Offsetdlg => "offsetdlg",
+            PanelKind::Unknown(s) => s,
+        }
+    }
+
+    /// Inverse of [`Self::id_str`]. Never fails — an unrecognized id
+    /// becomes `Unknown`, the same "round-trips inertly" behavior the old
+    /// bare-string `PanelId` gave every caller for free.
+    pub fn from_id_str(s: &str) -> Self {
+        match s {
+            "tools" => PanelKind::Tools,
+            "layers" => PanelKind::Layers,
+            "links" => PanelKind::Links,
+            "artboards" => PanelKind::Artboards,
+            "swatches" => PanelKind::Swatches,
+            "character" => PanelKind::Character,
+            "paragraph" => PanelKind::Paragraph,
+            "color" => PanelKind::Color,
+            "gradient" => PanelKind::Gradient,
+            "transform" => PanelKind::Transform,
+            "pathfinder" => PanelKind::Pathfinder,
+            "align" => PanelKind::Align,
+            "picker" => PanelKind::Picker,
+            "export-screens" => PanelKind::ExportScreens,
+            "shapedlg.rect" => PanelKind::ShapedlgRect,
+            "shapedlg.round" => PanelKind::ShapedlgRound,
+            "shapedlg.ellipse" => PanelKind::ShapedlgEllipse,
+            "shapedlg.polygon" => PanelKind::ShapedlgPolygon,
+            "shapedlg.star" => PanelKind::ShapedlgStar,
+            "shapedlg.arc" => PanelKind::ShapedlgArc,
+            "shapedlg.spiral" => PanelKind::ShapedlgSpiral,
+            "xformdlg.reflect" => PanelKind::XformdlgReflect,
+            "xformdlg.shear" => PanelKind::XformdlgShear,
+            "blenddlg" => PanelKind::Blenddlg,
+            "offsetdlg" => PanelKind::Offsetdlg,
+            other => PanelKind::Unknown(Box::leak(other.to_string().into_boxed_str())),
+        }
+    }
+
+    /// Display name — the panel tab's/menu's human-readable label.
+    pub fn label(self) -> &'static str {
+        match self {
+            PanelKind::Tools => "Tools",
+            PanelKind::Layers => "Layers",
+            PanelKind::Links => "Links",
+            PanelKind::Artboards => "Artboards",
+            PanelKind::Swatches => "Swatches",
+            PanelKind::Character => "Character",
+            PanelKind::Paragraph => "Paragraph",
+            PanelKind::Color => "Color",
+            PanelKind::Gradient => "Gradient",
+            PanelKind::Transform => "Transform",
+            PanelKind::Pathfinder => "Pathfinder",
+            PanelKind::Align => "Align",
+            PanelKind::Picker => "Color Picker",
+            PanelKind::ExportScreens => "Export for Screens",
+            PanelKind::ShapedlgRect => "Rectangle",
+            PanelKind::ShapedlgRound => "Rounded Rectangle",
+            PanelKind::ShapedlgEllipse => "Ellipse",
+            PanelKind::ShapedlgPolygon => "Polygon",
+            PanelKind::ShapedlgStar => "Star",
+            PanelKind::ShapedlgArc => "Arc Segment Tool Options",
+            PanelKind::ShapedlgSpiral => "Spiral",
+            PanelKind::XformdlgReflect => "Reflect",
+            PanelKind::XformdlgShear => "Shear",
+            PanelKind::Blenddlg => "Blend Options",
+            PanelKind::Offsetdlg => "Offset Path",
+            PanelKind::Unknown(s) => s,
+        }
+    }
+}
+
 /// Opaque, stable identifier for a panel kind. The app maps these to real
 /// panels via its registry; the dock never dereferences one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct PanelId(pub &'static str);
+pub struct PanelId(pub PanelKind);
 
-// `PanelId` wraps a `&'static str`, so serde can't fill one in directly on
-// load. Equality / hashing compare the string *contents* (derived), so a
-// leaked copy of the name is interchangeable with the original static —
-// and the panel-name set is tiny and fixed, so the leak is bounded.
 impl Serialize for PanelId {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.0)
+        s.serialize_str(self.0.id_str())
     }
 }
 impl<'de> Deserialize<'de> for PanelId {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
-        Ok(PanelId(Box::leak(s.into_boxed_str())))
+        Ok(PanelId(PanelKind::from_id_str(&s)))
     }
 }
 
@@ -110,9 +285,9 @@ impl Group {
 
 /// Tabs-mode content pane bounds, logical px (⇐ `TAB_CONTENT_MIN_H` /
 /// `TAB_CONTENT_MAX_H` / `TAB_CONTENT_DEFAULT_H`).
-pub const TAB_CONTENT_MIN_H: f32 = 80.0;
-pub const TAB_CONTENT_MAX_H: f32 = 480.0;
-pub const TAB_CONTENT_DEFAULT_H: f32 = 160.0;
+pub fn metric_tab_content_min_h() -> f32 { crate::metrics::with(|m| m.dock_tab_content_min_h) }
+pub fn metric_tab_content_max_h() -> f32 { crate::metrics::with(|m| m.dock_tab_content_max_h) }
+pub fn metric_tab_content_default_h() -> f32 { crate::metrics::with(|m| m.dock_tab_content_default_h) }
 
 /// One Master Group: an on-screen unit that is either docked to a rail
 /// edge or floating as its own OS window — the *same* entity either way
@@ -153,6 +328,16 @@ impl Default for ToolsDensity {
 }
 
 impl Master {
+    /// Resize chrome dimensions, preserving desktop position and panel identity.
+    pub fn rescale(&mut self, ratio: f32) {
+        self.rect[2] *= ratio;
+        self.rect[3] *= ratio;
+        self.scroll *= ratio;
+        for g in &mut self.groups {
+            if let Some(h) = &mut g.content_h { *h *= ratio; }
+        }
+    }
+
     fn new(id: u64, kind: MasterKind, groups: Vec<Group>, rect: [f32; 4]) -> Self {
         Self {
             id,
@@ -629,13 +814,122 @@ impl DockModel {
 mod tests {
     use super::*;
 
-    const A: PanelId = PanelId("a");
-    const B: PanelId = PanelId("b");
-    const C: PanelId = PanelId("c");
-    const D: PanelId = PanelId("d");
+    const A: PanelId = PanelId(PanelKind::Unknown("a"));
+    const B: PanelId = PanelId(PanelKind::Unknown("b"));
+    const C: PanelId = PanelId(PanelKind::Unknown("c"));
+    const D: PanelId = PanelId(PanelKind::Unknown("d"));
 
     fn rect() -> [f32; 4] {
         [0.0, 0.0, 200.0, 100.0]
+    }
+
+    /// `PanelKind::ALL` must list every real variant exactly once — built
+    /// via an exhaustive match with no wildcard, so this test itself
+    /// fails to *compile* (not just fails to pass) if a variant is ever
+    /// added to the enum and forgotten here, the same guarantee
+    /// `01-prefaction-and-tool-all-sync-easy.md` recommends for
+    /// `Tool::ALL`/`PrefAction::ALL`.
+    #[test]
+    fn panel_kind_all_covers_every_real_variant_exactly_once() {
+        fn covered(k: PanelKind) -> bool {
+            match k {
+                PanelKind::Tools
+                | PanelKind::Layers
+                | PanelKind::Links
+                | PanelKind::Artboards
+                | PanelKind::Swatches
+                | PanelKind::Character
+                | PanelKind::Paragraph
+                | PanelKind::Color
+                | PanelKind::Gradient
+                | PanelKind::Transform
+                | PanelKind::Pathfinder
+                | PanelKind::Align
+                | PanelKind::Picker
+                | PanelKind::ExportScreens
+                | PanelKind::ShapedlgRect
+                | PanelKind::ShapedlgRound
+                | PanelKind::ShapedlgEllipse
+                | PanelKind::ShapedlgPolygon
+                | PanelKind::ShapedlgStar
+                | PanelKind::ShapedlgArc
+                | PanelKind::ShapedlgSpiral
+                | PanelKind::XformdlgReflect
+                | PanelKind::XformdlgShear
+                | PanelKind::Blenddlg
+                | PanelKind::Offsetdlg => true,
+                PanelKind::Unknown(_) => false,
+            }
+        }
+        assert_eq!(PanelKind::ALL.len(), 25);
+        for k in PanelKind::ALL {
+            assert!(covered(k), "{k:?} missing from the exhaustive check above");
+        }
+        let mut seen = std::collections::HashSet::new();
+        for k in PanelKind::ALL {
+            assert!(seen.insert(k), "{k:?} appears more than once in ALL");
+        }
+    }
+
+    /// `id_str()`/`from_id_str()` must round-trip every real variant, and
+    /// the on-disk string for each must match the literal a pre-refactor
+    /// save file actually contains — checked against a list transcribed
+    /// independently of `id_str()` itself, so a typo introduced in both
+    /// places identically (e.g. copy-pasting `id_str`'s body into this
+    /// test) wouldn't silently agree with itself.
+    #[test]
+    fn panel_kind_id_str_round_trips_and_matches_pre_refactor_strings() {
+        for k in PanelKind::ALL {
+            assert_eq!(PanelKind::from_id_str(k.id_str()), k);
+        }
+        let expected: [(PanelKind, &str); 25] = [
+            (PanelKind::Tools, "tools"),
+            (PanelKind::Layers, "layers"),
+            (PanelKind::Links, "links"),
+            (PanelKind::Artboards, "artboards"),
+            (PanelKind::Swatches, "swatches"),
+            (PanelKind::Character, "character"),
+            (PanelKind::Paragraph, "paragraph"),
+            (PanelKind::Color, "color"),
+            (PanelKind::Gradient, "gradient"),
+            (PanelKind::Transform, "transform"),
+            (PanelKind::Pathfinder, "pathfinder"),
+            (PanelKind::Align, "align"),
+            (PanelKind::Picker, "picker"),
+            (PanelKind::ExportScreens, "export-screens"),
+            (PanelKind::ShapedlgRect, "shapedlg.rect"),
+            (PanelKind::ShapedlgRound, "shapedlg.round"),
+            (PanelKind::ShapedlgEllipse, "shapedlg.ellipse"),
+            (PanelKind::ShapedlgPolygon, "shapedlg.polygon"),
+            (PanelKind::ShapedlgStar, "shapedlg.star"),
+            (PanelKind::ShapedlgArc, "shapedlg.arc"),
+            (PanelKind::ShapedlgSpiral, "shapedlg.spiral"),
+            (PanelKind::XformdlgReflect, "xformdlg.reflect"),
+            (PanelKind::XformdlgShear, "xformdlg.shear"),
+            (PanelKind::Blenddlg, "blenddlg"),
+            (PanelKind::Offsetdlg, "offsetdlg"),
+        ];
+        for (kind, literal) in expected {
+            assert_eq!(kind.id_str(), literal, "{kind:?}'s id_str drifted from the pre-refactor literal");
+            assert_eq!(PanelKind::from_id_str(literal), kind, "{literal:?} no longer deserializes to {kind:?}");
+        }
+    }
+
+    /// An id a saved layout might contain that isn't one of the 25 known
+    /// kinds — old, future, or just a typo — must still round-trip
+    /// (`Unknown`, not a deserialize error), matching the pre-refactor
+    /// bare-string `PanelId`'s "anything round-trips" behavior exactly.
+    #[test]
+    fn unrecognized_panel_id_round_trips_as_unknown_instead_of_failing() {
+        let json = serde_json::to_string(&PanelId(PanelKind::Unknown("some-future-panel"))).unwrap();
+        assert_eq!(json, "\"some-future-panel\"");
+        let back: PanelId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, PanelId(PanelKind::Unknown("some-future-panel")));
+
+        let known_json = serde_json::to_string(&PanelId(PanelKind::Links)).unwrap();
+        assert_eq!(known_json, "\"links\"");
+        let known_back: PanelId = serde_json::from_str(&known_json).unwrap();
+        assert_eq!(known_back, PanelId(PanelKind::Links));
     }
 
     #[test]

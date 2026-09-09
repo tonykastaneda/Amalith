@@ -4,11 +4,13 @@
 //! `amalith-panelSys/app.js`'s DOM structure — see `MasterFrame`'s own
 //! doc comments for the JS-to-Rust mapping.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, Line, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
-use crate::dock::{Master, MasterLayout, PanelId};
+use crate::dock::{Master, MasterLayout, PanelId, PanelKind};
 use crate::layout::{GroupDrop, MasterFrame, PanelDrop};
 use crate::text::TextContext;
 use crate::theme::Theme;
@@ -19,11 +21,11 @@ const TAB_TEXT_PX: f32 = 12.6;
 /// Panel tabs get 10% more side padding than the theme's base, and reserve
 /// this much room on the right for the close (×) button.
 pub const PANEL_TAB_PAD_MUL: f64 = 1.1;
-pub const PANEL_TAB_CLOSE_W: f64 = 22.0;
+pub fn metric_panel_tab_close_w() -> f64 { crate::metrics::with(|m| m.chrome_panel_tab_close_w) }
 
 /// The close-button hit / draw rect for a panel `tab`.
 pub fn panel_tab_close_rect(tab: Rect) -> Rect {
-    Rect::new(tab.x1 - PANEL_TAB_CLOSE_W, tab.y0, tab.x1, tab.y1)
+    Rect::new(tab.x1 - metric_panel_tab_close_w(), tab.y0, tab.x1, tab.y1)
 }
 
 /// The hamburger button on the right of a tab strip — a per-*tab* menu
@@ -73,7 +75,7 @@ pub fn paint_master(
             master.layout == MasterLayout::Tabs
         };
         paint_chevrons(scene, frame.chevron, theme.text_dim, chevron_state);
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &frame.header);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &frame.header);
     }
 
     for g in &frame.groups {
@@ -90,7 +92,7 @@ pub fn paint_master(
                     let is_open = open_flyout == Some((g.index, i));
                     if is_open {
                         scene.fill(Fill::NonZero, ID, theme.bg, None, &row.rect);
-                        let inner_shadow = Rect::new(row.rect.x0, row.rect.y0, row.rect.x1, row.rect.y0 + 2.0);
+                        let inner_shadow = Rect::new(row.rect.x0, row.rect.y0, row.rect.x1, row.rect.y0 + ui_px(2.0));
                         scene.fill(Fill::NonZero, ID, Color::from_rgba8(0, 0, 0, 60), None, &inner_shadow);
                     }
                     if i > 0 {
@@ -100,19 +102,19 @@ pub fn paint_master(
                     let color = if is_open { theme.text } else { theme.text_dim };
                     let icon_box = if frame.compact {
                         let c = row.rect.center();
-                        Rect::new(c.x - 9.0, c.y - 9.0, c.x + 9.0, c.y + 9.0)
+                        Rect::new(c.x - ui_px(9.0), c.y - ui_px(9.0), c.x + ui_px(9.0), c.y + ui_px(9.0))
                     } else {
                         Rect::new(
-                            row.rect.x0 + 10.0,
-                            row.rect.y0 + (row.rect.height() - 18.0) * 0.5,
-                            row.rect.x0 + 28.0,
-                            row.rect.y0 + (row.rect.height() + 18.0) * 0.5,
+                            row.rect.x0 + ui_px(10.0),
+                            row.rect.y0 + (row.rect.height() - ui_px(18.0)) * 0.5,
+                            row.rect.x0 + ui_px(28.0),
+                            row.rect.y0 + (row.rect.height() + ui_px(18.0)) * 0.5,
                         )
                     };
                     crate::panel_icon::draw(scene, row.panel, icon_box, color);
                     if !frame.compact {
                         let baseline = row.rect.y0 + row.rect.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-                        text.draw(scene, &label(row.panel), TAB_TEXT_PX, color, icon_box.x1 + 8.0, baseline);
+                        text.draw(scene, &label(row.panel), TAB_TEXT_PX, color, icon_box.x1 + ui_px(8.0), baseline);
                     }
                 }
             }
@@ -122,11 +124,11 @@ pub fn paint_master(
                     let active = i == g.active;
                     if active {
                         scene.fill(Fill::NonZero, ID, theme.strip_active, None, &tab.rect);
-                        let u = Rect::new(tab.rect.x0, tab.rect.y1 - 2.0, tab.rect.x1, tab.rect.y1);
+                        let u = Rect::new(tab.rect.x0, tab.rect.y1 - ui_px(2.0), tab.rect.x1, tab.rect.y1);
                         scene.fill(Fill::NonZero, ID, theme.drop_line, None, &u);
                     }
                     if i > 0 {
-                        let sep = Rect::new(tab.rect.x0 - 0.5, tab.rect.y0 + 4.0, tab.rect.x0 + 0.5, tab.rect.y1 - 4.0);
+                        let sep = Rect::new(tab.rect.x0 - 0.5, tab.rect.y0 + ui_px(4.0), tab.rect.x0 + 0.5, tab.rect.y1 - ui_px(4.0));
                         scene.fill(Fill::NonZero, ID, theme.border, None, &sep);
                     }
                     let color = if active { theme.text } else { theme.text_dim };
@@ -150,7 +152,7 @@ pub fn paint_master(
                 paint_resize_grip(scene, g.resize_handle, theme);
             }
         }
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &g.bounds);
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &g.bounds);
     }
 }
 
@@ -173,7 +175,7 @@ fn paint_group_handle(scene: &mut Scene, handle: Rect, theme: &Theme) {
 fn paint_resize_grip(scene: &mut Scene, r: Rect, theme: &Theme) {
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &r);
     let c = r.center();
-    scene.stroke(&Stroke::new(1.5), ID, theme.text_dim.with_alpha(0.6), None, &Line::new((c.x - 12.0, c.y), (c.x + 12.0, c.y)));
+    scene.stroke(&Stroke::new(ui_px(1.5)), ID, theme.text_dim.with_alpha(0.6), None, &Line::new((c.x - ui_px(12.0), c.y), (c.x + ui_px(12.0), c.y)));
 }
 
 /// Live drop cue while dragging a panel over an already-laid-out Master
@@ -238,7 +240,7 @@ pub fn paint_group_drop(scene: &mut Scene, frame: &MasterFrame, drop: &GroupDrop
     match *drop {
         GroupDrop::MergeInto { group } => {
             if let Some(g) = frame.groups.get(group) {
-                scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &g.bounds.inset(-1.0));
+                scene.stroke(&Stroke::new(ui_px(2.0)), ID, theme.accent, None, &g.bounds.inset(ui_px(-1.0)));
             }
         }
         GroupDrop::NewSibling { at } => {
@@ -255,7 +257,7 @@ pub fn paint_group_drop(scene: &mut Scene, frame: &MasterFrame, drop: &GroupDrop
 
 /// The docking insertion line at the viewport edge/seam (⇐ `#dock-insert`).
 pub fn paint_dock_insert(scene: &mut Scene, viewport_h: f64, x: f64, theme: &Theme) {
-    let r = Rect::new(x - 2.0, 0.0, x + 2.0, viewport_h);
+    let r = Rect::new(x - ui_px(2.0), 0.0, x + ui_px(2.0), viewport_h);
     scene.fill(Fill::NonZero, ID, theme.drop_line, None, &r);
 }
 
@@ -279,24 +281,24 @@ pub fn paint_flyout_chrome(scene: &mut Scene, bounds: Rect, header: Rect, close:
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
     let baseline = header.y0 + header.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-    text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + 10.0, baseline);
+    text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + ui_px(10.0), baseline);
     paint_x(scene, close, theme.text_dim, 3.5);
-    scene.stroke(&Stroke::new(1.5), ID, theme.text_dim, None, &bounds);
+    scene.stroke(&Stroke::new(ui_px(1.5)), ID, theme.text_dim, None, &bounds);
 }
 
 /// A close ("×") glyph centered in `r`, arm half-length `a`.
 pub(crate) fn paint_x(scene: &mut Scene, r: Rect, color: vello::peniko::Color, a: f64) {
     let c = r.center();
-    let stroke = Stroke::new(1.4);
+    let stroke = Stroke::new(ui_px(1.4));
     scene.stroke(&stroke, ID, color, None, &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)));
     scene.stroke(&stroke, ID, color, None, &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)));
 }
 
 fn paint_hamburger(scene: &mut Scene, r: Rect, color: vello::peniko::Color) {
     let c = r.center();
-    let half = 5.5;
-    let gap = 3.4;
-    let stroke = Stroke::new(1.4);
+    let half = ui_px(5.5);
+    let gap = ui_px(3.4);
+    let stroke = Stroke::new(ui_px(1.4));
     for i in [-1, 0, 1] {
         let y = c.y + i as f64 * gap;
         scene.stroke(&stroke, ID, color, None, &Line::new((c.x - half, y), (c.x + half, y)));
@@ -310,7 +312,7 @@ fn paint_chevrons(scene: &mut Scene, r: Rect, color: vello::peniko::Color, point
     let c = r.center();
     let (dx, half) = (3.0_f64, 3.5_f64);
     let sign = if pointing_left { 1.0 } else { -1.0 };
-    let stroke = Stroke::new(1.4);
+    let stroke = Stroke::new(ui_px(1.4));
     for i in [-1.0_f64, 1.0] {
         let cx = c.x + i * dx;
         scene.stroke(&stroke, ID, color, None, &Line::new((cx + sign * half * 0.6, c.y - half), (cx - sign * half * 0.6, c.y)));
@@ -350,8 +352,8 @@ mod tests {
     fn paint_master_stack_and_tabs_modes_dont_panic() {
         let mut text = TextContext::new();
         for layout in [MasterLayout::Stack, MasterLayout::Tabs] {
-            let m = master(layout, vec![vec![PanelId("a"), PanelId("b")], vec![PanelId("c")]]);
-            let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
+            let m = master(layout, vec![vec![PanelId(PanelKind::Unknown("a")), PanelId(PanelKind::Unknown("b"))], vec![PanelId(PanelKind::Unknown("c"))]]);
+            let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, true);
             let mut scene = Scene::new();
             paint_master(
                 &mut scene,
@@ -359,7 +361,7 @@ mod tests {
                 &m,
                 &theme(),
                 &mut text,
-                &|p| p.0.to_string(),
+                &|p| p.0.id_str().to_string(),
                 &|_| false,
                 Some((0, 0)),
                 false,
@@ -370,26 +372,26 @@ mod tests {
     #[test]
     fn paint_master_compact_mode_doesnt_panic() {
         let mut text = TextContext::new();
-        let m = master(MasterLayout::Stack, vec![vec![PanelId("a")]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 100.0, 400.0), &theme(), &mut w80, false, true);
+        let m = master(MasterLayout::Stack, vec![vec![PanelId(PanelKind::Unknown("a"))]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(100.0), ui_px(400.0)), &theme(), &mut w80, false, true);
         assert!(frame.compact);
         let mut scene = Scene::new();
-        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, false);
+        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.id_str().to_string(), &|_| false, None, false);
     }
 
     #[test]
     fn paint_master_bespoke_mode_doesnt_panic() {
         let mut text = TextContext::new();
-        let m = master(MasterLayout::Tabs, vec![vec![PanelId("picker")]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true, true);
+        let m = master(MasterLayout::Tabs, vec![vec![PanelId(PanelKind::Picker)]]);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(240.0), ui_px(200.0)), &theme(), &mut w80, true, true);
         let mut scene = Scene::new();
-        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.to_string(), &|_| false, None, true);
+        paint_master(&mut scene, &frame, &m, &theme(), &mut text, &|p| p.0.id_str().to_string(), &|_| false, None, true);
     }
 
     #[test]
     fn hamburger_sits_on_the_right_of_the_tab_strip() {
         let theme = Theme::default();
-        let strip = Rect::new(10.0, 20.0, 210.0, 47.3);
+        let strip = Rect::new(ui_px(10.0), ui_px(20.0), ui_px(210.0), ui_px(47.3));
         let m = panel_menu_rect(strip, &theme);
         assert_eq!(m.x1, strip.x1);
         assert_eq!(m.y0, strip.y0);

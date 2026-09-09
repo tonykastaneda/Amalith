@@ -1,6 +1,8 @@
 //! Overlay painters drawn on top of everything: the font dropdown and
 //! the hover tooltip.
 
+use crate::metrics::px as ui_px;
+
 use super::super::*;
 use vello::kurbo::Line;
 
@@ -16,10 +18,10 @@ impl App {
             ID,
             th.bg,
             None,
-            &outer.to_rounded_rect(4.0),
+            &outer.to_rounded_rect(ui_px(4.0)),
         );
         self.content
-            .stroke(&Stroke::new(1.0), ID, th.border, None, &outer.to_rounded_rect(4.0));
+            .stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &outer.to_rounded_rect(ui_px(4.0)));
         self.content
             .push_clip_layer(Fill::NonZero, ID, &outer);
         let cur = match m.kind {
@@ -32,14 +34,14 @@ impl App {
                 format!("{}", self.active_text_style().size.round() as i64)
             }
         };
-        let header = m.header_h(Self::FM_ROW);
+        let header = m.header_h(Self::metric_fm_row());
         let items = m.matches();
         for (i, label) in items.iter().enumerate() {
-            let y = outer.y0 + 3.0 + header + i as f64 * Self::FM_ROW - m.scroll;
-            if y + Self::FM_ROW < outer.y0 || y > outer.y1 {
+            let y = outer.y0 + ui_px(3.0) + header + i as f64 * Self::metric_fm_row() - m.scroll;
+            if y + Self::metric_fm_row() < outer.y0 || y > outer.y1 {
                 continue;
             }
-            let row = Rect::new(outer.x0, y, outer.x1, y + Self::FM_ROW);
+            let row = Rect::new(outer.x0, y, outer.x1, y + Self::metric_fm_row());
             let hot = row.contains(self.pointer);
             if hot {
                 self.content
@@ -51,8 +53,8 @@ impl App {
                 label,
                 12.0,
                 if sel { th.accent } else { th.text },
-                row.x0 + 10.0,
-                row.center().y + 4.0,
+                row.x0 + ui_px(10.0),
+                row.center().y + ui_px(4.0),
             );
         }
         // The type-to-filter row, drawn last so scrolled entries can't
@@ -60,9 +62,9 @@ impl App {
         if header > 0.0 {
             let hrow = Rect::new(
                 outer.x0,
-                outer.y0 + 3.0,
+                outer.y0 + ui_px(3.0),
                 outer.x1,
-                outer.y0 + 3.0 + Self::FM_ROW,
+                outer.y0 + ui_px(3.0) + Self::metric_fm_row(),
             );
             self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &hrow);
             self.content.fill(
@@ -72,7 +74,7 @@ impl App {
                 None,
                 &Rect::new(outer.x0, hrow.y1, outer.x1, hrow.y1 + 1.0),
             );
-            let qx = hrow.x0 + 10.0;
+            let qx = hrow.x0 + ui_px(10.0);
             let qw = self.text.measure(&m.query, 12.0);
             self.text.draw(
                 &mut self.content,
@@ -80,14 +82,14 @@ impl App {
                 12.0,
                 th.text,
                 qx,
-                hrow.center().y + 4.0,
+                hrow.center().y + ui_px(4.0),
             );
             self.content.fill(
                 Fill::NonZero,
                 ID,
                 th.accent,
                 None,
-                &Rect::new(qx + qw + 1.0, hrow.y0 + 4.0, qx + qw + 2.4, hrow.y1 - 4.0),
+                &Rect::new(qx + qw + 1.0, hrow.y0 + ui_px(4.0), qx + qw + ui_px(2.4), hrow.y1 - ui_px(4.0)),
             );
         }
         self.content.pop_layer();
@@ -100,18 +102,18 @@ impl App {
         let fly = Self::ruler_menu_rect(anchor);
         let th = &self.theme;
         self.content
-            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(4.0));
+            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(ui_px(4.0)));
         self.content.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             th.border,
             None,
-            &fly.to_rounded_rect(4.0),
+            &fly.to_rounded_rect(ui_px(4.0)),
         );
         let cur = self.doc.editor.document().settings.default_unit;
-        let mut y = fly.y0 + Self::RM_PAD;
+        let mut y = fly.y0 + Self::metric_rm_pad();
         for unit in amalith_core::Unit::ALL {
-            let row = Rect::new(fly.x0, y, fly.x1, y + Self::RM_ROW);
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_rm_row());
             if row.contains(self.pointer) {
                 self.content
                     .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
@@ -123,8 +125,8 @@ impl App {
                     "✓",
                     12.0,
                     th.accent,
-                    row.x0 + 10.0,
-                    row.center().y + 4.0,
+                    row.x0 + ui_px(10.0),
+                    row.center().y + ui_px(4.0),
                 );
             }
             self.text.draw(
@@ -132,10 +134,10 @@ impl App {
                 unit.label(),
                 12.5,
                 if on { th.accent } else { th.text },
-                row.x0 + 28.0,
-                row.center().y + 4.5,
+                row.x0 + ui_px(28.0),
+                row.center().y + ui_px(4.5),
             );
-            y += Self::RM_ROW;
+            y += Self::metric_rm_row();
         }
     }
 
@@ -148,7 +150,7 @@ impl App {
         let crumbs = self.isolation_crumbs();
         let region = self.canvas_region();
         let inset = if self.rulers { crate::rulers::THICK } else { 0.0 };
-        let bar = Rect::new(region.x0 + inset, region.y0 + inset, region.x1, region.y0 + inset + 24.0);
+        let bar = Rect::new(region.x0 + inset, region.y0 + inset, region.x1, region.y0 + inset + ui_px(24.0));
         let th = &self.theme;
         self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &bar);
         self.content.fill(
@@ -159,35 +161,35 @@ impl App {
             &Rect::new(bar.x0, bar.y1, bar.x1, bar.y1 + 1.0),
         );
         // "<" back arrow.
-        let arrow = Rect::new(bar.x0 + 4.0, bar.y0, bar.x0 + 22.0, bar.y1);
+        let arrow = Rect::new(bar.x0 + ui_px(4.0), bar.y0, bar.x0 + ui_px(22.0), bar.y1);
         {
             use vello::kurbo::BezPath;
             let cy = bar.center().y;
             let mut p = BezPath::new();
-            p.move_to((arrow.x0 + 11.0, cy - 4.0));
-            p.line_to((arrow.x0 + 6.0, cy));
-            p.line_to((arrow.x0 + 11.0, cy + 4.0));
+            p.move_to((arrow.x0 + ui_px(11.0), cy - ui_px(4.0)));
+            p.line_to((arrow.x0 + ui_px(6.0), cy));
+            p.line_to((arrow.x0 + ui_px(11.0), cy + ui_px(4.0)));
             self.content
-                .stroke(&Stroke::new(1.5), ID, th.text, None, &p);
+                .stroke(&Stroke::new(ui_px(1.5)), ID, th.text, None, &p);
         }
         self.iso_bar.push((arrow, self.isolation.len() - 1));
 
-        let mut x = arrow.x1 + 6.0;
+        let mut x = arrow.x1 + ui_px(6.0);
         for (i, label) in crumbs.iter().enumerate() {
             if i > 0 {
-                self.text.draw(&mut self.content, "›", 12.0, self.theme.text_dim, x, bar.center().y + 4.0);
-                x += 12.0;
+                self.text.draw(&mut self.content, "›", 12.0, self.theme.text_dim, x, bar.center().y + ui_px(4.0));
+                x += ui_px(12.0);
             }
             let w = self.text.measure(label, 12.5);
             let last = i == crumbs.len() - 1;
             let col = if last { self.theme.text } else { self.theme.text_dim };
-            self.text.draw(&mut self.content, label, 12.5, col, x, bar.center().y + 4.5);
+            self.text.draw(&mut self.content, label, 12.5, col, x, bar.center().y + ui_px(4.5));
             // crumb 0 = owning layer; crumbs 1.. map to isolation depth i.
             if i >= 1 {
                 self.iso_bar
-                    .push((Rect::new(x - 3.0, bar.y0, x + w + 3.0, bar.y1), i));
+                    .push((Rect::new(x - ui_px(3.0), bar.y0, x + w + ui_px(3.0), bar.y1), i));
             }
-            x += w + 8.0;
+            x += w + ui_px(8.0);
         }
     }
 
@@ -340,8 +342,8 @@ impl App {
         let constrain = self.free_transform_constrain;
         let th = self.theme.clone();
 
-        self.content.fill(Fill::NonZero, ID, th.panel_bg, None, &lay.panel.to_rounded_rect(6.0));
-        self.content.stroke(&Stroke::new(1.0), ID, th.border, None, &lay.panel.to_rounded_rect(6.0));
+        self.content.fill(Fill::NonZero, ID, th.panel_bg, None, &lay.panel.to_rounded_rect(ui_px(6.0)));
+        self.content.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &lay.panel.to_rounded_rect(ui_px(6.0)));
 
         let buttons = [
             (lay.constrain, constrain && mode != free_transform::FreeTransformMode::Perspective),
@@ -351,14 +353,14 @@ impl App {
         ];
         for (i, (r, selected)) in buttons.into_iter().enumerate() {
             if selected {
-                self.content.fill(Fill::NonZero, ID, th.accent, None, &r.to_rounded_rect(4.0));
+                self.content.fill(Fill::NonZero, ID, th.accent, None, &r.to_rounded_rect(ui_px(4.0)));
             } else if r.contains(pointer) {
                 self.content
-                    .fill(Fill::NonZero, ID, th.accent.with_alpha(0.16), None, &r.to_rounded_rect(4.0));
+                    .fill(Fill::NonZero, ID, th.accent.with_alpha(0.16), None, &r.to_rounded_rect(ui_px(4.0)));
             }
-            self.content.stroke(&Stroke::new(1.0), ID, th.border, None, &r.to_rounded_rect(4.0));
+            self.content.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r.to_rounded_rect(ui_px(4.0)));
             let color = if i == 0 && mode == free_transform::FreeTransformMode::Perspective { th.text_dim.with_alpha(0.35) } else if selected { th.on_accent } else { th.text_dim };
-            let box_ = Rect::from_center_size(r.center(), (18.0, 18.0));
+            let box_ = Rect::from_center_size(r.center(), (ui_px(18.0), ui_px(18.0)));
             match i {
                 0 => paint_constrain_glyph(&mut self.content, box_, color),
                 1 => icons::draw(&mut self.content, icons::Icon::FreeTransform, box_, color),
@@ -474,41 +476,41 @@ impl App {
         let fly = Self::ctx_menu_rect(menu.origin, &menu.items);
         let th = &self.theme;
         self.content
-            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(5.0));
+            .fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(ui_px(5.0)));
         self.content.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             th.border,
             None,
-            &fly.to_rounded_rect(5.0),
+            &fly.to_rounded_rect(ui_px(5.0)),
         );
-        let mut y = fly.y0 + Self::CM_PAD;
+        let mut y = fly.y0 + Self::metric_cm_pad();
         // `menu` is borrowed from `self`; collect what we need to draw so
         // the draw calls can borrow `self` mutably.
         let rows: Vec<(f64, Option<(String, bool)>)> = menu
             .items
             .iter()
             .map(|it| match it {
-                CtxItem::Sep => (Self::CM_SEP, None),
+                CtxItem::Sep => (Self::metric_cm_sep(), None),
                 CtxItem::Action { label, enabled, .. } => {
-                    (Self::CM_ROW, Some((label.clone(), *enabled)))
+                    (Self::metric_cm_row(), Some((label.clone(), *enabled)))
                 }
             })
             .collect();
         for (h, row) in rows {
             match row {
                 None => {
-                    let sy = y + Self::CM_SEP * 0.5;
+                    let sy = y + Self::metric_cm_sep() * 0.5;
                     self.content.stroke(
-                        &Stroke::new(1.0),
+                        &Stroke::new(ui_px(1.0)),
                         ID,
                         self.theme.border,
                         None,
-                        &vello::kurbo::Line::new((fly.x0 + 8.0, sy), (fly.x1 - 8.0, sy)),
+                        &vello::kurbo::Line::new((fly.x0 + ui_px(8.0), sy), (fly.x1 - ui_px(8.0), sy)),
                     );
                 }
                 Some((label, enabled)) => {
-                    let r = Rect::new(fly.x0, y, fly.x1, y + Self::CM_ROW);
+                    let r = Rect::new(fly.x0, y, fly.x1, y + Self::metric_cm_row());
                     if enabled && r.contains(self.pointer) {
                         self.content
                             .fill(Fill::NonZero, ID, self.theme.strip_bg, None, &r);
@@ -523,8 +525,8 @@ impl App {
                         &label,
                         12.5,
                         col,
-                        r.x0 + 14.0,
-                        r.center().y + 4.5,
+                        r.x0 + ui_px(14.0),
+                        r.center().y + ui_px(4.5),
                     );
                 }
             }
@@ -543,18 +545,18 @@ impl App {
             ID,
             th.bg,
             None,
-            &fly.to_rounded_rect(4.0),
+            &fly.to_rounded_rect(ui_px(4.0)),
         );
         self.content.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             th.border,
             None,
-            &fly.to_rounded_rect(4.0),
+            &fly.to_rounded_rect(ui_px(4.0)),
         );
-        let mut y = fly.y0 + Self::AT_PAD;
+        let mut y = fly.y0 + Self::metric_at_pad();
         for (to, label) in Self::align_to_items() {
-            let row = Rect::new(fly.x0, y, fly.x1, y + Self::AT_ROW);
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_at_row());
             if row.contains(self.pointer) {
                 self.content
                     .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
@@ -566,8 +568,8 @@ impl App {
                     "✓",
                     12.0,
                     th.accent,
-                    row.x0 + 10.0,
-                    row.center().y + 4.0,
+                    row.x0 + ui_px(10.0),
+                    row.center().y + ui_px(4.0),
                 );
             }
             self.text.draw(
@@ -575,10 +577,10 @@ impl App {
                 label,
                 12.5,
                 if on { th.accent } else { th.text },
-                row.x0 + 28.0,
-                row.center().y + 4.5,
+                row.x0 + ui_px(28.0),
+                row.center().y + ui_px(4.5),
             );
-            y += Self::AT_ROW;
+            y += Self::metric_at_row();
         }
     }
 
@@ -594,8 +596,8 @@ impl App {
             .fill(Fill::NonZero, ID, th.strip_active, None, &m.anchor);
         let c = m.anchor.center();
         let half = 5.5;
-        let gap = 3.4;
-        let stroke = Stroke::new(1.4);
+        let gap = ui_px(3.4);
+        let stroke = Stroke::new(ui_px(1.4));
         for i in [-1, 0, 1] {
             let y = c.y + i as f64 * gap;
             self.content.stroke(
@@ -611,33 +613,33 @@ impl App {
             ID,
             th.bg,
             None,
-            &fly.to_rounded_rect(6.0),
+            &fly.to_rounded_rect(ui_px(6.0)),
         );
         self.content.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             ID,
             th.border,
             None,
-            &fly.to_rounded_rect(6.0),
+            &fly.to_rounded_rect(ui_px(6.0)),
         );
-        let mut y = fly.y0 + Self::PM_PAD;
+        let mut y = fly.y0 + Self::metric_pm_pad();
         for e in &items {
             match e {
                 panels::MenuEntry::Separator => {
-                    let mid = y + Self::PM_SEP * 0.5;
+                    let mid = y + Self::metric_pm_sep() * 0.5;
                     self.content.fill(
                         Fill::NonZero,
                         ID,
                         th.border,
                         None,
-                        &Rect::new(fly.x0 + 10.0, mid, fly.x1 - 10.0, mid + 1.0),
+                        &Rect::new(fly.x0 + ui_px(10.0), mid, fly.x1 - ui_px(10.0), mid + 1.0),
                     );
-                    y += Self::PM_SEP;
+                    y += Self::metric_pm_sep();
                 }
                 panels::MenuEntry::Item {
                     label, checked, ..
                 } => {
-                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::PM_ROW);
+                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_pm_row());
                     if row.contains(self.pointer) {
                         self.content
                             .fill(Fill::NonZero, ID, th.strip_bg, None, &row);
@@ -648,8 +650,8 @@ impl App {
                             "✓",
                             12.0,
                             th.text,
-                            row.x0 + 10.0,
-                            row.center().y + 4.0,
+                            row.x0 + ui_px(10.0),
+                            row.center().y + ui_px(4.0),
                         );
                     }
                     self.text.draw(
@@ -657,10 +659,10 @@ impl App {
                         label,
                         12.5,
                         th.text,
-                        row.x0 + 28.0,
-                        row.center().y + 4.5,
+                        row.x0 + ui_px(28.0),
+                        row.center().y + ui_px(4.5),
                     );
-                    y += Self::PM_ROW;
+                    y += Self::metric_pm_row();
                 }
             }
         }
@@ -678,17 +680,18 @@ pub(in crate::app) fn draw_tooltip(
     wl: f64,
     hl: f64,
 ) {
-    let fs = 11.5;
+    let metrics = crate::metrics::with(Clone::clone);
+    let fs = metrics.tooltip_font_size;
     let tw = text.measure(label, fs);
-    let pad = 7.0;
-    let (bw, bh) = (tw + pad * 2.0, fs as f64 + pad * 1.6);
-    let mut x = anchor.x + 12.0;
-    let mut y = anchor.y + 18.0;
-    if x + bw > wl - 4.0 {
-        x = (anchor.x - bw - 8.0).max(4.0);
+    let pad = metrics.tooltip_pad;
+    let (bw, bh) = (tw + pad * 2.0, fs as f64 * metrics.ui_scale + pad * 1.6);
+    let mut x = anchor.x + metrics.tooltip_offset_x;
+    let mut y = anchor.y + metrics.tooltip_offset_y;
+    if x + bw > wl - metrics.tooltip_margin {
+        x = (anchor.x - bw - metrics.tooltip_flip_gap).max(metrics.tooltip_margin);
     }
-    if y + bh > hl - 4.0 {
-        y = (anchor.y - bh - 8.0).max(4.0);
+    if y + bh > hl - metrics.tooltip_margin {
+        y = (anchor.y - bh - metrics.tooltip_flip_gap).max(metrics.tooltip_margin);
     }
     let box_ = Rect::new(x, y, x + bw, y + bh);
     scene.fill(
@@ -721,7 +724,7 @@ fn paint_constrain_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     let h = box_.height();
     let body = Rect::new(box_.x0 + w * 0.18, box_.y0 + h * 0.46, box_.x1 - w * 0.18, box_.y1 - h * 0.10);
     let sw = (w * 0.09).max(1.2);
-    scene.stroke(&Stroke::new(sw), ID, color, None, &body.to_rounded_rect(1.5));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &body.to_rounded_rect(ui_px(1.5)));
     let c = Point::new(box_.center().x, body.y0);
     let r = body.width() * 0.32;
     scene.stroke(

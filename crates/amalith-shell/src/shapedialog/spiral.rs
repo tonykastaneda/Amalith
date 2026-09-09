@@ -4,6 +4,8 @@
 //! Star. Style is a mouse-only pair of icon buttons picking the winding
 //! direction, in the options area below the rows.
 
+use crate::metrics::px as ui_px;
+
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
@@ -25,20 +27,19 @@ impl Default for Spiral {
     }
 }
 
-const BTN: f64 = 40.0;
-const BTN_GAP: f64 = 10.0;
-const LABEL_W: f64 = 96.0;
-const TOP_PAD: f64 = 10.0;
-const BOT_PAD: f64 = 10.0;
-const OPTIONS_H: f64 = TOP_PAD + BTN + BOT_PAD;
+fn metric_btn() -> f64 { crate::metrics::with(|m| m.shapedialog_spiral_btn) }
+fn metric_btn_gap() -> f64 { crate::metrics::with(|m| m.shapedialog_spiral_btn_gap) }
+fn metric_label_w() -> f64 { crate::metrics::with(|m| m.shapedialog_spiral_label_w) }
+fn metric_top_pad() -> f64 { crate::metrics::with(|m| m.shapedialog_spiral_top_pad) }
+fn metric_options_h() -> f64 { crate::metrics::with(|m| m.shapedialog_spiral_options_h) }
 
 impl Spiral {
     fn style_row(&self, area: Rect) -> Rect {
-        Rect::new(area.x0, area.y0 + TOP_PAD, area.x1, area.y0 + TOP_PAD + BTN)
+        Rect::new(area.x0, area.y0 + metric_top_pad(), area.x1, area.y0 + metric_top_pad() + metric_btn())
     }
     fn style_button(row: Rect, left: bool) -> Rect {
-        let x0 = row.x0 + LABEL_W + if left { 0.0 } else { BTN + BTN_GAP };
-        Rect::new(x0, row.y0, x0 + BTN, row.y0 + BTN)
+        let x0 = row.x0 + metric_label_w() + if left { 0.0 } else { metric_btn() + metric_btn_gap() };
+        Rect::new(x0, row.y0, x0 + metric_btn(), row.y0 + metric_btn())
     }
 
     /// A small stroked spiral glyph inside `r`, mirrored (winding the
@@ -62,7 +63,7 @@ impl Spiral {
                 p.line_to(pt);
             }
         }
-        scene.stroke(&Stroke::new(1.4), Affine::IDENTITY, color, None, &p);
+        scene.stroke(&Stroke::new(ui_px(1.4)), Affine::IDENTITY, color, None, &p);
     }
 }
 
@@ -102,12 +103,12 @@ impl Shape for Spiral {
     }
 
     fn options_height(&self) -> f64 {
-        OPTIONS_H
+        metric_options_h()
     }
 
     fn paint_options(&self, scene: &mut Scene, area: Rect, theme: &Theme, text: &mut TextContext) {
         let row = self.style_row(area);
-        text.draw(scene, "Style:", 12.5, theme.text_dim, row.x0, row.center().y + 4.5);
+        text.draw(scene, "Style:", 12.5, theme.text_dim, row.x0, row.center().y + ui_px(4.5));
         for left in [true, false] {
             let r = Self::style_button(row, left);
             let selected = left == self.clockwise;
@@ -116,14 +117,14 @@ impl Shape for Spiral {
                 Affine::IDENTITY,
                 if selected { theme.strip_active } else { theme.bg },
                 None,
-                &r.to_rounded_rect(4.0),
+                &r.to_rounded_rect(ui_px(4.0)),
             );
             scene.stroke(
                 &Stroke::new(if selected { 1.5 } else { 1.0 }),
                 Affine::IDENTITY,
                 if selected { theme.accent } else { theme.border },
                 None,
-                &r.to_rounded_rect(4.0),
+                &r.to_rounded_rect(ui_px(4.0)),
             );
             Self::draw_glyph(scene, r, theme.text, left);
         }

@@ -2,6 +2,8 @@
 //! they read as one app instead of each modal having quietly grown its own
 //! near-identical button.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Affine, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -35,7 +37,7 @@ pub fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect,
     scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
     if !primary {
         scene.stroke(
-            &Stroke::new(1.0),
+            &Stroke::new(ui_px(1.0)),
             Affine::IDENTITY,
             theme.text_dim.with_alpha(0.6),
             None,
@@ -50,7 +52,7 @@ pub fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect,
         12.5,
         col,
         r.x0 + (r.width() - w) * 0.5,
-        r.y0 + r.height() * 0.5 + 4.5,
+        r.y0 + r.height() * 0.5 + ui_px(4.5),
     );
 }
 

@@ -33,11 +33,6 @@ pub const ZOOM_MAX: f64 = 256.0;
 /// white artboard.
 const OUTLINE_INK: Color = Color::from_rgb8(0x20, 0x20, 0x20);
 
-/// Crossed-box contour drawn over every *Linked* image (never an Embedded
-/// one) so which is which reads at a glance right on the canvas, not just
-/// in the Links panel — the app's default accent blue.
-const LINKED_INK: Color = Color::from_rgb8(0x3b, 0x9b, 0xff);
-
 impl Default for CanvasView {
     fn default() -> Self {
         Self {
@@ -213,6 +208,7 @@ pub fn export_scene(
     images: &HashMap<AssetId, ImageLods>,
     outline: bool,
     text: &mut TextContext,
+    link_ink: Color,
 ) -> Scene {
     let mut scene = Scene::new();
     let px = Rect::new(
@@ -231,7 +227,9 @@ pub fn export_scene(
             continue;
         }
         for &id in &layer.children {
-            paint_object(&mut scene, doc, id, vt, scale, px, None, text, None, images, outline);
+            paint_object(
+                &mut scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink,
+            );
         }
     }
     scene.pop_layer();
@@ -338,9 +336,9 @@ pub fn paint(
         // and bold; same size as the rest.
         let name = format!("{:02} - {}", i + 1, ab.name);
         if active {
-            text.draw_bold(scene, &name, 11.0, theme.text, r.x0, r.y0 - 6.0);
+            text.draw_bold_fixed(scene, &name, 11.0, theme.text, r.x0, r.y0 - 6.0);
         } else {
-            text.draw(scene, &name, 11.0, theme.artboard_label, r.x0, r.y0 - 6.0);
+            text.draw_fixed(scene, &name, 11.0, theme.artboard_label, r.x0, r.y0 - 6.0);
         }
     }
 
@@ -361,6 +359,7 @@ pub fn paint(
                 editing_text,
                 images,
                 outline,
+                theme.accent,
             );
         }
     }
@@ -383,6 +382,7 @@ pub fn paint(
         };
         paint_object(
             scene, doc, root, parent_m, view.zoom, cull, drag, text, editing_text, images, outline,
+            theme.accent,
         );
     }
 
@@ -402,6 +402,7 @@ pub fn paint(
                 editing_text,
                 images,
                 outline,
+                theme.accent,
             );
         }
     }
@@ -425,6 +426,7 @@ pub fn paint(
                     editing_text,
                     images,
                     outline,
+                    theme.accent,
                 );
             }
         }
@@ -459,7 +461,8 @@ pub fn paint(
         let handle_fill = Color::from_rgb8(0xe1, 0xf1, 0xff);
         let handle_border = Color::from_rgb8(0x2d, 0x8b, 0xf2);
         for h in handles::Handle::ALL {
-            let sq = Rect::from_center_size(handles::handle_pos(q, h), (8.0, 8.0));
+            let hs = 8.0 * crate::handle_scale::multiplier();
+            let sq = Rect::from_center_size(handles::handle_pos(q, h), (hs, hs));
             scene.fill(Fill::NonZero, Affine::IDENTITY, handle_fill, None, &sq);
             scene.stroke(
                 &Stroke::new(1.25),
@@ -659,7 +662,8 @@ pub fn paint(
             );
             let white = Color::from_rgb8(0xff, 0xff, 0xff);
             for h in Handle::ALL {
-                let sq = Rect::from_center_size(handles::handle_pos(q, h), (8.0, 8.0));
+                let hs = 8.0 * crate::handle_scale::multiplier();
+                let sq = Rect::from_center_size(handles::handle_pos(q, h), (hs, hs));
                 scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
                 scene.stroke(
                     &Stroke::new(1.25),
@@ -736,7 +740,7 @@ pub fn paint(
                             &tab,
                         );
                         let white = Color::from_rgb8(0xff, 0xff, 0xff);
-                        let red = Color::from_rgb8(0xd0, 0x30, 0x30);
+                        let red = crate::textedit::TEXT_OVERSET_INK;
                         let port = |scene: &mut Scene, c: Point, fill: Color, border: Color| {
                             let r = Rect::from_center_size(c, (11.0, 11.0));
                             scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
@@ -1060,7 +1064,7 @@ pub fn paint(
             None,
             &cull,
         );
-        text.draw(
+        text.draw_fixed(
             scene,
             "cull",
             11.0,
@@ -1272,6 +1276,11 @@ fn stroke_path(
 /// artboard's rect (e.g. to repaint over that artboard's drop shadow)
 /// produces one seamless pattern rather than each rect starting its own
 /// grid from (0, 0).
+/// The dark square of a transparency checkerboard — a fixed app-wide
+/// convention (not theme-customizable, unlike `accent`), shared with the
+/// Gradient panel's own alpha-ramp checker in `panels/gradient.rs`.
+pub(crate) const TRANSPARENCY_CHECKER_DARK: Color = Color::from_rgb8(0xcc, 0xcc, 0xcc);
+
 fn paint_transparency_grid(scene: &mut Scene, r: Rect, origin: Point) {
     const TILE: f64 = 8.0;
     scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
@@ -1299,7 +1308,7 @@ fn paint_transparency_grid(scene: &mut Scene, r: Rect, origin: Point) {
             dark.close_path();
         }
     }
-    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgb8(0xcc, 0xcc, 0xcc), None, &dark);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, TRANSPARENCY_CHECKER_DARK, None, &dark);
 }
 
 fn paint_freeform_fill(
@@ -1362,6 +1371,10 @@ fn paint_object(
     editing_text: Option<ObjectId>,
     images: &HashMap<AssetId, ImageLods>,
     outline: bool,
+    // The crossed-box contour drawn over every *Linked* image — always the
+    // live `theme.accent`, so a customized accent color propagates here
+    // instead of silently keeping the app's old default blue.
+    link_ink: Color,
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -1586,6 +1599,7 @@ fn paint_object(
                     editing_text,
                     images,
                     outline,
+                    link_ink,
                 );
             }
             if clipped.is_some() {
@@ -1704,7 +1718,7 @@ fn paint_object(
             if doc.asset(img.asset).is_some_and(|a| a.is_linked()) {
                 if let Some(b) = obj.kind.own_local_bounds() {
                     let bp = crossed_box_path(convert::rect(b), m);
-                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, LINKED_INK, None, &bp);
+                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, link_ink, None, &bp);
                 }
             }
         }

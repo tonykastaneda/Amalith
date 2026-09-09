@@ -94,10 +94,10 @@ impl App {
             PaletteKind::Menu(MenuAction::ToggleGuideLock),
         );
 
-        for (id, label) in WINDOW_PANELS {
+        for id in WINDOW_PANELS {
             let on = self.dock.contains(PanelId(id));
             add(
-                format!("{} {} Panel", if on { "Hide" } else { "Show" }, label),
+                format!("{} {} Panel", if on { "Hide" } else { "Show" }, id.label()),
                 "Panel",
                 PaletteKind::Menu(MenuAction::TogglePanel(id)),
             );

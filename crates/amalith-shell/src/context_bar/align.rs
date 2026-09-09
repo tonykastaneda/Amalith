@@ -1,6 +1,8 @@
 //! Align cluster for the options bar, matching Illustrator's Control bar:
 //! Align To dropdown, six align buttons, six distribute buttons.
 
+use crate::metrics::px as ui_px;
+
 use amalith_commands::AlignKind;
 use vello::kurbo::{BezPath, Point, Rect};
 use vello::peniko::{Color, Fill};
@@ -11,10 +13,10 @@ use crate::text::TextContext;
 
 use super::{Ctx, SegKind, Segment, ID};
 
-const BTN: f64 = 25.0;
-const GAP: f64 = 2.0;
-const GROUP: f64 = 9.0;
-const DROP_W: f64 = 37.0;
+fn metric_btn() -> f64 { crate::metrics::with(|m| m.context_bar_align_btn) }
+fn metric_gap() -> f64 { crate::metrics::with(|m| m.context_bar_align_gap) }
+fn metric_group() -> f64 { crate::metrics::with(|m| m.context_bar_align_group) }
+fn metric_drop_w() -> f64 { crate::metrics::with(|m| m.context_bar_align_drop_w) }
 
 const ALIGN: [AlignKind; 6] = [
     AlignKind::HLeft,
@@ -34,16 +36,12 @@ const DIST: [AlignKind; 6] = [
 ];
 
 /// dropdown + 6 align + 6 distribute, with a group gap in each six.
-const WIDTH: f64 = DROP_W
-    + 6.0
-    + (6.0 * BTN + 5.0 * GAP + GROUP)
-    + 8.0
-    + (6.0 * BTN + 5.0 * GAP + GROUP);
+fn metric_width() -> f64 { crate::metrics::with(|m| m.context_bar_align_width) }
 
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Align,
     applies: |ctx| ctx.selection_len > 0,
-    measure: |_| WIDTH,
+    measure: |_| metric_width(),
     paint,
     hit,
 };
@@ -58,20 +56,20 @@ fn six(x0: f64, y0: f64) -> (f64, [Rect; 6]) {
     let mut x = x0;
     let rects = std::array::from_fn(|i| {
         if i == 3 {
-            x += GROUP;
+            x += metric_group();
         }
-        let b = Rect::new(x, y0, x + BTN, y0 + BTN);
-        x += BTN + GAP;
+        let b = Rect::new(x, y0, x + metric_btn(), y0 + metric_btn());
+        x += metric_btn() + metric_gap();
         b
     });
     (x, rects)
 }
 
 fn parts(r: Rect) -> Parts {
-    let y0 = r.center().y - BTN * 0.5;
-    let drop = Rect::new(r.x0, y0, r.x0 + DROP_W, y0 + BTN);
-    let (x, align) = six(drop.x1 + 6.0, y0);
-    let (_, dist) = six(x + 6.0, y0);
+    let y0 = r.center().y - metric_btn() * 0.5;
+    let drop = Rect::new(r.x0, y0, r.x0 + metric_drop_w(), y0 + metric_btn());
+    let (x, align) = six(drop.x1 + ui_px(6.0), y0);
+    let (_, dist) = six(x + ui_px(6.0), y0);
     Parts { drop, align, dist }
 }
 
@@ -86,7 +84,7 @@ fn paint(scene: &mut Scene, _text: &mut TextContext, r: Rect, ctx: &Ctx) {
             ID,
             if ctx.align_to_menu { th.bg } else { th.strip_bg },
             None,
-            &p.drop.to_rounded_rect(3.0),
+            &p.drop.to_rounded_rect(ui_px(3.0)),
         );
     }
     paint_drop_icon(scene, p.drop, th.text);
@@ -98,7 +96,7 @@ fn paint(scene: &mut Scene, _text: &mut TextContext, r: Rect, ctx: &Ctx) {
                 ID,
                 th.strip_bg,
                 None,
-                &slot.to_rounded_rect(3.0),
+                &slot.to_rounded_rect(ui_px(3.0)),
             );
         }
         panels::align::paint_align_icon(scene, *slot, kind, th.text);
@@ -110,7 +108,7 @@ fn paint(scene: &mut Scene, _text: &mut TextContext, r: Rect, ctx: &Ctx) {
                 ID,
                 th.strip_bg,
                 None,
-                &slot.to_rounded_rect(3.0),
+                &slot.to_rounded_rect(ui_px(3.0)),
             );
         }
         panels::align::paint_dist_icon(scene, *slot, kind, th.text);
@@ -119,13 +117,13 @@ fn paint(scene: &mut Scene, _text: &mut TextContext, r: Rect, ctx: &Ctx) {
 
 /// 9-dot grid (Align To) plus a dropdown caret, like Illustrator's Control bar.
 fn paint_drop_icon(scene: &mut Scene, r: Rect, ink: Color) {
-    let grid = Rect::new(r.x0 + 5.0, r.y0 + 6.0, r.x0 + 21.0, r.y1 - 6.0);
-    let d = 2.2;
+    let grid = Rect::new(r.x0 + ui_px(5.0), r.y0 + ui_px(6.0), r.x0 + ui_px(21.0), r.y1 - ui_px(6.0));
+    let d = ui_px(2.2);
     for row in 0..3 {
         for col in 0..3 {
             let p = Point::new(
-                grid.x0 + 2.0 + col as f64 * 5.5,
-                grid.y0 + 2.0 + row as f64 * 5.0,
+                grid.x0 + ui_px(2.0) + col as f64 * ui_px(5.5),
+                grid.y0 + ui_px(2.0) + row as f64 * ui_px(5.0),
             );
             scene.fill(
                 Fill::NonZero,
@@ -136,12 +134,12 @@ fn paint_drop_icon(scene: &mut Scene, r: Rect, ink: Color) {
             );
         }
     }
-    let cx = r.x1 - 8.0;
+    let cx = r.x1 - ui_px(8.0);
     let cy = r.center().y;
     let mut t = BezPath::new();
-    t.move_to((cx - 3.5, cy - 1.75));
-    t.line_to((cx + 3.5, cy - 1.75));
-    t.line_to((cx, cy + 3.0));
+    t.move_to((cx - ui_px(3.5), cy - 1.75));
+    t.line_to((cx + ui_px(3.5), cy - 1.75));
+    t.line_to((cx, cy + ui_px(3.0)));
     t.close_path();
     scene.fill(Fill::NonZero, ID, ink, None, &t);
 }

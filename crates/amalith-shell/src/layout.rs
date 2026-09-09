@@ -5,19 +5,21 @@
 //! logic in the HTML/CSS/JS reference (`amalith-panelSys/app.js`); doc
 //! comments name the JS function each Rust one replaces.
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Point, Rect};
 
-use crate::dock::{Master, MasterLayout, PanelId, Side, TAB_CONTENT_MAX_H, TAB_CONTENT_MIN_H};
+use crate::dock::{Master, MasterLayout, PanelId, PanelKind, Side, metric_tab_content_max_h, metric_tab_content_min_h};
 use crate::theme::Theme;
 
 /// Floating/docked Master width bounds (⇐ `MASTER_MIN_W`/`MASTER_MAX_W`).
-pub const MASTER_MIN_W: f64 = 160.0;
-pub const MASTER_MAX_W: f64 = 720.0;
+pub fn metric_master_min_w() -> f64 { crate::metrics::with(|m| m.layout_master_min_w) }
+pub fn metric_master_max_w() -> f64 { crate::metrics::with(|m| m.layout_master_max_w) }
 /// A Tools master clamps narrower (⇐ `TOOLS_MIN_W`).
-pub const TOOLS_MIN_W: f64 = 48.0;
+pub fn metric_tools_min_w() -> f64 { crate::metrics::with(|m| m.layout_tools_min_w) }
 /// Below this width a master's Stack-mode rows drop their labels (⇐
 /// `COMPACT_BREAKPOINT`).
-pub const COMPACT_BREAKPOINT: f64 = 240.0;
+pub fn metric_compact_breakpoint() -> f64 { crate::metrics::with(|m| m.layout_compact_breakpoint) }
 /// The rail width a compact (icon-only) Stack-mode master actually
 /// occupies on screen — same floor as [`TOOLS_MIN_W`], the other
 /// icon-only rail. `Master::rect[2]` can sit anywhere in
@@ -27,33 +29,33 @@ pub const COMPACT_BREAKPOINT: f64 = 240.0;
 /// the extra space blank beside the icon. `rect[2]` itself is never
 /// touched — this only changes what [`dock_width`] reports, so toggling
 /// back to Tabs restores the width the user last set.
-pub const COMPACT_RAIL_W: f64 = TOOLS_MIN_W;
+pub fn metric_compact_rail_w() -> f64 { crate::metrics::with(|m| m.layout_compact_rail_w) }
 
 /// `m`'s effective width for rail-stacking / dock-offset math — its
 /// stored width, unless it would render compact (see [`COMPACT_RAIL_W`]).
 pub fn dock_width(m: &Master) -> f64 {
     let raw = m.rect[2] as f64;
-    if !m.is_tools() && m.layout == MasterLayout::Stack && raw < COMPACT_BREAKPOINT {
-        COMPACT_RAIL_W
+    if !m.is_tools() && m.layout == MasterLayout::Stack && raw < metric_compact_breakpoint() {
+        metric_compact_rail_w()
     } else {
         raw
     }
 }
 /// Edge band, from the viewport's left/right edge, that always docks
 /// regardless of what's under the cursor (⇐ `DOCK_EDGE`).
-pub const DOCK_EDGE: f64 = 36.0;
+pub fn metric_dock_edge() -> f64 { crate::metrics::with(|m| m.layout_dock_edge) }
 /// Half-width band around an already-docked master's own edge that also
 /// docks (a "seam"), even away from the viewport edge (⇐ the `± 10`
 /// checks in `resolveDockTarget`).
-pub const DOCK_SEAM: f64 = 10.0;
+pub fn metric_dock_seam() -> f64 { crate::metrics::with(|m| m.layout_dock_seam) }
 /// Height of one Stack-mode panel row (icon + label).
-pub const STACK_ROW_H: f64 = 34.0;
+pub fn metric_stack_row_h() -> f64 { crate::metrics::with(|m| m.layout_stack_row_h) }
 /// Height of a Master's own header (× and the chevron need real room).
-pub const HEADER_H: f64 = 15.0;
+pub fn metric_header_h() -> f64 { crate::metrics::with(|m| m.layout_header_h) }
 /// Height of a Group's plain drag handle — just a thin grip strip, much
 /// shorter than the Master's own header (it carries no controls of its
 /// own, only the light-blue pill drawn inside it).
-pub const GROUP_HANDLE_H: f64 = 10.0;
+pub fn metric_group_handle_h() -> f64 { crate::metrics::with(|m| m.layout_group_handle_h) }
 
 /// One panel row in Stack-mode display.
 #[derive(Clone, Copy, Debug)]
@@ -162,26 +164,26 @@ pub fn layout_master(
     bespoke: bool,
     fill_last: bool,
 ) -> MasterFrame {
-    let header_h = if bespoke { 0.0 } else { HEADER_H };
+    let header_h = if bespoke { 0.0 } else { metric_header_h() };
     let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, (bounds.y0 + header_h).min(bounds.y1));
-    let close = Rect::new(header.x0, header.y0, header.x0 + 26.0, header.y1);
-    let chevron = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+    let close = Rect::new(header.x0, header.y0, header.x0 + ui_px(26.0), header.y1);
+    let chevron = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
     let body = Rect::new(bounds.x0, header.y1, bounds.x1, bounds.y1);
-    let compact = bounds.width() < COMPACT_BREAKPOINT;
+    let compact = bounds.width() < metric_compact_breakpoint();
 
     let mut groups = Vec::with_capacity(master.groups.len());
     let mut y = body.y0;
     for (i, g) in master.groups.iter().enumerate() {
-        let handle_h = if bespoke { 0.0 } else { GROUP_HANDLE_H };
+        let handle_h = if bespoke { 0.0 } else { metric_group_handle_h() };
         let handle = Rect::new(body.x0, y, body.x1, (y + handle_h).min(body.y1));
         let mut area = GroupArea { index: i, handle, active: g.active, ..GroupArea::default() };
         match master.layout {
             MasterLayout::Stack => {
                 let mut ry = handle.y1;
                 for &panel in &g.panels {
-                    let r = Rect::new(body.x0, ry, body.x1, ry + STACK_ROW_H);
+                    let r = Rect::new(body.x0, ry, body.x1, ry + metric_stack_row_h());
                     area.rows.push(PanelRow { panel, rect: r });
-                    ry += STACK_ROW_H;
+                    ry += metric_stack_row_h();
                 }
                 area.bounds = Rect::new(body.x0, y, body.x1, ry);
                 y = ry;
@@ -191,7 +193,7 @@ pub fn layout_master(
                 area.tab_strip = Rect::new(body.x0, handle.y1, body.x1, strip_y1);
                 let mut x = body.x0;
                 for &panel in &g.panels {
-                    let w = tab_width(panel).max(8.0);
+                    let w = tab_width(panel).max(ui_px(8.0));
                     area.tabs.push(TabRect { panel, rect: Rect::new(x, area.tab_strip.y0, x + w, strip_y1) });
                     x += w;
                 }
@@ -208,13 +210,13 @@ pub fn layout_master(
                     let natural = g
                         .panels
                         .get(g.active)
-                        .map_or(crate::dock::TAB_CONTENT_DEFAULT_H as f64, |&p| {
+                        .map_or(crate::dock::metric_tab_content_default_h() as f64, |&p| {
                             crate::panels::min_body_height(p, body.width())
                         });
                     let pinned = g
                         .content_h
                         .map_or(natural, |h| h as f64)
-                        .clamp(TAB_CONTENT_MIN_H as f64, TAB_CONTENT_MAX_H as f64);
+                        .clamp(metric_tab_content_min_h() as f64, metric_tab_content_max_h() as f64);
                     if stretch_last {
                         pinned.max(body.y1 - strip_y1)
                     } else {
@@ -228,7 +230,7 @@ pub fn layout_master(
                     // of the Master would be a dead control.
                     Rect::ZERO
                 } else {
-                    Rect::new(body.x0, area.content.y1, body.x1, area.content.y1 + 6.0)
+                    Rect::new(body.x0, area.content.y1, body.x1, area.content.y1 + ui_px(6.0))
                 };
                 area.bounds = Rect::new(
                     body.x0,
@@ -358,25 +360,25 @@ pub fn resolve_dock_target(
     left: &[f64],
     right: &[f64],
 ) -> Option<(Side, usize, bool)> {
-    if cursor_x <= DOCK_EDGE {
+    if cursor_x <= metric_dock_edge() {
         return Some((Side::Left, insert_index_for(left, cursor_x), false));
     }
-    if cursor_x >= viewport_w - DOCK_EDGE {
+    if cursor_x >= viewport_w - metric_dock_edge() {
         return Some((Side::Right, insert_index_for_right(right, viewport_w, cursor_x), false));
     }
 
     // Left side seams: each docked master occupies [off, off+w) from x=0.
     let mut off = 0.0;
     for (i, &w) in left.iter().enumerate() {
-        if (cursor_x - off).abs() <= DOCK_SEAM {
+        if (cursor_x - off).abs() <= metric_dock_seam() {
             return Some((Side::Left, i, true));
         }
-        if (cursor_x - (off + w)).abs() <= DOCK_SEAM {
+        if (cursor_x - (off + w)).abs() <= metric_dock_seam() {
             return Some((Side::Left, i + 1, true));
         }
         off += w;
     }
-    if !left.is_empty() && cursor_x > off && cursor_x < off + DOCK_EDGE {
+    if !left.is_empty() && cursor_x > off && cursor_x < off + metric_dock_edge() {
         return Some((Side::Left, left.len(), true));
     }
 
@@ -386,17 +388,17 @@ pub fn resolve_dock_target(
     for (i, &w) in right.iter().enumerate() {
         let inner = viewport_w - off - w;
         let outer = viewport_w - off;
-        if (cursor_x - outer).abs() <= DOCK_SEAM {
+        if (cursor_x - outer).abs() <= metric_dock_seam() {
             return Some((Side::Right, i, true));
         }
-        if (cursor_x - inner).abs() <= DOCK_SEAM {
+        if (cursor_x - inner).abs() <= metric_dock_seam() {
             return Some((Side::Right, i + 1, true));
         }
         off += w;
     }
     if !right.is_empty() {
         let innermost = viewport_w - off;
-        if cursor_x < innermost && cursor_x > innermost - DOCK_EDGE {
+        if cursor_x < innermost && cursor_x > innermost - metric_dock_edge() {
             return Some((Side::Right, right.len(), true));
         }
     }
@@ -431,7 +433,7 @@ fn insert_index_for_right(widths: &[f64], viewport_w: f64, cursor_x: f64) -> usi
 /// `isPureDockEdge`) — used to prefer edge-docking over merging into
 /// whatever master happens to be under the cursor there.
 pub fn is_pure_dock_edge(cursor_x: f64, viewport_w: f64) -> bool {
-    cursor_x <= DOCK_EDGE || cursor_x >= viewport_w - DOCK_EDGE
+    cursor_x <= metric_dock_edge() || cursor_x >= viewport_w - metric_dock_edge()
 }
 
 /// x-offset of the `index`-th docked master on `side`, given the widths
@@ -443,25 +445,25 @@ pub fn dock_offset(widths: &[f64], index: usize) -> f64 {
 
 /// Width/height of a Stack-mode row's flyout preview (⇐ `openPanelFlyout`'s
 /// `fw`/`fh`).
-pub const FLYOUT_W: f64 = 280.0;
-pub const FLYOUT_H: f64 = 220.0;
+pub fn metric_flyout_w() -> f64 { crate::metrics::with(|m| m.layout_flyout_w) }
+pub fn metric_flyout_h() -> f64 { crate::metrics::with(|m| m.layout_flyout_h) }
 
 /// Where a Stack-mode row's flyout preview should sit: beside `row`,
 /// flipping to the other side if it would run off `viewport`'s right
 /// edge, and clamped fully inside `viewport` either way (⇐
 /// `openPanelFlyout`'s positioning math).
 pub fn flyout_rect(row: Rect, viewport: Rect) -> Rect {
-    let mut left = row.x1 + 10.0;
-    if left + FLYOUT_W > viewport.x1 - 12.0 {
-        left = row.x0 - FLYOUT_W - 10.0;
+    let mut left = row.x1 + ui_px(10.0);
+    if left + metric_flyout_w() > viewport.x1 - ui_px(12.0) {
+        left = row.x0 - metric_flyout_w() - ui_px(10.0);
     }
-    left = left.max(viewport.x0 + 8.0);
+    left = left.max(viewport.x0 + ui_px(8.0));
     let mut top = row.y0;
-    if top + FLYOUT_H > viewport.y1 - 12.0 {
-        top = (viewport.y1 - FLYOUT_H - 12.0).max(viewport.y0 + 8.0);
+    if top + metric_flyout_h() > viewport.y1 - ui_px(12.0) {
+        top = (viewport.y1 - metric_flyout_h() - ui_px(12.0)).max(viewport.y0 + ui_px(8.0));
     }
-    top = top.max(viewport.y0 + 8.0);
-    Rect::new(left, top, left + FLYOUT_W, top + FLYOUT_H)
+    top = top.max(viewport.y0 + ui_px(8.0));
+    Rect::new(left, top, left + metric_flyout_w(), top + metric_flyout_h())
 }
 
 /// Where a docked Master's Stack-mode row flyout should sit: always out
@@ -473,16 +475,16 @@ pub fn flyout_rect(row: Rect, viewport: Rect) -> Rect {
 pub fn docked_flyout_rect(row: Rect, side: Side, canvas: (f64, f64), viewport: Rect) -> Rect {
     let (canvas_x0, canvas_x1) = canvas;
     let left = match side {
-        Side::Left => canvas_x0 + 10.0,
-        Side::Right => canvas_x1 - FLYOUT_W - 10.0,
+        Side::Left => canvas_x0 + ui_px(10.0),
+        Side::Right => canvas_x1 - metric_flyout_w() - ui_px(10.0),
     }
-    .clamp(canvas_x0 + 8.0, (canvas_x1 - FLYOUT_W - 8.0).max(canvas_x0 + 8.0));
+    .clamp(canvas_x0 + ui_px(8.0), (canvas_x1 - metric_flyout_w() - ui_px(8.0)).max(canvas_x0 + ui_px(8.0)));
     let mut top = row.y0;
-    if top + FLYOUT_H > viewport.y1 - 12.0 {
-        top = (viewport.y1 - FLYOUT_H - 12.0).max(viewport.y0 + 8.0);
+    if top + metric_flyout_h() > viewport.y1 - ui_px(12.0) {
+        top = (viewport.y1 - metric_flyout_h() - ui_px(12.0)).max(viewport.y0 + ui_px(8.0));
     }
-    top = top.max(viewport.y0 + 8.0);
-    Rect::new(left, top, left + FLYOUT_W, top + FLYOUT_H)
+    top = top.max(viewport.y0 + ui_px(8.0));
+    Rect::new(left, top, left + metric_flyout_w(), top + metric_flyout_h())
 }
 
 #[cfg(test)]
@@ -490,9 +492,9 @@ mod tests {
     use super::*;
     use crate::dock::{Group, MasterKind};
 
-    const A: PanelId = PanelId("a");
-    const B: PanelId = PanelId("b");
-    const C: PanelId = PanelId("c");
+    const A: PanelId = PanelId(PanelKind::Unknown("a"));
+    const B: PanelId = PanelId(PanelKind::Unknown("b"));
+    const C: PanelId = PanelId(PanelKind::Unknown("c"));
 
     fn theme() -> Theme {
         Theme::default()
@@ -522,7 +524,7 @@ mod tests {
     #[test]
     fn stack_mode_stacks_one_row_per_panel_across_every_group() {
         let m = master(MasterLayout::Stack, vec![vec![A, B], vec![C]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, true);
         assert_eq!(frame.groups.len(), 2);
         assert_eq!(frame.groups[0].rows.len(), 2);
         assert_eq!(frame.groups[1].rows.len(), 1);
@@ -540,13 +542,13 @@ mod tests {
         // otherwise always count as "last").
         let mut m = master(MasterLayout::Tabs, vec![vec![A, B]]);
         m.groups[0].content_h = Some(999_999.0); // clamps down to MAX
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, false);
         let g = &frame.groups[0];
         assert_eq!(g.tabs.len(), 2);
         assert_eq!(g.tabs[0].rect.x0, 0.0);
         assert_eq!(g.tabs[1].rect.x0, 80.0);
         assert!(
-            (g.content.height() - TAB_CONTENT_MAX_H as f64).abs() < 1e-9,
+            (g.content.height() - metric_tab_content_max_h() as f64).abs() < 1e-9,
             "got {}",
             g.content.height()
         );
@@ -559,7 +561,7 @@ mod tests {
         // Docked or floating doesn't matter — what matters is `fill_last`
         // (true for every real on-screen frame; see its own doc comment).
         let m = master(MasterLayout::Tabs, vec![vec![A], vec![B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 900.0), &theme(), &mut w80, false, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(900.0)), &theme(), &mut w80, false, true);
         // The first (non-last) group keeps its ordinary natural height...
         assert!(frame.groups[0].content.height() < 200.0);
         // ...but the last one reaches all the way down to the bottom of
@@ -574,8 +576,8 @@ mod tests {
         // should scroll (elsewhere), not clip the last group smaller
         // than its own natural content height.
         let m = master(MasterLayout::Tabs, vec![vec![A]]);
-        let short = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 60.0), &theme(), &mut w80, false, true);
-        assert!((short.groups[0].content.height() - TAB_CONTENT_MIN_H as f64).abs() < 1e-9);
+        let short = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(60.0)), &theme(), &mut w80, false, true);
+        assert!((short.groups[0].content.height() - metric_tab_content_min_h() as f64).abs() < 1e-9);
     }
 
     #[test]
@@ -584,7 +586,7 @@ mod tests {
         // — otherwise a giant probe rect would stretch the last group
         // toward infinity and defeat the whole point.
         let m = master(MasterLayout::Tabs, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 900.0), &theme(), &mut w80, false, false);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(900.0)), &theme(), &mut w80, false, false);
         assert!(frame.groups[0].content.height() < 200.0);
         assert_ne!(frame.groups[0].resize_handle, Rect::ZERO);
     }
@@ -594,7 +596,7 @@ mod tests {
         // The colour picker / a shape dialog / Export for Screens: a
         // fixed-size window whose only chrome is its one tab strip.
         let m = master(MasterLayout::Tabs, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 240.0, 200.0), &theme(), &mut w80, true, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(240.0), ui_px(200.0)), &theme(), &mut w80, true, true);
         assert_eq!(frame.header.height(), 0.0);
         assert_eq!(frame.groups[0].handle.height(), 0.0);
         assert_eq!(frame.groups[0].resize_handle.height(), 0.0);
@@ -608,14 +610,14 @@ mod tests {
     fn natural_height_matches_the_body_bottom_a_giant_probe_rect_produces() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
         let h = natural_height(&m, 280.0, &theme(), &mut w80, false);
-        assert_eq!(h, HEADER_H + GROUP_HANDLE_H + STACK_ROW_H);
+        assert_eq!(h, metric_header_h() + metric_group_handle_h() + metric_stack_row_h());
     }
 
     #[test]
     fn compact_flips_once_width_drops_below_the_breakpoint() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let wide = layout_master(&m, Rect::new(0.0, 0.0, 300.0, 400.0), &theme(), &mut w80, false, true);
-        let narrow = layout_master(&m, Rect::new(0.0, 0.0, 200.0, 400.0), &theme(), &mut w80, false, true);
+        let wide = layout_master(&m, Rect::new(0.0, 0.0, ui_px(300.0), ui_px(400.0)), &theme(), &mut w80, false, true);
+        let narrow = layout_master(&m, Rect::new(0.0, 0.0, ui_px(200.0), ui_px(400.0)), &theme(), &mut w80, false, true);
         assert!(!wide.compact);
         assert!(narrow.compact);
     }
@@ -623,14 +625,14 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_over_a_tab_strip_inserts_at_the_nearest_gap() {
         let m = master(MasterLayout::Tabs, vec![vec![A, B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, true);
         let strip_y = frame.groups[0].tab_strip.center().y;
         assert_eq!(
-            hit_test_panel_drop(&frame, Point::new(10.0, strip_y)),
+            hit_test_panel_drop(&frame, Point::new(ui_px(10.0), strip_y)),
             Some(PanelDrop::IntoGroup { group: 0, at: 0 })
         );
         assert_eq!(
-            hit_test_panel_drop(&frame, Point::new(140.0, strip_y)),
+            hit_test_panel_drop(&frame, Point::new(ui_px(140.0), strip_y)),
             Some(PanelDrop::IntoGroup { group: 0, at: 2 })
         );
     }
@@ -638,8 +640,8 @@ mod tests {
     #[test]
     fn hit_test_panel_drop_outside_every_group_but_inside_the_body_makes_a_new_group() {
         let m = master(MasterLayout::Stack, vec![vec![A]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
-        let below_everything = Point::new(10.0, frame.body.y1 - 1.0);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, true);
+        let below_everything = Point::new(ui_px(10.0), frame.body.y1 - 1.0);
         assert_eq!(
             hit_test_panel_drop(&frame, below_everything),
             Some(PanelDrop::NewGroup { at: 1 })
@@ -649,7 +651,7 @@ mod tests {
     #[test]
     fn hit_test_group_drop_skips_the_dragged_group_itself() {
         let m = master(MasterLayout::Stack, vec![vec![A], vec![B]]);
-        let frame = layout_master(&m, Rect::new(0.0, 0.0, 280.0, 400.0), &theme(), &mut w80, false, true);
+        let frame = layout_master(&m, Rect::new(0.0, 0.0, ui_px(280.0), ui_px(400.0)), &theme(), &mut w80, false, true);
         let own_row = frame.groups[0].rows[0].rect.center();
         // Dragging group 0 itself over its own row must not "merge into
         // itself" — it should fall through to a sibling-position result.
@@ -691,27 +693,27 @@ mod tests {
 
     #[test]
     fn flyout_rect_sits_beside_the_row_when_there_is_room() {
-        let row = Rect::new(0.0, 100.0, 240.0, 134.0);
-        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let row = Rect::new(0.0, ui_px(100.0), ui_px(240.0), ui_px(134.0));
+        let viewport = Rect::new(0.0, 0.0, ui_px(1000.0), ui_px(800.0));
         let f = flyout_rect(row, viewport);
         assert_eq!(f.x0, row.x1 + 10.0);
         assert_eq!(f.y0, row.y0);
-        assert_eq!(f.width(), FLYOUT_W);
-        assert_eq!(f.height(), FLYOUT_H);
+        assert_eq!(f.width(), metric_flyout_w());
+        assert_eq!(f.height(), metric_flyout_h());
     }
 
     #[test]
     fn flyout_rect_flips_to_the_other_side_when_it_would_run_off_the_right_edge() {
-        let row = Rect::new(760.0, 100.0, 1000.0, 134.0);
-        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let row = Rect::new(ui_px(760.0), ui_px(100.0), ui_px(1000.0), ui_px(134.0));
+        let viewport = Rect::new(0.0, 0.0, ui_px(1000.0), ui_px(800.0));
         let f = flyout_rect(row, viewport);
-        assert_eq!(f.x0, row.x0 - FLYOUT_W - 10.0);
+        assert_eq!(f.x0, row.x0 - metric_flyout_w() - 10.0);
     }
 
     #[test]
     fn flyout_rect_stays_clamped_inside_the_viewport_near_the_bottom() {
-        let row = Rect::new(0.0, 780.0, 240.0, 814.0);
-        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let row = Rect::new(0.0, ui_px(780.0), ui_px(240.0), ui_px(814.0));
+        let viewport = Rect::new(0.0, 0.0, ui_px(1000.0), ui_px(800.0));
         let f = flyout_rect(row, viewport);
         assert!(f.y1 <= viewport.y1 - 12.0 + 1e-9);
     }
@@ -723,18 +725,18 @@ mod tests {
         // the second master — exactly where the old row-relative
         // `flyout_rect` would (wrongly) open it, on top of that second
         // master's tab strip instead of out past it, into the canvas.
-        let row = Rect::new(0.0, 100.0, 160.0, 134.0);
+        let row = Rect::new(0.0, ui_px(100.0), ui_px(160.0), ui_px(134.0));
         let canvas = (360.0, 1000.0); // canvas starts past both rails
-        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let viewport = Rect::new(0.0, 0.0, ui_px(1000.0), ui_px(800.0));
         let f = docked_flyout_rect(row, Side::Left, canvas, viewport);
         assert_eq!(f.x0, canvas.0 + 10.0);
     }
 
     #[test]
     fn docked_flyout_rect_opens_left_from_a_right_docked_rail() {
-        let row = Rect::new(840.0, 100.0, 1000.0, 134.0);
+        let row = Rect::new(ui_px(840.0), ui_px(100.0), ui_px(1000.0), ui_px(134.0));
         let canvas = (0.0, 640.0);
-        let viewport = Rect::new(0.0, 0.0, 1000.0, 800.0);
+        let viewport = Rect::new(0.0, 0.0, ui_px(1000.0), ui_px(800.0));
         let f = docked_flyout_rect(row, Side::Right, canvas, viewport);
         assert_eq!(f.x1, canvas.1 - 10.0);
     }
@@ -746,7 +748,7 @@ mod tests {
         // in a much wider, mostly-empty column.
         let mut m = master(MasterLayout::Stack, vec![vec![A]]);
         m.rect[2] = 200.0;
-        assert_eq!(dock_width(&m), COMPACT_RAIL_W);
+        assert_eq!(dock_width(&m), metric_compact_rail_w());
     }
 
     #[test]

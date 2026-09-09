@@ -6,6 +6,8 @@
 //! (footer button strip, inline-rename field, paint swatch). Dispatch is
 //! still a direct `match` on the panel id string, not the `Panel` trait.
 
+use crate::metrics::px as ui_px;
+
 mod artboards;
 pub mod character;
 pub mod color;
@@ -29,17 +31,25 @@ use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
-use crate::dock::PanelId;
+use crate::dock::{PanelId, PanelKind};
 use crate::text::TextContext;
 use crate::theme::Theme;
 use crate::tool::Tool;
 
 const ID: Affine = Affine::IDENTITY;
-const ROW_H: f64 = 26.0;
-const PAD: f64 = 10.0;
-const SWATCH: f64 = 22.0;
+/// The diagonal stroke drawn across a paint swatch that has no fill/stroke
+/// — `draw_paint_swatch` below and [`color`]'s own inline swatch drawing
+/// both need it.
+pub(super) const NO_PAINT_SLASH: Color = Color::from_rgb8(0xd0, 0x30, 0x30);
+/// Fill behind a "mixed" swatch (a multi-object selection with more than
+/// one fill/stroke) — `draw_paint_swatch` below and [`tools`]'s own proxy
+/// swatch both draw the same grey-with-"?" pattern.
+pub(super) const MIXED_SWATCH_BG: Color = Color::from_rgb8(0x3c, 0x3c, 0x3c);
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.panels_row_h) }
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.panels_pad) }
+fn metric_swatch() -> f64 { crate::metrics::with(|m| m.panels_swatch) }
 /// Height of a panel's bottom button strip.
-const FOOTER_H: f64 = 30.0;
+fn metric_footer_h() -> f64 { crate::metrics::with(|m| m.panels_footer_h) }
 
 /// Which paint a swatch click targets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -181,13 +191,13 @@ pub struct Ctx<'a> {
 /// The primitive tool a `shapedlg.*` panel id stands for.
 pub(crate) fn shape_dialog_tool(id: PanelId) -> Option<Tool> {
     Some(match id.0 {
-        "shapedlg.rect" => Tool::Rectangle,
-        "shapedlg.round" => Tool::RoundedRect,
-        "shapedlg.ellipse" => Tool::Ellipse,
-        "shapedlg.polygon" => Tool::Polygon,
-        "shapedlg.star" => Tool::Star,
-        "shapedlg.arc" => Tool::Arc,
-        "shapedlg.spiral" => Tool::Spiral,
+        PanelKind::ShapedlgRect => Tool::Rectangle,
+        PanelKind::ShapedlgRound => Tool::RoundedRect,
+        PanelKind::ShapedlgEllipse => Tool::Ellipse,
+        PanelKind::ShapedlgPolygon => Tool::Polygon,
+        PanelKind::ShapedlgStar => Tool::Star,
+        PanelKind::ShapedlgArc => Tool::Arc,
+        PanelKind::ShapedlgSpiral => Tool::Spiral,
         _ => return None,
     })
 }
@@ -410,10 +420,10 @@ pub enum MenuEntry {
 /// Flyout items for the hamburger on panel `id`.
 pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
     match id.0 {
-        "color" => color::menu(ctx),
-        "transform" => transform::menu(ctx),
-        "align" => align::menu(ctx),
-        "links" => links::menu(ctx),
+        PanelKind::Color => color::menu(ctx),
+        PanelKind::Transform => transform::menu(ctx),
+        PanelKind::Align => align::menu(ctx),
+        PanelKind::Links => links::menu(ctx),
         _ => Vec::new(),
     }
 }
@@ -448,51 +458,57 @@ pub fn links_content_height(doc: &Document) -> f64 {
 /// Draw panel `id`'s body into `body`.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect, ctx: &Ctx) {
     match id.0 {
-        "tools" => tools::paint(scene, text, body, ctx),
-        "layers" => layers::paint(scene, text, body, ctx),
-        "links" => links::paint(scene, text, body, ctx),
-        "artboards" => artboards::paint(scene, text, body, ctx),
-        "swatches" => swatches::paint(scene, text, body, ctx),
-        "character" => character::paint(scene, text, body, ctx),
-        "color" => color::paint(scene, text, body, ctx),
-        "gradient" => gradient::paint(scene, text, body, ctx),
-        "transform" => transform::paint(scene, text, body, ctx),
-        "pathfinder" => pathfinder::paint(scene, text, body, ctx),
-        "align" => align::paint(scene, text, body, ctx),
-        "paragraph" => paragraph::paint(scene, text, body, ctx),
-        "picker" => {
+        PanelKind::Tools => tools::paint(scene, text, body, ctx),
+        PanelKind::Layers => layers::paint(scene, text, body, ctx),
+        PanelKind::Links => links::paint(scene, text, body, ctx),
+        PanelKind::Artboards => artboards::paint(scene, text, body, ctx),
+        PanelKind::Swatches => swatches::paint(scene, text, body, ctx),
+        PanelKind::Character => character::paint(scene, text, body, ctx),
+        PanelKind::Color => color::paint(scene, text, body, ctx),
+        PanelKind::Gradient => gradient::paint(scene, text, body, ctx),
+        PanelKind::Transform => transform::paint(scene, text, body, ctx),
+        PanelKind::Pathfinder => pathfinder::paint(scene, text, body, ctx),
+        PanelKind::Align => align::paint(scene, text, body, ctx),
+        PanelKind::Paragraph => paragraph::paint(scene, text, body, ctx),
+        PanelKind::Picker => {
             if let Some(pk) = ctx.picker {
                 let mut local = pk;
                 local.origin = Point::new(body.x0, body.y0);
                 crate::picker::paint(scene, &local, ctx.theme.text, ctx.theme, text);
             }
         }
-        s if shape_dialog_tool(PanelId(s)).is_some() => {
+        PanelKind::ShapedlgRect
+        | PanelKind::ShapedlgRound
+        | PanelKind::ShapedlgEllipse
+        | PanelKind::ShapedlgPolygon
+        | PanelKind::ShapedlgStar
+        | PanelKind::ShapedlgArc
+        | PanelKind::ShapedlgSpiral => {
             if let Some((dlg, caret)) = ctx.shape_dialog {
                 crate::shapedialog::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
-        "export-screens" => {
+        PanelKind::ExportScreens => {
             if let Some((dlg, caret)) = ctx.export {
                 crate::export::paint(scene, dlg, body, ctx.theme, text, caret, ctx.doc);
             }
         }
-        "xformdlg.reflect" | "xformdlg.shear" => {
+        PanelKind::XformdlgReflect | PanelKind::XformdlgShear => {
             if let Some((dlg, caret)) = ctx.xform_dialog {
                 crate::xformdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
-        "blenddlg" => {
+        PanelKind::Blenddlg => {
             if let Some((dlg, caret)) = ctx.blend_dialog {
                 crate::blenddlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
-        "offsetdlg" => {
+        PanelKind::Offsetdlg => {
             if let Some((dlg, caret)) = ctx.offset_dialog {
                 crate::offsetdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
-        _ => {}
+        PanelKind::Unknown(_) => {}
     }
 }
 
@@ -500,19 +516,19 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
 /// `body`) into an [`Action`].
 pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
     match id.0 {
-        "tools" => tools::hit(body, local, ctx),
-        "layers" => layers::hit(body, local, ctx),
-        "links" => links::hit(body, local, ctx),
-        "artboards" => artboards::hit(body, local, ctx),
-        "swatches" => swatches::hit(body, local, ctx),
-        "character" => character::hit(body, local, ctx),
-        "color" => color::hit(body, local, ctx),
-        "gradient" => gradient::hit(body, local, ctx),
-        "transform" => transform::hit(body, local, ctx),
-        "pathfinder" => pathfinder::hit(body, local, ctx),
-        "align" => align::hit(body, local, ctx),
-        "paragraph" => paragraph::hit(body, local, ctx),
-        "picker" => {
+        PanelKind::Tools => tools::hit(body, local, ctx),
+        PanelKind::Layers => layers::hit(body, local, ctx),
+        PanelKind::Links => links::hit(body, local, ctx),
+        PanelKind::Artboards => artboards::hit(body, local, ctx),
+        PanelKind::Swatches => swatches::hit(body, local, ctx),
+        PanelKind::Character => character::hit(body, local, ctx),
+        PanelKind::Color => color::hit(body, local, ctx),
+        PanelKind::Gradient => gradient::hit(body, local, ctx),
+        PanelKind::Transform => transform::hit(body, local, ctx),
+        PanelKind::Pathfinder => pathfinder::hit(body, local, ctx),
+        PanelKind::Align => align::hit(body, local, ctx),
+        PanelKind::Paragraph => paragraph::hit(body, local, ctx),
+        PanelKind::Picker => {
             ctx.picker.map_or(Action::None, |mut pk| {
                 pk.origin = Point::new(body.x0, body.y0);
                 match crate::picker::hit(&pk, local) {
@@ -524,7 +540,13 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
                 }
             })
         }
-        s if shape_dialog_tool(PanelId(s)).is_some() => {
+        PanelKind::ShapedlgRect
+        | PanelKind::ShapedlgRound
+        | PanelKind::ShapedlgEllipse
+        | PanelKind::ShapedlgPolygon
+        | PanelKind::ShapedlgStar
+        | PanelKind::ShapedlgArc
+        | PanelKind::ShapedlgSpiral => {
             match ctx.shape_dialog.map(|(d, _)| d.hit(body, local)) {
                 Some(crate::shapedialog::Hit::Field(i)) => Action::ShapeField(i),
                 Some(crate::shapedialog::Hit::Step(i, d)) => Action::ShapeStep(i, d),
@@ -535,20 +557,20 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
                 _ => Action::None,
             }
         }
-        "export-screens" => match ctx.export {
+        PanelKind::ExportScreens => match ctx.export {
             Some((dlg, _)) => Action::ExportHit(crate::export::hit(dlg, body, local)),
             None => Action::None,
         },
-        "xformdlg.reflect" | "xformdlg.shear" => match ctx.xform_dialog {
+        PanelKind::XformdlgReflect | PanelKind::XformdlgShear => match ctx.xform_dialog {
             Some((dlg, _)) => Action::XformHit(crate::xformdlg::hit(dlg, body, local)),
             None => Action::None,
         },
-        "blenddlg" => Action::BlendHit(crate::blenddlg::hit(body, local)),
-        "offsetdlg" => match ctx.offset_dialog {
+        PanelKind::Blenddlg => Action::BlendHit(crate::blenddlg::hit(body, local)),
+        PanelKind::Offsetdlg => match ctx.offset_dialog {
             Some((dlg, _)) => Action::OffsetHit(crate::offsetdlg::hit(dlg, body, local)),
             None => Action::None,
         },
-        _ => Action::None,
+        PanelKind::Unknown(_) => Action::None,
     }
 }
 
@@ -570,27 +592,31 @@ pub fn rail_floor(id: PanelId, width: f64) -> f64 {
 /// height; list panels report a short floor and clip past it.
 pub fn min_body_height(id: PanelId, width: f64) -> f64 {
     match id.0 {
-        "character" => character::natural_height(),
-        "tools" => tools::natural_height(width),
-        "layers" => layers::SEARCH_H + ROW_H * 2.0 + FOOTER_H,
-        "links" => ROW_H * 2.0 + FOOTER_H,
-        "artboards" | "swatches" => 132.0,
-        "color" => color::NATURAL_H,
-        "gradient" => gradient::NATURAL_H,
-        "transform" => transform::natural_height(),
-        "pathfinder" => pathfinder::natural_height(),
-        "align" => align::natural_height(),
-        "paragraph" => paragraph::natural_height(),
-        "picker" => crate::picker::H,
-        "export-screens" => crate::export::H,
-        "xformdlg.reflect" => crate::xformdlg::body_height(crate::xformdlg::Kind::Reflect),
-        "xformdlg.shear" => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
-        "blenddlg" => crate::blenddlg::body_height(),
-        "offsetdlg" => crate::offsetdlg::body_height(),
-        s if shape_dialog_tool(PanelId(s)).is_some() => {
-            crate::shapedialog::body_height(shape_dialog_tool(PanelId(s)).unwrap())
-        }
-        _ => 60.0,
+        PanelKind::Character => character::natural_height(),
+        PanelKind::Tools => tools::natural_height(width),
+        PanelKind::Layers => layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h(),
+        PanelKind::Links => metric_row_h() * 2.0 + metric_footer_h(),
+        PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
+        PanelKind::Color => color::metric_natural_h(),
+        PanelKind::Gradient => gradient::metric_natural_h(),
+        PanelKind::Transform => transform::natural_height(),
+        PanelKind::Pathfinder => pathfinder::natural_height(),
+        PanelKind::Align => align::natural_height(),
+        PanelKind::Paragraph => paragraph::natural_height(),
+        PanelKind::Picker => crate::picker::metric_h(),
+        PanelKind::ExportScreens => crate::export::metric_h(),
+        PanelKind::XformdlgReflect => crate::xformdlg::body_height(crate::xformdlg::Kind::Reflect),
+        PanelKind::XformdlgShear => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
+        PanelKind::Blenddlg => crate::blenddlg::body_height(),
+        PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
+        PanelKind::ShapedlgRect
+        | PanelKind::ShapedlgRound
+        | PanelKind::ShapedlgEllipse
+        | PanelKind::ShapedlgPolygon
+        | PanelKind::ShapedlgStar
+        | PanelKind::ShapedlgArc
+        | PanelKind::ShapedlgSpiral => crate::shapedialog::body_height(shape_dialog_tool(id).unwrap()),
+        PanelKind::Unknown(_) => ui_px(60.0),
     }
 }
 
@@ -600,14 +626,14 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
 /// swatches / picker), which own their overflow behaviour.
 fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
     Some(match id.0 {
-        "character" => character::natural_height(),
-        "tools" => tools::natural_height(width),
-        "color" => color::NATURAL_H,
-        "gradient" => gradient::NATURAL_H,
-        "transform" => transform::natural_height(),
-        "pathfinder" => pathfinder::natural_height(),
-        "align" => align::natural_height(),
-        "paragraph" => paragraph::natural_height(),
+        PanelKind::Character => character::natural_height(),
+        PanelKind::Tools => tools::natural_height(width),
+        PanelKind::Color => color::metric_natural_h(),
+        PanelKind::Gradient => gradient::metric_natural_h(),
+        PanelKind::Transform => transform::natural_height(),
+        PanelKind::Pathfinder => pathfinder::natural_height(),
+        PanelKind::Align => align::natural_height(),
+        PanelKind::Paragraph => paragraph::natural_height(),
         _ => return None,
     })
 }
@@ -653,11 +679,11 @@ pub fn paint_scrollbar(scene: &mut Scene, body: Rect, id: PanelId, scroll: f64, 
     if content <= body.height() + 0.5 {
         return;
     }
-    let track_w = 3.0;
-    let x1 = body.x1 - 2.0;
+    let track_w = ui_px(3.0);
+    let x1 = body.x1 - ui_px(2.0);
     let x0 = x1 - track_w;
     let frac_vis = (body.height() / content).clamp(0.0, 1.0);
-    let thumb_h = (body.height() * frac_vis).max(24.0);
+    let thumb_h = (body.height() * frac_vis).max(ui_px(24.0));
     let travel = body.height() - thumb_h;
     let frac_scr = (scroll / (content - body.height())).clamp(0.0, 1.0);
     let y0 = body.y0 + travel * frac_scr;
@@ -673,15 +699,15 @@ pub fn paint_scrollbar(scene: &mut Scene, body: Rect, id: PanelId, scroll: f64, 
 /// Hover text for the control at `local` in panel `id`'s body, if any.
 pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {
-        "tools" => tools::tip(body, local, ctx),
-        "color" => color::tip(body, local, ctx).map(str::to_string),
-        "gradient" => gradient::tip(body, local, ctx).map(str::to_string),
-        "picker" => Some("Color Picker".into()),
-        "character" => character::tip(body, local, ctx).map(str::to_string),
-        "transform" => transform::tip(body, local, ctx).map(str::to_string),
-        "pathfinder" => pathfinder::tip(body, local, ctx).map(str::to_string),
-        "align" => align::tip(body, local, ctx).map(str::to_string),
-        "paragraph" => paragraph::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Tools => tools::tip(body, local, ctx),
+        PanelKind::Color => color::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Gradient => gradient::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Picker => Some("Color Picker".into()),
+        PanelKind::Character => character::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Transform => transform::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Pathfinder => pathfinder::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Align => align::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Paragraph => paragraph::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }
@@ -689,18 +715,18 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
 // ---- shared widgets --------------------------------------------------
 
 fn row_rect(body: Rect, i: usize) -> Rect {
-    let y = body.y0 + i as f64 * ROW_H;
-    Rect::new(body.x0, y, body.x1, y + ROW_H)
+    let y = body.y0 + i as f64 * metric_row_h();
+    Rect::new(body.x0, y, body.x1, y + metric_row_h())
 }
 
 /// The four footer button rects, left→right: move-up, move-down, add,
 /// delete — right-aligned in the strip along `body`'s bottom edge.
 fn panel_footer_rects(body: Rect) -> [Rect; 4] {
-    let sz = 20.0;
-    let gap = 10.0;
-    let cy = body.y1 - FOOTER_H * 0.5;
+    let sz = ui_px(20.0);
+    let gap = ui_px(10.0);
+    let cy = body.y1 - metric_footer_h() * 0.5;
     std::array::from_fn(|k| {
-        let cx = body.x1 - PAD - (3 - k) as f64 * (sz + gap) - sz * 0.5;
+        let cx = body.x1 - metric_pad() - (3 - k) as f64 * (sz + gap) - sz * 0.5;
         Rect::from_center_size(Point::new(cx, cy), (sz, sz))
     })
 }
@@ -718,7 +744,7 @@ fn footer_color(theme: &Theme, enabled: bool, hot: bool) -> Color {
 /// Draws the footer strip and its four icons. `enabled` gates each of
 /// [up, down, add, delete].
 fn paint_panel_footer(scene: &mut Scene, body: Rect, theme: &Theme, pointer: Point, enabled: [bool; 4]) {
-    let strip = Rect::new(body.x0, body.y1 - FOOTER_H, body.x1, body.y1);
+    let strip = Rect::new(body.x0, body.y1 - metric_footer_h(), body.x1, body.y1);
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &strip);
     scene.fill(
         Fill::NonZero,
@@ -742,59 +768,59 @@ fn paint_panel_footer(scene: &mut Scene, body: Rect, theme: &Theme, pointer: Poi
 fn draw_footer_arrow(scene: &mut Scene, r: Rect, up: bool, color: Color) {
     let cx = r.center().x;
     let (y_head, y_tail, y_tip) = if up {
-        (r.y0 + 6.0, r.y1 - 3.0, r.y0 + 2.0)
+        (r.y0 + ui_px(6.0), r.y1 - ui_px(3.0), r.y0 + ui_px(2.0))
     } else {
-        (r.y1 - 6.0, r.y0 + 3.0, r.y1 - 2.0)
+        (r.y1 - ui_px(6.0), r.y0 + ui_px(3.0), r.y1 - ui_px(2.0))
     };
     scene.stroke(
-        &Stroke::new(1.6),
+        &Stroke::new(ui_px(1.6)),
         ID,
         color,
         None,
         &vello::kurbo::Line::new((cx, y_tail), (cx, y_tip)),
     );
     let mut head = BezPath::new();
-    head.move_to((cx - 4.0, y_head));
+    head.move_to((cx - ui_px(4.0), y_head));
     head.line_to((cx, y_tip));
-    head.line_to((cx + 4.0, y_head));
-    scene.stroke(&Stroke::new(1.6), ID, color, None, &head);
+    head.line_to((cx + ui_px(4.0), y_head));
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, color, None, &head);
 }
 
 fn draw_footer_plus(scene: &mut Scene, r: Rect, color: Color) {
     let c = r.center();
     scene.stroke(
-        &Stroke::new(1.6),
+        &Stroke::new(ui_px(1.6)),
         ID,
         color,
         None,
-        &vello::kurbo::Line::new((c.x - 5.0, c.y), (c.x + 5.0, c.y)),
+        &vello::kurbo::Line::new((c.x - ui_px(5.0), c.y), (c.x + ui_px(5.0), c.y)),
     );
     scene.stroke(
-        &Stroke::new(1.6),
+        &Stroke::new(ui_px(1.6)),
         ID,
         color,
         None,
-        &vello::kurbo::Line::new((c.x, c.y - 5.0), (c.x, c.y + 5.0)),
+        &vello::kurbo::Line::new((c.x, c.y - ui_px(5.0)), (c.x, c.y + ui_px(5.0))),
     );
 }
 
 fn draw_footer_trash(scene: &mut Scene, r: Rect, color: Color) {
     let c = r.center();
-    let can = Rect::new(c.x - 4.5, c.y - 2.5, c.x + 4.5, c.y + 6.0);
-    scene.stroke(&Stroke::new(1.4), ID, color, None, &can);
+    let can = Rect::new(c.x - ui_px(4.5), c.y - ui_px(2.5), c.x + ui_px(4.5), c.y + ui_px(6.0));
+    scene.stroke(&Stroke::new(ui_px(1.4)), ID, color, None, &can);
     scene.stroke(
-        &Stroke::new(1.4),
+        &Stroke::new(ui_px(1.4)),
         ID,
         color,
         None,
-        &vello::kurbo::Line::new((c.x - 7.0, c.y - 2.5), (c.x + 7.0, c.y - 2.5)),
+        &vello::kurbo::Line::new((c.x - ui_px(7.0), c.y - ui_px(2.5)), (c.x + ui_px(7.0), c.y - ui_px(2.5))),
     );
     scene.stroke(
-        &Stroke::new(1.4),
+        &Stroke::new(ui_px(1.4)),
         ID,
         color,
         None,
-        &vello::kurbo::Line::new((c.x - 2.0, c.y - 5.0), (c.x + 2.0, c.y - 5.0)),
+        &vello::kurbo::Line::new((c.x - ui_px(2.0), c.y - ui_px(5.0)), (c.x + ui_px(2.0), c.y - ui_px(5.0))),
     );
 }
 
@@ -810,21 +836,21 @@ fn draw_name_field(
     color: Color,
     editing: Option<&str>,
 ) {
-    let baseline = row.y0 + row.height() * 0.5 + 4.0;
+    let baseline = row.y0 + row.height() * 0.5 + ui_px(4.0);
     match editing {
         None => text.draw(scene, label, 12.0, color, x, baseline),
         Some(buf) => {
-            let field = Rect::new(x - 4.0, row.y0 + 3.0, row.x1 - PAD, row.y1 - 3.0);
+            let field = Rect::new(x - ui_px(4.0), row.y0 + ui_px(3.0), row.x1 - metric_pad(), row.y1 - ui_px(3.0));
             scene.fill(Fill::NonZero, ID, theme.bg, None, &field);
-            scene.stroke(&Stroke::new(1.25), ID, theme.accent, None, &field);
+            scene.stroke(&Stroke::new(ui_px(1.25)), ID, theme.accent, None, &field);
             text.draw(scene, buf, 12.0, theme.text, x, baseline);
             let caret_x = x + text.measure(buf, 12.0) + 1.0;
             scene.stroke(
-                &Stroke::new(1.0),
+                &Stroke::new(ui_px(1.0)),
                 ID,
                 theme.text,
                 None,
-                &vello::kurbo::Line::new((caret_x, row.y0 + 5.0), (caret_x, row.y1 - 5.0)),
+                &vello::kurbo::Line::new((caret_x, row.y0 + ui_px(5.0)), (caret_x, row.y1 - ui_px(5.0))),
             );
         }
     }
@@ -842,7 +868,7 @@ pub fn draw_paint_swatch(
     mixed: bool,
 ) {
     if mixed {
-        scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x3c, 0x3c, 0x3c), None, &r);
+        scene.fill(Fill::NonZero, ID, MIXED_SWATCH_BG, None, &r);
         mixed_marks(scene, text, r);
     } else {
         match paint {
@@ -852,9 +878,9 @@ pub fn draw_paint_swatch(
                 slash.move_to((r.x0, r.y1));
                 slash.line_to((r.x1, r.y0));
                 scene.stroke(
-                    &Stroke::new(1.5),
+                    &Stroke::new(ui_px(1.5)),
                     ID,
-                    Color::from_rgb8(0xd0, 0x30, 0x30),
+                    NO_PAINT_SLASH,
                     None,
                     &slash,
                 );
@@ -898,11 +924,12 @@ pub(crate) fn gradient_ramp(scene: &mut Scene, r: Rect) {
 /// mixed-appearance cue), or just a centred one on a small swatch.
 pub(crate) fn mixed_marks(scene: &mut Scene, text: &mut TextContext, r: Rect) {
     let ink = Color::from_rgb8(0xdc, 0xdc, 0xdc);
-    let big = r.height() >= 28.0;
-    let sz = (r.height() * if big { 0.30 } else { 0.62 }).clamp(7.0, 15.0) as f32;
+    let base_height = r.height() / text.ui_scale() as f64;
+    let big = base_height >= 28.0;
+    let sz = (base_height * if big { 0.30 } else { 0.62 }).clamp(7.0, 15.0) as f32;
     let w = text.measure("?", sz);
     let put = |scene: &mut Scene, text: &mut TextContext, cx: f64, cy: f64| {
-        text.draw(scene, "?", sz, ink, cx - w * 0.5, cy + sz as f64 * 0.36);
+        text.draw(scene, "?", sz, ink, cx - w * 0.5, cy + ui_px(sz as f64) * 0.36);
     };
     put(scene, text, r.center().x, r.center().y);
     if big {

@@ -1,5 +1,7 @@
 //! Dialog-style HSV color picker with color-space readouts.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::Color as CoreColor;
 use vello::kurbo::{Affine, BezPath, Circle, Point, Rect, Stroke};
 use vello::peniko::{Color, ColorStop, Fill, Gradient};
@@ -8,8 +10,8 @@ use vello::Scene;
 use crate::panels::PaintSlot;
 use crate::theme::Theme;
 
-pub const W: f64 = 680.0;
-pub const H: f64 = 386.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.picker_w) }
+pub fn metric_h() -> f64 { crate::metrics::with(|m| m.picker_h) }
 
 #[derive(Clone, Copy, Debug)]
 pub struct Picker {
@@ -44,27 +46,27 @@ impl Picker {
         Rect::new(
             self.origin.x,
             self.origin.y,
-            self.origin.x + W,
-            self.origin.y + H,
+            self.origin.x + metric_w(),
+            self.origin.y + metric_h(),
         )
     }
     fn sv_rect(&self) -> Rect {
         let b = self.bounds();
-        Rect::new(b.x0 + 19.0, b.y0 + 26.0, b.x0 + 327.0, b.y0 + 334.0)
+        Rect::new(b.x0 + ui_px(19.0), b.y0 + ui_px(26.0), b.x0 + ui_px(327.0), b.y0 + ui_px(334.0))
     }
     fn hue_rect(&self) -> Rect {
         let b = self.bounds();
-        Rect::new(b.x0 + 350.0, b.y0 + 23.0, b.x0 + 380.0, b.y0 + 331.0)
+        Rect::new(b.x0 + ui_px(350.0), b.y0 + ui_px(23.0), b.x0 + ui_px(380.0), b.y0 + ui_px(331.0))
     }
     fn ok_rect(&self) -> Rect {
         let b = self.bounds();
         // Same size and inset as New Document's primary "Create" button.
-        Rect::new(b.x1 - 30.0 - 110.0, b.y1 - 14.0 - 34.0, b.x1 - 30.0, b.y1 - 14.0)
+        Rect::new(b.x1 - ui_px(30.0) - ui_px(110.0), b.y1 - ui_px(14.0) - ui_px(34.0), b.x1 - ui_px(30.0), b.y1 - ui_px(14.0))
     }
     fn cancel_rect(&self) -> Rect {
         let ok = self.ok_rect();
         // Same size and gap as New Document's secondary "Close" button.
-        Rect::new(ok.x0 - 14.0 - 96.0, ok.y0, ok.x0 - 14.0, ok.y1)
+        Rect::new(ok.x0 - ui_px(14.0) - ui_px(96.0), ok.y0, ok.x0 - ui_px(14.0), ok.y1)
     }
 }
 
@@ -105,7 +107,7 @@ pub fn hit(pk: &Picker, p: Point) -> Hit {
         return Hit::Ok;
     }
     let b = pk.bounds();
-    if Rect::new(b.x0, b.y0, b.x1, b.y0 + 26.0).contains(p) {
+    if Rect::new(b.x0, b.y0, b.x1, b.y0 + ui_px(26.0)).contains(p) {
         return Hit::Title;
     }
     if pk.bounds().contains(p) {
@@ -139,7 +141,7 @@ pub fn paint(
 ) {
     let b = pk.bounds();
     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.panel_bg, None, &b);
-    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &b);
+    scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &b);
 
     // SV square: white→hue horizontally, then transparent→black vertically.
     let sv = pk.sv_rect();
@@ -156,16 +158,16 @@ pub fn paint(
     // SV cursor.
     let cx = sv.x0 + pk.s as f64 * sv.width();
     let cy = sv.y0 + (1.0 - pk.v as f64) * sv.height();
-    let cursor = Circle::new((cx, cy), 5.0);
+    let cursor = Circle::new((cx, cy), ui_px(5.0));
     scene.stroke(
-        &Stroke::new(3.0),
+        &Stroke::new(ui_px(3.0)),
         Affine::IDENTITY,
         Color::BLACK,
         None,
         &cursor,
     );
     scene.stroke(
-        &Stroke::new(1.0),
+        &Stroke::new(ui_px(1.0)),
         Affine::IDENTITY,
         Color::WHITE,
         None,
@@ -193,15 +195,15 @@ pub fn paint(
     };
     let marker = theme.text_dim;
     let mut left = BezPath::new();
-    left.move_to((hrect.x0 - 10.0, hy - 5.0));
-    left.line_to((hrect.x0 - 2.0, hy));
-    left.line_to((hrect.x0 - 10.0, hy + 5.0));
+    left.move_to((hrect.x0 - ui_px(10.0), hy - ui_px(5.0)));
+    left.line_to((hrect.x0 - ui_px(2.0), hy));
+    left.line_to((hrect.x0 - ui_px(10.0), hy + ui_px(5.0)));
     left.close_path();
     scene.fill(Fill::NonZero, Affine::IDENTITY, marker, None, &left);
     let mut right = BezPath::new();
-    right.move_to((hrect.x1 + 10.0, hy - 5.0));
-    right.line_to((hrect.x1 + 2.0, hy));
-    right.line_to((hrect.x1 + 10.0, hy + 5.0));
+    right.move_to((hrect.x1 + ui_px(10.0), hy - ui_px(5.0)));
+    right.line_to((hrect.x1 + ui_px(2.0), hy));
+    right.line_to((hrect.x1 + ui_px(10.0), hy + ui_px(5.0)));
     right.close_path();
     scene.fill(Fill::NonZero, Affine::IDENTITY, marker, None, &right);
 
@@ -235,9 +237,9 @@ pub fn paint(
     let cmyk_labels = ["C:", "M:", "Y:", "K:"];
     let field_bg = theme.bg;
     for (i, (label, value)) in labels.iter().zip(left_values.iter()).enumerate() {
-        let y = b.y0 + 32.0 + i as f64 * 30.0;
-        let radio = Circle::new((b.x0 + 418.0, y), 7.0);
-        scene.stroke(&Stroke::new(1.2), Affine::IDENTITY, marker, None, &radio);
+        let y = b.y0 + ui_px(32.0) + i as f64 * ui_px(30.0);
+        let radio = Circle::new((b.x0 + ui_px(418.0), y), ui_px(7.0));
+        scene.stroke(&Stroke::new(ui_px(1.2)), Affine::IDENTITY, marker, None, &radio);
         if i == 0 {
             scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &radio);
             scene.fill(
@@ -245,16 +247,16 @@ pub fn paint(
                 Affine::IDENTITY,
                 theme.panel_bg,
                 None,
-                &Circle::new((b.x0 + 418.0, y), 2.5),
+                &Circle::new((b.x0 + ui_px(418.0), y), ui_px(2.5)),
             );
         }
-        text.draw(scene, label, 14.0, text_color, b.x0 + 430.0, y + 5.0);
-        draw_field(scene, text, theme, text_color, field_bg, b.x0 + 450.0, y - 12.0, 80.0, value);
+        text.draw(scene, label, 14.0, text_color, b.x0 + ui_px(430.0), y + ui_px(5.0));
+        draw_field(scene, text, theme, text_color, field_bg, b.x0 + ui_px(450.0), y - ui_px(12.0), ui_px(80.0), value);
     }
     for (i, (label, value)) in cmyk_labels.iter().zip(right_values.iter()).enumerate() {
-        let y = b.y0 + 32.0 + i as f64 * 30.0;
-        text.draw(scene, label, 14.0, text_color, b.x0 + 545.0, y + 5.0);
-        draw_field(scene, text, theme, text_color, field_bg, b.x0 + 565.0, y - 12.0, 80.0, value);
+        let y = b.y0 + ui_px(32.0) + i as f64 * ui_px(30.0);
+        text.draw(scene, label, 14.0, text_color, b.x0 + ui_px(545.0), y + ui_px(5.0));
+        draw_field(scene, text, theme, text_color, field_bg, b.x0 + ui_px(565.0), y - ui_px(12.0), ui_px(80.0), value);
     }
     let hex = format!(
         "{:02x}{:02x}{:02x}",
@@ -262,8 +264,8 @@ pub fn paint(
         (g * 255.0).round() as u8,
         (blue * 255.0).round() as u8
     );
-    text.draw(scene, "#", 20.0, marker, b.x0 + 413.0, b.y0 + 229.0);
-    draw_field(scene, text, theme, text_color, field_bg, b.x0 + 430.0, b.y0 + 211.0, 90.0, &hex);
+    text.draw(scene, "#", 20.0, marker, b.x0 + ui_px(413.0), b.y0 + ui_px(229.0));
+    draw_field(scene, text, theme, text_color, field_bg, b.x0 + ui_px(430.0), b.y0 + ui_px(211.0), ui_px(90.0), &hex);
 
     crate::widgets::button(scene, text, theme, pk.cancel_rect(), "Cancel", false);
     crate::widgets::button(scene, text, theme, pk.ok_rect(), "OK", true);
@@ -280,10 +282,10 @@ fn draw_field(
     width: f64,
     value: &str,
 ) {
-    let field = Rect::new(x, y, x + width, y + 25.0).to_rounded_rect(3.0);
+    let field = Rect::new(x, y, x + width, y + ui_px(25.0)).to_rounded_rect(ui_px(3.0));
     scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &field);
-    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.border, None, &field);
-    text.draw(scene, value, 14.0, text_color, x + 7.0, y + 17.0);
+    scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &field);
+    text.draw(scene, value, 14.0, text_color, x + ui_px(7.0), y + ui_px(17.0));
 }
 
 fn stop(offset: f32, hue: f32) -> ColorStop {
@@ -358,7 +360,7 @@ mod tests {
 
     #[test]
     fn picker_hit_values_match_visual_extents() {
-        let pk = Picker::from_color(PaintSlot::Fill, Point::new(20.0, 30.0), None);
+        let pk = Picker::from_color(PaintSlot::Fill, Point::new(ui_px(20.0), ui_px(30.0)), None);
         let sv = pk.sv_rect();
         assert_eq!(hit(&pk, Point::new(sv.x0, sv.y0)), Hit::Sv(0.0, 1.0));
         assert_eq!(hit(&pk, sv.center()), Hit::Sv(0.5, 0.5));

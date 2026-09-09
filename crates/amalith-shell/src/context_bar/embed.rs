@@ -2,6 +2,8 @@
 //! Clicking it copies the file's bytes into the document and switches the
 //! asset over to Embedded (see `App::embed_asset`).
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Point, Rect};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -15,7 +17,7 @@ use super::{Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Embed,
     applies: |ctx| ctx.embed_target.is_some(),
-    measure: |_| 72.0,
+    measure: |_| ui_px(72.0),
     paint,
     hit,
 };
@@ -34,13 +36,13 @@ fn hit(r: Rect, local: Point, ctx: &Ctx) -> Action {
 }
 
 fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, label: &str) {
-    scene.fill(Fill::NonZero, ID, theme.bg, None, &r.to_rounded_rect(4.0));
+    scene.fill(Fill::NonZero, ID, theme.bg, None, &r.to_rounded_rect(ui_px(4.0)));
     scene.stroke(
-        &vello::kurbo::Stroke::new(1.0),
+        &vello::kurbo::Stroke::new(ui_px(1.0)),
         ID,
         theme.text_dim.with_alpha(0.5),
         None,
-        &r.to_rounded_rect(4.0),
+        &r.to_rounded_rect(ui_px(4.0)),
     );
     let w = text.measure(label, 13.0);
     text.draw(
@@ -49,6 +51,6 @@ fn button(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, lab
         13.0,
         theme.text,
         r.x0 + (r.width() - w) * 0.5,
-        r.y0 + r.height() * 0.5 + 4.5,
+        r.y0 + r.height() * 0.5 + ui_px(4.5),
     );
 }

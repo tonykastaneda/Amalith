@@ -47,13 +47,13 @@ pub(crate) use sizing::Field;
 use sizing::Sizing;
 
 /// Panel body width. The shell adds its tab-strip height for the window.
-pub const W: f64 = 268.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.shapedialog_w) }
 
-const BTN_H: f64 = 30.0;
-const BTN_W: f64 = 88.0;
-const BTN_GAP: f64 = 14.0;
-const GAP_BEFORE_BTNS: f64 = 18.0;
-const BOT_PAD: f64 = 16.0;
+fn metric_btn_h() -> f64 { crate::metrics::with(|m| m.shapedialog_btn_h) }
+fn metric_btn_w() -> f64 { crate::metrics::with(|m| m.shapedialog_btn_w) }
+fn metric_btn_gap() -> f64 { crate::metrics::with(|m| m.shapedialog_btn_gap) }
+fn metric_gap_before_btns() -> f64 { crate::metrics::with(|m| m.shapedialog_gap_before_btns) }
+fn metric_bot_pad() -> f64 { crate::metrics::with(|m| m.shapedialog_bot_pad) }
 
 /// Per-shape behaviour. One implementor per file in this directory.
 ///
@@ -127,7 +127,7 @@ fn shape_for(tool: Tool) -> Box<dyn Shape> {
 pub fn body_height(tool: Tool) -> f64 {
     let shape = shape_for(tool);
     let rows = shape.rows(&Params::default()).len();
-    sizing::stack_height(rows) + shape.options_height() + GAP_BEFORE_BTNS + BTN_H + BOT_PAD
+    sizing::stack_height(rows) + shape.options_height() + metric_gap_before_btns() + metric_btn_h() + metric_bot_pad()
 }
 
 /// Remembered values, so a dialog reopens with what was last entered.
@@ -215,24 +215,24 @@ impl ShapeDialog {
     fn options_area(&self, body: Rect) -> Rect {
         let y = body.y0 + self.sizing.height();
         Rect::new(
-            body.x0 + sizing::PAD_X,
+            body.x0 + sizing::metric_pad_x(),
             y,
-            body.x1 - sizing::PAD_X,
+            body.x1 - sizing::metric_pad_x(),
             y + self.shape.options_height(),
         )
     }
 
     fn ok_rect(&self, body: Rect) -> Rect {
         Rect::new(
-            body.x1 - sizing::PAD_X - BTN_W,
-            body.y1 - BOT_PAD - BTN_H,
-            body.x1 - sizing::PAD_X,
-            body.y1 - BOT_PAD,
+            body.x1 - sizing::metric_pad_x() - metric_btn_w(),
+            body.y1 - metric_bot_pad() - metric_btn_h(),
+            body.x1 - sizing::metric_pad_x(),
+            body.y1 - metric_bot_pad(),
         )
     }
     fn cancel_rect(&self, body: Rect) -> Rect {
         let ok = self.ok_rect(body);
-        Rect::new(ok.x0 - BTN_GAP - BTN_W, ok.y0, ok.x0 - BTN_GAP, ok.y1)
+        Rect::new(ok.x0 - metric_btn_gap() - metric_btn_w(), ok.y0, ok.x0 - metric_btn_gap(), ok.y1)
     }
 
     pub fn hit(&self, body: Rect, local: Point) -> Hit {

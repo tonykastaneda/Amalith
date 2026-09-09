@@ -66,6 +66,17 @@ pub struct Theme {
 }
 
 impl Theme {
+    pub fn set_ui_scale(&mut self, scale: f64) {
+        let base = Self::default();
+        self.tab_strip_h = base.tab_strip_h * scale;
+        self.group_title_h = base.group_title_h * scale;
+        self.splitter_thickness = base.splitter_thickness * scale;
+        self.tab_pad_x = base.tab_pad_x * scale;
+        self.panel_menu_w = base.panel_menu_w * scale;
+        self.group_close_w = base.group_close_w * scale;
+        self.panel_collapse_w = base.panel_collapse_w * scale;
+    }
+
     /// Point the accent at `c` and refresh every token derived from it
     /// (drop indicator wash + line, marquee fill, and the on-accent ink).
     pub fn set_accent(&mut self, c: Color) {

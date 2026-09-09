@@ -63,8 +63,8 @@ impl App {
                         panels::PaintSlot::Stroke => self.doc.stroke,
                     });
                 let origin = Point::new(
-                    ((w - picker::W) * 0.5).max(4.0),
-                    ((h - picker::H) * 0.5).max(4.0),
+                    ((w - picker::metric_w()) * 0.5).max(4.0),
+                    ((h - picker::metric_h()) * 0.5).max(4.0),
                 );
                 self.picker = Some(picker::Picker::from_color(slot, origin, paint.color()));
             }
@@ -72,7 +72,7 @@ impl App {
                 if let Some(pk) = &mut self.picker {
                     pk.s = s;
                     pk.v = v;
-                    if self.dock.contains(PanelId("picker")) {
+                    if self.dock.contains(PanelId(PanelKind::Picker)) {
                         // Pointer is in the host window; reconstruct the
                         // panel-body origin from the SV inset so a drag
                         // keeps using the same hit math.
@@ -87,7 +87,7 @@ impl App {
             panels::Action::PickerHue(h) => {
                 if let Some(pk) = &mut self.picker {
                     pk.h = h;
-                    if self.dock.contains(PanelId("picker")) {
+                    if self.dock.contains(PanelId(PanelKind::Picker)) {
                         pk.origin = Point::new(
                             self.pointer.x - 350.0,
                             self.pointer.y - 23.0 - (1.0 - h as f64) * 308.0,
@@ -445,7 +445,7 @@ impl App {
                 }
             }
             panels::Action::PanelMenu { panel, id } => {
-                if panel.0 == "color" {
+                if panel.0 == PanelKind::Color {
                     match id {
                         "rgb" => self.color_mode = panels::ColorSpace::Rgb,
                         "hsb" => self.color_mode = panels::ColorSpace::Hsb,
@@ -474,13 +474,13 @@ impl App {
                         }
                         _ => {}
                     }
-                } else if panel.0 == "transform" {
+                } else if panel.0 == PanelKind::Transform {
                     match id {
                         "flip-h" => self.flip_xform(true),
                         "flip-v" => self.flip_xform(false),
                         _ => {}
                     }
-                } else if panel.0 == "align" {
+                } else if panel.0 == PanelKind::Align {
                     if id == "cancel-key" {
                         self.key_object = None;
                         if self.align_to == amalith_commands::AlignTo::KeyObject {
@@ -491,7 +491,7 @@ impl App {
                             };
                         }
                     }
-                } else if panel.0 == "links" {
+                } else if panel.0 == PanelKind::Links {
                     if let Some(asset_id) = self.doc.selected_asset {
                         match id {
                             "embed" => self.embed_asset(asset_id),
@@ -814,8 +814,8 @@ impl App {
             return None;
         }
         if self.pointer_win == self.main_id
-            && self.pointer.y >= APP_BAR_H
-            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+            && self.pointer.y >= metric_app_bar_h()
+            && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
             let bar = opt_bar_rect(w);
@@ -824,7 +824,7 @@ impl App {
                 return Some(f);
             }
         }
-        let pbody = self.active_panel_body_at_pointer("transform")?;
+        let pbody = self.active_panel_body_at_pointer(PanelKind::Transform)?;
         panels::transform::field_at(pbody, self.pointer)
     }
 
@@ -834,7 +834,7 @@ impl App {
             return None;
         }
         let kind = self.target_gradient().map(|(_, g)| g.kind);
-        let pbody = self.active_panel_body_at_pointer("gradient")?;
+        let pbody = self.active_panel_body_at_pointer(PanelKind::Gradient)?;
         panels::gradient::field_at(pbody, self.pointer, kind)
     }
 
@@ -1069,8 +1069,8 @@ impl App {
                     .and_then(|a| a.fill)
                     .map(|c| amalith_core::Color::rgba(c.r, c.g, c.b, c.a));
                 let origin = Point::new(
-                    ((w - crate::picker::W) * 0.5).max(4.0),
-                    ((h - crate::picker::H) * 0.5).max(4.0),
+                    ((w - crate::picker::metric_w()) * 0.5).max(4.0),
+                    ((h - crate::picker::metric_h()) * 0.5).max(4.0),
                 );
                 self.picker = Some(crate::picker::Picker::from_color(
                     self.active_slot,
@@ -1159,8 +1159,8 @@ impl App {
     /// to decide if a press should commit the current field edit).
     pub(in crate::app) fn over_artboard_segment(&self) -> bool {
         if self.pointer_win != self.main_id
-            || self.pointer.y < APP_BAR_H
-            || self.pointer.y >= APP_BAR_H + OPT_BAR_H
+            || self.pointer.y < metric_app_bar_h()
+            || self.pointer.y >= metric_app_bar_h() + metric_opt_bar_h()
         {
             return false;
         }
@@ -1196,7 +1196,7 @@ impl App {
         if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
             return false;
         }
-        let Some(pbody) = self.active_panel_body_at_pointer("align") else {
+        let Some(pbody) = self.active_panel_body_at_pointer(PanelKind::Align) else {
             return false;
         };
         panels::align::spacing_field_at(pbody, self.pointer)
@@ -1314,8 +1314,8 @@ impl App {
             return false;
         }
         if self.pointer_win == self.main_id
-            && self.pointer.y >= APP_BAR_H
-            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+            && self.pointer.y >= metric_app_bar_h()
+            && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
             let bar = opt_bar_rect(w);
@@ -1381,8 +1381,8 @@ impl App {
             return false;
         }
         if self.pointer_win == self.main_id
-            && self.pointer.y >= APP_BAR_H
-            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+            && self.pointer.y >= metric_app_bar_h()
+            && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
             let bar = opt_bar_rect(w);

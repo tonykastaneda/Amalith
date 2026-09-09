@@ -49,8 +49,8 @@ impl App {
                 };
                 if let Some(pk) = &mut self.picker {
                     pk.origin = Point::new(
-                        (self.pointer.x - offset.x).clamp(4.0, (w - picker::W - 4.0).max(4.0)),
-                        (self.pointer.y - offset.y).clamp(4.0, (h - picker::H - 4.0).max(4.0)),
+                        (self.pointer.x - offset.x).clamp(4.0, (w - picker::metric_w() - 4.0).max(4.0)),
+                        (self.pointer.y - offset.y).clamp(4.0, (h - picker::metric_h() - 4.0).max(4.0)),
                     );
                     self.request_main_redraw();
                 }
@@ -63,11 +63,11 @@ impl App {
                     ResizeEdge::Left => start_w - dx,
                 };
                 let min_w = if self.dock.master(master).is_some_and(Master::is_tools) {
-                    layout::TOOLS_MIN_W as f32
+                    layout::metric_tools_min_w() as f32
                 } else {
-                    layout::MASTER_MIN_W as f32
+                    layout::metric_master_min_w() as f32
                 };
-                let clamped = raw.clamp(min_w, layout::MASTER_MAX_W as f32);
+                let clamped = raw.clamp(min_w, layout::metric_master_max_w() as f32);
                 if let Some(m) = self.dock.master_mut(master) {
                     m.rect[2] = clamped;
                 }
@@ -78,7 +78,7 @@ impl App {
                 let (master, group, start_h, start_y) = (*master, *group, *start_h, *start_y);
                 let dy = (self.pointer.y - start_y) as f32;
                 let next = (start_h + dy)
-                    .clamp(crate::dock::TAB_CONTENT_MIN_H, crate::dock::TAB_CONTENT_MAX_H);
+                    .clamp(crate::dock::metric_tab_content_min_h(), crate::dock::metric_tab_content_max_h());
                 if let Some(m) = self.dock.master_mut(master) {
                     if let Some(g) = m.group_mut(group) {
                         g.content_h = Some(next);
@@ -304,7 +304,7 @@ impl App {
                     self.doc.editor.document(),
                     &self.doc.expanded_groups,
                     &self.layer_query,
-                    self.panel_scroll_of(PanelId("layers")),
+                    self.panel_scroll_of(PanelId(PanelKind::Layers)),
                     &ids,
                 )
                 .map(|d| (d.parent, d.index, d.row, d.into));
@@ -569,7 +569,7 @@ impl App {
                 }
                 let m = handles::reflect_transform(pivot, axis_deg);
                 let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
-                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                let moved = was_moved || (self.pointer - press).hypot() > metric_drag_threshold();
                 self.drag = Drag::ReflectTool { pivot, press, start_xf, preview, copy, moved };
                 self.update_canvas_cursor();
                 self.request_main_redraw();
@@ -598,7 +598,7 @@ impl App {
                 shear_deg = shear_deg.clamp(-89.0, 89.0);
                 let m = handles::shear_transform(pivot, shear_deg, 0.0);
                 let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
-                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                let moved = was_moved || (self.pointer - press).hypot() > metric_drag_threshold();
                 self.drag = Drag::ShearTool { pivot, press, start_xf, preview, copy, moved };
                 self.update_canvas_cursor();
                 self.request_main_redraw();
@@ -618,13 +618,13 @@ impl App {
                 let eps = 4.0 / self.doc.view.zoom;
                 let m = handles::scale_tool_transform(pivot, press_doc, dp, self.shift_down, eps);
                 let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
-                let moved = was_moved || (self.pointer - press).hypot() > DRAG_THRESHOLD;
+                let moved = was_moved || (self.pointer - press).hypot() > metric_drag_threshold();
                 self.drag = Drag::ScaleTool { pivot, press, start_xf, preview, copy, moved };
                 self.update_canvas_cursor();
                 self.request_main_redraw();
             }
             Drag::PendingMasterMove { master, press, grab, was_docked } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                if (self.pointer - *press).hypot() > metric_drag_threshold() {
                     let (master, grab) = (*master, *grab);
                     if was_docked.is_some() {
                         // event_loop isn't handed to cursor events; defer
@@ -636,7 +636,7 @@ impl App {
                 }
             }
             Drag::PendingGroupDrag { source, press } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                if (self.pointer - *press).hypot() > metric_drag_threshold() {
                     let (source, press) = (*source, *press);
                     // Already the sole group of an already-floating
                     // Master (its own window, pressed here) — nothing to
@@ -655,7 +655,7 @@ impl App {
                 }
             }
             Drag::PendingPanelDrag { panel, press } => {
-                if (self.pointer - *press).hypot() > DRAG_THRESHOLD {
+                if (self.pointer - *press).hypot() > metric_drag_threshold() {
                     let (panel, press) = (*panel, *press);
                     let already_alone = self.dock.locate(panel).is_some_and(|(mid, ..)| {
                         self.dock.master(mid).is_some_and(|m| m.dock.is_none() && m.panels().len() == 1)
@@ -826,7 +826,7 @@ impl App {
             }
             Drag::GradientStop { index, bar } => {
                 // Released well below the ramp = "drag off to delete".
-                if self.pointer.y > bar.y1 + crate::panels::gradient::REMOVE_DROP {
+                if self.pointer.y > bar.y1 + crate::panels::gradient::metric_remove_drop() {
                     self.gradient_remove_stop(index);
                 }
             }
@@ -858,7 +858,7 @@ impl App {
                         self.doc.editor.document(),
                         &self.doc.expanded_groups,
                         &self.layer_query,
-                        self.panel_scroll_of(PanelId("layers")),
+                        self.panel_scroll_of(PanelId(PanelKind::Layers)),
                         &ids,
                     );
                     if let Some(d) = target {

@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dock::{DockModel, MasterLayout, PanelId, Side};
+use crate::dock::{DockModel, MasterLayout, PanelId, PanelKind, Side};
 use crate::workspace::Layout;
 
 pub const ESSENTIALS_CLASSIC: &str = "Essentials Classic";
@@ -25,9 +25,9 @@ pub fn essentials_classic() -> Layout {
     dock.dock_master(tools, Side::Left, 0);
     let right = dock.spawn_master(
         vec![
-            vec![PanelId("pathfinder"), PanelId("transform"), PanelId("align"), PanelId("color")],
-            vec![PanelId("character"), PanelId("paragraph")],
-            vec![PanelId("layers"), PanelId("artboards")],
+            vec![PanelId(PanelKind::Pathfinder), PanelId(PanelKind::Transform), PanelId(PanelKind::Align), PanelId(PanelKind::Color)],
+            vec![PanelId(PanelKind::Character), PanelId(PanelKind::Paragraph)],
+            vec![PanelId(PanelKind::Layers), PanelId(PanelKind::Artboards)],
         ],
         [0.0, 40.0, 320.0, 600.0],
     );
@@ -35,7 +35,7 @@ pub fn essentials_classic() -> Layout {
     // Links gets its own column rather than crowding into the Layers/
     // Artboards group — narrow enough to sit permanently in Stack mode's
     // icon-only rendering (below `layout::COMPACT_BREAKPOINT`).
-    let links = dock.spawn_master(vec![vec![PanelId("links")]], [0.0, 40.0, 48.0, 200.0]);
+    let links = dock.spawn_master(vec![vec![PanelId(PanelKind::Links)]], [0.0, 40.0, 48.0, 200.0]);
     if let Some(m) = dock.master_mut(links) {
         m.layout = MasterLayout::Stack;
     }

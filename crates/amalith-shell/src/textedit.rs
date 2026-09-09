@@ -30,6 +30,13 @@ use crate::text::{TextContext, TextLayoutKey};
 /// A caret size hint for `cursor_geometry`, in editor px.
 const CARET_W: f32 = 1.5;
 
+/// The "text can't all fit" warning: the overflow tab drawn here on an
+/// Area-text box whose fixed height clips its own layout, and the overset
+/// badge `canvas.rs` draws on a threaded frame's out-port. Shared because
+/// both mean the same thing to the user — text didn't fit — not because
+/// they're the same drawing.
+pub(crate) const TEXT_OVERSET_INK: Color = Color::from_rgb8(0xd0, 0x30, 0x30);
+
 /// One in-progress text edit.
 pub struct TextEdit {
     /// The document object being edited.
@@ -649,7 +656,7 @@ impl TextEdit {
                     scene.fill(
                         Fill::NonZero,
                         xf,
-                        Color::from_rgb8(0xd0, 0x30, 0x30),
+                        TEXT_OVERSET_INK,
                         None,
                         &m,
                     );

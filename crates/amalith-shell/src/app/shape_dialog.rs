@@ -10,14 +10,14 @@ impl App {
     /// The float-only panel id standing in for `tool`'s exact-size dialog.
     pub(in crate::app) fn shape_panel_id(tool: Tool) -> PanelId {
         PanelId(match tool {
-            Tool::Rectangle => "shapedlg.rect",
-            Tool::RoundedRect => "shapedlg.round",
-            Tool::Ellipse => "shapedlg.ellipse",
-            Tool::Polygon => "shapedlg.polygon",
-            Tool::Star => "shapedlg.star",
-            Tool::Arc => "shapedlg.arc",
-            Tool::Spiral => "shapedlg.spiral",
-            _ => "shapedlg.rect",
+            Tool::Rectangle => PanelKind::ShapedlgRect,
+            Tool::RoundedRect => PanelKind::ShapedlgRound,
+            Tool::Ellipse => PanelKind::ShapedlgEllipse,
+            Tool::Polygon => PanelKind::ShapedlgPolygon,
+            Tool::Star => PanelKind::ShapedlgStar,
+            Tool::Arc => PanelKind::ShapedlgArc,
+            Tool::Spiral => PanelKind::ShapedlgSpiral,
+            _ => PanelKind::ShapedlgRect,
         })
     }
 
@@ -25,7 +25,7 @@ impl App {
     /// and never shows in the Window menu — the colour picker or a shape
     /// dialog.
     pub(in crate::app) fn is_float_only(&self, fid: u64) -> bool {
-        if self.dock.floating_id_of(PanelId("picker")) == Some(fid) {
+        if self.dock.floating_id_of(PanelId(PanelKind::Picker)) == Some(fid) {
             return true;
         }
         if self.export.is_some() && self.dock.floating_id_of(export::EXPORT_PID) == Some(fid) {
@@ -58,7 +58,7 @@ impl App {
         let pid = Self::shape_panel_id(tool);
         let fid = self.dock.floating_id_of(pid)?;
         let h = self.theme.tab_strip_h + shapedialog::body_height(tool);
-        let bounds = Rect::new(0.0, 0.0, shapedialog::W, h);
+        let bounds = Rect::new(0.0, 0.0, shapedialog::metric_w(), h);
         Some(self.build_master_frame(fid, bounds).body)
     }
 
@@ -101,7 +101,7 @@ impl App {
         self.text_blink = Instant::now();
 
         let pid = Self::shape_panel_id(tool);
-        let fw = shapedialog::W;
+        let fw = shapedialog::metric_w();
         let fh = shapedialog::body_height(tool) + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();

@@ -42,7 +42,7 @@ impl App {
         }
         if self.dock.master(master).is_some_and(Master::is_tools) {
             if frame.body.contains(self.pointer) {
-                let pid = PanelId("tools");
+                let pid = PanelId(PanelKind::Tools);
                 let action = {
                     let ctx = self.panel_press_ctx(None);
                     panels::hit(pid, frame.body, self.pointer, &ctx)
@@ -141,7 +141,7 @@ impl App {
                     return true;
                 };
                 let pbody = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid)).0;
-                let layer_drop = if pid == PanelId("layers") {
+                let layer_drop = if pid == PanelId(PanelKind::Layers) {
                     self.layer_drop.map(|(_, _, row, into)| (row, into))
                 } else {
                     None
@@ -158,7 +158,7 @@ impl App {
                     self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
                     let spawn = double && matches!(action, panels::Action::OpenPicker(_));
-                    let arm_drag = !double && pid == PanelId("layers") && matches!(action, panels::Action::Select(_));
+                    let arm_drag = !double && pid == PanelId(PanelKind::Layers) && matches!(action, panels::Action::Select(_));
                     let grad_drag = gradient_drag_for(&action, double);
                     self.apply_panel_action(action, double);
                     if spawn {
@@ -183,7 +183,7 @@ impl App {
                     .master(master)
                     .and_then(|m| m.group(g.index))
                     .and_then(|gg| gg.content_h)
-                    .unwrap_or(crate::dock::TAB_CONTENT_DEFAULT_H);
+                    .unwrap_or(crate::dock::metric_tab_content_default_h());
                 self.drag = Drag::GroupContentResize {
                     master,
                     group: g.index,
@@ -287,6 +287,8 @@ impl App {
                     self.scripts = p.working_scripts;
                     self.keymaps = p.working_keymaps;
                     self.apply_theme_accent();
+                    self.apply_ui_scale();
+                    self.apply_handle_size();
                     settings::save(&self.settings);
                     crate::scripts::save(&self.scripts);
                     crate::keymap::save(&self.keymaps);
@@ -336,6 +338,12 @@ impl App {
                         p.working_scripts.keys.clear();
                         p.refresh_scripts();
                     }
+                }
+                prefs::Hit::SetUiScale(scale) => {
+                    if let Some(p) = &mut self.prefs { p.working.ui_scale = scale; }
+                }
+                prefs::Hit::SetHandleSize(size) => {
+                    if let Some(p) = &mut self.prefs { p.working.handle_size = size; }
                 }
                 prefs::Hit::SetAccent(rgb) => {
                     if let Some(p) = &mut self.prefs {
@@ -621,14 +629,14 @@ impl App {
                 }
 
                 // The app bar swallows clicks (unless the picker is up).
-                if self.picker.is_none() && self.pointer.y < APP_BAR_H {
+                if self.picker.is_none() && self.pointer.y < metric_app_bar_h() {
                     return;
                 }
 
                 // The context / control bar — one hit walk over its segments.
                 if self.picker.is_none()
-                    && self.pointer.y >= APP_BAR_H
-                    && self.pointer.y < APP_BAR_H + OPT_BAR_H
+                    && self.pointer.y >= metric_app_bar_h()
+                    && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
                 {
                     let action = {
                         let cx = self.context_bar_ctx();
@@ -670,7 +678,7 @@ impl App {
                 }
 
                 // The colour picker is modal while open.
-                if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId("picker"))) {
+                if let Some(pk) = self.picker.filter(|_| !self.dock.contains(PanelId(PanelKind::Picker))) {
                     match picker::hit(&pk, self.pointer) {
                         picker::Hit::Sv(s, v) => {
                             if let Some(p) = &mut self.picker {
@@ -715,10 +723,10 @@ impl App {
                         // Master's width — same grab zone a rail's own
                         // edge used to have.
                         let edge_rect = match side {
-                            Side::Left => Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1),
-                            Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1),
+                            Side::Left => Rect::new(rect.x1 - metric_rail_edge(), rect.y0, rect.x1, rect.y1),
+                            Side::Right => Rect::new(rect.x0, rect.y0, rect.x0 + metric_rail_edge(), rect.y1),
                         };
-                        if edge_rect.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                        if edge_rect.inflate(metric_grab_slop() + 1.0, 0.0).contains(self.pointer) {
                             let edge = match side {
                                 Side::Left => ResizeEdge::Right,
                                 Side::Right => ResizeEdge::Left,
@@ -1499,10 +1507,11 @@ impl App {
                 self.request_main_redraw();
             }
             Role::Floating(fid) => {
+                let scale = self.floating_window(fid).map_or(1.0, |w| w.scale_factor());
                 let sz = self.floating_window(fid).map(|w| w.inner_size()).unwrap_or_default();
                 let (wl, hl) = (
-                    (sz.width as f64 / self.scale).max(1.0),
-                    (sz.height as f64 / self.scale).max(1.0),
+                    (sz.width as f64 / scale).max(1.0),
+                    (sz.height as f64 / scale).max(1.0),
                 );
                 let rect = Rect::new(0.0, 0.0, wl, hl);
                 // A floating Master's own left/right edge resizes it too
@@ -1513,9 +1522,9 @@ impl App {
                 // picker, a shape dialog, Export for Screens): those never
                 // resize at all.
                 if !self.is_float_only(fid) {
-                    let left_edge = Rect::new(rect.x0, rect.y0, rect.x0 + RAIL_EDGE, rect.y1);
-                    let right_edge = Rect::new(rect.x1 - RAIL_EDGE, rect.y0, rect.x1, rect.y1);
-                    if left_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                    let left_edge = Rect::new(rect.x0, rect.y0, rect.x0 + metric_rail_edge(), rect.y1);
+                    let right_edge = Rect::new(rect.x1 - metric_rail_edge(), rect.y0, rect.x1, rect.y1);
+                    if left_edge.inflate(metric_grab_slop() + 1.0, 0.0).contains(self.pointer) {
                         let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
                         self.drag = Drag::MasterWidth {
                             master: fid,
@@ -1525,7 +1534,7 @@ impl App {
                         };
                         return;
                     }
-                    if right_edge.inflate(GRAB_SLOP + 1.0, 0.0).contains(self.pointer) {
+                    if right_edge.inflate(metric_grab_slop() + 1.0, 0.0).contains(self.pointer) {
                         let start_w = self.dock.master(fid).map(|m| m.rect[2]).unwrap_or(0.0);
                         self.drag = Drag::MasterWidth {
                             master: fid,

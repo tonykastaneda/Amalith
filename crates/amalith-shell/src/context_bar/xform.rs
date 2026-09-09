@@ -3,6 +3,8 @@
 //! Same numbers and commands as the Transform panel; this is the compact
 //! extract for the options bar.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::xform::{self, TransformValues};
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::Fill;
@@ -16,7 +18,7 @@ use super::{baseline, draw_field, field, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::Xform,
     applies: |ctx| ctx.selection_len > 0 && !ctx.text_context,
-    measure: |_| 524.0,
+    measure: |_| ui_px(524.0),
     paint,
     hit,
 };
@@ -35,16 +37,16 @@ struct Parts {
 
 fn parts(r: Rect) -> Parts {
     let cy = r.center().y;
-    let mut x = r.x0 + 53.0; // after "Shape:"
-    let w = Rect::new(x, cy - 11.5, x + 78.0, cy + 11.5);
-    x = w.x1 + 7.0;
-    let lock = Rect::new(x, cy - 11.5, x + 23.0, cy + 11.5);
-    x = lock.x1 + 7.0;
-    let h = Rect::new(x, cy - 11.5, x + 78.0, cy + 11.5);
-    x = h.x1 + 18.0 + 71.0; // gap + "Transform"
-    let (xf, x_up, x_down) = field(x + 18.0, cy, 74.0); // after "X:"
-    x = x_down.x1 + 12.0;
-    let (yf, y_up, y_down) = field(x + 18.0, cy, 74.0); // after "Y:"
+    let mut x = r.x0 + ui_px(53.0); // after "Shape:"
+    let w = Rect::new(x, cy - ui_px(11.5), x + ui_px(78.0), cy + ui_px(11.5));
+    x = w.x1 + ui_px(7.0);
+    let lock = Rect::new(x, cy - ui_px(11.5), x + ui_px(23.0), cy + ui_px(11.5));
+    x = lock.x1 + ui_px(7.0);
+    let h = Rect::new(x, cy - ui_px(11.5), x + ui_px(78.0), cy + ui_px(11.5));
+    x = h.x1 + ui_px(18.0) + ui_px(71.0); // gap + "Transform"
+    let (xf, x_up, x_down) = field(x + ui_px(18.0), cy, ui_px(74.0)); // after "X:"
+    x = x_down.x1 + ui_px(12.0);
+    let (yf, y_up, y_down) = field(x + ui_px(18.0), cy, ui_px(74.0)); // after "Y:"
     Parts {
         w,
         h,
@@ -92,8 +94,8 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     paint_lock(scene, p.lock, ctx.xform_constrain, theme);
     draw_box(scene, text, theme, p.h, &shown(ctx, XformField::H, v), editing(ctx, XformField::H));
 
-    text.draw(scene, "Transform", 13.0, theme.text_dim, p.h.x1 + 18.0, base);
-    text.draw(scene, "X:", 13.0, theme.text, p.x.x0 - 18.0, base);
+    text.draw(scene, "Transform", 13.0, theme.text_dim, p.h.x1 + ui_px(18.0), base);
+    text.draw(scene, "X:", 13.0, theme.text, p.x.x0 - ui_px(18.0), base);
     draw_field(
         scene,
         text,
@@ -104,7 +106,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         &shown(ctx, XformField::X, v),
         editing(ctx, XformField::X),
     );
-    text.draw(scene, "Y:", 13.0, theme.text, p.y.x0 - 18.0, base);
+    text.draw(scene, "Y:", 13.0, theme.text, p.y.x0 - ui_px(18.0), base);
     draw_field(
         scene,
         text,
@@ -129,7 +131,7 @@ fn draw_box(
     scene.fill(Fill::NonZero, ID, theme.bg, None, &r);
     if highlight {
         let w = text.measure(value, 13.0);
-        let band = Rect::new(r.x0 + 5.0, r.y0 + 3.0, (r.x0 + 9.0 + w).min(r.x1 - 3.0), r.y1 - 3.0);
+        let band = Rect::new(r.x0 + ui_px(5.0), r.y0 + ui_px(3.0), (r.x0 + ui_px(9.0) + w).min(r.x1 - ui_px(3.0)), r.y1 - ui_px(3.0));
         crate::widgets::draw_field_highlight(scene, theme, band);
     }
     scene.stroke(&Stroke::new(if highlight { 1.5 } else { 1.0 }), ID, border, None, &r);
@@ -138,8 +140,8 @@ fn draw_box(
         value,
         13.0,
         theme.text,
-        r.x0 + 7.0,
-        r.y0 + r.height() * 0.5 + 4.5,
+        r.x0 + ui_px(7.0),
+        r.y0 + r.height() * 0.5 + ui_px(4.5),
     );
 }
 
@@ -149,22 +151,22 @@ fn paint_lock(scene: &mut Scene, r: Rect, on: bool, theme: &crate::theme::Theme)
     } else {
         theme.text_dim.with_alpha(0.7)
     };
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &r);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &r);
     let c = r.center();
     if on {
         // Linked chain: two rings.
-        let a = Rect::from_center_size(Point::new(c.x, c.y - 3.5), (8.0, 9.0));
-        let b = Rect::from_center_size(Point::new(c.x, c.y + 3.5), (8.0, 9.0));
-        scene.stroke(&Stroke::new(1.4), ID, col, None, &a.to_rounded_rect(2.5));
-        scene.stroke(&Stroke::new(1.4), ID, col, None, &b.to_rounded_rect(2.5));
+        let a = Rect::from_center_size(Point::new(c.x, c.y - ui_px(3.5)), (ui_px(8.0), ui_px(9.0)));
+        let b = Rect::from_center_size(Point::new(c.x, c.y + ui_px(3.5)), (ui_px(8.0), ui_px(9.0)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), ID, col, None, &a.to_rounded_rect(ui_px(2.5)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), ID, col, None, &b.to_rounded_rect(ui_px(2.5)));
     } else {
         // Broken link — a slash through a ring.
-        let a = Rect::from_center_size(c, (9.0, 11.5));
-        scene.stroke(&Stroke::new(1.4), ID, col, None, &a.to_rounded_rect(2.5));
+        let a = Rect::from_center_size(c, (ui_px(9.0), ui_px(11.5)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), ID, col, None, &a.to_rounded_rect(ui_px(2.5)));
         let mut slash = BezPath::new();
-        slash.move_to((c.x - 6.0, c.y + 7.0));
-        slash.line_to((c.x + 6.0, c.y - 7.0));
-        scene.stroke(&Stroke::new(1.4), ID, col, None, &slash);
+        slash.move_to((c.x - ui_px(6.0), c.y + ui_px(7.0)));
+        slash.line_to((c.x + ui_px(6.0), c.y - ui_px(7.0)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), ID, col, None, &slash);
     }
 }
 

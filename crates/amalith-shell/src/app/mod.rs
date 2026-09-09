@@ -15,6 +15,8 @@
 //! raw mouse-motion deltas. It never reads an OS window rect back into a
 //! positioning command — that feedback path is what makes drag jitter.
 
+use crate::metrics::px as ui_px;
+
 mod action;
 mod blend_dialog;
 mod command_palette;
@@ -47,7 +49,7 @@ pub(crate) use crate::anchors;
 pub(crate) use crate::canvas::{
     self, AnchorView, CanvasView, DragPreview, PenAnchor, PenPreview, TextBoxPreview,
 };
-pub(crate) use crate::dock::{DockModel, Group, Master, MasterKind, MasterLayout, PanelId, Side, ToolsDensity};
+pub(crate) use crate::dock::{DockModel, Group, Master, MasterKind, MasterLayout, PanelId, PanelKind, Side, ToolsDensity};
 pub(crate) use crate::handles::{self, Handle};
 pub(crate) use crate::layout::{GroupDrop, MasterFrame, PanelDrop};
 pub(crate) use crate::newdoc;
@@ -76,27 +78,27 @@ pub(crate) use winit::window::{Window, WindowId};
 /// native menu bar in that space, so the strip would only be dead air —
 /// collapse it there and let the chrome below start at the menu bar.
 #[cfg(not(target_os = "windows"))]
-const APP_BAR_H: f64 = 30.0;
+fn metric_app_bar_h() -> f64 { crate::metrics::with(|m| m.app_app_bar_h) }
 #[cfg(target_os = "windows")]
-const APP_BAR_H: f64 = 0.0;
+fn metric_app_bar_h() -> f64 { crate::metrics::with(|m| m.app_app_bar_h) }
 /// The document-tab strip, between the app bar and the options bar.
-const TAB_BAR_H: f64 = 29.4;
+fn metric_tab_bar_h() -> f64 { crate::metrics::with(|m| m.app_tab_bar_h) }
 /// The tool options strip, between the app bar and the canvas. Sized so
 /// its 23px-tall controls clear the edges — see `context_bar`.
-const OPT_BAR_H: f64 = 35.0;
+fn metric_opt_bar_h() -> f64 { crate::metrics::with(|m| m.app_opt_bar_h) }
 /// Total fixed chrome above the canvas / below the top of the window.
-const CHROME_TOP: f64 = APP_BAR_H + TAB_BAR_H + OPT_BAR_H;
+fn metric_chrome_top() -> f64 { crate::metrics::with(|m| m.app_chrome_top) }
 /// Slack around a splitter's visual gap for grabbing it.
-const GRAB_SLOP: f64 = 5.0;
+fn metric_grab_slop() -> f64 { crate::metrics::with(|m| m.app_grab_slop) }
 /// Visible thickness of the bar on a rail's inner edge.
-const RAIL_EDGE: f64 = 4.0;
+fn metric_rail_edge() -> f64 { crate::metrics::with(|m| m.app_rail_edge) }
 /// Pointer travel before a press becomes a drag.
-const DRAG_THRESHOLD: f64 = 5.0;
+fn metric_drag_threshold() -> f64 { crate::metrics::with(|m| m.app_drag_threshold) }
 /// Default size of a torn-off panel window, logical points.
-const FLOAT_W: f64 = 264.0;
-const FLOAT_H: f64 = 320.0;
+fn metric_float_w() -> f64 { crate::metrics::with(|m| m.app_float_w) }
+fn metric_float_h() -> f64 { crate::metrics::with(|m| m.app_float_h) }
 /// Where the cursor sits inside a freshly torn-off window (on its strip).
-const TEAROFF_GRAB: Vec2 = Vec2::new(58.0, 13.0);
+fn tearoff_grab() -> Vec2 { Vec2::new(ui_px(58.0), ui_px(13.0)) }
 
 const ID: Affine = Affine::IDENTITY;
 
@@ -126,6 +128,7 @@ enum ResizeEdge {
 /// One rendered window: surface, its device's vello renderer, the winit
 /// handle, and what it shows.
 struct WindowHost {
+    dpi: crate::window_dpi::WindowDpi,
     surface: RenderSurface<'static>,
     renderer: Renderer,
     window: Arc<Window>,
@@ -558,7 +561,7 @@ enum MenuAction {
     /// Run the user script at this path.
     RunScript(std::path::PathBuf),
     /// Windows menu: show/hide the panel with this id.
-    TogglePanel(&'static str),
+    TogglePanel(PanelKind),
     /// Windows ▸ Workspace: switch to the named workspace.
     PickWorkspace(String),
     /// Windows ▸ Workspace ▸ Reset <name>.
@@ -1171,7 +1174,6 @@ struct App {
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     theme: Theme,
-    scale: f64,
     /// Pointer position within whichever window last reported it, logical.
     pointer: Point,
     pointer_win: Option<WindowId>,
@@ -1278,6 +1280,7 @@ struct App {
 
 impl App {
     fn new() -> Self {
+        crate::metrics::apply(1.0);
         // The active named workspace's layout, then overlay whatever the
         // last session actually left on screen (transient, tracked
         // separately from any saved workspace — see `workspace.rs`).
@@ -1402,7 +1405,6 @@ impl App {
             last_pen: None,
             marquee: None,
             theme: Theme::default(),
-            scale: 1.0,
             pointer: Point::ZERO,
             pointer_win: None,
             cmd_down: false,
@@ -1595,13 +1597,13 @@ impl App {
     /// Full content height of panel `id` at `body` — pure-layout panels
     /// from `panels`, the Layers list from the live document.
     fn panel_content_h(&self, id: PanelId, body: Rect) -> f64 {
-        if id == PanelId("layers") {
+        if id == PanelId(PanelKind::Layers) {
             panels::layers_content_height(
                 self.doc.editor.document(),
                 &self.doc.expanded_groups,
                 &self.layer_query,
             )
-        } else if id == PanelId("links") {
+        } else if id == PanelId(PanelKind::Links) {
             panels::links_content_height(self.doc.editor.document())
         } else {
             panels::max_scroll(id, body.width(), body.height()) + body.height()
@@ -1627,7 +1629,7 @@ impl App {
             })?;
             let win = self.floating_window(mid)?;
             let sz = win.inner_size();
-            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor()))
         };
         let frame = self.build_master_frame(master_id, bounds);
         for g in &frame.groups {
@@ -1843,8 +1845,8 @@ impl App {
     /// client-area origin. Read-only — never fed into a move command.
     fn main_inner_origin(&self) -> Point {
         self.main_window()
-            .and_then(|w| w.inner_position().ok())
-            .map(|p| Point::new(p.x as f64 / self.scale, p.y as f64 / self.scale))
+            .and_then(|w| w.inner_position().ok().map(|p| p.to_logical::<f64>(w.scale_factor())))
+            .map(|p| Point::new(p.x, p.y))
             .unwrap_or(Point::ZERO)
     }
 
@@ -1960,7 +1962,7 @@ impl App {
         self.picker_gradient_stop = None;
         self.picker_gradient_point = None;
         self.picker = None;
-        self.dock.remove(PanelId("picker"));
+        self.dock.remove(PanelId(PanelKind::Picker));
         let dead: Vec<WindowId> = self
             .hosts
             .iter()
@@ -2063,19 +2065,19 @@ impl App {
         self.request_main_redraw();
     }
 
-    const FM_ROW: f64 = 22.0;
+    fn metric_fm_row() -> f64 { crate::metrics::with(|m| m.app_fm_row) }
     const FM_ROWS: usize = 12;
 
     fn font_menu_rect(m: &FontMenuState) -> Rect {
-        let w = m.anchor.width().max(190.0);
+        let w = m.anchor.width().max(ui_px(190.0));
         let rows = m.matches().len().min(Self::FM_ROWS).max(1) as f64;
         let x = m.anchor.x0;
-        let y = m.anchor.y1 + 2.0;
+        let y = m.anchor.y1 + ui_px(2.0);
         Rect::new(
             x,
             y,
             x + w,
-            y + m.header_h(Self::FM_ROW) + rows * Self::FM_ROW + 6.0,
+            y + m.header_h(Self::metric_fm_row()) + rows * Self::metric_fm_row() + ui_px(6.0),
         )
     }
 
@@ -2090,10 +2092,10 @@ impl App {
             self.request_main_redraw();
             return true;
         }
-        let header = m.header_h(Self::FM_ROW);
+        let header = m.header_h(Self::metric_fm_row());
         let items = m.matches();
         let idx =
-            ((p.y - outer.y0 - 3.0 - header + m.scroll) / Self::FM_ROW).floor() as isize;
+            ((p.y - outer.y0 - ui_px(3.0) - header + m.scroll) / Self::metric_fm_row()).floor() as isize;
         if idx >= 0 && (idx as usize) < items.len() {
             let kind = m.kind;
             let label = items[idx as usize].clone();
@@ -2191,9 +2193,9 @@ impl App {
         true
     }
 
-    const AT_W: f64 = 188.0;
-    const AT_ROW: f64 = 24.0;
-    const AT_PAD: f64 = 6.0;
+    fn metric_at_w() -> f64 { crate::metrics::with(|m| m.app_at_w) }
+    fn metric_at_row() -> f64 { crate::metrics::with(|m| m.app_at_row) }
+    fn metric_at_pad() -> f64 { crate::metrics::with(|m| m.app_at_pad) }
 
     fn align_to_items() -> [(amalith_commands::AlignTo, &'static str); 3] {
         [
@@ -2276,18 +2278,18 @@ impl App {
         self.request_main_redraw();
     }
 
-    const CM_W: f64 = 200.0;
-    const CM_ROW: f64 = 26.0;
-    const CM_SEP: f64 = 9.0;
-    const CM_PAD: f64 = 6.0;
+    fn metric_cm_w() -> f64 { crate::metrics::with(|m| m.app_cm_w) }
+    fn metric_cm_row() -> f64 { crate::metrics::with(|m| m.app_cm_row) }
+    fn metric_cm_sep() -> f64 { crate::metrics::with(|m| m.app_cm_sep) }
+    fn metric_cm_pad() -> f64 { crate::metrics::with(|m| m.app_cm_pad) }
 
     fn ctx_menu_height(items: &[CtxItem]) -> f64 {
-        Self::CM_PAD * 2.0
+        Self::metric_cm_pad() * 2.0
             + items
                 .iter()
                 .map(|it| match it {
-                    CtxItem::Sep => Self::CM_SEP,
-                    CtxItem::Action { .. } => Self::CM_ROW,
+                    CtxItem::Sep => Self::metric_cm_sep(),
+                    CtxItem::Action { .. } => Self::metric_cm_row(),
                 })
                 .sum::<f64>()
     }
@@ -2296,7 +2298,7 @@ impl App {
         Rect::new(
             origin.x,
             origin.y,
-            origin.x + Self::CM_W,
+            origin.x + Self::metric_cm_w(),
             origin.y + Self::ctx_menu_height(items),
         )
     }
@@ -2414,7 +2416,7 @@ impl App {
         let h = Self::ctx_menu_height(&items);
         let (w, wh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let origin = Point::new(
-            at.x.min(w - Self::CM_W - 4.0).max(4.0),
+            at.x.min(w - Self::metric_cm_w() - 4.0).max(4.0),
             at.y.min(wh - h - 4.0).max(4.0),
         );
         self.ruler_menu = None;
@@ -2434,16 +2436,16 @@ impl App {
         if !rect.contains(p) {
             return true;
         }
-        let mut y = rect.y0 + Self::CM_PAD;
+        let mut y = rect.y0 + Self::metric_cm_pad();
         let mut hit = None;
         for it in &menu.items {
             match it {
-                CtxItem::Sep => y += Self::CM_SEP,
+                CtxItem::Sep => y += Self::metric_cm_sep(),
                 CtxItem::Action { action, enabled, .. } => {
-                    if *enabled && Rect::new(rect.x0, y, rect.x1, y + Self::CM_ROW).contains(p) {
+                    if *enabled && Rect::new(rect.x0, y, rect.x1, y + Self::metric_cm_row()).contains(p) {
                         hit = Some(*action);
                     }
-                    y += Self::CM_ROW;
+                    y += Self::metric_cm_row();
                 }
             }
         }
@@ -2508,12 +2510,12 @@ impl App {
     }
 
     fn align_to_menu_rect(anchor: Rect) -> Rect {
-        let h = Self::AT_PAD * 2.0 + Self::AT_ROW * 3.0;
+        let h = Self::metric_at_pad() * 2.0 + Self::metric_at_row() * 3.0;
         Rect::new(
             anchor.x0,
-            anchor.y1 + 2.0,
-            anchor.x0 + Self::AT_W,
-            anchor.y1 + 2.0 + h,
+            anchor.y1 + ui_px(2.0),
+            anchor.x0 + Self::metric_at_w(),
+            anchor.y1 + ui_px(2.0) + h,
         )
     }
 
@@ -2533,50 +2535,50 @@ impl App {
             self.request_main_redraw();
             return true;
         }
-        let mut y = fly.y0 + Self::AT_PAD;
+        let mut y = fly.y0 + Self::metric_at_pad();
         for (to, _) in Self::align_to_items() {
-            let row = Rect::new(fly.x0, y, fly.x1, y + Self::AT_ROW);
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_at_row());
             if row.contains(p) {
                 self.align_to_menu = None;
                 self.apply_panel_action(panels::Action::SetAlignTo(to), false);
                 return true;
             }
-            y += Self::AT_ROW;
+            y += Self::metric_at_row();
         }
         self.align_to_menu = None;
         self.request_main_redraw();
         true
     }
 
-    const PM_W: f64 = 168.0;
-    const PM_ROW: f64 = 28.0;
-    const PM_SEP: f64 = 9.0;
-    const PM_PAD: f64 = 8.0;
+    fn metric_pm_w() -> f64 { crate::metrics::with(|m| m.app_pm_w) }
+    fn metric_pm_row() -> f64 { crate::metrics::with(|m| m.app_pm_row) }
+    fn metric_pm_sep() -> f64 { crate::metrics::with(|m| m.app_pm_sep) }
+    fn metric_pm_pad() -> f64 { crate::metrics::with(|m| m.app_pm_pad) }
 
     fn panel_menu_height(items: &[panels::MenuEntry]) -> f64 {
         if items.is_empty() {
-            return Self::PM_PAD * 2.0 + 8.0;
+            return Self::metric_pm_pad() * 2.0 + ui_px(8.0);
         }
-        let mut h = Self::PM_PAD * 2.0;
+        let mut h = Self::metric_pm_pad() * 2.0;
         for e in items {
             h += match e {
-                panels::MenuEntry::Item { .. } => Self::PM_ROW,
-                panels::MenuEntry::Separator => Self::PM_SEP,
+                panels::MenuEntry::Item { .. } => Self::metric_pm_row(),
+                panels::MenuEntry::Separator => Self::metric_pm_sep(),
             };
         }
         h
     }
 
     fn panel_menu_flyout(anchor: Rect, items: &[panels::MenuEntry], wl: f64, hl: f64) -> Rect {
-        let w = Self::PM_W;
+        let w = Self::metric_pm_w();
         let h = Self::panel_menu_height(items);
         let mut x = anchor.x1;
         let mut y = anchor.y0;
-        if x + w > wl - 4.0 {
-            x = (anchor.x0 - w).max(4.0);
+        if x + w > wl - ui_px(4.0) {
+            x = (anchor.x0 - w).max(ui_px(4.0));
         }
-        if y + h > hl - 4.0 {
-            y = (hl - h - 4.0).max(4.0);
+        if y + h > hl - ui_px(4.0) {
+            y = (hl - h - ui_px(4.0)).max(ui_px(4.0));
         }
         Rect::new(x, y, x + w, y + h)
     }
@@ -2623,7 +2625,7 @@ impl App {
             .get(&win)
             .map(|h| {
                 let s = h.window.inner_size();
-                (s.width as f64 / self.scale, s.height as f64 / self.scale)
+                (s.width as f64 / h.dpi.factor(), s.height as f64 / h.dpi.factor())
             })
             .unwrap_or((1280.0, 800.0));
         let fly = Self::panel_menu_flyout(m.anchor, &items, wl, hl);
@@ -2646,16 +2648,16 @@ impl App {
         items: &[panels::MenuEntry],
         p: Point,
     ) -> Option<&'static str> {
-        let mut y = fly.y0 + Self::PM_PAD;
+        let mut y = fly.y0 + Self::metric_pm_pad();
         for e in items {
             match e {
-                panels::MenuEntry::Separator => y += Self::PM_SEP,
+                panels::MenuEntry::Separator => y += Self::metric_pm_sep(),
                 panels::MenuEntry::Item { id, .. } => {
-                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::PM_ROW);
+                    let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_pm_row());
                     if row.contains(p) {
                         return Some(*id);
                     }
-                    y += Self::PM_ROW;
+                    y += Self::metric_pm_row();
                 }
             }
         }
@@ -3618,8 +3620,8 @@ impl App {
             context_bar::SegKind::Stroke,
         )
         .map_or(200.0, |r| r.x0 - 4.0);
-        let x = anchor.min(win_w - stroke_panel::W - 6.0).max(6.0);
-        stroke_panel::layout(Point::new(x, APP_BAR_H + OPT_BAR_H + 3.0))
+        let x = anchor.min(win_w - stroke_panel::metric_w() - 6.0).max(6.0);
+        stroke_panel::layout(Point::new(x, metric_app_bar_h() + metric_opt_bar_h() + 3.0))
     }
 
     /// Read the current stroke style (from the first selected object, or
@@ -4492,11 +4494,51 @@ impl App {
         }
     }
 
+    /// Apply chrome geometry, text sizing and window constraints together.
+    fn apply_ui_scale(&mut self) {
+        let scale = crate::metrics::normalize_scale(self.settings.ui_scale);
+        let old = crate::metrics::with(|m| m.ui_scale);
+        self.settings.ui_scale = scale;
+        crate::metrics::apply(scale);
+        self.theme.set_ui_scale(scale);
+        self.text.set_ui_scale(scale);
+        let ratio = scale / old;
+        for master in &mut self.dock.masters { master.rescale(ratio as f32); }
+        for scroll in self.panel_scroll.values_mut() { *scroll *= ratio; }
+        if ratio != 1.0 { self.drag = Drag::None; self.font_menu = None; }
+        // Painted hit rectangles will be rebuilt at the new geometry.
+        self.panel_menu = None;
+        self.stack_flyout = None;
+        for host in self.hosts.values() {
+            if matches!(host.role, Role::Main) {
+                let (w, h) = crate::metrics::main_min_size();
+                host.window.set_min_inner_size(Some(LogicalSize::new(w, h)));
+                let size = host.window.inner_size().to_logical::<f64>(host.dpi.factor());
+                if size.width < w || size.height < h {
+                    let _ = host.window.request_inner_size(LogicalSize::new(size.width.max(w), size.height.max(h)));
+                }
+            } else if ratio != 1.0 {
+                host.window.set_min_inner_size(Some(LogicalSize::new(layout::metric_tools_min_w(), layout::metric_header_h() + self.theme.tab_strip_h)));
+                let size = host.window.inner_size().to_logical::<f64>(host.dpi.factor());
+                let _ = host.window.request_inner_size(LogicalSize::new(size.width * ratio, size.height * ratio));
+            }
+            host.window.request_redraw();
+        }
+    }
+
     /// Push `settings.accent` into the live theme (and its derived tokens).
     fn apply_theme_accent(&mut self) {
         let [r, g, b] = self.settings.accent;
         self.theme
             .set_accent(vello::peniko::Color::from_rgb8(r, g, b));
+        self.request_main_redraw();
+    }
+
+    /// Push `settings.handle_size` into the live selection-handle scale —
+    /// independent of `apply_ui_scale`, per
+    /// `DONE-10-selection-anchor-size-preference-medium.md`.
+    fn apply_handle_size(&mut self) {
+        crate::handle_scale::apply(self.settings.handle_size);
         self.request_main_redraw();
     }
 
@@ -5903,7 +5945,7 @@ impl App {
         self.doc.view
             .to_screen()
             .inverse()
-            .transform_rect_bbox(Rect::new(left, CHROME_TOP, right, h))
+            .transform_rect_bbox(Rect::new(left, metric_chrome_top(), right, h))
     }
 
     /// The full canvas region between the rails, below the chrome —
@@ -5911,7 +5953,7 @@ impl App {
     fn canvas_region(&self) -> Rect {
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, right) = self.canvas_x_span();
-        Rect::new(left, CHROME_TOP, right, h)
+        Rect::new(left, metric_chrome_top(), right, h)
     }
 
     /// The canvas viewport in screen (logical) px — `canvas_region` inset
@@ -6006,9 +6048,9 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
-            layer_scroll: self.panel_scroll_of(PanelId("layers")),
+            layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop: None,
-            links_scroll: self.panel_scroll_of(PanelId("links")),
+            links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
@@ -6065,9 +6107,9 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
-            layer_scroll: self.panel_scroll_of(PanelId("layers")),
+            layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop,
-            links_scroll: self.panel_scroll_of(PanelId("links")),
+            links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
@@ -6094,7 +6136,7 @@ impl App {
     /// scrolled body rect — used by the numeric-field-under-pointer
     /// lookups (Transform / Gradient / Align spacing) that used to walk a
     /// rail's `PanelArea` list by hand, three times over.
-    fn active_panel_body_at_pointer(&mut self, want: &str) -> Option<Rect> {
+    fn active_panel_body_at_pointer(&mut self, want: PanelKind) -> Option<Rect> {
         let wid = self.pointer_win?;
         let (master_id, bounds) = if Some(wid) == self.main_id {
             let (w, h) = self.main_logical_size()?;
@@ -6112,7 +6154,7 @@ impl App {
             })?;
             let win = self.floating_window(mid)?;
             let sz = win.inner_size();
-            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor()))
         };
         let frame = self.build_master_frame(master_id, bounds);
         for g in &frame.groups {
@@ -6159,8 +6201,8 @@ impl App {
             }
         }
         if self.pointer_win == self.main_id
-            && self.pointer.y >= APP_BAR_H
-            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+            && self.pointer.y >= metric_app_bar_h()
+            && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);
             // Tip layout only needs selection_len / text_context / pointer —
@@ -6185,7 +6227,7 @@ impl App {
             })?;
             let win = self.floating_window(mid)?;
             let sz = win.inner_size();
-            (mid, Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale))
+            (mid, Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor()))
         };
         let frame = self.build_master_frame(master_id, bounds);
         for g in &frame.groups {
@@ -6245,7 +6287,7 @@ impl App {
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
         self.stack_flyout = None;
-        if pid.0 == "picker" {
+        if pid.0 == PanelKind::Picker {
             self.picker = None;
         }
         if panels::shape_dialog_tool(pid).is_some() {
@@ -6364,11 +6406,11 @@ impl App {
 
     /// Window menu: show the panel (docked into the right master) if
     /// hidden, or remove it if shown.
-    fn toggle_panel(&mut self, id: &str) {
-        let pid = PanelId(match WINDOW_PANELS.iter().find(|(p, _)| *p == id) {
-            Some((p, _)) => *p,
-            None => return,
-        });
+    fn toggle_panel(&mut self, kind: PanelKind) {
+        if !WINDOW_PANELS.contains(&kind) {
+            return;
+        }
+        let pid = PanelId(kind);
         self.stack_flyout = None;
         if self.dock.contains(pid) {
             self.dock.remove(pid);
@@ -6469,7 +6511,7 @@ impl App {
             }
             let win = self.floating_window(fm)?;
             let sz = win.inner_size();
-            Rect::new(0.0, 0.0, sz.width as f64 / self.scale, sz.height as f64 / self.scale)
+            Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor())
         };
         let frame = self.build_master_frame(fm, bounds_in_window);
         let row = frame.groups.get(fg)?.rows.get(fi)?.rect;
@@ -6478,10 +6520,10 @@ impl App {
         } else {
             let win = self.floating_window(fm)?;
             let sz = win.inner_size();
-            (sz.width as f64 / self.scale, sz.height as f64 / self.scale)
+            (sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor())
         };
         let bounds = layout::flyout_rect(row, Rect::new(0.0, 0.0, vw, vh));
-        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::HEADER_H);
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
         let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
         Some((bounds, close))
     }
@@ -6509,7 +6551,7 @@ impl App {
             self.stroke_flyout_layout(w).panel.contains(self.pointer)
         };
         let over = self.pointer_win == self.main_id
-            && (self.picker.is_none() || self.dock.contains(PanelId("picker")))
+            && (self.picker.is_none() || self.dock.contains(PanelId(PanelKind::Picker)))
             && self.newdoc.is_none()
             && self.about.is_none()
             && self.home.is_none()
@@ -6680,7 +6722,7 @@ impl App {
     fn main_logical_size(&self) -> Option<(f64, f64)> {
         let w = self.main_window()?;
         let sz = w.inner_size();
-        Some((sz.width as f64 / self.scale, sz.height as f64 / self.scale))
+        Some((sz.width as f64 / w.scale_factor(), sz.height as f64 / w.scale_factor()))
     }
 
     /// Measures `p`'s tab width, mutating the font cache (used by
@@ -6688,7 +6730,7 @@ impl App {
     /// is laid out).
     fn tab_width(&mut self, p: PanelId) -> f64 {
         self.text.measure(&tab_label(p), 12.0) + self.theme.tab_pad_x * chrome::PANEL_TAB_PAD_MUL * 2.0
-            + chrome::PANEL_TAB_CLOSE_W
+            + chrome::metric_panel_tab_close_w()
     }
 
     /// `id`'s laid-out geometry within `bounds` (already positioned —
@@ -6732,8 +6774,8 @@ impl App {
             Some(Rect::new(
                 origin.x,
                 origin.y,
-                origin.x + sz.width as f64 / self.scale,
-                origin.y + sz.height as f64 / self.scale,
+                origin.x + sz.width as f64 / win.scale_factor(),
+                origin.y + sz.height as f64 / win.scale_factor(),
             ))
         }
     }
@@ -6887,7 +6929,7 @@ impl App {
         let theme = self.theme.clone();
         let bespoke = self.is_float_only(master);
         let h = if m.is_tools() {
-            layout::HEADER_H + panels::tools::natural_height(width)
+            layout::metric_header_h() + panels::tools::natural_height(width)
         } else {
             layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p), bespoke)
         };
@@ -6920,6 +6962,7 @@ impl App {
         )
         .expect("create renderer");
         WindowHost {
+            dpi: crate::window_dpi::WindowDpi::new(window.scale_factor()),
             surface,
             renderer,
             window,
@@ -6962,6 +7005,7 @@ impl App {
             .with_resizable(true)
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_inner_size(LogicalSize::new(size.0, size.1))
+            .with_min_inner_size(LogicalSize::new(layout::metric_tools_min_w(), layout::metric_header_h() + self.theme.tab_strip_h))
             .with_position(LogicalPosition::new(pos.x, pos.y));
         let window = Arc::new(
             event_loop
@@ -7007,13 +7051,13 @@ impl App {
     /// once you let go).
     fn detach_group_live(&mut self, event_loop: &ActiveEventLoop, master: u64, group: usize) {
         let global = self.current_global_cursor().unwrap_or(self.pointer);
-        let grab = Vec2::new(TEAROFF_GRAB.x.min(FLOAT_W - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let grab = Vec2::new(tearoff_grab().x.min(metric_float_w() - 12.0).max(12.0), tearoff_grab().y);
         let pos = global - grab;
-        let rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+        let rect = [pos.x as f32, pos.y as f32, metric_float_w() as f32, metric_float_h() as f32];
         let Some(id) = self.dock.detach_group(master, group, rect) else {
             return;
         };
-        self.spawn_master_window(event_loop, id, pos, (FLOAT_W, FLOAT_H));
+        self.spawn_master_window(event_loop, id, pos, (metric_float_w(), metric_float_h()));
         self.drag = Drag::DraggingGroup { current: (id, 0), grab };
     }
 
@@ -7021,13 +7065,13 @@ impl App {
     /// instead of only on release).
     fn detach_panel_live(&mut self, event_loop: &ActiveEventLoop, panel: PanelId) {
         let global = self.current_global_cursor().unwrap_or(self.pointer);
-        let grab = Vec2::new(TEAROFF_GRAB.x.min(FLOAT_W - 12.0).max(12.0), TEAROFF_GRAB.y);
+        let grab = Vec2::new(tearoff_grab().x.min(metric_float_w() - 12.0).max(12.0), tearoff_grab().y);
         let pos = global - grab;
-        let rect = [pos.x as f32, pos.y as f32, FLOAT_W as f32, FLOAT_H as f32];
+        let rect = [pos.x as f32, pos.y as f32, metric_float_w() as f32, metric_float_h() as f32];
         let Some(id) = self.dock.detach_panel(panel, rect) else {
             return;
         };
-        self.spawn_master_window(event_loop, id, pos, (FLOAT_W, FLOAT_H));
+        self.spawn_master_window(event_loop, id, pos, (metric_float_w(), metric_float_h()));
         self.drag = Drag::DraggingPanel { panel, master: id, grab };
     }
 
@@ -7035,10 +7079,10 @@ impl App {
     /// centred over the main window. Dragging the tab strip moves it
     /// anywhere on the desktop — same path as a torn-off panel.
     fn spawn_picker_window(&mut self, event_loop: &ActiveEventLoop) {
-        let pid = PanelId("picker");
+        let pid = PanelId(PanelKind::Picker);
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
-        let fw = picker::W;
-        let fh = picker::H + self.theme.tab_strip_h;
+        let fw = picker::metric_w();
+        let fh = picker::metric_h() + self.theme.tab_strip_h;
         let origin = self.main_inner_origin();
         let pos = Point::new(
             origin.x + ((mw - fw) * 0.5).max(4.0),
@@ -7268,6 +7312,8 @@ impl ApplicationHandler for App {
             return;
         }
         self.apply_theme_accent();
+        self.apply_ui_scale();
+        self.apply_handle_size();
         if self.font_families.is_empty() {
             let (fc, _) = self.text.parts();
             let mut names: Vec<String> =
@@ -7283,7 +7329,14 @@ impl ApplicationHandler for App {
         let attrs = Window::default_attributes()
             .with_title("Amalith Ver. Alpha")
             .with_window_icon(appicon::window_icon())
-            .with_inner_size(LogicalSize::new(win_w, win_h));
+            .with_inner_size({
+                let (w, h) = crate::metrics::main_min_size();
+                LogicalSize::new(win_w.max(w), win_h.max(h))
+            })
+            .with_min_inner_size({
+                let (w, h) = crate::metrics::main_min_size();
+                LogicalSize::new(w, h)
+            });
         #[cfg(target_os = "macos")]
         let attrs = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -7297,7 +7350,6 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         // No `.app` bundle yet, so set the Dock / Cmd-Tab icon at runtime.
         appicon::set_dock_icon();
-        self.scale = window.scale_factor();
         let wid = window.id();
         let host = self.make_host(window, Role::Main);
         self.hosts.insert(wid, host);
@@ -7322,6 +7374,7 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let scale = self.hosts.get(&id).map_or(1.0, |h| h.dpi.factor());
         match event {
             WindowEvent::Focused(focused) => {
                 let was_active = !self.focused.is_empty();
@@ -7384,8 +7437,8 @@ impl ApplicationHandler for App {
                 // width the user left it.
                 if let Some(Role::Floating(fid)) = role {
                     let (w, h) = (
-                        size.width as f32 / self.scale as f32,
-                        size.height as f32 / self.scale as f32,
+                        size.width as f32 / scale as f32,
+                        size.height as f32 / scale as f32,
                     );
                     if let Some(f) = self.dock.master_mut(fid) {
                         f.rect[2] = w;
@@ -7394,15 +7447,16 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if Some(id) == self.main_id {
-                    self.scale = scale_factor;
-                }
-                if let Some(host) = self.hosts.get(&id) {
+                if let Some(host) = self.hosts.get_mut(&id) {
+                    if self.pointer_win == Some(id) {
+                        self.pointer = Point::new(self.pointer.x * host.dpi.factor() / scale_factor, self.pointer.y * host.dpi.factor() / scale_factor);
+                    }
+                    host.dpi = crate::window_dpi::WindowDpi::new(scale_factor);
                     host.window.request_redraw();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer = Point::new(position.x / self.scale, position.y / self.scale);
+                self.pointer = self.hosts.get(&id).map_or(Point::ZERO, |host| host.dpi.point(position.x, position.y));
                 self.pointer_win = Some(id);
                 self.on_cursor_move();
                 if let Some(master) = self.pending_master_undock.take() {
@@ -7526,7 +7580,7 @@ impl ApplicationHandler for App {
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some() =>
             {
-                self.on_wheel(delta);
+                self.on_wheel(delta, scale);
             }
             WindowEvent::RedrawRequested => self.redraw(id),
             WindowEvent::DroppedFile(path) if Some(id) == self.main_id => {
@@ -7667,15 +7721,15 @@ fn artboard_at(doc: &Document, dp: Point) -> Option<ArtboardId> {
 }
 
 /// Width and per-row height of the labeled tool-group flyout.
-const TOOL_FLYOUT_W: f64 = 220.0;
-const TOOL_FLYOUT_ROW: f64 = 30.0;
+fn metric_tool_flyout_w() -> f64 { crate::metrics::with(|m| m.app_tool_flyout_w) }
+fn metric_tool_flyout_row() -> f64 { crate::metrics::with(|m| m.app_tool_flyout_row) }
 
 /// Rect of labeled flyout row `i`, a vertical list right of `anchor`
 /// (Illustrator's own tool-group flyout layout).
 fn tool_flyout_row(anchor: Rect, i: usize) -> Rect {
-    let x = anchor.x1 + 8.0;
-    let y = anchor.y0 + i as f64 * TOOL_FLYOUT_ROW;
-    Rect::new(x, y, x + TOOL_FLYOUT_W, y + TOOL_FLYOUT_ROW)
+    let x = anchor.x1 + ui_px(8.0);
+    let y = anchor.y0 + i as f64 * metric_tool_flyout_row();
+    Rect::new(x, y, x + metric_tool_flyout_w(), y + metric_tool_flyout_row())
 }
 
 /// Fractional (0..1) hotspot of a tool's cursor glyph within its box —
@@ -7793,7 +7847,7 @@ fn docked_master_rect(dock: &DockModel, id: u64, w: f64, h: f64) -> Rect {
         .collect();
     let off = layout::dock_offset(&widths, idx);
     let mw = layout::dock_width(m);
-    let top = APP_BAR_H + OPT_BAR_H;
+    let top = metric_app_bar_h() + metric_opt_bar_h();
     match side {
         Side::Left => Rect::new(off, top, off + mw, h),
         Side::Right => Rect::new(w - off - mw, top, w - off, h),
@@ -7801,41 +7855,13 @@ fn docked_master_rect(dock: &DockModel, id: u64, w: f64, h: f64) -> Rect {
 }
 
 fn tab_label(panel: PanelId) -> String {
-    match panel.0 {
-        "tools" => "Tools",
-        "layers" => "Layers",
-        "links" => "Links",
-        "artboards" => "Artboards",
-        "swatches" => "Swatches",
-        "character" => "Character",
-        "paragraph" => "Paragraph",
-        "color" => "Color",
-        "gradient" => "Gradient",
-        "transform" => "Transform",
-        "pathfinder" => "Pathfinder",
-        "align" => "Align",
-        "picker" => "Color Picker",
-        "shapedlg.rect" => "Rectangle",
-        "shapedlg.round" => "Rounded Rectangle",
-        "shapedlg.ellipse" => "Ellipse",
-        "shapedlg.polygon" => "Polygon",
-        "shapedlg.star" => "Star",
-        "shapedlg.arc" => "Arc Segment Tool Options",
-        "shapedlg.spiral" => "Spiral",
-        "export-screens" => "Export for Screens",
-        "xformdlg.reflect" => "Reflect",
-        "xformdlg.shear" => "Shear",
-        "blenddlg" => "Blend Options",
-        "offsetdlg" => "Offset Path",
-        other => other,
-    }
-    .to_string()
+    panel.0.label().to_string()
 }
 
 /// The options / context bar: full window width, directly under the app
 /// bar and above both the tools rail and the tab strip.
 fn opt_bar_rect(width: f64) -> Rect {
-    Rect::new(0.0, APP_BAR_H, width, APP_BAR_H + OPT_BAR_H)
+    Rect::new(0.0, metric_app_bar_h(), width, metric_app_bar_h() + metric_opt_bar_h())
 }
 
 /// The document-tab strip: the canvas x-span, between the options bar and
@@ -7843,9 +7869,9 @@ fn opt_bar_rect(width: f64) -> Rect {
 fn tab_bar_rect(left_x: f64, right_x: f64) -> Rect {
     Rect::new(
         left_x,
-        APP_BAR_H + OPT_BAR_H,
+        metric_app_bar_h() + metric_opt_bar_h(),
         right_x.max(left_x),
-        APP_BAR_H + OPT_BAR_H + TAB_BAR_H,
+        metric_app_bar_h() + metric_opt_bar_h() + metric_tab_bar_h(),
     )
 }
 
@@ -7853,19 +7879,19 @@ fn tab_bar_rect(left_x: f64, right_x: f64) -> Rect {
 /// Returns `(whole tab rect, close-× rect)` per tab.
 fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(Rect, Rect)> {
     let mut out = Vec::with_capacity(labels.len());
-    let mut x = strip.x0 + 4.0;
+    let mut x = strip.x0 + ui_px(4.0);
     for label in labels {
         let tw = text.measure(label, 12.6);
-        let w = tw + 18.9 /* × */ + 23.1 /* padding */;
+        let w = tw + ui_px(18.9) /* × */ + ui_px(23.1) /* padding */;
         let whole = Rect::new(x, strip.y0, (x + w).min(strip.x1), strip.y1);
         let close = Rect::new(
-            whole.x0 + 6.0,
-            strip.y0 + 4.0,
-            whole.x0 + 20.0,
-            strip.y1 - 4.0,
+            whole.x0 + ui_px(6.0),
+            strip.y0 + ui_px(4.0),
+            whole.x0 + ui_px(20.0),
+            strip.y1 - ui_px(4.0),
         );
         out.push((whole, close));
-        x += w + 2.0;
+        x += w + ui_px(2.0);
         if x >= strip.x1 {
             break;
         }
@@ -7873,20 +7899,22 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
     out
 }
 
-/// The panels the Panels menu lists, alphabetical like Illustrator.
-const WINDOW_PANELS: [(&str, &str); 12] = [
-    ("align", "Align"),
-    ("artboards", "Artboards"),
-    ("character", "Character"),
-    ("color", "Color"),
-    ("gradient", "Gradient"),
-    ("layers", "Layers"),
-    ("links", "Links"),
-    ("paragraph", "Paragraph"),
-    ("pathfinder", "Pathfinder"),
-    ("swatches", "Swatches"),
-    ("tools", "Tools"),
-    ("transform", "Transform"),
+/// The panels the Panels menu lists, alphabetical like Illustrator. A
+/// deliberate subset of `PanelKind::ALL` — excludes the color picker and
+/// every float-only dialog panel, which never belong in this menu.
+const WINDOW_PANELS: [PanelKind; 12] = [
+    PanelKind::Align,
+    PanelKind::Artboards,
+    PanelKind::Character,
+    PanelKind::Color,
+    PanelKind::Gradient,
+    PanelKind::Layers,
+    PanelKind::Links,
+    PanelKind::Paragraph,
+    PanelKind::Pathfinder,
+    PanelKind::Swatches,
+    PanelKind::Tools,
+    PanelKind::Transform,
 ];
 
 /// Start the shell: create the winit event loop and run [`App`] on it.
@@ -7899,8 +7927,8 @@ pub fn run() {
 mod dock_geometry_tests {
     use super::*;
 
-    const A: PanelId = PanelId("a");
-    const B: PanelId = PanelId("b");
+    const A: PanelId = PanelId(PanelKind::Unknown("a"));
+    const B: PanelId = PanelId(PanelKind::Unknown("b"));
 
     #[test]
     fn a_lone_docked_master_keeps_its_configured_width() {

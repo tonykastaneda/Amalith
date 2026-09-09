@@ -10,6 +10,8 @@
 //! column of options (what to export, where to, the Formats table), and a
 //! bottom bar with the counts and the Export button.
 
+use crate::metrics::px as ui_px;
+
 mod formats;
 
 pub use formats::{scale_label, Format, Row};
@@ -24,16 +26,16 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 
 /// Panel body width. The shell adds its tab-strip height for the window.
-pub const W: f64 = 900.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.export_w) }
 /// Panel body height.
-pub const H: f64 = 600.0;
+pub fn metric_h() -> f64 { crate::metrics::with(|m| m.export_h) }
 
-const PAD: f64 = 24.0;
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.export_pad) }
 /// x where the right-hand options column starts.
-const RIGHT_X: f64 = 540.0;
-const ROW_H: f64 = 26.0;
-const BTN_H: f64 = 30.0;
-const FIELD_H: f64 = 24.0;
+fn metric_right_x() -> f64 { crate::metrics::with(|m| m.export_right_x) }
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.export_row_h) }
+fn metric_btn_h() -> f64 { crate::metrics::with(|m| m.export_btn_h) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.export_field_h) }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
@@ -316,20 +318,20 @@ struct MenuLayout {
 }
 
 fn menu_layout(anchor: Rect, n: usize, body: Rect) -> MenuLayout {
-    let item_h = 22.0;
-    let w = anchor.width().max(74.0);
-    let h = n as f64 * item_h + 6.0;
-    let up = anchor.y1 + h > body.y1 - 8.0;
+    let item_h = ui_px(22.0);
+    let w = anchor.width().max(ui_px(74.0));
+    let h = n as f64 * item_h + ui_px(6.0);
+    let up = anchor.y1 + h > body.y1 - ui_px(8.0);
     let (top, x0) = if up {
         (anchor.y0 - h, anchor.x0)
     } else {
-        (anchor.y1 + 2.0, anchor.x0)
+        (anchor.y1 + ui_px(2.0), anchor.x0)
     };
     let frame = Rect::new(x0, top, x0 + w, top + h);
     let items = (0..n)
         .map(|i| {
-            let y = frame.y0 + 3.0 + i as f64 * item_h;
-            Rect::new(frame.x0 + 2.0, y, frame.x1 - 2.0, y + item_h)
+            let y = frame.y0 + ui_px(3.0) + i as f64 * item_h;
+            Rect::new(frame.x0 + ui_px(2.0), y, frame.x1 - ui_px(2.0), y + item_h)
         })
         .collect();
     MenuLayout { items, frame }
@@ -375,87 +377,87 @@ struct FmtRow {
 fn layout(body: Rect, n_items: usize, n_rows: usize) -> L {
     let x0 = body.x0;
     let y0 = body.y0;
-    let tab_y = y0 + 12.0;
-    let tab_artboards = Rect::new(x0 + PAD + 60.0, tab_y, x0 + PAD + 168.0, tab_y + 28.0);
-    let tab_assets = Rect::new(tab_artboards.x1 + 6.0, tab_y, tab_artboards.x1 + 96.0, tab_y + 28.0);
+    let tab_y = y0 + ui_px(12.0);
+    let tab_artboards = Rect::new(x0 + metric_pad() + ui_px(60.0), tab_y, x0 + metric_pad() + ui_px(168.0), tab_y + ui_px(28.0));
+    let tab_assets = Rect::new(tab_artboards.x1 + ui_px(6.0), tab_y, tab_artboards.x1 + ui_px(96.0), tab_y + ui_px(28.0));
 
     let grid = Rect::new(
-        x0 + PAD,
-        tab_artboards.y1 + 12.0,
-        x0 + RIGHT_X - 18.0,
-        body.y1 - 60.0,
+        x0 + metric_pad(),
+        tab_artboards.y1 + ui_px(12.0),
+        x0 + metric_right_x() - ui_px(18.0),
+        body.y1 - ui_px(60.0),
     );
     // 4 columns, square-ish cells.
     let cols = 4usize;
-    let gap = 22.0;
-    let cell = ((grid.width() - gap * (cols as f64 - 1.0)) / cols as f64).clamp(60.0, 140.0);
-    let stride = cell + gap + 22.0; // + label row
+    let gap = ui_px(22.0);
+    let cell = ((grid.width() - gap * (cols as f64 - 1.0)) / cols as f64).clamp(ui_px(60.0), ui_px(140.0));
+    let stride = cell + gap + ui_px(22.0); // + label row
     let mut cells = Vec::with_capacity(n_items);
     let mut boxes = Vec::with_capacity(n_items);
     for i in 0..n_items {
         let cx = grid.x0 + (i % cols) as f64 * (cell + gap);
         let cy = grid.y0 + (i / cols) as f64 * stride;
         let r = Rect::new(cx, cy, cx + cell, cy + cell);
-        boxes.push(Rect::new(r.x0 + 4.0, r.y1 - 18.0, r.x0 + 18.0, r.y1 - 4.0));
+        boxes.push(Rect::new(r.x0 + ui_px(4.0), r.y1 - ui_px(18.0), r.x0 + ui_px(18.0), r.y1 - ui_px(4.0)));
         cells.push(r);
     }
 
-    let rx = x0 + RIGHT_X;
-    let rr = body.x1 - PAD;
+    let rx = x0 + metric_right_x();
+    let rr = body.x1 - metric_pad();
     let mut y = grid.y0;
 
     // Select box.
-    let select_box = Rect::new(rx, y + 18.0, rr, y + 130.0);
-    let r_all = Rect::new(select_box.x0 + 12.0, select_box.y0 + 14.0, select_box.x0 + 30.0, select_box.y0 + 32.0);
-    let r_range = Rect::new(select_box.x0 + 96.0, r_all.y0, select_box.x0 + 114.0, r_all.y1);
-    let range_field = Rect::new(r_range.x1 + 18.0, r_range.y0 - 3.0, select_box.x1 - 14.0, r_range.y0 + 21.0);
-    let r_full = Rect::new(select_box.x0 + 12.0, select_box.y0 + 62.0, select_box.x0 + 30.0, select_box.y0 + 80.0);
-    y = select_box.y1 + 22.0;
+    let select_box = Rect::new(rx, y + ui_px(18.0), rr, y + ui_px(130.0));
+    let r_all = Rect::new(select_box.x0 + ui_px(12.0), select_box.y0 + ui_px(14.0), select_box.x0 + ui_px(30.0), select_box.y0 + ui_px(32.0));
+    let r_range = Rect::new(select_box.x0 + ui_px(96.0), r_all.y0, select_box.x0 + ui_px(114.0), r_all.y1);
+    let range_field = Rect::new(r_range.x1 + ui_px(18.0), r_range.y0 - ui_px(3.0), select_box.x1 - ui_px(14.0), r_range.y0 + ui_px(21.0));
+    let r_full = Rect::new(select_box.x0 + ui_px(12.0), select_box.y0 + ui_px(62.0), select_box.x0 + ui_px(30.0), select_box.y0 + ui_px(80.0));
+    y = select_box.y1 + ui_px(22.0);
 
     // Export to.
-    y += 20.0; // label
-    let folder_btn = Rect::new(rr - 34.0, y, rr, y + 30.0);
-    let dest_field = Rect::new(rx, y, folder_btn.x0 - 10.0, y + 30.0);
-    y = dest_field.y1 + 14.0;
+    y += ui_px(20.0); // label
+    let folder_btn = Rect::new(rr - ui_px(34.0), y, rr, y + ui_px(30.0));
+    let dest_field = Rect::new(rx, y, folder_btn.x0 - ui_px(10.0), y + ui_px(30.0));
+    y = dest_field.y1 + ui_px(14.0);
 
-    let open_after = Rect::new(rx, y, rx + 18.0, y + 18.0);
-    y += ROW_H;
-    let subfolders = Rect::new(rx, y, rx + 18.0, y + 18.0);
-    y += ROW_H;
-    let r_sub_scale = Rect::new(rx + 22.0, y, rx + 40.0, y + 18.0);
-    let r_sub_format = Rect::new(rx + 108.0, y, rx + 126.0, y + 18.0);
-    y += ROW_H + 8.0;
+    let open_after = Rect::new(rx, y, rx + ui_px(18.0), y + ui_px(18.0));
+    y += metric_row_h();
+    let subfolders = Rect::new(rx, y, rx + ui_px(18.0), y + ui_px(18.0));
+    y += metric_row_h();
+    let r_sub_scale = Rect::new(rx + ui_px(22.0), y, rx + ui_px(40.0), y + ui_px(18.0));
+    let r_sub_format = Rect::new(rx + ui_px(108.0), y, rx + ui_px(126.0), y + ui_px(18.0));
+    y += metric_row_h() + ui_px(8.0);
 
     // Export PDFs as.
-    y += 20.0; // label
-    let r_pdf_single = Rect::new(rx + 128.0, y, rx + 146.0, y + 18.0);
-    let r_pdf_multi = Rect::new(rx + 236.0, y, rx + 254.0, y + 18.0);
-    y += ROW_H + 8.0;
+    y += ui_px(20.0); // label
+    let r_pdf_single = Rect::new(rx + ui_px(128.0), y, rx + ui_px(146.0), y + ui_px(18.0));
+    let r_pdf_multi = Rect::new(rx + ui_px(236.0), y, rx + ui_px(254.0), y + ui_px(18.0));
+    y += metric_row_h() + ui_px(8.0);
 
     // Formats table.
-    y += 20.0; // "Formats:" label
-    y += 22.0; // column headers
-    let col_scale_x = rx + 6.0;
-    let col_suffix_x = rx + 84.0;
-    let col_format_x = rr - 158.0;
+    y += ui_px(20.0); // "Formats:" label
+    y += ui_px(22.0); // column headers
+    let col_scale_x = rx + ui_px(6.0);
+    let col_suffix_x = rx + ui_px(84.0);
+    let col_format_x = rr - ui_px(158.0);
     let mut fmt_rows = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
         fmt_rows.push(FmtRow {
-            scale: Rect::new(col_scale_x, y, col_scale_x + 70.0, y + FIELD_H),
-            suffix: Rect::new(col_suffix_x, y, col_format_x - 12.0, y + FIELD_H),
-            format: Rect::new(col_format_x, y, rr - 24.0, y + FIELD_H),
-            remove: Rect::new(rr - 18.0, y + 4.0, rr - 2.0, y + 20.0),
+            scale: Rect::new(col_scale_x, y, col_scale_x + ui_px(70.0), y + metric_field_h()),
+            suffix: Rect::new(col_suffix_x, y, col_format_x - ui_px(12.0), y + metric_field_h()),
+            format: Rect::new(col_format_x, y, rr - ui_px(24.0), y + metric_field_h()),
+            remove: Rect::new(rr - ui_px(18.0), y + ui_px(4.0), rr - ui_px(2.0), y + ui_px(20.0)),
         });
-        y += FIELD_H + 8.0;
+        y += metric_field_h() + ui_px(8.0);
     }
-    let add_scale = Rect::new(rx, y, rr, y + BTN_H);
+    let add_scale = Rect::new(rx, y, rr, y + metric_btn_h());
 
     // Bottom bar.
-    let by = body.y1 - PAD - BTN_H;
-    let clear_sel = Rect::new(x0 + PAD + 180.0, by, x0 + PAD + 360.0, by + BTN_H);
-    let prefix_field = Rect::new(clear_sel.x1 + 60.0, by + 3.0, clear_sel.x1 + 210.0, by + BTN_H - 3.0);
-    let export = Rect::new(rr - 150.0, by, rr, by + BTN_H);
-    let cancel = Rect::new(export.x0 - 12.0 - 100.0, by, export.x0 - 12.0, by + BTN_H);
+    let by = body.y1 - metric_pad() - metric_btn_h();
+    let clear_sel = Rect::new(x0 + metric_pad() + ui_px(180.0), by, x0 + metric_pad() + ui_px(360.0), by + metric_btn_h());
+    let prefix_field = Rect::new(clear_sel.x1 + ui_px(60.0), by + ui_px(3.0), clear_sel.x1 + ui_px(210.0), by + metric_btn_h() - ui_px(3.0));
+    let export = Rect::new(rr - ui_px(150.0), by, rr, by + metric_btn_h());
+    let cancel = Rect::new(export.x0 - ui_px(12.0) - ui_px(100.0), by, export.x0 - ui_px(12.0), by + metric_btn_h());
 
     L {
         tab_artboards,
@@ -546,10 +548,10 @@ pub fn hit(dlg: &ExportForScreens, body: Rect, p: Point) -> Hit {
     }
     // "Include Bleed" — its checkbox sits between the All/Range row and Full.
     let bleed_box = Rect::new(
-        l.select_box.x0 + 12.0,
-        l.r_all.y1 + 8.0,
-        l.select_box.x0 + 30.0,
-        l.r_all.y1 + 26.0,
+        l.select_box.x0 + ui_px(12.0),
+        l.r_all.y1 + ui_px(8.0),
+        l.select_box.x0 + ui_px(30.0),
+        l.r_all.y1 + ui_px(26.0),
     );
     if bleed_box.contains(p) {
         return Hit::ToggleBleed;
@@ -602,11 +604,11 @@ pub fn hit(dlg: &ExportForScreens, body: Rect, p: Point) -> Hit {
 }
 
 fn hit_radio(r: Rect, p: Point) -> bool {
-    r.inflate(2.0, 2.0).contains(p)
+    r.inflate(ui_px(2.0), ui_px(2.0)).contains(p)
 }
 fn hit_check(r: Rect, p: Point) -> bool {
     // The label to the right is part of the target.
-    Rect::new(r.x0, r.y0, r.x0 + 220.0, r.y1).contains(p)
+    Rect::new(r.x0, r.y0, r.x0 + ui_px(220.0), r.y1).contains(p)
 }
 
 // --- paint -------------------------------------------------------
@@ -628,8 +630,8 @@ pub fn paint(
     tab(scene, text, theme, l.tab_assets, "Assets", dlg.tab == Tab::Assets);
 
     // Left pane frame.
-    let pane = Rect::new(l.grid.x0 - 10.0, l.grid.y0 - 10.0, l.grid.x1 + 10.0, l.grid.y1 + 10.0);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &pane);
+    let pane = Rect::new(l.grid.x0 - ui_px(10.0), l.grid.y0 - ui_px(10.0), l.grid.x1 + ui_px(10.0), l.grid.y1 + ui_px(10.0));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &pane);
 
     if dlg.tab == Tab::Assets {
         text.draw(
@@ -637,8 +639,8 @@ pub fn paint(
             "No assets yet — flag objects with Asset Export.",
             13.0,
             theme.text_dim,
-            l.grid.x0 + 8.0,
-            l.grid.y0 + 30.0,
+            l.grid.x0 + ui_px(8.0),
+            l.grid.y0 + ui_px(30.0),
         );
     } else {
         scene.push_clip_layer(Fill::NonZero, ID, &pane);
@@ -654,62 +656,62 @@ pub fn paint(
                 11.0,
                 theme.text_dim,
                 cell.x0,
-                cell.y1 + 15.0,
+                cell.y1 + ui_px(15.0),
             );
-            text.draw(scene, &it.name, 12.0, theme.text, cell.x0 + 16.0, cell.y1 + 15.0);
+            text.draw(scene, &it.name, 12.0, theme.text, cell.x0 + ui_px(16.0), cell.y1 + ui_px(15.0));
         }
         scene.pop_layer();
     }
 
     // ----- right column -----
-    text.draw(scene, "Select:", 12.0, theme.text_dim, l.select_box.x0, l.select_box.y0 - 8.0);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &l.select_box);
+    text.draw(scene, "Select:", 12.0, theme.text_dim, l.select_box.x0, l.select_box.y0 - ui_px(8.0));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &l.select_box);
     radio(scene, l.r_all, dlg.mode == SelectMode::All, theme);
-    text.draw(scene, "All", 12.0, theme.text, l.r_all.x1 + 8.0, l.r_all.y0 + 14.0);
+    text.draw(scene, "All", 12.0, theme.text, l.r_all.x1 + ui_px(8.0), l.r_all.y0 + ui_px(14.0));
     radio(scene, l.r_range, dlg.mode == SelectMode::Range, theme);
-    text.draw(scene, "Range:", 12.0, theme.text, l.r_range.x1 + 8.0, l.r_range.y0 + 14.0);
+    text.draw(scene, "Range:", 12.0, theme.text, l.r_range.x1 + ui_px(8.0), l.r_range.y0 + ui_px(14.0));
     field(scene, text, theme, l.range_field, &dlg.range, dlg.focus == Focus::Range && caret_on);
     let bleed_box = Rect::new(
-        l.select_box.x0 + 12.0,
-        l.r_all.y1 + 8.0,
-        l.select_box.x0 + 30.0,
-        l.r_all.y1 + 26.0,
+        l.select_box.x0 + ui_px(12.0),
+        l.r_all.y1 + ui_px(8.0),
+        l.select_box.x0 + ui_px(30.0),
+        l.r_all.y1 + ui_px(26.0),
     );
     check(scene, bleed_box, dlg.include_bleed, theme);
-    text.draw(scene, "Include Bleed", 12.0, theme.text, bleed_box.x1 + 8.0, bleed_box.y0 + 14.0);
+    text.draw(scene, "Include Bleed", 12.0, theme.text, bleed_box.x1 + ui_px(8.0), bleed_box.y0 + ui_px(14.0));
     radio(scene, l.r_full, dlg.mode == SelectMode::FullDocument, theme);
-    text.draw(scene, "Full Document", 12.0, theme.text, l.r_full.x1 + 8.0, l.r_full.y0 + 14.0);
+    text.draw(scene, "Full Document", 12.0, theme.text, l.r_full.x1 + ui_px(8.0), l.r_full.y0 + ui_px(14.0));
 
-    text.draw(scene, "Export to:", 12.0, theme.text_dim, l.dest_field.x0, l.dest_field.y0 - 8.0);
+    text.draw(scene, "Export to:", 12.0, theme.text_dim, l.dest_field.x0, l.dest_field.y0 - ui_px(8.0));
     field(scene, text, theme, l.dest_field, &dlg.dest.display().to_string(), false);
-    scene.fill(Fill::NonZero, ID, theme.strip_active, None, &l.folder_btn.to_rounded_rect(3.0));
+    scene.fill(Fill::NonZero, ID, theme.strip_active, None, &l.folder_btn.to_rounded_rect(ui_px(3.0)));
     folder_glyph(scene, l.folder_btn, theme.text);
 
     check(scene, l.open_after, dlg.open_after, theme);
-    text.draw(scene, "Open Location after Export", 12.0, theme.text, l.open_after.x1 + 8.0, l.open_after.y0 + 14.0);
+    text.draw(scene, "Open Location after Export", 12.0, theme.text, l.open_after.x1 + ui_px(8.0), l.open_after.y0 + ui_px(14.0));
     check(scene, l.subfolders, dlg.subfolders, theme);
-    text.draw(scene, "Create Sub-folders", 12.0, theme.text, l.subfolders.x1 + 8.0, l.subfolders.y0 + 14.0);
+    text.draw(scene, "Create Sub-folders", 12.0, theme.text, l.subfolders.x1 + ui_px(8.0), l.subfolders.y0 + ui_px(14.0));
     let sub_col = if dlg.subfolders { theme.text } else { theme.text_dim };
     radio(scene, l.r_sub_scale, dlg.sub_by == SubBy::Scale, theme);
-    text.draw(scene, "Scale", 12.0, sub_col, l.r_sub_scale.x1 + 8.0, l.r_sub_scale.y0 + 14.0);
+    text.draw(scene, "Scale", 12.0, sub_col, l.r_sub_scale.x1 + ui_px(8.0), l.r_sub_scale.y0 + ui_px(14.0));
     radio(scene, l.r_sub_format, dlg.sub_by == SubBy::Format, theme);
-    text.draw(scene, "Format", 12.0, sub_col, l.r_sub_format.x1 + 8.0, l.r_sub_format.y0 + 14.0);
+    text.draw(scene, "Format", 12.0, sub_col, l.r_sub_format.x1 + ui_px(8.0), l.r_sub_format.y0 + ui_px(14.0));
 
     let pdf_col = if dlg.any_pdf() { theme.text } else { theme.text_dim };
-    text.draw(scene, "Export PDFs as:", 12.0, theme.text_dim, l.select_box.x0, l.r_pdf_single.y0 - 8.0);
+    text.draw(scene, "Export PDFs as:", 12.0, theme.text_dim, l.select_box.x0, l.r_pdf_single.y0 - ui_px(8.0));
     radio(scene, l.r_pdf_single, !dlg.pdf_multi, theme);
-    text.draw(scene, "Single File", 12.0, pdf_col, l.r_pdf_single.x1 + 8.0, l.r_pdf_single.y0 + 14.0);
+    text.draw(scene, "Single File", 12.0, pdf_col, l.r_pdf_single.x1 + ui_px(8.0), l.r_pdf_single.y0 + ui_px(14.0));
     radio(scene, l.r_pdf_multi, dlg.pdf_multi, theme);
-    text.draw(scene, "Multiple Files", 12.0, pdf_col, l.r_pdf_multi.x1 + 8.0, l.r_pdf_multi.y0 + 14.0);
+    text.draw(scene, "Multiple Files", 12.0, pdf_col, l.r_pdf_multi.x1 + ui_px(8.0), l.r_pdf_multi.y0 + ui_px(14.0));
 
     // Formats table.
-    let ftitle_y = l.fmt_rows.first().map(|r| r.scale.y0 - 30.0).unwrap_or(l.add_scale.y0 - 60.0);
+    let ftitle_y = l.fmt_rows.first().map(|r| r.scale.y0 - ui_px(30.0)).unwrap_or(l.add_scale.y0 - ui_px(60.0));
     text.draw(scene, "Formats:", 12.0, theme.text_dim, l.select_box.x0, ftitle_y);
     if let Some(fr) = l.fmt_rows.first() {
-        let hy = fr.scale.y0 - 8.0;
-        text.draw(scene, "Scale", 11.0, theme.text_dim, fr.scale.x0 + 4.0, hy);
-        text.draw(scene, "Suffix", 11.0, theme.text_dim, fr.suffix.x0 + 4.0, hy);
-        text.draw(scene, "Format", 11.0, theme.text_dim, fr.format.x0 + 4.0, hy);
+        let hy = fr.scale.y0 - ui_px(8.0);
+        text.draw(scene, "Scale", 11.0, theme.text_dim, fr.scale.x0 + ui_px(4.0), hy);
+        text.draw(scene, "Suffix", 11.0, theme.text_dim, fr.suffix.x0 + ui_px(4.0), hy);
+        text.draw(scene, "Format", 11.0, theme.text_dim, fr.format.x0 + ui_px(4.0), hy);
     }
     for (i, fr) in l.fmt_rows.iter().enumerate() {
         let row = &dlg.rows[i];
@@ -724,7 +726,7 @@ pub fn paint(
 
     // Bottom bar.
     crate::widgets::button(scene, text, theme, l.clear_sel, "Clear Selection", false);
-    text.draw(scene, "Prefix:", 12.0, theme.text_dim, l.clear_sel.x1 + 8.0, l.prefix_field.y0 + 16.0);
+    text.draw(scene, "Prefix:", 12.0, theme.text_dim, l.clear_sel.x1 + ui_px(8.0), l.prefix_field.y0 + ui_px(16.0));
     field(scene, text, theme, l.prefix_field, &dlg.prefix, dlg.focus == Focus::Prefix && caret_on);
 
     let n_sel = dlg.selected().len();
@@ -735,8 +737,8 @@ pub fn paint(
         &counts,
         12.0,
         theme.text_dim,
-        body.x0 + (W - cw) * 0.5,
-        l.cancel.y0 - 12.0,
+        body.x0 + (metric_w() - cw) * 0.5,
+        l.cancel.y0 - ui_px(12.0),
     );
     crate::widgets::button(scene, text, theme, l.cancel, "Cancel", false);
     crate::widgets::button(scene, text, theme, l.export, "Export Artboard", true);
@@ -760,13 +762,13 @@ pub fn paint(
             OpenMenu::Format(i) => Format::ALL.iter().position(|f| *f == dlg.rows[i].format),
         };
         let ml = menu_layout(anchor, items.len(), body);
-        scene.fill(Fill::NonZero, ID, theme.bg, None, &ml.frame.to_rounded_rect(4.0));
-        scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &ml.frame.to_rounded_rect(4.0));
+        scene.fill(Fill::NonZero, ID, theme.bg, None, &ml.frame.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &ml.frame.to_rounded_rect(ui_px(4.0)));
         for (k, r) in ml.items.iter().enumerate() {
             if Some(k) == cur {
                 scene.fill(Fill::NonZero, ID, theme.strip_active, None, r);
             }
-            text.draw(scene, &items[k], 12.0, theme.text, r.x0 + 8.0, r.y0 + r.height() * 0.5 + 4.0);
+            text.draw(scene, &items[k], 12.0, theme.text, r.x0 + ui_px(8.0), r.y0 + r.height() * 0.5 + ui_px(4.0));
         }
     }
 }
@@ -794,6 +796,10 @@ fn thumb(scene: &mut Scene, doc: &amalith_core::Document, ab: amalith_core::Rect
     scene.pop_layer();
 }
 
+/// Fallback fill for a thumbnail path/compound-path whose object has no
+/// fill color of its own.
+const THUMB_NO_FILL: Color = Color::from_rgb8(0x88, 0x88, 0x88);
+
 fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_core::ObjectId, m: Affine) {
     use amalith_core::ObjectKind;
     let Some(obj) = doc.object(id) else { return };
@@ -809,7 +815,7 @@ fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_cor
                 .fill
                 .color()
                 .map(crate::convert::color)
-                .unwrap_or(Color::from_rgb8(0x88, 0x88, 0x88));
+                .unwrap_or(THUMB_NO_FILL);
             scene.fill(Fill::NonZero, om, col, None, &bez);
         }
         ObjectKind::CompoundPath(cp) => {
@@ -822,7 +828,7 @@ fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_cor
                 .fill
                 .color()
                 .map(crate::convert::color)
-                .unwrap_or(Color::from_rgb8(0x88, 0x88, 0x88));
+                .unwrap_or(THUMB_NO_FILL);
             scene.fill(Fill::NonZero, om, col, None, &bez);
         }
         ObjectKind::Group(g) => {
@@ -846,16 +852,16 @@ fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_cor
 
 fn tab(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, label: &str, on: bool) {
     if on {
-        scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r.to_rounded_rect(4.0));
+        scene.fill(Fill::NonZero, ID, theme.strip_active, None, &r.to_rounded_rect(ui_px(4.0)));
     }
     let col = if on { theme.accent } else { theme.text_dim };
     let w = text.measure(label, 13.0);
-    text.draw(scene, label, 13.0, col, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + 4.5);
+    text.draw(scene, label, 13.0, col, r.x0 + (r.width() - w) * 0.5, r.y0 + r.height() * 0.5 + ui_px(4.5));
 }
 
 fn radio(scene: &mut Scene, r: Rect, on: bool, theme: &Theme) {
     let c = Circle::new((r.x0 + r.width() * 0.5, r.y0 + r.height() * 0.5), r.width() * 0.5);
-    scene.stroke(&Stroke::new(1.2), ID, theme.text_dim, None, &c);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, theme.text_dim, None, &c);
     if on {
         scene.fill(
             Fill::NonZero,
@@ -868,70 +874,70 @@ fn radio(scene: &mut Scene, r: Rect, on: bool, theme: &Theme) {
 }
 
 fn check(scene: &mut Scene, r: Rect, on: bool, theme: &Theme) {
-    let rr = r.to_rounded_rect(3.0);
+    let rr = r.to_rounded_rect(ui_px(3.0));
     scene.fill(Fill::NonZero, ID, if on { theme.accent } else { theme.bg }, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &rr);
     if on {
         let mut p = BezPath::new();
-        p.move_to((r.x0 + 3.5, r.y0 + r.height() * 0.55));
-        p.line_to((r.x0 + r.width() * 0.42, r.y1 - 3.5));
-        p.line_to((r.x1 - 3.0, r.y0 + 3.0));
-        scene.stroke(&Stroke::new(1.8), ID, theme.on_accent, None, &p);
+        p.move_to((r.x0 + ui_px(3.5), r.y0 + r.height() * 0.55));
+        p.line_to((r.x0 + r.width() * 0.42, r.y1 - ui_px(3.5)));
+        p.line_to((r.x1 - ui_px(3.0), r.y0 + ui_px(3.0)));
+        scene.stroke(&Stroke::new(ui_px(1.8)), ID, theme.on_accent, None, &p);
     }
 }
 
 fn field(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, val: &str, caret: bool) {
-    let rr = r.to_rounded_rect(3.0);
+    let rr = r.to_rounded_rect(ui_px(3.0));
     scene.fill(Fill::NonZero, ID, theme.bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &rr);
     // Trim from the left so a long path stays readable at the tail.
     let mut shown = val.to_string();
-    while text.measure(&shown, 12.0) > r.width() - 14.0 && shown.chars().count() > 3 {
+    while text.measure(&shown, 12.0) > r.width() - ui_px(14.0) && shown.chars().count() > 3 {
         shown = format!("…{}", &shown[shown.char_indices().nth(2).map(|(i, _)| i).unwrap_or(0)..]);
     }
-    text.draw(scene, &shown, 12.0, theme.text, r.x0 + 7.0, r.y0 + r.height() * 0.5 + 4.0);
+    text.draw(scene, &shown, 12.0, theme.text, r.x0 + ui_px(7.0), r.y0 + r.height() * 0.5 + ui_px(4.0));
     if caret {
-        let cx = r.x0 + 7.0 + text.measure(&shown, 12.0) + 1.0;
-        scene.fill(Fill::NonZero, ID, theme.text, None, &Rect::new(cx, r.y0 + 4.0, cx + 1.4, r.y1 - 4.0));
+        let cx = r.x0 + ui_px(7.0) + text.measure(&shown, 12.0) + 1.0;
+        scene.fill(Fill::NonZero, ID, theme.text, None, &Rect::new(cx, r.y0 + ui_px(4.0), cx + 1.4, r.y1 - ui_px(4.0)));
     }
 }
 
 fn dropdown(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, val: &str, enabled: bool) {
-    let rr = r.to_rounded_rect(3.0);
+    let rr = r.to_rounded_rect(ui_px(3.0));
     scene.fill(Fill::NonZero, ID, theme.bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &rr);
     let col = if enabled { theme.text } else { theme.text_dim };
-    text.draw(scene, val, 12.0, col, r.x0 + 7.0, r.y0 + r.height() * 0.5 + 4.0);
-    let cx = r.x1 - 12.0;
+    text.draw(scene, val, 12.0, col, r.x0 + ui_px(7.0), r.y0 + r.height() * 0.5 + ui_px(4.0));
+    let cx = r.x1 - ui_px(12.0);
     let cy = r.y0 + r.height() * 0.5;
     let mut p = BezPath::new();
-    p.move_to((cx - 3.5, cy - 2.0));
-    p.line_to((cx + 3.5, cy - 2.0));
-    p.line_to((cx, cy + 2.5));
+    p.move_to((cx - ui_px(3.5), cy - ui_px(2.0)));
+    p.line_to((cx + ui_px(3.5), cy - ui_px(2.0)));
+    p.line_to((cx, cy + ui_px(2.5)));
     p.close_path();
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &p);
 }
 
 fn folder_glyph(scene: &mut Scene, r: Rect, col: Color) {
-    let g = Rect::new(r.x0 + 8.0, r.y0 + 9.0, r.x1 - 8.0, r.y1 - 9.0);
+    let g = Rect::new(r.x0 + ui_px(8.0), r.y0 + ui_px(9.0), r.x1 - ui_px(8.0), r.y1 - ui_px(9.0));
     let mut p = BezPath::new();
-    p.move_to((g.x0, g.y0 + 3.0));
-    p.line_to((g.x0 + 5.0, g.y0 + 3.0));
-    p.line_to((g.x0 + 7.0, g.y0));
+    p.move_to((g.x0, g.y0 + ui_px(3.0)));
+    p.line_to((g.x0 + ui_px(5.0), g.y0 + ui_px(3.0)));
+    p.line_to((g.x0 + ui_px(7.0), g.y0));
     p.line_to((g.x1, g.y0));
     p.line_to((g.x1, g.y1));
     p.line_to((g.x0, g.y1));
     p.close_path();
-    scene.stroke(&Stroke::new(1.3), ID, col, None, &p);
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, col, None, &p);
 }
 
 fn x_glyph(scene: &mut Scene, r: Rect, col: Color) {
     let mut p = BezPath::new();
-    p.move_to((r.x0 + 3.0, r.y0 + 3.0));
-    p.line_to((r.x1 - 3.0, r.y1 - 3.0));
-    p.move_to((r.x1 - 3.0, r.y0 + 3.0));
-    p.line_to((r.x0 + 3.0, r.y1 - 3.0));
-    scene.stroke(&Stroke::new(1.4), ID, col, None, &p);
+    p.move_to((r.x0 + ui_px(3.0), r.y0 + ui_px(3.0)));
+    p.line_to((r.x1 - ui_px(3.0), r.y1 - ui_px(3.0)));
+    p.move_to((r.x1 - ui_px(3.0), r.y0 + ui_px(3.0)));
+    p.line_to((r.x0 + ui_px(3.0), r.y1 - ui_px(3.0)));
+    scene.stroke(&Stroke::new(ui_px(1.4)), ID, col, None, &p);
 }
 
 // --- helpers ----------------------------------------------------

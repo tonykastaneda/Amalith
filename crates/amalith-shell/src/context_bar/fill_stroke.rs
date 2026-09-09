@@ -1,6 +1,8 @@
 //! Fill + Stroke colour chips. Shown for everything except a pure-text
 //! focus (where the `character` segment takes over).
 
+use crate::metrics::px as ui_px;
+
 use vello::kurbo::{Point, Rect, Stroke};
 use vello::Scene;
 
@@ -12,7 +14,7 @@ use super::{baseline, Ctx, SegKind, Segment, ID};
 pub(super) const SEGMENT: Segment = Segment {
     kind: SegKind::FillStroke,
     applies: |ctx| !ctx.text_context,
-    measure: |_| 124.0,
+    measure: |_| ui_px(124.0),
     paint,
     hit,
 };
@@ -20,8 +22,8 @@ pub(super) const SEGMENT: Segment = Segment {
 /// (fill chip, stroke chip) rects inside the segment.
 fn chips(r: Rect) -> (Rect, Rect) {
     let cy = r.center().y;
-    let fill = Rect::from_center_size(Point::new(r.x0 + 45.0, cy), (21.0, 21.0));
-    let stroke = Rect::from_center_size(Point::new(r.x0 + 101.0, cy), (21.0, 21.0));
+    let fill = Rect::from_center_size(Point::new(r.x0 + ui_px(45.0), cy), (ui_px(21.0), ui_px(21.0)));
+    let stroke = Rect::from_center_size(Point::new(r.x0 + ui_px(101.0), cy), (ui_px(21.0), ui_px(21.0)));
     (fill, stroke)
 }
 
@@ -31,8 +33,8 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     text.draw(scene, "Fill", 13.0, theme.text_dim, r.x0, baseline(r));
 
     let indicator = |scene: &mut Scene, chip: Rect| {
-        let s = Rect::from_center_size(Point::new(chip.x1 + 13.0, chip.center().y), (13.0, 13.0));
-        scene.stroke(&Stroke::new(1.0), ID, theme.text_dim, None, &s);
+        let s = Rect::from_center_size(Point::new(chip.x1 + ui_px(13.0), chip.center().y), (ui_px(13.0), ui_px(13.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim, None, &s);
     };
     panels::draw_paint_swatch(
         scene,

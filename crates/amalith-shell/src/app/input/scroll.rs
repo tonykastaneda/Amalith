@@ -8,7 +8,7 @@ use winit::event::MouseScrollDelta;
 use crate::context_bar;
 use crate::stroke_panel;
 
-use super::super::{opt_bar_rect, App, APP_BAR_H, OPT_BAR_H};
+use super::super::{opt_bar_rect, App, metric_app_bar_h, metric_opt_bar_h};
 
 impl App {
     pub(in crate::app) fn on_pinch(&mut self, delta: f64) {
@@ -16,12 +16,12 @@ impl App {
         self.request_main_redraw();
     }
 
-    pub(in crate::app) fn on_wheel(&mut self, delta: MouseScrollDelta) {
+    pub(in crate::app) fn on_wheel(&mut self, delta: MouseScrollDelta, scale: f64) {
         let (dx, dy) = match delta {
             // Line-based (mouse wheel): each notch ≈ 30 logical px.
             MouseScrollDelta::LineDelta(x, y) => (x as f64 * 30.0, y as f64 * 30.0),
             // Pixel-based (trackpad): physical px → logical.
-            MouseScrollDelta::PixelDelta(p) => (p.x / self.scale, p.y / self.scale),
+            MouseScrollDelta::PixelDelta(p) => (p.x / scale, p.y / scale),
         };
         // The Reflect/Shear dialog, then the exact-size shape dialogs —
         // both bespoke floating windows with their own numeric fields.
@@ -74,7 +74,7 @@ impl App {
         // An open font dropdown scrolls its (filtered) list.
         if let Some(m) = &mut self.font_menu {
             let shown = m.matches().len();
-            let max = ((shown.saturating_sub(Self::FM_ROWS)) as f64 * Self::FM_ROW).max(0.0);
+            let max = ((shown.saturating_sub(Self::FM_ROWS)) as f64 * Self::metric_fm_row()).max(0.0);
             m.scroll = (m.scroll - dy).clamp(0.0, max);
             self.request_main_redraw();
             return;
@@ -93,8 +93,8 @@ impl App {
         // Scrolling over a context-bar Stroke / Opacity / Character
         // segment nudges that segment's value.
         if self.picker.is_none()
-            && self.pointer.y >= APP_BAR_H
-            && self.pointer.y < APP_BAR_H + OPT_BAR_H
+            && self.pointer.y >= metric_app_bar_h()
+            && self.pointer.y < metric_app_bar_h() + metric_opt_bar_h()
             && dy.abs() > 0.5
         {
             let w = self.main_logical_size().map_or(1280.0, |(w, _)| w);

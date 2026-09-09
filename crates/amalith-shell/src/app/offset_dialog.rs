@@ -15,7 +15,7 @@ pub(in crate::app) enum OffsetClose {
 
 impl App {
     pub(in crate::app) fn offset_panel_id() -> PanelId {
-        PanelId("offsetdlg")
+        PanelId(PanelKind::Offsetdlg)
     }
 
     /// Open Offset Path for the current selection's path objects — a
@@ -35,7 +35,7 @@ impl App {
         self.text_blink = Instant::now();
 
         let pid = Self::offset_panel_id();
-        let fw = offsetdlg::W;
+        let fw = offsetdlg::metric_w();
         let fh = offsetdlg::body_height() + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();
@@ -74,7 +74,7 @@ impl App {
         let pid = Self::offset_panel_id();
         let fid = self.dock.floating_id_of(pid)?;
         let h = self.theme.tab_strip_h + offsetdlg::body_height();
-        let bounds = Rect::new(0.0, 0.0, offsetdlg::W, h);
+        let bounds = Rect::new(0.0, 0.0, offsetdlg::metric_w(), h);
         Some(self.build_master_frame(fid, bounds).body)
     }
 

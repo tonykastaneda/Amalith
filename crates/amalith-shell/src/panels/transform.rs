@@ -3,6 +3,8 @@
 //! Reads the selection through [`amalith_core::xform`] and emits
 //! [`Action`]s the shell turns into `SetTransform`.
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::xform::{self, RefPoint, TransformValues};
 use vello::kurbo::{BezPath, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
@@ -10,11 +12,11 @@ use vello::Scene;
 
 use crate::text::TextContext;
 
-use super::{Action, Ctx, ID, PAD};
+use super::{Action, Ctx, ID, metric_pad};
 
-const FIELD_H: f64 = 22.0;
-const GAP: f64 = 8.0;
-const LOC: f64 = 44.0;
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.panels_transform_field_h) }
+fn metric_gap() -> f64 { crate::metrics::with(|m| m.panels_transform_gap) }
+fn metric_loc() -> f64 { crate::metrics::with(|m| m.panels_transform_loc) }
 
 /// Which numeric field the pointer is on / the user is typing into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,42 +53,42 @@ struct L {
 }
 
 fn layout(body: Rect) -> L {
-    let x0 = body.x0 + PAD;
-    let y0 = body.y0 + 10.0;
-    let x1 = body.x1 - PAD;
-    let locator = Rect::new(x0, y0 + 4.0, x0 + LOC, y0 + 4.0 + LOC);
+    let x0 = body.x0 + metric_pad();
+    let y0 = body.y0 + ui_px(10.0);
+    let x1 = body.x1 - metric_pad();
+    let locator = Rect::new(x0, y0 + ui_px(4.0), x0 + metric_loc(), y0 + ui_px(4.0) + metric_loc());
 
-    let link_w = 28.0;
-    let link = Rect::new(x1 - link_w, y0, x1, y0 + FIELD_H * 2.0 + GAP);
-    let rest_l = locator.x1 + 10.0;
-    let rest_r = link.x0 - 8.0;
-    let col_w = ((rest_r - rest_l) - GAP).max(40.0) / 2.0;
+    let link_w = ui_px(28.0);
+    let link = Rect::new(x1 - link_w, y0, x1, y0 + metric_field_h() * 2.0 + metric_gap());
+    let rest_l = locator.x1 + ui_px(10.0);
+    let rest_r = link.x0 - ui_px(8.0);
+    let col_w = ((rest_r - rest_l) - metric_gap()).max(ui_px(40.0)) / 2.0;
 
-    let x = Rect::new(rest_l, y0, rest_l + col_w, y0 + FIELD_H);
-    let w = Rect::new(rest_l + col_w + GAP, y0, rest_r, y0 + FIELD_H);
-    let y = Rect::new(rest_l, y0 + FIELD_H + GAP, rest_l + col_w, y0 + FIELD_H * 2.0 + GAP);
+    let x = Rect::new(rest_l, y0, rest_l + col_w, y0 + metric_field_h());
+    let w = Rect::new(rest_l + col_w + metric_gap(), y0, rest_r, y0 + metric_field_h());
+    let y = Rect::new(rest_l, y0 + metric_field_h() + metric_gap(), rest_l + col_w, y0 + metric_field_h() * 2.0 + metric_gap());
     let h = Rect::new(
-        rest_l + col_w + GAP,
-        y0 + FIELD_H + GAP,
+        rest_l + col_w + metric_gap(),
+        y0 + metric_field_h() + metric_gap(),
         rest_r,
-        y0 + FIELD_H * 2.0 + GAP,
+        y0 + metric_field_h() * 2.0 + metric_gap(),
     );
 
     let mut cells = [Rect::ZERO; 9];
-    let cell = 8.0;
-    let cg = (LOC - 8.0 - cell * 3.0) / 2.0;
+    let cell = ui_px(8.0);
+    let cg = (metric_loc() - ui_px(8.0) - cell * 3.0) / 2.0;
     for row in 0..3 {
         for col in 0..3 {
-            let cx = locator.x0 + 4.0 + col as f64 * (cell + cg);
-            let cy = locator.y0 + 4.0 + row as f64 * (cell + cg);
+            let cx = locator.x0 + ui_px(4.0) + col as f64 * (cell + cg);
+            let cy = locator.y0 + ui_px(4.0) + row as f64 * (cell + cg);
             cells[row * 3 + col] = Rect::new(cx, cy, cx + cell, cy + cell);
         }
     }
 
-    let ry = y0 + FIELD_H * 2.0 + GAP + 14.0;
-    let half = ((x1 - x0) - GAP).max(40.0) / 2.0;
-    let rotation = Rect::new(x0, ry, x0 + half, ry + FIELD_H);
-    let shear = Rect::new(x0 + half + GAP, ry, x1, ry + FIELD_H);
+    let ry = y0 + metric_field_h() * 2.0 + metric_gap() + ui_px(14.0);
+    let half = ((x1 - x0) - metric_gap()).max(ui_px(40.0)) / 2.0;
+    let rotation = Rect::new(x0, ry, x0 + half, ry + metric_field_h());
+    let shear = Rect::new(x0 + half + metric_gap(), ry, x1, ry + metric_field_h());
 
     L {
         locator,
@@ -98,12 +100,12 @@ fn layout(body: Rect) -> L {
         link,
         rotation,
         shear,
-        bottom: ry + FIELD_H + PAD,
+        bottom: ry + metric_field_h() + metric_pad(),
     }
 }
 
 pub fn natural_height() -> f64 {
-    layout(Rect::new(0.0, 0.0, 240.0, 400.0)).bottom
+    layout(Rect::new(0.0, 0.0, ui_px(240.0), ui_px(400.0))).bottom
 }
 
 fn readout(ctx: &Ctx) -> Option<TransformValues> {
@@ -191,14 +193,14 @@ fn paint_locator(scene: &mut Scene, l: &L, ctx: &Ctx) {
             } else {
                 th.border
             };
-            scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(1.5));
+            scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(ui_px(1.5)));
             if !on {
                 scene.fill(
                     Fill::NonZero,
                     ID,
                     th.panel_bg,
                     None,
-                    &r.inset(1.5).to_rounded_rect(1.0),
+                    &r.inset(ui_px(1.5)).to_rounded_rect(ui_px(1.0)),
                 );
             }
         }
@@ -206,7 +208,7 @@ fn paint_locator(scene: &mut Scene, l: &L, ctx: &Ctx) {
 }
 
 fn paint_link(scene: &mut Scene, r: Rect, on: bool, th: &crate::theme::Theme, pointer: Point) {
-    let rr = r.to_rounded_rect(4.0);
+    let rr = r.to_rounded_rect(ui_px(4.0));
     let hot = r.contains(pointer);
     let bg = if on {
         th.accent.with_alpha(0.22)
@@ -216,14 +218,14 @@ fn paint_link(scene: &mut Scene, r: Rect, on: bool, th: &crate::theme::Theme, po
         th.bg
     };
     scene.fill(Fill::NonZero, ID, bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
     let c = r.center();
     let col = if on { th.accent } else { th.text_dim };
     // Two overlapping rings — a chain link.
-    let a = Rect::from_center_size(Point::new(c.x, c.y - 5.0), (9.0, 11.0));
-    let b = Rect::from_center_size(Point::new(c.x, c.y + 5.0), (9.0, 11.0));
-    scene.stroke(&Stroke::new(1.6), ID, col, None, &a.to_rounded_rect(3.0));
-    scene.stroke(&Stroke::new(1.6), ID, col, None, &b.to_rounded_rect(3.0));
+    let a = Rect::from_center_size(Point::new(c.x, c.y - ui_px(5.0)), (ui_px(9.0), ui_px(11.0)));
+    let b = Rect::from_center_size(Point::new(c.x, c.y + ui_px(5.0)), (ui_px(9.0), ui_px(11.0)));
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, col, None, &a.to_rounded_rect(ui_px(3.0)));
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, col, None, &b.to_rounded_rect(ui_px(3.0)));
 }
 
 fn labeled_field(
@@ -236,14 +238,14 @@ fn labeled_field(
     enabled: bool,
     pointer: Point,
 ) {
-    let lw = text.measure(label, 11.0) + 4.0;
+    let lw = text.measure(label, 11.0) + ui_px(4.0);
     text.draw(
         scene,
         label,
         11.0,
         th.text_dim,
         r.x0,
-        r.center().y + 4.0,
+        r.center().y + ui_px(4.0),
     );
     let box_ = Rect::new(r.x0 + lw, r.y0, r.x1, r.y1);
     field_box(scene, text, th, box_, value, enabled, pointer);
@@ -259,10 +261,10 @@ fn icon_field(
     enabled: bool,
     pointer: Point,
 ) {
-    icon(scene, Point::new(r.x0 + 8.0, r.center().y), th.text_dim);
-    let box_ = Rect::new(r.x0 + 18.0, r.y0, r.x1, r.y1);
+    icon(scene, Point::new(r.x0 + ui_px(8.0), r.center().y), th.text_dim);
+    let box_ = Rect::new(r.x0 + ui_px(18.0), r.y0, r.x1, r.y1);
     field_box(scene, text, th, box_, value, enabled, pointer);
-    caret_down(scene, Point::new(box_.x1 - 10.0, box_.center().y), th.text_dim);
+    caret_down(scene, Point::new(box_.x1 - ui_px(10.0), box_.center().y), th.text_dim);
 }
 
 fn field_box(
@@ -274,46 +276,46 @@ fn field_box(
     enabled: bool,
     pointer: Point,
 ) {
-    let rr = r.to_rounded_rect(3.0);
+    let rr = r.to_rounded_rect(ui_px(3.0));
     let hot = r.contains(pointer);
     let bg = if hot && enabled { th.strip_bg } else { th.bg };
     scene.fill(Fill::NonZero, ID, bg, None, &rr);
-    scene.stroke(&Stroke::new(1.0), ID, th.border, None, &rr);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &rr);
     let col = if enabled { th.text } else { th.text_dim };
     text.draw(
         scene,
         value,
         11.5,
         col,
-        r.x0 + 6.0,
-        r.center().y + 4.0,
+        r.x0 + ui_px(6.0),
+        r.center().y + ui_px(4.0),
     );
 }
 
 fn rot_icon(scene: &mut Scene, c: Point, color: Color) {
     let mut p = BezPath::new();
-    p.move_to((c.x - 5.0, c.y + 4.0));
-    p.line_to((c.x + 5.0, c.y + 4.0));
-    p.line_to((c.x, c.y - 5.0));
+    p.move_to((c.x - ui_px(5.0), c.y + ui_px(4.0)));
+    p.line_to((c.x + ui_px(5.0), c.y + ui_px(4.0)));
+    p.line_to((c.x, c.y - ui_px(5.0)));
     p.close_path();
-    scene.stroke(&Stroke::new(1.2), ID, color, None, &p);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &p);
 }
 
 fn shear_icon(scene: &mut Scene, c: Point, color: Color) {
     let mut p = BezPath::new();
-    p.move_to((c.x - 4.0, c.y + 5.0));
-    p.line_to((c.x + 2.0, c.y + 5.0));
-    p.line_to((c.x + 6.0, c.y - 5.0));
-    p.line_to((c.x, c.y - 5.0));
+    p.move_to((c.x - ui_px(4.0), c.y + ui_px(5.0)));
+    p.line_to((c.x + ui_px(2.0), c.y + ui_px(5.0)));
+    p.line_to((c.x + ui_px(6.0), c.y - ui_px(5.0)));
+    p.line_to((c.x, c.y - ui_px(5.0)));
     p.close_path();
-    scene.stroke(&Stroke::new(1.2), ID, color, None, &p);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &p);
 }
 
 fn caret_down(scene: &mut Scene, c: Point, color: Color) {
     let mut p = BezPath::new();
-    p.move_to((c.x - 3.0, c.y - 1.5));
-    p.line_to((c.x + 3.0, c.y - 1.5));
-    p.line_to((c.x, c.y + 2.0));
+    p.move_to((c.x - ui_px(3.0), c.y - 1.5));
+    p.line_to((c.x + ui_px(3.0), c.y - 1.5));
+    p.line_to((c.x, c.y + ui_px(2.0)));
     p.close_path();
     scene.fill(Fill::NonZero, ID, color, None, &p);
 }

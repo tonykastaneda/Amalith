@@ -144,7 +144,7 @@ impl App {
                         .execute(Command::EditGradient { id, gradient: g });
                 }
             }
-            self.ensure_panel("gradient");
+            self.ensure_panel(PanelKind::Gradient);
             self.request_main_redraw();
             return;
         }
@@ -165,7 +165,7 @@ impl App {
             self.gradient_slot = slot;
             self.gradient_stop = 0;
         }
-        self.ensure_panel("gradient");
+        self.ensure_panel(PanelKind::Gradient);
         self.request_main_redraw();
     }
 
@@ -197,11 +197,11 @@ impl App {
     }
 
     /// Show a Window-menu panel docked in the right rail if it isn't visible.
-    pub(in crate::app) fn ensure_panel(&mut self, id: &str) {
-        let pid = match WINDOW_PANELS.iter().find(|(p, _)| *p == id) {
-            Some((p, _)) => PanelId(*p),
-            None => return,
-        };
+    pub(in crate::app) fn ensure_panel(&mut self, id: PanelKind) {
+        if !WINDOW_PANELS.contains(&id) {
+            return;
+        }
+        let pid = PanelId(id);
         if self.dock.contains(pid) {
             return;
         }
@@ -252,7 +252,7 @@ impl App {
             Some(_) => {}
             None => self.apply_gradient_kind(kind),
         }
-        self.ensure_panel("gradient");
+        self.ensure_panel(PanelKind::Gradient);
         self.request_main_redraw();
     }
 
@@ -371,8 +371,8 @@ impl App {
         let c = g.stops[sel].color;
         let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let origin = Point::new(
-            ((w - picker::W) * 0.5).max(4.0),
-            ((h - picker::H) * 0.5).max(4.0),
+            ((w - picker::metric_w()) * 0.5).max(4.0),
+            ((h - picker::metric_h()) * 0.5).max(4.0),
         );
         self.picker_gradient_stop = Some(sel);
         self.picker = Some(picker::Picker::from_color(
@@ -671,7 +671,7 @@ impl App {
         self.gradient_slot = self.active_slot;
         self.gradient_stop = 0;
         self.doc.selection = vec![id];
-        self.ensure_panel("gradient");
+        self.ensure_panel(PanelKind::Gradient);
         self.drag = Drag::GradientAxis {
             object: id,
             start_doc: dp,
@@ -690,7 +690,7 @@ impl App {
             if let AnnotHit::Stop(_, i) = hit {
                 self.gradient_stop = i;
                 if double {
-                    self.ensure_panel("gradient");
+                    self.ensure_panel(PanelKind::Gradient);
                     self.gradient_stop_picker();
                     return;
                 }
@@ -698,7 +698,7 @@ impl App {
             if let AnnotHit::Point(_, i) = hit {
                 self.gradient_point = i;
                 if double {
-                    self.ensure_panel("gradient");
+                    self.ensure_panel(PanelKind::Gradient);
                     self.gradient_point_picker(i);
                     return;
                 }
@@ -748,7 +748,7 @@ impl App {
                     };
                 }
             }
-            self.ensure_panel("gradient");
+            self.ensure_panel(PanelKind::Gradient);
             self.request_main_redraw();
             return;
         }
@@ -764,7 +764,7 @@ impl App {
                     object: obj,
                     index,
                 };
-                self.ensure_panel("gradient");
+                self.ensure_panel(PanelKind::Gradient);
                 self.request_main_redraw();
                 return;
             }
@@ -778,7 +778,7 @@ impl App {
                     object: id,
                     index: self.gradient_stop,
                 };
-                self.ensure_panel("gradient");
+                self.ensure_panel(PanelKind::Gradient);
                 self.request_main_redraw();
                 return;
             }
@@ -1106,8 +1106,8 @@ impl App {
         let c = p.color;
         let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let origin = Point::new(
-            ((w - picker::W) * 0.5).max(4.0),
-            ((h - picker::H) * 0.5).max(4.0),
+            ((w - picker::metric_w()) * 0.5).max(4.0),
+            ((h - picker::metric_h()) * 0.5).max(4.0),
         );
         self.picker_gradient_point = Some(index);
         self.picker = Some(picker::Picker::from_color(self.active_slot, origin, Some(c)));

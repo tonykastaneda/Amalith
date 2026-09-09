@@ -51,7 +51,10 @@ impl Layout {
         window_size: Option<(f32, f32)>,
     ) -> Self {
         Self {
-            masters: dock.masters.iter().filter(|m| m.dock.is_some()).cloned().collect(),
+            masters: dock.masters.iter().filter(|m| m.dock.is_some()).cloned().map(|mut m| {
+                m.rescale(crate::metrics::with(|metrics| 1.0 / metrics.ui_scale) as f32);
+                m
+            }).collect(),
             rulers,
             guides_hidden,
             guides_locked,
@@ -66,7 +69,10 @@ impl Layout {
     pub fn apply_to(&self, dock: &mut DockModel) {
         if !self.masters.is_empty() {
             dock.masters.retain(|m| m.dock.is_none());
-            dock.masters.extend(self.masters.iter().cloned());
+            dock.masters.extend(self.masters.iter().cloned().map(|mut m| {
+                m.rescale(crate::metrics::with(|metrics| metrics.ui_scale) as f32);
+                m
+            }));
         }
     }
 }

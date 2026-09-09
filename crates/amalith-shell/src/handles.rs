@@ -78,11 +78,15 @@ fn point_in_convex_quad(p: Point, quad: [Point; 4]) -> bool {
 }
 
 /// Which handle `p` (screen px) is over, given the selection quad in
-/// screen px. 14px grab square, matching amalith-app.
+/// screen px. 14px grab square, matching amalith-app — scaled by the
+/// Selection & Anchor Display size preference ([`crate::handle_scale`]),
+/// kept in step with the drawn handle so clicking always matches what's
+/// on screen.
 pub fn hit_handle(p: Point, quad_screen: [Point; 4]) -> Option<Handle> {
+    let r = 7.0 * crate::handle_scale::multiplier();
     Handle::ALL
         .into_iter()
-        .find(|&h| (p - handle_pos(quad_screen, h)).hypot() <= 7.0)
+        .find(|&h| (p - handle_pos(quad_screen, h)).hypot() <= r)
 }
 
 /// Is `p` (screen px) in the rotation halo just outside a handle?
@@ -107,7 +111,8 @@ pub fn rotate_halo_handle(p: Point, quad_screen: [Point; 4]) -> Option<usize> {
         }
         let offset = p - anchor;
         let dist = offset.hypot();
-        offset.dot(outward / len) > 0.0 && (8.0..=32.0).contains(&dist)
+        let m = crate::handle_scale::multiplier();
+        offset.dot(outward / len) > 0.0 && (8.0 * m..=32.0 * m).contains(&dist)
     })
 }
 

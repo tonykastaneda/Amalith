@@ -23,8 +23,8 @@ use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
 /// Scrollbar gutter width and minimum thumb length, px.
-const BAR_W: f64 = 4.0;
-const MIN_THUMB: f64 = 24.0;
+fn metric_bar_w() -> f64 { crate::metrics::with(|m| m.scroll_view_bar_w) }
+fn metric_min_thumb() -> f64 { crate::metrics::with(|m| m.scroll_view_min_thumb) }
 /// How far past the visible bar a press still counts as grabbing it.
 const GRAB_SLOP: f64 = 6.0;
 
@@ -64,15 +64,15 @@ impl ScrollView {
         let max = self.max();
         if max > 0.0 {
             let vh = view.height();
-            let th = (vh * (vh / content_h)).clamp(MIN_THUMB, vh);
+            let th = (vh * (vh / content_h)).clamp(metric_min_thumb(), vh);
             let ty = view.y0 + (vh - th) * (self.off / max);
-            let bar = Rect::new(view.x1 - BAR_W - 1.0, ty, view.x1 - 1.0, ty + th);
+            let bar = Rect::new(view.x1 - metric_bar_w() - 1.0, ty, view.x1 - 1.0, ty + th);
             let col = if self.drag.is_some() {
                 theme.text_dim
             } else {
                 Color::from_rgba8(0x9a, 0x9a, 0x9a, 0x88)
             };
-            scene.fill(Fill::NonZero, ID, col, None, &bar.to_rounded_rect(BAR_W * 0.5));
+            scene.fill(Fill::NonZero, ID, col, None, &bar.to_rounded_rect(metric_bar_w() * 0.5));
             self.thumb = Some(bar);
         }
 
@@ -109,7 +109,7 @@ impl ScrollView {
             return true;
         }
         // A click in the gutter above / below the thumb pages toward it.
-        let gutter = Rect::new(self.view.x1 - BAR_W - GRAB_SLOP, self.view.y0, self.view.x1, self.view.y1);
+        let gutter = Rect::new(self.view.x1 - metric_bar_w() - GRAB_SLOP, self.view.y0, self.view.x1, self.view.y1);
         if gutter.contains(p) {
             let page = self.range.1 * 0.9 * if p.y < thumb.y0 { -1.0 } else { 1.0 };
             self.off = (self.off + page).clamp(0.0, self.max());
@@ -124,7 +124,7 @@ impl ScrollView {
             return false;
         };
         let vh = self.range.1;
-        let th = (vh * (vh / self.range.0)).clamp(MIN_THUMB, vh);
+        let th = (vh * (vh / self.range.0)).clamp(metric_min_thumb(), vh);
         let travel = (vh - th).max(1.0);
         self.off = (off0 + (p.y - y0) / travel * self.max()).clamp(0.0, self.max());
         true

@@ -131,7 +131,7 @@ pub fn build(
             majors.move_to((sx, top.y1 - THICK * 0.6));
             majors.line_to((sx, top.y1));
             let v = i as f64 * minor_u;
-            text.draw(scene, &label(v), LABEL_SIZE, major_ink, sx + 3.0, top.y0 + 11.0);
+            text.draw_fixed(scene, &label(v), LABEL_SIZE, major_ink, sx + 3.0, top.y0 + 11.0);
         } else {
             minors.move_to((sx, top.y1 - THICK * 0.3));
             minors.line_to((sx, top.y1));
@@ -153,7 +153,7 @@ pub fn build(
             majors.move_to((left.x1 - THICK * 0.6, sy));
             majors.line_to((left.x1, sy));
             let v = i as f64 * minor_u;
-            text.draw_column(
+            text.draw_column_fixed(
                 scene,
                 &label(v),
                 LABEL_SIZE,

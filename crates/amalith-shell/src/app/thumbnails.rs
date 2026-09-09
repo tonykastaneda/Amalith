@@ -76,8 +76,16 @@ impl App {
         // No image cache — a recent file's linked/embedded raster assets
         // aren't decoded for this, so they render blank. Acceptable for a
         // thumbnail this small; the vector content still comes through.
-        let scene =
-            canvas::export_scene(&doc, src, scale, bg, &HashMap::new(), false, &mut self.text);
+        let scene = canvas::export_scene(
+            &doc,
+            src,
+            scale,
+            bg,
+            &HashMap::new(),
+            false,
+            &mut self.text,
+            self.theme.accent,
+        );
         let rgba = self.render_scene_to_rgba(&scene, w, h)?;
 
         if let Some(parent) = cache_path.parent() {

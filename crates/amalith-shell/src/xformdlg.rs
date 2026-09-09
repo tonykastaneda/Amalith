@@ -10,6 +10,8 @@
 //! pivot instead, would reuse the same `amalith_core::xform::reflect_about`
 //! / `shear_about` math — only where the pivot comes from differs.)
 
+use crate::metrics::px as ui_px;
+
 use amalith_core::xform::{reflect_about, shear_about};
 use amalith_core::ObjectId;
 use vello::kurbo::{Affine, Circle, Line, Point, Rect, Shape, Stroke, Vec2};
@@ -21,28 +23,27 @@ use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
 
-pub const W: f64 = 320.0;
+pub fn metric_w() -> f64 { crate::metrics::with(|m| m.xformdlg_w) }
 
-const PAD: f64 = 20.0;
-const ROW_H: f64 = 30.0;
-const RADIO_R: f64 = 6.0;
-const DIAL_R: f64 = 12.0;
-const FIELD_W: f64 = 56.0;
-const FIELD_H: f64 = 22.0;
+fn metric_pad() -> f64 { crate::metrics::with(|m| m.xformdlg_pad) }
+fn metric_row_h() -> f64 { crate::metrics::with(|m| m.xformdlg_row_h) }
+fn metric_radio_r() -> f64 { crate::metrics::with(|m| m.xformdlg_radio_r) }
+fn metric_dial_r() -> f64 { crate::metrics::with(|m| m.xformdlg_dial_r) }
+fn metric_field_w() -> f64 { crate::metrics::with(|m| m.xformdlg_field_w) }
+fn metric_field_h() -> f64 { crate::metrics::with(|m| m.xformdlg_field_h) }
 /// Left column each row's label sits in, before the dial — wide enough
 /// for "Horizontal" (the widest Axis-row label). The standalone Shear
 /// Angle row uses its own, wider column ([`SHEAR_LABEL_W`]).
-const LABEL_W: f64 = 76.0;
 /// Left column for the Shear Angle row's own (longer, unindented) label.
-const SHEAR_LABEL_W: f64 = 96.0;
-const BOX_TOP_GAP: f64 = 16.0;
-const BOX_BOTTOM_PAD: f64 = 14.0;
-const SECTION_GAP: f64 = 18.0;
-const BTN_H: f64 = 30.0;
-const BTN_W: f64 = 80.0;
-const BTN_GAP: f64 = 12.0;
-const BOT_PAD: f64 = 18.0;
-const CHECK_S: f64 = 15.0;
+fn metric_shear_label_w() -> f64 { crate::metrics::with(|m| m.xformdlg_shear_label_w) }
+fn metric_box_top_gap() -> f64 { crate::metrics::with(|m| m.xformdlg_box_top_gap) }
+fn metric_box_bottom_pad() -> f64 { crate::metrics::with(|m| m.xformdlg_box_bottom_pad) }
+fn metric_section_gap() -> f64 { crate::metrics::with(|m| m.xformdlg_section_gap) }
+fn metric_btn_h() -> f64 { crate::metrics::with(|m| m.xformdlg_btn_h) }
+fn metric_btn_w() -> f64 { crate::metrics::with(|m| m.xformdlg_btn_w) }
+fn metric_btn_gap() -> f64 { crate::metrics::with(|m| m.xformdlg_btn_gap) }
+fn metric_bot_pad() -> f64 { crate::metrics::with(|m| m.xformdlg_bot_pad) }
+fn metric_check_s() -> f64 { crate::metrics::with(|m| m.xformdlg_check_s) }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Axis {
@@ -357,32 +358,32 @@ struct Layout {
 }
 
 fn layout(kind: Kind, body: Rect) -> Layout {
-    let mut y = body.y0 + PAD;
+    let mut y = body.y0 + metric_pad();
     let x0 = body.x0;
     let x1 = body.x1;
     let shear_row = if kind == Kind::Shear {
-        let r = Rect::new(x0 + PAD, y, x1 - PAD, y + ROW_H);
-        y += ROW_H + SECTION_GAP;
+        let r = Rect::new(x0 + metric_pad(), y, x1 - metric_pad(), y + metric_row_h());
+        y += metric_row_h() + metric_section_gap();
         Some(r)
     } else {
         None
     };
     let box_top = y;
-    y += BOX_TOP_GAP;
-    let horizontal_row = Rect::new(x0 + PAD * 1.4, y, x1 - PAD, y + ROW_H);
-    y += ROW_H;
-    let vertical_row = Rect::new(x0 + PAD * 1.4, y, x1 - PAD, y + ROW_H);
-    y += ROW_H;
-    let angle_row = Rect::new(x0 + PAD * 1.4, y, x1 - PAD, y + ROW_H);
-    y += ROW_H + BOX_BOTTOM_PAD;
-    let axis_box = Rect::new(x0 + PAD * 0.6, box_top, x1 - PAD * 0.6, y);
-    y += SECTION_GAP * 0.5;
-    let preview_row = Rect::new(x0 + PAD, y, x1 - PAD, y + CHECK_S.max(16.0));
-    y += preview_row.height() + SECTION_GAP;
+    y += metric_box_top_gap();
+    let horizontal_row = Rect::new(x0 + metric_pad() * 1.4, y, x1 - metric_pad(), y + metric_row_h());
+    y += metric_row_h();
+    let vertical_row = Rect::new(x0 + metric_pad() * 1.4, y, x1 - metric_pad(), y + metric_row_h());
+    y += metric_row_h();
+    let angle_row = Rect::new(x0 + metric_pad() * 1.4, y, x1 - metric_pad(), y + metric_row_h());
+    y += metric_row_h() + metric_box_bottom_pad();
+    let axis_box = Rect::new(x0 + metric_pad() * 0.6, box_top, x1 - metric_pad() * 0.6, y);
+    y += metric_section_gap() * 0.5;
+    let preview_row = Rect::new(x0 + metric_pad(), y, x1 - metric_pad(), y + metric_check_s().max(ui_px(16.0)));
+    y += preview_row.height() + metric_section_gap();
 
-    let ok = Rect::new(x1 - PAD - BTN_W, y, x1 - PAD, y + BTN_H);
-    let cancel = Rect::new(ok.x0 - BTN_GAP - BTN_W, ok.y0, ok.x0 - BTN_GAP, ok.y1);
-    let copy = Rect::new(cancel.x0 - BTN_GAP - BTN_W, cancel.y0, cancel.x0 - BTN_GAP, cancel.y1);
+    let ok = Rect::new(x1 - metric_pad() - metric_btn_w(), y, x1 - metric_pad(), y + metric_btn_h());
+    let cancel = Rect::new(ok.x0 - metric_btn_gap() - metric_btn_w(), ok.y0, ok.x0 - metric_btn_gap(), ok.y1);
+    let copy = Rect::new(cancel.x0 - metric_btn_gap() - metric_btn_w(), cancel.y0, cancel.x0 - metric_btn_gap(), cancel.y1);
 
     Layout {
         shear_row,
@@ -399,12 +400,12 @@ fn layout(kind: Kind, body: Rect) -> Layout {
 
 /// Full body height this dialog needs (its width is fixed at [`W`]).
 pub fn body_height(kind: Kind) -> f64 {
-    let l = layout(kind, Rect::new(0.0, 0.0, W, 0.0));
-    l.ok.y1 + BOT_PAD
+    let l = layout(kind, Rect::new(0.0, 0.0, metric_w(), 0.0));
+    l.ok.y1 + metric_bot_pad()
 }
 
 /// The Axis rows' own label column: past the radio + its gap to the label.
-const AXIS_LABEL_COL: f64 = RADIO_R * 2.0 + 12.0 + LABEL_W;
+fn metric_axis_label_col() -> f64 { crate::metrics::with(|m| m.xformdlg_axis_label_col) }
 
 /// Dial centre, `label_col` past `row.x0` — the Shear Angle row (no radio)
 /// passes [`SHEAR_LABEL_W`]; the Axis box's Angle row passes
@@ -412,17 +413,17 @@ const AXIS_LABEL_COL: f64 = RADIO_R * 2.0 + 12.0 + LABEL_W;
 /// (rather than a fixed offset) is what stops the dial from landing on
 /// top of whichever label happens to be longest.
 fn dial_center_at(row: Rect, label_col: f64) -> Point {
-    Point::new(row.x0 + label_col + DIAL_R, row.center().y)
+    Point::new(row.x0 + label_col + metric_dial_r(), row.center().y)
 }
 fn field_rect_at(row: Rect, label_col: f64) -> Rect {
-    let x0 = row.x0 + label_col + DIAL_R * 2.0 + 12.0;
-    Rect::new(x0, row.center().y - FIELD_H * 0.5, x0 + FIELD_W, row.center().y + FIELD_H * 0.5)
+    let x0 = row.x0 + label_col + metric_dial_r() * 2.0 + ui_px(12.0);
+    Rect::new(x0, row.center().y - metric_field_h() * 0.5, x0 + metric_field_w(), row.center().y + metric_field_h() * 0.5)
 }
 fn radio_center(row: Rect) -> Point {
-    Point::new(row.x0 + RADIO_R, row.center().y)
+    Point::new(row.x0 + metric_radio_r(), row.center().y)
 }
 fn preview_check_rect(row: Rect) -> Rect {
-    Rect::new(row.x0, row.center().y - CHECK_S * 0.5, row.x0 + CHECK_S, row.center().y + CHECK_S * 0.5)
+    Rect::new(row.x0, row.center().y - metric_check_s() * 0.5, row.x0 + metric_check_s(), row.center().y + metric_check_s() * 0.5)
 }
 
 /// Resolve a press at `local` (same coordinate space as `body`) into a
@@ -442,11 +443,11 @@ pub fn hit(dlg: &TransformDialog, body: Rect, local: Point) -> Hit {
         return Hit::TogglePreview;
     }
     if let Some(row) = l.shear_row {
-        let c = dial_center_at(row, SHEAR_LABEL_W);
-        if Circle::new(c, DIAL_R + 3.0).contains(local) {
+        let c = dial_center_at(row, metric_shear_label_w());
+        if Circle::new(c, metric_dial_r() + 3.0).contains(local) {
             return Hit::Dial(DialField::Shear, angle_at(c, local), c);
         }
-        if field_rect_at(row, SHEAR_LABEL_W).contains(local) {
+        if field_rect_at(row, metric_shear_label_w()).contains(local) {
             return Hit::FocusField(Focus::ShearAngle);
         }
     }
@@ -455,15 +456,15 @@ pub fn hit(dlg: &TransformDialog, body: Rect, local: Point) -> Hit {
         (l.vertical_row, Axis::Vertical),
         (l.angle_row, Axis::Angle),
     ] {
-        if Circle::new(radio_center(row), RADIO_R + 4.0).contains(local) {
+        if Circle::new(radio_center(row), metric_radio_r() + 4.0).contains(local) {
             return Hit::SelectAxis(axis);
         }
     }
-    let ac = dial_center_at(l.angle_row, AXIS_LABEL_COL);
-    if Circle::new(ac, DIAL_R + 3.0).contains(local) {
+    let ac = dial_center_at(l.angle_row, metric_axis_label_col());
+    if Circle::new(ac, metric_dial_r() + 3.0).contains(local) {
         return Hit::Dial(DialField::Axis, angle_at(ac, local), ac);
     }
-    if field_rect_at(l.angle_row, AXIS_LABEL_COL).contains(local) {
+    if field_rect_at(l.angle_row, metric_axis_label_col()).contains(local) {
         return Hit::FocusField(Focus::AxisAngle);
     }
     Hit::None
@@ -476,13 +477,13 @@ pub fn paint(scene: &mut Scene, dlg: &TransformDialog, body: Rect, theme: &Theme
     let l = layout(dlg.kind, body);
 
     if let Some(row) = l.shear_row {
-        text.draw(scene, "Shear Angle:", 12.5, theme.text, row.x0, row.center().y + 4.5);
-        draw_dial(scene, dial_center_at(row, SHEAR_LABEL_W), theme, dlg.shear_deg(), false);
+        text.draw(scene, "Shear Angle:", 12.5, theme.text, row.x0, row.center().y + ui_px(4.5));
+        draw_dial(scene, dial_center_at(row, metric_shear_label_w()), theme, dlg.shear_deg(), false);
         draw_field(
             scene,
             text,
             theme,
-            field_rect_at(row, SHEAR_LABEL_W),
+            field_rect_at(row, metric_shear_label_w()),
             &dlg.shear_buf,
             dlg.focus == Focus::ShearAngle,
             dlg.fresh,
@@ -490,16 +491,16 @@ pub fn paint(scene: &mut Scene, dlg: &TransformDialog, body: Rect, theme: &Theme
         );
     }
 
-    scene.stroke(&Stroke::new(1.0), ID, theme.border, None, &l.axis_box.to_rounded_rect(4.0));
-    let label_w = text.measure("Axis", 11.0) + 8.0;
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &l.axis_box.to_rounded_rect(ui_px(4.0)));
+    let label_w = text.measure("Axis", 11.0) + ui_px(8.0);
     scene.fill(
         Fill::NonZero,
         ID,
         theme.panel_bg,
         None,
-        &Rect::new(l.axis_box.x0 + 8.0, l.axis_box.y0 - 6.0, l.axis_box.x0 + 8.0 + label_w, l.axis_box.y0 + 6.0),
+        &Rect::new(l.axis_box.x0 + ui_px(8.0), l.axis_box.y0 - ui_px(6.0), l.axis_box.x0 + ui_px(8.0) + label_w, l.axis_box.y0 + ui_px(6.0)),
     );
-    text.draw(scene, "Axis", 11.0, theme.text_dim, l.axis_box.x0 + 12.0, l.axis_box.y0 + 4.0);
+    text.draw(scene, "Axis", 11.0, theme.text_dim, l.axis_box.x0 + ui_px(12.0), l.axis_box.y0 + ui_px(4.0));
 
     for (row, axis, glyph) in [
         (l.horizontal_row, Axis::Horizontal, dlg.kind == Kind::Reflect),
@@ -512,30 +513,30 @@ pub fn paint(scene: &mut Scene, dlg: &TransformDialog, body: Rect, theme: &Theme
             Axis::Vertical => "Vertical",
             Axis::Angle => "Angle:",
         };
-        text.draw(scene, label, 12.5, theme.text, row.x0 + RADIO_R * 2.0 + 10.0, row.center().y + 4.5);
+        text.draw(scene, label, 12.5, theme.text, row.x0 + metric_radio_r() * 2.0 + ui_px(10.0), row.center().y + ui_px(4.5));
         if axis == Axis::Angle {
-            draw_dial(scene, dial_center_at(row, AXIS_LABEL_COL), theme, dlg.axis_deg(), dlg.axis == Axis::Angle);
+            draw_dial(scene, dial_center_at(row, metric_axis_label_col()), theme, dlg.axis_deg(), dlg.axis == Axis::Angle);
             draw_field(
                 scene,
                 text,
                 theme,
-                field_rect_at(row, AXIS_LABEL_COL),
+                field_rect_at(row, metric_axis_label_col()),
                 &dlg.axis_buf,
                 dlg.focus == Focus::AxisAngle,
                 dlg.fresh,
                 caret_on,
             );
         } else if glyph {
-            draw_reflect_glyph(scene, dial_center_at(row, AXIS_LABEL_COL), theme, axis == Axis::Vertical);
+            draw_reflect_glyph(scene, dial_center_at(row, metric_axis_label_col()), theme, axis == Axis::Vertical);
         }
     }
 
     let cb = preview_check_rect(l.preview_row);
-    scene.stroke(&Stroke::new(1.0), ID, theme.text_dim.with_alpha(0.6), None, &cb);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim.with_alpha(0.6), None, &cb);
     if dlg.preview {
-        scene.fill(Fill::NonZero, ID, theme.accent, None, &cb.inset(-2.0));
+        scene.fill(Fill::NonZero, ID, theme.accent, None, &cb.inset(ui_px(-ui_px(2.0))));
     }
-    text.draw(scene, "Preview", 12.5, theme.text, cb.x1 + 8.0, cb.y0 + cb.height() * 0.5 + 4.5);
+    text.draw(scene, "Preview", 12.5, theme.text, cb.x1 + ui_px(8.0), cb.y0 + cb.height() * 0.5 + ui_px(4.5));
 
     crate::widgets::button(scene, text, theme, l.copy, "Copy", false);
     crate::widgets::button(scene, text, theme, l.cancel, "Cancel", false);
@@ -543,20 +544,20 @@ pub fn paint(scene: &mut Scene, dlg: &TransformDialog, body: Rect, theme: &Theme
 }
 
 fn draw_radio(scene: &mut Scene, c: Point, theme: &Theme, selected: bool) {
-    let ring = Circle::new(c, RADIO_R);
-    scene.stroke(&Stroke::new(1.3), ID, theme.text_dim, None, &ring);
+    let ring = Circle::new(c, metric_radio_r());
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, theme.text_dim, None, &ring);
     if selected {
-        scene.fill(Fill::NonZero, ID, theme.accent, None, &Circle::new(c, RADIO_R * 0.5));
+        scene.fill(Fill::NonZero, ID, theme.accent, None, &Circle::new(c, metric_radio_r() * 0.5));
     }
 }
 
 fn draw_dial(scene: &mut Scene, c: Point, theme: &Theme, angle_deg: f64, active: bool) {
-    let ring = Circle::new(c, DIAL_R);
+    let ring = Circle::new(c, metric_dial_r());
     let color = if active { theme.accent } else { theme.text_dim };
-    scene.stroke(&Stroke::new(1.3), ID, color, None, &ring);
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &ring);
     let r = angle_deg.to_radians();
-    let d = Vec2::new(r.cos(), -r.sin()) * (DIAL_R - 2.0);
-    scene.stroke(&Stroke::new(1.4), ID, color, None, &Line::new(c - d, c + d));
+    let d = Vec2::new(r.cos(), -r.sin()) * (metric_dial_r() - ui_px(2.0));
+    scene.stroke(&Stroke::new(ui_px(1.4)), ID, color, None, &Line::new(c - d, c + d));
 }
 
 /// The small mirrored-triangles glyph beside Reflect's Horizontal/Vertical
@@ -565,22 +566,22 @@ fn draw_reflect_glyph(scene: &mut Scene, c: Point, theme: &Theme, vertical: bool
     use vello::kurbo::BezPath;
     let mut p = BezPath::new();
     if vertical {
-        p.move_to(c + Vec2::new(-9.0, -6.0));
-        p.line_to(c + Vec2::new(-3.0, 0.0));
-        p.line_to(c + Vec2::new(-9.0, 6.0));
+        p.move_to(c + Vec2::new(ui_px(-ui_px(9.0)), ui_px(-ui_px(6.0))));
+        p.line_to(c + Vec2::new(ui_px(-ui_px(3.0)), 0.0));
+        p.line_to(c + Vec2::new(ui_px(-ui_px(9.0)), ui_px(6.0)));
         p.close_path();
-        p.move_to(c + Vec2::new(9.0, -6.0));
-        p.line_to(c + Vec2::new(3.0, 0.0));
-        p.line_to(c + Vec2::new(9.0, 6.0));
+        p.move_to(c + Vec2::new(ui_px(9.0), ui_px(-ui_px(6.0))));
+        p.line_to(c + Vec2::new(ui_px(3.0), 0.0));
+        p.line_to(c + Vec2::new(ui_px(9.0), ui_px(6.0)));
         p.close_path();
     } else {
-        p.move_to(c + Vec2::new(-6.0, -9.0));
-        p.line_to(c + Vec2::new(0.0, -3.0));
-        p.line_to(c + Vec2::new(6.0, -9.0));
+        p.move_to(c + Vec2::new(ui_px(-ui_px(6.0)), ui_px(-ui_px(9.0))));
+        p.line_to(c + Vec2::new(0.0, ui_px(-ui_px(3.0))));
+        p.line_to(c + Vec2::new(ui_px(6.0), ui_px(-ui_px(9.0))));
         p.close_path();
-        p.move_to(c + Vec2::new(-6.0, 9.0));
-        p.line_to(c + Vec2::new(0.0, 3.0));
-        p.line_to(c + Vec2::new(6.0, 9.0));
+        p.move_to(c + Vec2::new(ui_px(-ui_px(6.0)), ui_px(9.0)));
+        p.line_to(c + Vec2::new(0.0, ui_px(3.0)));
+        p.line_to(c + Vec2::new(ui_px(6.0), ui_px(9.0)));
         p.close_path();
     }
     scene.fill(Fill::NonZero, ID, theme.text_dim, None, &p);
@@ -612,14 +613,14 @@ fn draw_field(
             ID,
             theme.accent,
             None,
-            &Rect::new(r.x0 + 5.0, r.y0 + 3.0, r.x0 + 7.0 + label_w + 2.0, r.y1 - 3.0),
+            &Rect::new(r.x0 + ui_px(5.0), r.y0 + ui_px(3.0), r.x0 + ui_px(7.0) + label_w + ui_px(2.0), r.y1 - ui_px(3.0)),
         );
     }
     let ink = if focused && selected { theme.on_accent } else { theme.text };
-    text.draw(scene, &label, 12.5, ink, r.x0 + 7.0, r.y0 + r.height() * 0.5 + 4.5);
+    text.draw(scene, &label, 12.5, ink, r.x0 + ui_px(7.0), r.y0 + r.height() * 0.5 + ui_px(4.5));
     if focused && !selected && caret_on {
-        let cx = r.x0 + 7.0 + label_w + 1.0;
-        scene.stroke(&Stroke::new(1.0), ID, theme.text, None, &Line::new((cx, r.y0 + 4.0), (cx, r.y1 - 4.0)));
+        let cx = r.x0 + ui_px(7.0) + label_w + 1.0;
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text, None, &Line::new((cx, r.y0 + ui_px(4.0)), (cx, r.y1 - ui_px(4.0))));
     }
 }
 
