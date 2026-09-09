@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dock::{DockModel, PanelId, Side};
+use crate::dock::{DockModel, MasterLayout, PanelId, Side};
 use crate::workspace::Layout;
 
 pub const ESSENTIALS_CLASSIC: &str = "Essentials Classic";
@@ -32,6 +32,14 @@ pub fn essentials_classic() -> Layout {
         [0.0, 40.0, 320.0, 600.0],
     );
     dock.dock_master(right, Side::Right, 0);
+    // Links gets its own column rather than crowding into the Layers/
+    // Artboards group — narrow enough to sit permanently in Stack mode's
+    // icon-only rendering (below `layout::COMPACT_BREAKPOINT`).
+    let links = dock.spawn_master(vec![vec![PanelId("links")]], [0.0, 40.0, 48.0, 200.0]);
+    if let Some(m) = dock.master_mut(links) {
+        m.layout = MasterLayout::Stack;
+    }
+    dock.dock_master(links, Side::Right, 1);
     Layout::capture(&dock, false, false, false, None)
 }
 
