@@ -7,7 +7,7 @@
 //! never reaches an off-screen object. Coordinates are vello kurbo.
 
 use amalith_core::{Document, ObjectId, ObjectKind, ObjectParent};
-use vello::kurbo::{Affine, ParamCurveNearest, PathSeg, Point, Rect};
+use vello::kurbo::{Affine, ParamCurveNearest, PathSeg, Point, Rect, Shape};
 
 use crate::convert;
 
@@ -38,7 +38,14 @@ pub fn bounds(doc: &Document, id: ObjectId) -> Option<Rect> {
 }
 
 /// Frontmost layer-child whose bounds contain `point` and overlap
-/// `visible`. Layer direct children only — a `Group` is selected as a unit.
+/// `visible`. Layer direct children only — a `Group` is selected as a unit
+/// (its bounding box stands in for it, same as ever — clicking a gap
+/// between its children still hits the group). A plain path or compound
+/// path additionally has to have `point` inside its *real* outline, not
+/// just its circumscribing box — a circle's own bounding box has empty
+/// corners that read as "inside" under a pure box test, which used to let
+/// a click there wrongly hit that circle instead of whatever (or nothing)
+/// is actually drawn there.
 pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Option<ObjectId> {
     for layer in doc.layers().iter().rev() {
         if !layer.visible {
@@ -49,14 +56,26 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
             if !obj.visible || obj.locked {
                 continue;
             }
-            if let Some(b) = bounds(doc, id) {
-                if overlaps(b, visible) && b.contains(point) {
-                    return Some(id);
-                }
+            let Some(b) = bounds(doc, id) else { continue };
+            if !overlaps(b, visible) || !b.contains(point) {
+                continue;
             }
+            if matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_))
+                && !point_in_fill(doc, id, point)
+            {
+                continue;
+            }
+            return Some(id);
         }
     }
     None
+}
+
+/// Real point-in-fill test for a path / compound path's own outline
+/// (world space), using the nonzero winding rule — the same rule the
+/// renderer fills with.
+fn point_in_fill(doc: &Document, id: ObjectId, point: Point) -> bool {
+    object_contour(doc, id).is_some_and(|bez| bez.winding(point) != 0)
 }
 
 /// `(id, bounds)` for every visible, layer-direct-child object overlapping
@@ -405,5 +424,36 @@ mod smart_guide_bounds_tests {
         )
         .unwrap();
         assert!(bounds_within(&doc, id, Rect::new(-100., -100., 100., 100.), &[]).is_empty());
+    }
+
+    /// A circle's bounding box is a square that reaches well past its
+    /// actual round edge — clicking in one of that square's empty
+    /// corners used to hit the circle anyway (pure box test), even when
+    /// a second, genuinely overlapping circle's real fill covers that
+    /// exact point instead.
+    #[test]
+    fn topmost_selectable_at_uses_the_real_circle_not_its_bounding_box() {
+        let mut doc = Document::new("circles");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let back = ObjectId::new();
+        let front = ObjectId::new();
+        // `front` (a circle centered at the origin, r=100) is drawn on
+        // top of `back` (centered at (90,70), r=90) — but the click
+        // point sits in `front`'s empty bounding-box corner and
+        // squarely inside `back`'s real circle.
+        doc.insert_object(
+            Object::new(back, ObjectParent::Layer(layer), ObjectKind::Path(PathData::ellipse(amalith_core::geom::Rect::new(0., -20., 180., 160.)))),
+            0,
+        )
+        .unwrap();
+        doc.insert_object(
+            Object::new(front, ObjectParent::Layer(layer), ObjectKind::Path(PathData::ellipse(amalith_core::geom::Rect::new(-100., -100., 100., 100.)))),
+            1,
+        )
+        .unwrap();
+        let visible = Rect::new(-1000., -1000., 1000., 1000.);
+        let hit = topmost_selectable_at(&doc, Point::new(95., 65.), visible);
+        assert_eq!(hit, Some(back), "the click is really inside the back circle, not front's empty corner");
     }
 }
