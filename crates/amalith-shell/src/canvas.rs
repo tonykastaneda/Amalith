@@ -645,15 +645,13 @@ pub fn paint(
                     .map(|p| vt * p),
                 )
             });
+        let extra = match drag {
+            Some(d) if d.xf.is_some() => xf_for_quad(doc, selection, d),
+            Some(d) if d.is_dragged(selection[0]) => Affine::translate(d.delta),
+            _ => Affine::IDENTITY,
+        };
         let quad = text_box_quad.or_else(|| {
-            select::selection_quad(doc, selection).map(|q| {
-                let extra = match drag {
-                    Some(d) if d.xf.is_some() => xf_for_quad(doc, selection, d),
-                    Some(d) if d.is_dragged(selection[0]) => Affine::translate(d.delta),
-                    _ => Affine::IDENTITY,
-                };
-                q.map(|p| vt * extra * p)
-            })
+            select::selection_quad(doc, selection).map(|q| q.map(|p| vt * extra * p))
         });
         if let Some(q) = quad {
             let mut path = BezPath::new();
@@ -806,6 +804,21 @@ pub fn paint(
             // its own right so its bounds are always visible.
             if selection.len() >= 2 {
                 let baby = Color::from_rgb8(0x8f, 0xc2, 0xf5);
+                // Same idea as the text-frame outlines just below, for
+                // ordinary shapes: the union box only traces the outer
+                // edge, so two overlapping selected shapes would
+                // otherwise show no hint of where the back one's edge
+                // actually runs under the front one (Illustrator always
+                // traces every selected object's own contour).
+                for &id in selection {
+                    let Some(obj) = doc.object(id) else { continue };
+                    if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
+                        continue;
+                    }
+                    if let Some(bez) = select::object_contour(doc, id) {
+                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, baby, None, &(vt * extra * bez));
+                    }
+                }
                 for &id in selection {
                     let Some(ObjectKind::Text(t)) = doc.object(id).map(|o| &o.kind) else {
                         continue;
