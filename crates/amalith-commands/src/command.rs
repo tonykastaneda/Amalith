@@ -188,12 +188,16 @@ pub enum Command {
     },
     /// Moves one bezier handle of anchor `anchor` (flat ordinal) on
     /// `object` by `delta` (local space). When the anchor is a smooth /
-    /// symmetric point its opposite handle stays mirrored.
+    /// symmetric point its opposite handle stays mirrored, unless
+    /// `break_mirror` is set (the Alt/Option-drag "split the handle"
+    /// gesture) — the anchor switches to `Corner` first, so this move
+    /// leaves the opposite handle exactly where it already was.
     MoveHandle {
         object: ObjectId,
         anchor: usize,
         side: amalith_core::HandleSide,
         delta: Vec2,
+        break_mirror: bool,
     },
     /// Toggles anchor `anchor` (flat ordinal) on `object` between a sharp
     /// corner (no handles) and a smooth point (mirrored handles from the

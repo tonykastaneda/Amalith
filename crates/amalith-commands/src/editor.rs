@@ -953,6 +953,7 @@ impl Editor {
                 anchor,
                 side,
                 delta,
+                break_mirror,
             } => {
                 let mut data = self.path_data(object)?;
                 let base = amalith_core::anchor_at(data.subpaths(), anchor)
@@ -967,6 +968,9 @@ impl Editor {
                     });
                 let target = base + delta;
                 data.edit_subpaths(|sp| {
+                    if break_mirror {
+                        amalith_core::break_handle_mirror(sp, anchor);
+                    }
                     amalith_core::set_handle(sp, anchor, side, Some(target));
                 });
                 vec![Edit::SetPathData { id: object, data }]

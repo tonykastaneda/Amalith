@@ -3229,6 +3229,45 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Recompute `Drag::MoveHandle`'s live target from the current pointer
+    /// plus Shift (lock to 45° / 8 directions from the anchor — Alt's
+    /// "split the handle" only takes effect at commit, matching every
+    /// other Alt-modified drag in this codebase, e.g. Move/Scale/Rotate's
+    /// own release-time Alt-copy). Safe to call on a pointer move or a
+    /// modifier change, so Shift snaps even with a still cursor.
+    fn recompute_move_handle(&mut self) {
+        let Drag::MoveHandle {
+            object,
+            anchor,
+            side,
+            start_doc,
+            ..
+        } = &self.drag
+        else {
+            return;
+        };
+        let (object, anchor, side, start_doc) = (*object, *anchor, *side, *start_doc);
+        let raw = self.doc_point(self.pointer);
+        let anchor_pt = anchors::anchors_of(self.doc.editor.document(), object)
+            .into_iter()
+            .find(|(n, _)| *n == anchor)
+            .map(|(_, p)| p);
+        let (dp, hit) = if self.shift_down {
+            (constrained(anchor_pt, raw, true), None)
+        } else {
+            self.sg_point_snap(raw, &[])
+        };
+        self.smart_guide_hit = hit;
+        self.drag = Drag::MoveHandle {
+            object,
+            anchor,
+            side,
+            start_doc,
+            last_doc: dp,
+        };
+        self.request_main_redraw();
+    }
+
     /// With the Pen tool active and a path already selected (but no draw
     /// in progress), the segment under the pointer that a click would
     /// insert an anchor into — `(object, flat segment ordinal, t)`.
@@ -7661,6 +7700,13 @@ impl ApplicationHandler for App {
                 self.click_streak = if near { self.click_streak + 1 } else { 1 };
                 self.last_click = Some((now, self.pointer));
                 self.on_press(event_loop, id, self.click_streak >= 2);
+                // A click can change the anchor selection without moving
+                // the pointer at all (e.g. picking a different anchor);
+                // `smart_guide_hit`/`sg_hovered_path` would otherwise keep
+                // whatever they were computed as on the *previous* move
+                // event, stale against the new selection, until the mouse
+                // actually moves again.
+                self.refresh_smart_guides();
             }
             WindowEvent::MouseInput {
                 state: ElementState::Released,
@@ -7668,6 +7714,9 @@ impl ApplicationHandler for App {
                 ..
             } => {
                 self.on_release();
+                // Same reasoning as the press handler: a drag ending can
+                // leave a new selection under a stationary cursor.
+                self.refresh_smart_guides();
                 if let Some((tool, anchor)) = self.pending_shape_dialog.take() {
                     self.spawn_shape_dialog(event_loop, tool, anchor);
                 }
@@ -7715,6 +7764,12 @@ impl ApplicationHandler for App {
                     // a cursor nudge.
                     if matches!(self.drag, Drag::PenHandle { .. }) {
                         self.drag_pen_handle();
+                    }
+                    // Same instant re-snap for Direct Selection's own
+                    // handle drag — Shift-lock engages/releases without
+                    // needing a cursor nudge.
+                    if matches!(self.drag, Drag::MoveHandle { .. }) {
+                        self.recompute_move_handle();
                     }
                     if matches!(self.drag, Drag::Warp { .. }) {
                         self.update_free_transform_drag();

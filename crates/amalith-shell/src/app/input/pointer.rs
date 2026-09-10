@@ -167,22 +167,8 @@ impl App {
                 };
                 self.request_main_redraw();
             }
-            Drag::MoveHandle {
-                object,
-                anchor,
-                side,
-                start_doc,
-                ..
-            } => {
-                let (object, anchor, side, start_doc) = (*object, *anchor, *side, *start_doc);
-                self.drag = Drag::MoveHandle {
-                    object,
-                    anchor,
-                    side,
-                    start_doc,
-                    last_doc: self.doc_point(self.pointer),
-                };
-                self.request_main_redraw();
+            Drag::MoveHandle { .. } => {
+                self.recompute_move_handle();
             }
             Drag::PickColor { in_hue } => {
                 let in_hue = *in_hue;
@@ -1423,6 +1409,7 @@ impl App {
                         anchor,
                         side,
                         delta,
+                        break_mirror: self.alt_down,
                     });
                     self.request_main_redraw();
                 }

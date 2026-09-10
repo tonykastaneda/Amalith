@@ -43,9 +43,9 @@ pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use pathtext::ArcLengthPath;
 pub use object::{
-    anchor_at, anchor_count, anchor_is_open_endpoint, delete_anchor, extend_open_subpath,
-    insert_anchor, insert_anchor_in, join_anchors, open_endpoint_subpath, set_anchor_smooth,
-    set_handle, subpaths_to_bezpath,
+    anchor_at, anchor_count, anchor_is_open_endpoint, break_handle_mirror, delete_anchor,
+    extend_open_subpath, insert_anchor, insert_anchor_in, join_anchors, open_endpoint_subpath,
+    set_anchor_smooth, set_handle, subpaths_to_bezpath,
     toggle_anchor_smooth, translate_anchor_n, trim_to_split, Anchor, BlendData,
     BlendSpacing, CompoundPathData, GroupData, HandleMode,
     HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,

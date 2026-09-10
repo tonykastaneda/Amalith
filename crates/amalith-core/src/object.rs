@@ -433,6 +433,19 @@ pub fn toggle_anchor_smooth(subpaths: &mut [Subpath], n: usize) {
     }
 }
 
+/// Switches anchor `n` to [`HandleMode::Corner`] without touching either
+/// handle's position — unlike `set_anchor_smooth(_, n, false)` /
+/// `make_corner`, which clear both handles outright (Illustrator's
+/// "Convert Anchor Point" gesture). This is instead the Alt/Option-drag
+/// "split the handle" gesture on an *already-placed* smooth/symmetric
+/// anchor: the two handles keep their current, independent shapes, only
+/// [`set_handle`]'s mirroring of one from the other switches off.
+pub fn break_handle_mirror(subpaths: &mut [Subpath], n: usize) {
+    if let Some(a) = anchor_at_mut(subpaths, n) {
+        a.mode = HandleMode::Corner;
+    }
+}
+
 /// Convert anchor `n` explicitly to a smooth point (`smooth = true`) or a
 /// sharp corner (`smooth = false`).
 pub fn set_anchor_smooth(subpaths: &mut [Subpath], n: usize, smooth: bool) {
@@ -1396,6 +1409,20 @@ mod path_data_tests {
         let a = anchor_at(&sp, 1).unwrap();
         // partner is the exact reflection through the anchor.
         assert_eq!(a.handle_in, Some(Point::new(30.0, -12.0)));
+    }
+
+    #[test]
+    fn break_handle_mirror_stops_the_partner_from_following_without_moving_either_handle() {
+        let mut sp = open_curve();
+        sp[0].anchors[1].mode = HandleMode::Symmetric;
+        let before_in = anchor_at(&sp, 1).unwrap().handle_in;
+        break_handle_mirror(&mut sp, 1);
+        let a = anchor_at(&sp, 1).unwrap();
+        assert_eq!(a.mode, HandleMode::Corner);
+        assert_eq!(a.handle_in, before_in, "breaking the mirror alone must not move either handle");
+        // Now dragging the *out* handle must leave the (already independent) *in* handle untouched.
+        set_handle(&mut sp, 1, HandleSide::Out, Some(Point::new(30.0, 12.0)));
+        assert_eq!(anchor_at(&sp, 1).unwrap().handle_in, before_in);
     }
 
     #[test]

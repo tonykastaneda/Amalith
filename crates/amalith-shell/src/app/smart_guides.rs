@@ -650,6 +650,14 @@ impl App {
                 };
                 Some(format!("ΔX: {:.1} pt  ΔY: {:.1} pt", d.x, d.y))
             }
+            Drag::MoveHandle { object, anchor, last_doc, .. } => {
+                let anchor_pt = anchors::anchors_of(self.doc.editor.document(), object)
+                    .into_iter()
+                    .find(|(n, _)| *n == anchor)
+                    .map(|(_, p)| p)?;
+                let d = last_doc - anchor_pt;
+                Some(format!("L: {:.1} pt  {:.1}°", d.hypot(), (-d.y).atan2(d.x).to_degrees()))
+            }
             Drag::DrawShape {
                 tool: Tool::Line,
                 start_doc,
