@@ -108,9 +108,11 @@ display work has been run in the live app at all yet.
    between two arbitrary points (not tied to a move/scale drag) remain
    unaddressed — current spacing still only compares immediate/established
    neighbor gaps, one pair at a time.
-4. **Display fidelity, still open:** independent per-layer guide color is blocked
-   on `Layer` having no color property at all — a Layers-panel feature in its own
-   right, out of scope for a Smart Guides pass to invent unprompted. Also open:
+4. **Display fidelity, still open:** ~~independent per-layer guide color~~ — done:
+   `Layer` now has a real `color: LayerColor` (Layer Options' named palette, set
+   via the new dialog — double-click a layer's color swatch in the Layers
+   panel), and Object Highlighting tints the hovered path's outline with its
+   own layer's color instead of the fixed Smart Guides pink. Also open:
    exact (not flattened-approximate) curve-on-curve intersection, verifying
    appearance at high DPI (the existing overlay code reuses the same scale-aware
    metrics/stroke widths as every other canvas overlay, so it's likely already

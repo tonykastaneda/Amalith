@@ -373,7 +373,16 @@ impl App {
                     // Transform the real path, retaining MoveTo boundaries; never
                     // connect separate contours with a synthetic straight line.
                     let path = to_screen * convert::affine(doc.world_transform(id)) * convert::bez_path(&pd.geometry);
-                    self.content.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.65), None, &path);
+                    // Illustrator tints this outline with the hovered
+                    // object's own layer color, not a fixed Smart Guides
+                    // pink — falls back to the fixed ink if the object's
+                    // layer somehow can't be found (shouldn't happen for
+                    // anything actually paintable).
+                    let highlight = self
+                        .owning_layer(id)
+                        .and_then(|lid| doc.layer(lid))
+                        .map_or(ink, |l| convert::color(l.color.rgb()));
+                    self.content.stroke(&Stroke::new(1.0), ID, highlight.with_alpha(0.65), None, &path);
                 }
             }
         }

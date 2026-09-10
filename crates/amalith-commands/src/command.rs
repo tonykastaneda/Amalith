@@ -7,7 +7,7 @@
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
     Affine, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
-    GuideOrient, Homography, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
+    GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
     StrokeStyle, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
@@ -69,6 +69,13 @@ pub enum Command {
     RenameLayer {
         id: LayerId,
         name: String,
+    },
+    /// Layer Options (double-click a layer's color swatch): every field
+    /// the dialog exposes, committed together as one undo step, matching
+    /// the dialog's own all-or-nothing OK/Cancel.
+    SetLayerOptions {
+        id: LayerId,
+        options: LayerOptions,
     },
     /// Renames an object (including a group) â the same field an object
     /// is created with, so `None` clears it back to the panel's fallback
@@ -513,6 +520,20 @@ pub struct JoinTrim {
     /// `amalith_core::insert_anchor`/`trim_to_split`'s own
     /// stored-direction convention.
     pub t: f64,
+}
+
+/// Every field the Layer Options dialog exposes — see
+/// [`Command::SetLayerOptions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerOptions {
+    pub name: String,
+    pub color: LayerColor,
+    pub visible: bool,
+    pub locked: bool,
+    pub template: bool,
+    pub print: bool,
+    pub preview: bool,
+    pub dim_images_to: Option<u8>,
 }
 
 /// Illustrator Pathfinder panel operations.

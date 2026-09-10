@@ -15,7 +15,7 @@
 //!    `Document`'s internal fields change shape, the on-disk schema
 //!    doesn't silently change with it — `DocumentManifest` is the explicit,
 //!    versioned contract external tools/plugins read.
-use amalith_core::{Artboard, Asset, Gradient, Guide, LayerId, Metadata, Object, Settings, Swatch};
+use amalith_core::{Artboard, Asset, Gradient, Guide, LayerColor, LayerId, Metadata, Object, Settings, Swatch};
 use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
@@ -53,6 +53,23 @@ pub(crate) struct LayerManifest {
     pub name: String,
     pub visible: bool,
     pub locked: bool,
+    /// Layer Options fields. `#[serde(default)]` so containers written
+    /// before Layer Options existed still load, with Illustrator's own
+    /// defaults (blue, printing, previewed, not a template, not dimmed).
+    #[serde(default)]
+    pub color: LayerColor,
+    #[serde(default)]
+    pub template: bool,
+    #[serde(default = "default_true")]
+    pub print: bool,
+    #[serde(default = "default_true")]
+    pub preview: bool,
+    #[serde(default)]
+    pub dim_images_to: Option<u8>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// One layer's object tree, flattened in DFS pre-order (each object

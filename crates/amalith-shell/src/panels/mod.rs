@@ -180,6 +180,7 @@ pub struct Ctx<'a> {
     /// The Offset Path dialog + caret-blink phase, when the `offsetdlg`
     /// float-only panel is being drawn / hit-tested.
     pub offset_dialog: Option<(&'a crate::offsetdlg::OffsetDialog, bool)>,
+    pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
     /// The gradient the Gradient panel edits (a clone of the pooled
     /// target), plus the selected stop index. `None` when the selection
     /// has no gradient paint.
@@ -239,6 +240,9 @@ pub enum Action {
     Select(ObjectId),
     /// Layers panel: a layer-header row was clicked.
     SelectLayer(LayerId),
+    /// A layer row's color swatch: single click selects like the rest of
+    /// the row, double click opens Layer Options.
+    LayerSwatch(LayerId),
     /// Artboards panel: an artboard row was clicked.
     SelectArtboard(ArtboardId),
     /// Artboards panel: the artboard's number was clicked — double-click
@@ -391,6 +395,7 @@ pub enum Action {
     /// The whole Offset Path dialog hit-vocabulary passes through — the
     /// App applies it directly (field focus, join pick, Preview, OK/Cancel).
     OffsetHit(crate::offsetdlg::Hit),
+    LayerDialogHit(crate::layerdlg::Hit),
     // --- Links panel ---
     /// A row was clicked — just highlights it.
     SelectAsset(AssetId),
@@ -508,6 +513,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::offsetdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        PanelKind::LayerOptionsDlg => {
+            if let Some((dlg, caret)) = ctx.layer_dialog {
+                crate::layerdlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
         PanelKind::Unknown(_) => {}
     }
 }
@@ -570,6 +580,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             Some((dlg, _)) => Action::OffsetHit(crate::offsetdlg::hit(dlg, body, local)),
             None => Action::None,
         },
+        PanelKind::LayerOptionsDlg => match ctx.layer_dialog {
+            Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
+            None => Action::None,
+        },
         PanelKind::Unknown(_) => Action::None,
     }
 }
@@ -609,6 +623,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::XformdlgShear => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
         PanelKind::Blenddlg => crate::blenddlg::body_height(),
         PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
+        PanelKind::LayerOptionsDlg => crate::layerdlg::body_height(),
         PanelKind::ShapedlgRect
         | PanelKind::ShapedlgRound
         | PanelKind::ShapedlgEllipse

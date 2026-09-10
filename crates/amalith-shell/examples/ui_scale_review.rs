@@ -71,6 +71,7 @@ fn main() {
             xform_dialog: None,
             blend_dialog: None,
             offset_dialog: None,
+            layer_dialog: None,
             gradient: None,
             gradient_edit: None,
         };

@@ -688,6 +688,7 @@ impl App {
                             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
@@ -757,6 +758,7 @@ impl App {
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -828,6 +830,7 @@ impl App {
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };

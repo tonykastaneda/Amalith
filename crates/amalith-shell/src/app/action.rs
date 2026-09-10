@@ -28,6 +28,17 @@ impl App {
                     self.begin_rename(panels::RenameId::Layer(id));
                 }
             }
+            panels::Action::LayerSwatch(id) => {
+                self.doc.selection.clear();
+                self.doc.anchor_sel.clear();
+                self.doc.selected_layer = Some(id);
+                if double {
+                    // Menu/shortcut-style actions have no `event_loop`
+                    // here; the window spawns next `about_to_wait`, same
+                    // as Export/Offset Path.
+                    self.pending_layer_dialog = Some(id);
+                }
+            }
             panels::Action::SelectArtboard(id) => {
                 self.doc.selected_artboard = Some(id);
                 if double {
@@ -210,6 +221,60 @@ impl App {
                     offsetdlg::Hit::Ok => self.close_offset_dialog(offset_dialog::OffsetClose::Ok),
                     offsetdlg::Hit::Cancel => self.close_offset_dialog(offset_dialog::OffsetClose::Cancel),
                     offsetdlg::Hit::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
+            panels::Action::LayerDialogHit(hit) => {
+                match hit {
+                    layerdlg::Hit::Name => {}
+                    layerdlg::Hit::ToggleColorMenu => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.color_menu_open = !dlg.color_menu_open;
+                        }
+                    }
+                    layerdlg::Hit::ColorItem(i) => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            if let Some(c) = amalith_core::LayerColor::ALL.get(i) {
+                                dlg.color = *c;
+                            }
+                            dlg.color_menu_open = false;
+                        }
+                    }
+                    layerdlg::Hit::ToggleTemplate => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.template = !dlg.template;
+                        }
+                    }
+                    layerdlg::Hit::ToggleLock => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.locked = !dlg.locked;
+                        }
+                    }
+                    layerdlg::Hit::ToggleShow => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.visible = !dlg.visible;
+                        }
+                    }
+                    layerdlg::Hit::TogglePrint => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.print = !dlg.print;
+                        }
+                    }
+                    layerdlg::Hit::TogglePreview => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.preview = !dlg.preview;
+                        }
+                    }
+                    layerdlg::Hit::ToggleDimImages => {
+                        if let Some(dlg) = self.layer_dialog.as_mut() {
+                            dlg.dim_images = if dlg.dim_images.is_some() { None } else { Some("50".to_string()) };
+                        }
+                    }
+                    layerdlg::Hit::DimPct => {}
+                    layerdlg::Hit::Ok => self.close_layer_dialog(layer_dialog::LayerDialogClose::Ok),
+                    layerdlg::Hit::Cancel => self.close_layer_dialog(layer_dialog::LayerDialogClose::Cancel),
+                    layerdlg::Hit::None => {}
                 }
                 self.text_blink = Instant::now();
                 self.request_main_redraw();

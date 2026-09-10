@@ -30,6 +30,7 @@ mod join_tool;
 mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
+mod layer_dialog;
 mod offset_dialog;
 mod render;
 mod shape_dialog;
@@ -59,7 +60,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
-    icons, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
+    icons, layerdlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
     settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
 };
@@ -1010,11 +1011,18 @@ struct App {
     /// Free-floating like the colour picker; never dockable, never in the
     /// Window menu.
     offset_dialog: Option<offsetdlg::OffsetDialog>,
+    /// The Layer Options dialog, opened by double-clicking a layer's color
+    /// swatch in the Layers panel. Free-floating like the color picker;
+    /// never dockable, never in the Window menu.
+    layer_dialog: Option<layerdlg::LayerOptionsDialog>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
     /// Same reason as `pending_export`, for the Offset Path dialog.
     pending_offset_dialog: bool,
+    /// Same reason as `pending_export`, for the Layer Options dialog —
+    /// which layer to open it for.
+    pending_layer_dialog: Option<amalith_core::LayerId>,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -1370,6 +1378,8 @@ impl App {
             blend_dialog: None,
             offset_dialog: None,
             pending_offset_dialog: false,
+            layer_dialog: None,
+            pending_layer_dialog: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -6338,6 +6348,7 @@ impl App {
             xform_dialog: None,
             blend_dialog: None,
             offset_dialog: None,
+            layer_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6394,6 +6405,7 @@ impl App {
             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, false)),
             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, false)),
+            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -7458,6 +7470,9 @@ impl ApplicationHandler for App {
         if std::mem::take(&mut self.pending_offset_dialog) {
             self.spawn_offset_dialog(event_loop);
         }
+        if let Some(id) = self.pending_layer_dialog.take() {
+            self.spawn_layer_dialog(event_loop, id);
+        }
         if self.pending_fit {
             self.fit_view();
         }
@@ -7511,7 +7526,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() || self.offset_dialog.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() || self.offset_dialog.is_some() || self.layer_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -7809,6 +7824,7 @@ impl ApplicationHandler for App {
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some()
+                    || self.layer_dialog.is_some()
                 {
                     self.cmd_down = if cfg!(target_os = "macos") { m.state().super_key() } else { m.state().control_key() };
                     self.shift_down = m.state().shift_key();
@@ -7858,7 +7874,8 @@ impl ApplicationHandler for App {
                     || self.export.is_some()
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
-                    || self.offset_dialog.is_some() =>
+                    || self.offset_dialog.is_some()
+                    || self.layer_dialog.is_some() =>
             {
                 self.on_key(event);
             }

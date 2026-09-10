@@ -34,7 +34,7 @@ mod history;
 mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
-pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, PasteStack, PathfinderOp};
+pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathfinderOp};
 pub use pathfinder::{has_visible_stroke, offset_path};
 pub use editor::Editor;
 pub use error::CommandError;
@@ -281,6 +281,48 @@ mod tests {
             .unwrap();
         let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
         assert!(data.subpaths()[0].closed);
+    }
+
+    #[test]
+    fn set_layer_options_commits_every_field_together_and_undoes_them_together() {
+        use amalith_core::LayerColor;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let before = editor.document().layer(layer).unwrap().clone();
+        assert_eq!(before.color, LayerColor::Blue);
+
+        let new_options = LayerOptions {
+            name: "BG".into(),
+            color: LayerColor::LightRed,
+            visible: false,
+            locked: true,
+            template: false,
+            print: false,
+            preview: true,
+            dim_images_to: Some(50),
+        };
+        editor
+            .execute(Command::SetLayerOptions { id: layer, options: new_options.clone() })
+            .unwrap();
+        let after = editor.document().layer(layer).unwrap();
+        assert_eq!(after.name, "BG");
+        assert_eq!(after.color, LayerColor::LightRed);
+        assert!(!after.visible);
+        assert!(after.locked);
+        assert!(!after.print);
+        assert_eq!(after.dim_images_to, Some(50));
+
+        editor.undo().unwrap();
+        let restored = editor.document().layer(layer).unwrap();
+        assert_eq!(restored.name, before.name);
+        assert_eq!(restored.color, before.color);
+        assert_eq!(restored.visible, before.visible);
+        assert_eq!(restored.dim_images_to, before.dim_images_to);
     }
 
     #[test]

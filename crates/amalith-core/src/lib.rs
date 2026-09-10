@@ -38,7 +38,7 @@ pub use geom::{Affine, Bounds, Point, Rect, Size, Vec2};
 pub use gradient::{FreeformPoint, Gradient, GradientKind, GradientStop};
 pub use guide::{Guide, GuideId, GuideOrient};
 pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId};
-pub use layer::Layer;
+pub use layer::{Layer, LayerColor};
 pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use pathtext::ArcLengthPath;

@@ -41,6 +41,11 @@ pub fn save(
                 name: layer.name.clone(),
                 visible: layer.visible,
                 locked: layer.locked,
+                color: layer.color,
+                template: layer.template,
+                print: layer.print,
+                preview: layer.preview,
+                dim_images_to: layer.dim_images_to,
             })
             .collect(),
     };
@@ -109,6 +114,11 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
             name: layer_manifest.name,
             visible: layer_manifest.visible,
             locked: layer_manifest.locked,
+            color: layer_manifest.color,
+            template: layer_manifest.template,
+            print: layer_manifest.print,
+            preview: layer_manifest.preview,
+            dim_images_to: layer_manifest.dim_images_to,
             children: Vec::new(),
         };
         let index = document.layers().len();

@@ -266,6 +266,11 @@ impl App {
             self.offset_dialog_key(&event);
             return;
         }
+        // The Layer Options dialog takes every key while open.
+        if self.layer_dialog.is_some() {
+            self.layer_dialog_key(&event);
+            return;
+        }
         // The Export for Screens dialog takes every key while open.
         if self.export.is_some() {
             self.export_key(&event);

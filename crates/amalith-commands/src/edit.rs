@@ -14,6 +14,7 @@
 //! undo/redo roundtrip. Applying the captured inverse `Edit` instead keeps
 //! the original ID, exactly as Inkscape's `DocumentUndo` logs low-level
 //! repr diffs rather than replaying the action that caused them.
+use crate::command::LayerOptions;
 use crate::error::CommandError;
 use amalith_core::{
     Affine, Artboard, ArtboardId, Asset, AssetId, AssetSource, Color, Document, DocumentError,
@@ -58,6 +59,10 @@ pub(crate) enum Edit {
     RenameLayer {
         id: LayerId,
         name: String,
+    },
+    SetLayerOptions {
+        id: LayerId,
+        options: LayerOptions,
     },
     InsertObject {
         object: Box<Object>,
@@ -226,6 +231,28 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let layer = doc.layer_mut(id).ok_or(CommandError::LayerNotFound(id))?;
             let old_name = std::mem::replace(&mut layer.name, name);
             Ok((Edit::RenameLayer { id, name: old_name }, None))
+        }
+        Edit::SetLayerOptions { id, options } => {
+            let layer = doc.layer_mut(id).ok_or(CommandError::LayerNotFound(id))?;
+            let old = LayerOptions {
+                name: layer.name.clone(),
+                color: layer.color,
+                visible: layer.visible,
+                locked: layer.locked,
+                template: layer.template,
+                print: layer.print,
+                preview: layer.preview,
+                dim_images_to: layer.dim_images_to,
+            };
+            layer.name = options.name;
+            layer.color = options.color;
+            layer.visible = options.visible;
+            layer.locked = options.locked;
+            layer.template = options.template;
+            layer.print = options.print;
+            layer.preview = options.preview;
+            layer.dim_images_to = options.dim_images_to;
+            Ok((Edit::SetLayerOptions { id, options: old }, None))
         }
         Edit::InsertObject { object, index } => {
             let id = object.id;

@@ -633,6 +633,7 @@ impl Editor {
             }
             Command::DeleteGradient { id } => vec![Edit::RemoveGradient { id }],
             Command::RenameLayer { id, name } => vec![Edit::RenameLayer { id, name }],
+            Command::SetLayerOptions { id, options } => vec![Edit::SetLayerOptions { id, options }],
             Command::RenameObject { id, name } => vec![Edit::RenameObject { id, name }],
             Command::ResizeArtboard { id, rect } => vec![Edit::ResizeArtboard { id, rect }],
             Command::MoveArtboard { id, delta } => {

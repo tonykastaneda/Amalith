@@ -113,6 +113,8 @@ struct LayerRow {
     locked: bool,
     /// Groups only: whether this row is currently expanded.
     expanded: bool,
+    /// Layer rows only (Layer Options' "Color") — unused for object rows.
+    color: amalith_core::LayerColor,
 }
 
 fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
@@ -135,6 +137,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
                 visible: obj.visible,
                 locked: obj.locked,
                 expanded: is_expanded,
+                color: amalith_core::LayerColor::Blue,
             });
             if is_expanded {
                 walk(doc, ObjectParent::Group(id), depth + 1, expanded, rows);
@@ -151,6 +154,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>) -> Vec<LayerRow> {
             visible: layer.visible,
             locked: layer.locked,
             expanded: false,
+            color: layer.color,
         });
         walk(doc, ObjectParent::Layer(layer.id), 1, expanded, &mut rows);
     }
@@ -399,16 +403,24 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                     ctx.theme.strip_bg
                 };
                 scene.fill(Fill::NonZero, ID, fill, None, &r);
+                scene.fill(
+                    Fill::NonZero,
+                    ID,
+                    crate::convert::color(row.color.rgb()),
+                    None,
+                    &layer_swatch_rect(r),
+                );
                 let editing = match ctx.renaming {
                     Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
                     _ => None,
                 };
+                let name_x = layer_name_x(body);
                 if editing.is_some() {
                     draw_name_field(
                         scene,
                         text,
                         ctx.theme,
-                        body.x0 + metric_pad(),
+                        name_x,
                         r,
                         &row.label,
                         ctx.theme.text,
@@ -416,7 +428,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                     );
                 } else {
                     let baseline = r.y0 + metric_row_h() * 0.5 + ui_px(4.0);
-                    text.draw(scene, &row.label, 12.0, ctx.theme.text, body.x0 + metric_pad(), baseline);
+                    text.draw(scene, &row.label, 12.0, ctx.theme.text, name_x, baseline);
                     if owns {
                         // Faux-bold: a second pass nudged half a pixel.
                         text.draw(
@@ -424,7 +436,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
                             &row.label,
                             12.0,
                             ctx.theme.text,
-                            body.x0 + metric_pad() + 0.6,
+                            name_x + 0.6,
                             baseline,
                         );
                     }
@@ -548,8 +560,9 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     if local.y < body.y0 + metric_search_h() {
         return Action::FocusLayerSearch;
     }
+    let list = list_rect(body);
     let rows = visible_rows(ctx);
-    let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list_rect(body).height());
+    let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list.height());
     let i = ((local.y - (body.y0 + metric_search_h()) + scroll) / metric_row_h()).floor();
     if i < 0.0 {
         return Action::None;
@@ -558,7 +571,19 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::None;
     };
     match row.kind {
-        RowKind::Layer(id) => Action::SelectLayer(id),
+        // The color swatch is its own precise square — a single click
+        // still selects the layer like the rest of the row; a double
+        // click (resolved by the caller) opens Layer Options instead of
+        // renaming.
+        RowKind::Layer(id) => {
+            let ry = list.y0 + i * metric_row_h() - scroll;
+            let r = Rect::new(body.x0, ry, body.x1, ry + metric_row_h());
+            if layer_swatch_rect(r).contains(local) {
+                Action::LayerSwatch(id)
+            } else {
+                Action::SelectLayer(id)
+            }
+        }
         RowKind::Object { id, is_group } => {
             let indent = metric_pad() + row.depth as f64 * metric_indent();
             let x = local.x - body.x0;
@@ -590,6 +615,23 @@ fn draw_triangle(scene: &mut Scene, cx: f64, cy: f64, expanded: bool, color: Col
     }
     p.close_path();
     scene.fill(Fill::NonZero, ID, color, None, &p);
+}
+
+/// A layer row's color swatch — Layer Options' "Color" swatch, shown as a
+/// small square at the far left of the row (Illustrator's own
+/// placement), vertically centered. Double-clicking it opens Layer
+/// Options; a single click still selects the layer, same as clicking
+/// anywhere else in the row.
+fn layer_swatch_rect(row: Rect) -> Rect {
+    let size = ui_px(10.0);
+    let x0 = row.x0 + ui_px(16.0);
+    let y0 = row.y0 + (row.height() - size) * 0.5;
+    Rect::new(x0, y0, x0 + size, y0 + size)
+}
+
+/// Where a layer row's name starts — clear of the color swatch.
+fn layer_name_x(body: Rect) -> f64 {
+    body.x0 + ui_px(16.0) + ui_px(10.0) + ui_px(16.0)
 }
 
 /// A small eye centred at `(cx, cy)`, with a slash through it when `off`.
