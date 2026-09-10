@@ -15,7 +15,14 @@ use kurbo::{flatten, stroke, BezPath, Cap, Join, PathEl, Point, Stroke, StrokeOp
 
 use crate::command::PathfinderOp;
 
-const TOL: f64 = 0.25;
+/// How closely a flattened polygon edge has to track the real curve
+/// (document-space points) before every Pathfinder-based op — boolean
+/// ops, Shape Builder, Offset Path, Expand Stroke. The flattened result
+/// *is* the operation's permanent output geometry (there's no re-fit
+/// back to Béziers afterward), so this is the difference between a
+/// curve staying visually smooth after a merge and coming out visibly
+/// faceted — worth keeping tight even though it costs more points.
+const TOL: f64 = 0.05;
 
 pub struct PathInput {
     pub contours: Vec<Vec<[f64; 2]>>,
@@ -96,7 +103,30 @@ fn overlay(
     let a = a.to_vec();
     let b = b.to_vec();
     let shapes: Vec<Vec<Vec<[f64; 2]>>> = a.overlay(&b, rule, FillRule::NonZero);
-    shapes.into_iter().flatten().collect()
+    shapes.into_iter().flatten().filter(|c| contour_area(c) > MIN_CONTOUR_AREA).collect()
+}
+
+/// Below this (document-space units², so ~0.1×0.1pt) a contour isn't real
+/// content — it's numerical noise. `i_overlay` computes a cut's two sides
+/// as independent boolean passes (e.g. `divide`'s own `leftover`/`hit`),
+/// and where their edges are supposed to meet exactly, floating-point
+/// rounding can instead leave a razor-thin sliver polygon along the seam.
+/// Every `overlay` call site funnels through here so no Pathfinder op
+/// (boolean ops, Shape Builder, Divide, Trim, …) ever turns one of those
+/// slivers into a real, separately-selectable output object.
+const MIN_CONTOUR_AREA: f64 = 0.01;
+
+fn contour_area(c: &[[f64; 2]]) -> f64 {
+    if c.len() < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..c.len() {
+        let (x1, y1) = (c[i][0], c[i][1]);
+        let [x2, y2] = c[(i + 1) % c.len()];
+        sum += x1 * y2 - x2 * y1;
+    }
+    (sum * 0.5).abs()
 }
 
 fn union_all(items: &[Vec<Vec<[f64; 2]>>]) -> Vec<Vec<[f64; 2]>> {
@@ -487,6 +517,25 @@ mod tests {
         let bb = out.geometry.bounding_box();
         assert!((bb.height() - 6.0).abs() < 0.5, "height {}", bb.height());
         assert!(out.geometry.elements().iter().any(|e| matches!(e, PathEl::ClosePath)));
+    }
+
+    #[test]
+    fn contour_area_matches_a_known_rectangle() {
+        let c = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 4.0], [0.0, 4.0]];
+        assert!((contour_area(&c) - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn overlay_drops_a_sliver_thinner_than_the_minimum_area() {
+        // A degenerate near-zero-width triangle, disjoint from the real
+        // shape — exactly what a plain union would otherwise keep as
+        // its own separate output piece, and exactly the shape of the
+        // floating-point noise `divide` can leave along a seam where
+        // two of its own boolean passes are supposed to meet.
+        let sliver = vec![vec![[100.0, 100.0], [100.001, 100.0], [100.0005, 100.001]]];
+        let real = vec![vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]];
+        let out = overlay(&sliver, &real, OverlayRule::Union);
+        assert_eq!(out.len(), 1, "the disjoint sliver should be filtered, leaving only the real square");
     }
 
     #[test]

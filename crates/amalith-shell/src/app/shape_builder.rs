@@ -289,6 +289,51 @@ mod tests {
     }
 
     #[test]
+    fn large_overlapping_circles_divide_with_no_sliver_fragments() {
+        // Real-world-scale circles (~380pt, matching the actual bug
+        // report) — the small 40pt ones used elsewhere in this file
+        // don't have enough flattened points to trigger the numerical
+        // noise this regression test catches.
+        let mut editor = Editor::new(Document::new("Test"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath {
+                layer,
+                path: PathData::ellipse(CoreRect::new(0.0, 0.0, 380.0, 380.0)),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath {
+                layer,
+                path: PathData::ellipse(CoreRect::new(230.0, 0.0, 610.0, 380.0)),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let cache = build_cache(editor.document(), &[a, b]).unwrap();
+        assert_eq!(cache.faces.len(), 3);
+        for (i, f) in cache.faces.iter().enumerate() {
+            assert_eq!(
+                f.core_contours.len(),
+                1,
+                "face {i} split into {} contours — a sliver leaked through",
+                f.core_contours.len()
+            );
+        }
+    }
+
+    #[test]
     fn stacked_circles_are_eligible_and_form_one_face() {
         let (editor, a, b) = stacked_circles();
         let cache = build_cache(editor.document(), &[a, b]).expect("2 paths should be eligible");
