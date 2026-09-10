@@ -346,11 +346,7 @@ impl App {
             // way a click would place it — otherwise the rubber-band line
             // shown while just moving the mouse (not yet dragging a
             // handle) never matches what Shift is actually about to do.
-            let hover = constrained(
-                self.pen.last().map(|a| a.point),
-                self.doc_point(self.pointer),
-                self.shift_down,
-            );
+            let hover = self.sg_pen_snap(self.doc_point(self.pointer)).0;
             let near_close = self.pen.len() >= 3
                 && self
                     .pen
@@ -906,9 +902,11 @@ impl App {
             self.paint_ctx_menu();
             self.paint_path_text_brackets();
             self.paint_width_points();
+            self.paint_join_preview();
             self.paint_offset_preview();
             self.paint_warp_preview();
             self.paint_free_transform_flyout();
+            self.paint_smart_guides();
             // The Home screen covers the canvas; the New Document modal and
             // the About panel each sit on top of that (and of the canvas).
             // Recent-file previews are rendered headlessly, one per frame,

@@ -1001,6 +1001,46 @@ impl Editor {
                 data.edit_subpaths(|sp| amalith_core::delete_anchor(sp, anchor));
                 vec![Edit::SetPathData { id: object, data }]
             }
+            Command::JoinAnchors { anchor_a: (oa, na), anchor_b: (ob, nb) } => {
+                let data_a = self.path_data(oa)?;
+                let data_b = self.path_data(ob)?;
+                if !amalith_core::anchor_is_open_endpoint(data_a.subpaths(), na)
+                    || !amalith_core::anchor_is_open_endpoint(data_b.subpaths(), nb)
+                {
+                    return Err(CommandError::JoinNeedsTwoOpenEndpoints);
+                }
+                self.splice_join(oa, data_a, na, ob, data_b, nb)?
+            }
+            Command::TrimAndJoinPaths { a, b } => {
+                let mut data_a = self.path_data(a.object)?;
+                let local_a = data_a
+                    .edit_subpaths_ret(|sp| amalith_core::trim_to_split(sp, a.subpath, a.at_end, a.t))
+                    .ok_or(CommandError::JoinNeedsTwoOpenEndpoints)?;
+                let mut data_b = self.path_data(b.object)?;
+                let local_b = data_b
+                    .edit_subpaths_ret(|sp| amalith_core::trim_to_split(sp, b.subpath, b.at_end, b.t))
+                    .ok_or(CommandError::JoinNeedsTwoOpenEndpoints)?;
+
+                // Force the two trimmed free ends to be bit-identical — two
+                // curves independently evaluated near an approximate
+                // crossing won't naturally land within `join_anchors`'s
+                // tight coincidence epsilon otherwise. Average the two
+                // world-space points and write the shared result back into
+                // each side's own local space.
+                let world_a = self.document.world_transform(a.object);
+                let world_b = self.document.world_transform(b.object);
+                let point_a = world_a * data_a.subpaths()[a.subpath].anchors[local_a].point;
+                let point_b = world_b * data_b.subpaths()[b.subpath].anchors[local_b].point;
+                let shared = point_a.midpoint(point_b);
+                let local_point_a = world_a.inverse() * shared;
+                let local_point_b = world_b.inverse() * shared;
+                data_a.edit_subpaths(|sp| sp[a.subpath].anchors[local_a].point = local_point_a);
+                data_b.edit_subpaths(|sp| sp[b.subpath].anchors[local_b].point = local_point_b);
+
+                let flat_a = amalith_core::anchor_count(&data_a.subpaths()[..a.subpath]) + local_a;
+                let flat_b = amalith_core::anchor_count(&data_b.subpaths()[..b.subpath]) + local_b;
+                self.splice_join(a.object, data_a, flat_a, b.object, data_b, flat_b)?
+            }
             Command::SetWidthPoints { object, points } => {
                 let mut data = self.path_data(object)?;
                 data.width_points = points;
@@ -1658,6 +1698,52 @@ impl Editor {
             _ => return None,
         };
         Some(self.document.world_transform(id) * local)
+    }
+
+    /// Splices two already-resolved `PathData` clones together at `na`/`nb`
+    /// (flat anchor ordinals into each's own `data_a`/`data_b`) and joins
+    /// them — the shared tail of both `Command::JoinAnchors` (whose clones
+    /// are the objects' current path data, untouched) and
+    /// `Command::TrimAndJoinPaths` (whose clones have already been
+    /// trimmed to a shared coincident point). `oa` survives, keeping its
+    /// id/appearance/z-order; when `ob != oa`, `ob`'s clone is transformed
+    /// into `oa`'s local space and appended before joining, then `ob`
+    /// itself is removed.
+    fn splice_join(
+        &self,
+        oa: ObjectId,
+        mut data_a: PathData,
+        na: usize,
+        ob: ObjectId,
+        data_b: PathData,
+        nb: usize,
+    ) -> Result<Vec<Edit>, CommandError> {
+        if oa == ob {
+            data_a.edit_subpaths(|sp| amalith_core::join_anchors(sp, na, nb));
+            return Ok(vec![Edit::SetPathData { id: oa, data: data_a }]);
+        }
+        let obj_a = self.document.object(oa).ok_or(CommandError::ObjectNotFound(oa))?;
+        let obj_b = self.document.object(ob).ok_or(CommandError::ObjectNotFound(ob))?;
+        if obj_a.parent != obj_b.parent {
+            return Err(CommandError::ObjectsSpanMultipleParents);
+        }
+        // `ob`'s geometry expressed in `oa`'s local space — the shared
+        // parent-space factor in each `world_transform` cancels, so this
+        // is correct regardless of whether the parent is a Group or a
+        // Layer, unlike `compile_pathfinder`'s own Group/Layer special-
+        // casing (not needed here since we convert object-to-object
+        // directly rather than through a computed result's own space).
+        let rel = self.document.world_transform(oa).inverse() * self.document.world_transform(ob);
+        let b_in_a_space = PathData::from_bezpath(rel * data_b.geometry.clone());
+        let offset = amalith_core::anchor_count(data_a.subpaths());
+        data_a.edit_subpaths(|sp| {
+            sp.extend(b_in_a_space.subpaths().iter().cloned());
+            amalith_core::join_anchors(sp, na, offset + nb);
+        });
+        Ok(vec![
+            Edit::SetPathData { id: oa, data: data_a },
+            Edit::RemoveObject { id: ob },
+        ])
     }
 
     fn compile_pathfinder(

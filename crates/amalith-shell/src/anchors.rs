@@ -12,6 +12,7 @@ use crate::convert;
 pub fn path_leaves(doc: &Document) -> Vec<ObjectId> {
     fn rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId>) {
         for &id in doc.children_of(parent) {
+            if !doc.object(id).is_some_and(|o| o.visible) { continue; }
             match doc.object(id).map(|o| &o.kind) {
                 Some(kind) if kind.path_data().is_some() => out.push(id),
                 Some(ObjectKind::Group(_)) => rec(doc, ObjectParent::Group(id), out),
@@ -167,6 +168,25 @@ pub fn topmost_anchor_among(
     None
 }
 
+/// Every anchor within `radius` document units of `p`, across every
+/// visible path — unlike `topmost_anchor_at`/`topmost_anchor_among`
+/// (single-best, stop-at-first-hit-object, a hit-test shape), this is a
+/// genuine scan: every candidate within range, for Smart Guides to then
+/// rank by distance or by kind (an open endpoint outranks a plain anchor)
+/// itself.
+pub fn anchors_within(doc: &Document, p: Point, radius: f64) -> Vec<(ObjectId, usize, Point)> {
+    let r2 = radius * radius;
+    let mut out = Vec::new();
+    for id in path_leaves(doc) {
+        for (i, ap) in anchors_of(doc, id) {
+            if (ap - p).hypot2() <= r2 {
+                out.push((id, i, ap));
+            }
+        }
+    }
+    out
+}
+
 /// Every anchor of `ids` whose position falls inside `doc_rect`.
 pub fn within_of(doc: &Document, ids: &[ObjectId], doc_rect: Rect) -> Vec<(ObjectId, usize)> {
     let mut out = Vec::new();
@@ -227,4 +247,32 @@ pub fn deformed_handle(
         amalith_core::set_handle(&mut sp, n, side, Some(moved));
     }
     amalith_core::PathData::from_subpaths(sp)
+}
+
+#[cfg(test)]
+mod smart_guide_tests {
+    use super::*;
+    use amalith_core::{Layer, LayerId, Object, PathData, GroupData};
+
+    #[test]
+    fn hidden_paths_and_hidden_ancestors_never_contribute_anchors() {
+        let mut doc=Document::new("visibility");
+        let layer=LayerId::new();
+        doc.insert_layer(Layer::new(layer,"Layer"),0);
+        let group=ObjectId::new();
+        doc.insert_object(Object::new(group,ObjectParent::Layer(layer),ObjectKind::Group(GroupData::default())),0).unwrap();
+        let path=ObjectId::new();
+        let mut geometry=amalith_core::geom::BezPath::new();
+        geometry.move_to((0.,0.)); geometry.line_to((10.,0.));
+        doc.insert_object(Object::new(path,ObjectParent::Group(group),ObjectKind::Path(PathData::from_bezpath(geometry))),0).unwrap();
+        assert_eq!(anchors_within(&doc,Point::ZERO,4.).len(),1);
+        doc.object_mut(path).unwrap().visible=false;
+        assert!(anchors_within(&doc,Point::ZERO,4.).is_empty());
+        doc.object_mut(path).unwrap().visible=true;
+        doc.object_mut(group).unwrap().visible=false;
+        assert!(anchors_within(&doc,Point::ZERO,4.).is_empty());
+        doc.object_mut(group).unwrap().visible=true;
+        doc.layer_mut(layer).unwrap().visible=false;
+        assert!(anchors_within(&doc,Point::ZERO,4.).is_empty());
+    }
 }

@@ -85,6 +85,22 @@ pub fn transformed_bounds(transform: Affine, rect: Rect) -> Bounds {
     transform.transform_rect_bbox(rect)
 }
 
+/// Where two straight segments cross, if at all (both parameters in
+/// `0..=1`) — standard parametric line-segment intersection. Shared by the
+/// Join tool's overlap-trim scrub and Smart Guides' path-crossing
+/// candidates, rather than each keeping its own copy of this math.
+pub fn segment_intersection(p1: Point, p2: Point, p3: Point, p4: Point) -> Option<Point> {
+    let d1 = p2 - p1;
+    let d2 = p4 - p3;
+    let denom = d1.x * d2.y - d1.y * d2.x;
+    if denom.abs() <= 1e-12 * d1.hypot() * d2.hypot() {
+        return None;
+    }
+    let t = ((p3.x - p1.x) * d2.y - (p3.y - p1.y) * d2.x) / denom;
+    let u = ((p3.x - p1.x) * d1.y - (p3.y - p1.y) * d1.x) / denom;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then(|| p1 + d1 * t)
+}
+
 /// Unions two optional bounds, treating `None` as "no contribution yet".
 ///
 /// Used when folding bounds over a list of children that may be empty or
@@ -133,5 +149,40 @@ mod tests {
         assert_eq!(union_bounds(Some(a), None), Some(a));
         assert_eq!(union_bounds(None, Some(a)), Some(a));
         assert_eq!(union_bounds(None, None), None);
+    }
+
+    #[test]
+    fn segment_intersection_is_independent_of_document_scale() {
+        for scale in [1e-6, 1.0, 1e6] {
+            let p = segment_intersection(Point::new(0.0,0.0), Point::new(scale,scale), Point::new(0.0,scale), Point::new(scale,0.0)).unwrap();
+            assert!((p.x/scale-0.5).abs() < 1e-12);
+            assert!((p.y/scale-0.5).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn segment_intersection_finds_a_crossing() {
+        let p = segment_intersection(
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 10.0),
+            Point::new(0.0, 10.0),
+            Point::new(10.0, 0.0),
+        )
+        .unwrap();
+        assert!((p - Point::new(5.0, 5.0)).hypot() < 1e-9);
+    }
+
+    #[test]
+    fn segment_intersection_none_when_parallel_or_out_of_range() {
+        // Parallel.
+        assert!(segment_intersection(
+            Point::new(0.0, 0.0), Point::new(10.0, 0.0),
+            Point::new(0.0, 1.0), Point::new(10.0, 1.0),
+        ).is_none());
+        // Would cross if extended, but not within either segment's 0..=1.
+        assert!(segment_intersection(
+            Point::new(0.0, 0.0), Point::new(1.0, 1.0),
+            Point::new(5.0, 0.0), Point::new(6.0, 1.0),
+        ).is_none());
     }
 }

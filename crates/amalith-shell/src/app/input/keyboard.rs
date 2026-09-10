@@ -95,6 +95,27 @@ impl App {
             if !event.state.is_pressed() {
                 return;
             }
+            if self.prefs.as_ref().is_some_and(|p| p.sg_angle_edit.is_some()) {
+                let mods = textedit::Mods { shift: self.shift_down, alt: self.alt_down, meta: self.cmd_down };
+                if self.clipboard.is_none() { self.clipboard = arboard::Clipboard::new().ok(); }
+                let p = self.prefs.as_mut().unwrap();
+                let resp = p.sg_angle_edit.as_mut().unwrap().1.key(&event.logical_key,mods,event.text.as_deref(),self.clipboard.as_mut(),&mut self.text);
+                match resp {
+                    crate::text_field::Resp::Cancel => p.sg_angle_edit = None,
+                    crate::text_field::Resp::Submit => p.commit_sg_angle(),
+                    crate::text_field::Resp::Tab(back) => {
+                        let i = p.sg_angle_edit.as_ref().unwrap().0;
+                        p.commit_sg_angle();
+                        let next = (i + if back { 5 } else { 1 }) % 6;
+                        let mut f = crate::text_field::TextField::new(&p.working.sg_angles[next].to_string());
+                        f.select_all(&mut self.text);
+                        p.sg_angle_edit = Some((next,f));
+                    }
+                    _ => {}
+                }
+                self.request_main_redraw();
+                return;
+            }
             // Typing a name for a new shortcut preset.
             if self.prefs.as_ref().is_some_and(|p| p.naming.is_some()) {
                 let mods = textedit::Mods {
@@ -590,6 +611,13 @@ impl App {
                     // ⌘Y — toggle Outline (wireframe) view.
                     KeyCode::KeyY if !self.shift_down => {
                         self.toggle_outline_mode();
+                    }
+                    // ⌘U — toggle Smart Guides. Redundant with the native
+                    // menu's own accelerator on macOS, but needed on
+                    // Windows, where muda's accelerator only labels the
+                    // menu and doesn't itself fire the keystroke.
+                    KeyCode::KeyU if !self.shift_down => {
+                        self.toggle_smart_guides();
                     }
                     // View zoom: ⌘+ / ⌘− step, ⌘0 fit, ⌘1 actual size.
                     // `Equal` is the `=`/`+` key; on most layouts ⌘+ needs

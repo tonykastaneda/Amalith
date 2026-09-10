@@ -277,6 +277,7 @@ impl App {
         }
         // The Preferences modal.
         if self.prefs.is_some() {
+            self.prefs.as_mut().unwrap().commit_sg_angle();
             let hit = self.prefs.as_mut().unwrap().on_press(self.pointer);
             match hit {
                 prefs::Hit::Backdrop | prefs::Hit::Cancel => self.prefs = None,
@@ -397,6 +398,42 @@ impl App {
                 prefs::Hit::SetCullInset(v) => {
                     if let Some(p) = &mut self.prefs {
                         p.working.cull_inset = v;
+                    }
+                }
+                prefs::Hit::ToggleSgFeature(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        let s = &mut p.working;
+                        let slot = [
+                            &mut s.sg_alignment_guides,
+                            &mut s.sg_anchor_path_labels,
+                            &mut s.sg_object_highlighting,
+                            &mut s.sg_measurement_labels,
+                            &mut s.sg_construction_guides,
+                            &mut s.sg_transform_tools,
+                            &mut s.sg_spacing_guides,
+                        ];
+                        if let Some(v) = slot.into_iter().nth(i) {
+                            *v = !*v;
+                        }
+                    }
+                }
+                prefs::Hit::SetSgTolerance(v) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.sg_tolerance = v;
+                    }
+                }
+                prefs::Hit::EditSgAngle(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        let mut field = crate::text_field::TextField::new(&p.working.sg_angles[i].to_string());
+                        field.select_all(&mut self.text);
+                        p.sg_angle_edit = Some((i,field));
+                    }
+                }
+                prefs::Hit::SetSgAngle(i, v) => {
+                    if let Some(p) = &mut self.prefs {
+                        if let Some(slot) = p.working.sg_angles.get_mut(i) {
+                            *slot = v.rem_euclid(180.0);
+                        }
                     }
                 }
                 prefs::Hit::None => {
@@ -823,6 +860,11 @@ impl App {
                 if self.active_tool == Tool::Width && self.width_tool_press() {
                     return;
                 }
+                // Join tool: press near an open path's free endpoint arms
+                // the endpoint-connect / overlap-trim drag.
+                if self.active_tool == Tool::Join && self.join_tool_press() {
+                    return;
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under
@@ -1108,6 +1150,12 @@ impl App {
                         self.request_main_redraw();
                         return;
                     }
+                    // Return to the last point to end its outgoing tangent,
+                    // allowing the next segment to leave a curve as a corner.
+                    if smart_guides::finish_pen_tangent(&mut self.pen,dp,4.0/self.doc.view.zoom) {
+                        self.request_main_redraw();
+                        return;
+                    }
                     let close_r = 8.0 / self.doc.view.zoom;
                     if self.pen.len() >= 3
                         && self
@@ -1118,7 +1166,8 @@ impl App {
                         self.commit_pen(true);
                         return;
                     }
-                    let p = constrained(self.pen.last().map(|a| a.point), dp, self.shift_down);
+                    let (p, hit) = self.sg_pen_snap(dp);
+                    self.smart_guide_hit = hit;
                     self.pen.push(PenAnchor {
                         point: p,
                         handle_in: None,
@@ -1141,6 +1190,8 @@ impl App {
                 if self.active_tool.is_shape()
                     || matches!(self.active_tool, Tool::Line | Tool::Arc | Tool::Spiral)
                 {
+                    let (dp,hit)=self.sg_point_snap(dp,&[]);
+                    self.smart_guide_hit=hit;
                     self.drag = Drag::DrawShape {
                         tool: self.active_tool,
                         start_doc: dp,

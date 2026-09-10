@@ -169,7 +169,8 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Blend => KeyChord::plain(KeyW),
         Tool::Width => KeyChord::with_shift(KeyW),
         Tool::FreeTransform => KeyChord::plain(KeyE),
-        Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral => {
+        Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral
+        | Tool::Join => {
             return None
         }
     })
@@ -280,6 +281,30 @@ pub struct Settings {
     /// "Selection & Anchor Display" preference. Independent of
     /// `ui_scale`; see [`crate::handle_scale`].
     pub handle_size: crate::handle_scale::HandleSize,
+    /// Smart Guides master switch (⌘U) — unlike `outline_mode`/
+    /// `transparency_grid` (plain `App` fields, reset every launch), this
+    /// one is a real persisted preference: users expect ⌘U to stay how
+    /// they left it, the way Illustrator's own does.
+    pub smart_guides_enabled: bool,
+    /// Dashed alignment lines to other objects' edges/center while moving.
+    pub sg_alignment_guides: bool,
+    /// The "anchor"/"path"/"endpoint" hover labels.
+    pub sg_anchor_path_labels: bool,
+    /// Highlights the exact path under the cursor (useful inside groups).
+    pub sg_object_highlighting: bool,
+    /// Distance/angle readouts while drawing or dragging.
+    pub sg_measurement_labels: bool,
+    /// Preset-angle guides from the last anchor while drawing with the Pen.
+    pub sg_construction_guides: bool,
+    /// A reference guide at the original angle/size while scaling/rotating.
+    pub sg_transform_tools: bool,
+    /// Equal-gap labels when 3+ objects line up with matching spacing.
+    pub sg_spacing_guides: bool,
+    /// Screen-px snapping tolerance — Illustrator's own default is 4.
+    pub sg_tolerance: f64,
+    /// Construction Guides' preset angles (degrees from the last anchor);
+    /// 6 slots, matching Illustrator's own Smart Guides preferences.
+    pub sg_angles: [f64; 6],
 }
 
 impl Settings {
@@ -305,6 +330,16 @@ impl Default for Settings {
             show_cull_outline: false,
             cull_inset: crate::canvas::CULL_INSET,
             handle_size: crate::handle_scale::HandleSize::default(),
+            smart_guides_enabled: true,
+            sg_alignment_guides: true,
+            sg_anchor_path_labels: true,
+            sg_object_highlighting: true,
+            sg_measurement_labels: true,
+            sg_construction_guides: true,
+            sg_transform_tools: true,
+            sg_spacing_guides: true,
+            sg_tolerance: 4.0,
+            sg_angles: [0.0, 45.0, 90.0, 135.0, 0.0, 0.0],
         }
     }
 }
@@ -319,7 +354,7 @@ pub const ACCENTS: [(&str, [u8; 3]); 6] = [
     ("Graphite", [0x9a, 0x9a, 0x9a]),
 ];
 
-pub const CATEGORIES: [&str; 4] = ["General", "Keyboard", "Scripts", "Debug"];
+pub const CATEGORIES: [&str; 5] = ["General", "Smart Guides", "Keyboard", "Scripts", "Debug"];
 
 fn metric_w() -> f64 { crate::metrics::with(|m| m.prefs_w) }
 fn metric_h() -> f64 { crate::metrics::with(|m| m.prefs_h) }
@@ -345,6 +380,15 @@ pub struct Prefs {
     check_cull: Rect,
     cull_up: Rect,
     cull_down: Rect,
+    /// Smart Guides page: the 7 sub-feature checkboxes, in declaration
+    /// order (see `SG_CHECK_LABELS`).
+    sg_checks: Vec<Rect>,
+    sg_tolerance_up: Rect,
+    sg_tolerance_down: Rect,
+    /// Smart Guides page: one (up, down) pair per `Settings.sg_angles` slot.
+    sg_angle_steppers: Vec<(Rect, Rect)>,
+    sg_angle_fields: Vec<Rect>,
+    pub sg_angle_edit: Option<(usize, crate::text_field::TextField)>,
     accent_swatches: Vec<(Rect, [u8; 3])>,
     scale_buttons: Vec<(Rect, f64)>,
     handle_size_buttons: Vec<(Rect, crate::handle_scale::HandleSize)>,
@@ -383,6 +427,13 @@ pub enum Hit {
     SetAccent([u8; 3]),
     SetUiScale(f64),
     SetHandleSize(crate::handle_scale::HandleSize),
+    /// Smart Guides page: toggle sub-feature `i` (index into the page's
+    /// own declaration order — see `paint_smart_guides`'s `LABELS`).
+    ToggleSgFeature(usize),
+    SetSgTolerance(f64),
+    /// Smart Guides page: set construction-guide angle slot `i`.
+    SetSgAngle(usize, f64),
+    EditSgAngle(usize),
     /// Keyboard page: start capturing a key for this binding.
     StartRecording(BindTarget),
     /// Keyboard page: restore the factory shortcuts.
@@ -400,6 +451,14 @@ pub enum Hit {
 }
 
 impl Prefs {
+    pub fn commit_sg_angle(&mut self) {
+        if let Some((slot,field)) = self.sg_angle_edit.take() {
+            if let Ok(v) = field.text().trim().trim_end_matches('°').parse::<f64>() {
+                if v.is_finite() { self.working.sg_angles[slot] = v.rem_euclid(180.0); }
+            }
+        }
+    }
+
     pub fn new(
         current: Settings,
         scripts: crate::scripts::ScriptsConfig,
@@ -431,6 +490,12 @@ impl Prefs {
             check_cull: Rect::ZERO,
             cull_up: Rect::ZERO,
             cull_down: Rect::ZERO,
+            sg_checks: Vec::new(),
+            sg_tolerance_up: Rect::ZERO,
+            sg_tolerance_down: Rect::ZERO,
+            sg_angle_steppers: Vec::new(),
+            sg_angle_fields: Vec::new(),
+            sg_angle_edit: None,
             accent_swatches: Vec::new(),
             scale_buttons: Vec::new(),
             handle_size_buttons: Vec::new(),
@@ -522,6 +587,26 @@ impl Prefs {
         }
         for (r, scale) in &self.scale_buttons {
             if r.contains(p) { return Hit::SetUiScale(*scale); }
+        }
+        for (i, r) in self.sg_checks.iter().enumerate() {
+            if r.contains(p) { return Hit::ToggleSgFeature(i); }
+        }
+        if self.sg_tolerance_up.contains(p) {
+            return Hit::SetSgTolerance((self.working.sg_tolerance + 0.5).min(50.0));
+        }
+        if self.sg_tolerance_down.contains(p) {
+            return Hit::SetSgTolerance((self.working.sg_tolerance - 0.5).max(0.5));
+        }
+        for (i, (up, down)) in self.sg_angle_steppers.iter().enumerate() {
+            if up.contains(p) {
+                return Hit::SetSgAngle(i, self.working.sg_angles[i] + 15.0);
+            }
+            if down.contains(p) {
+                return Hit::SetSgAngle(i, self.working.sg_angles[i] - 15.0);
+            }
+        }
+        for (i,r) in self.sg_angle_fields.iter().enumerate() {
+            if r.contains(p) { return Hit::EditSgAngle(i); }
         }
         for (r, size) in &self.handle_size_buttons {
             if r.contains(p) { return Hit::SetHandleSize(*size); }
@@ -623,6 +708,11 @@ impl Prefs {
         self.check_cull = Rect::ZERO;
         self.cull_up = Rect::ZERO;
         self.cull_down = Rect::ZERO;
+        self.sg_checks.clear();
+        self.sg_tolerance_up = Rect::ZERO;
+        self.sg_tolerance_down = Rect::ZERO;
+        self.sg_angle_steppers.clear();
+        self.sg_angle_fields.clear();
         self.reset_keys = Rect::ZERO;
         self.scripts_choose = Rect::ZERO;
         self.scripts_clear = Rect::ZERO;
@@ -637,18 +727,24 @@ impl Prefs {
         };
 
         if self.category == 1 {
-            self.paint_keyboard(scene, tcx, theme, px, oy);
+            self.paint_smart_guides(scene, tcx, theme, px, oy);
             footer(self, scene, tcx);
             return;
         }
 
         if self.category == 2 {
-            self.paint_scripts(scene, tcx, theme, px, oy);
+            self.paint_keyboard(scene, tcx, theme, px, oy);
             footer(self, scene, tcx);
             return;
         }
 
         if self.category == 3 {
+            self.paint_scripts(scene, tcx, theme, px, oy);
+            footer(self, scene, tcx);
+            return;
+        }
+
+        if self.category == 4 {
             self.paint_debug(scene, tcx, theme, px, oy);
             footer(self, scene, tcx);
             return;
@@ -965,6 +1061,74 @@ impl Prefs {
     }
 
     /// The Debug page — cull-outline visibility and distance.
+    /// The Smart Guides page: the 7 Illustrator sub-feature checkboxes,
+    /// the snapping-tolerance stepper, and 6 construction-guide angle
+    /// steppers.
+    fn paint_smart_guides(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        theme: &Theme,
+        px: f64,
+        oy: f64,
+    ) {
+        let mut cy = oy + ui_px(60.0);
+        tcx.draw(scene, "Smart Guides", 13.0, theme.text, px, cy);
+        cy += ui_px(30.0);
+
+        const LABELS: [(&str, fn(&Settings) -> bool); 7] = [
+            ("Alignment Guides", |s| s.sg_alignment_guides),
+            ("Anchor/Path Labels", |s| s.sg_anchor_path_labels),
+            ("Object Highlighting", |s| s.sg_object_highlighting),
+            ("Measurement Labels", |s| s.sg_measurement_labels),
+            ("Construction Guides", |s| s.sg_construction_guides),
+            ("Transform Tools", |s| s.sg_transform_tools),
+            ("Spacing Guides", |s| s.sg_spacing_guides),
+        ];
+        for (label, get) in LABELS {
+            let r = checkbox(scene, tcx, theme, px, cy, label, get(&self.working));
+            self.sg_checks.push(r);
+            cy += ui_px(26.0);
+        }
+        cy += ui_px(10.0);
+
+        tcx.draw(scene, "Snapping Tolerance", 12.0, theme.text_dim, px, cy + ui_px(14.0));
+        let fx = px + ui_px(170.0);
+        let field = Rect::new(fx, cy, fx + ui_px(90.0), cy + ui_px(22.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(ui_px(4.0)));
+        tcx.draw(scene, &format!("{} px", trim(self.working.sg_tolerance)), 12.0, theme.text, fx + ui_px(8.0), cy + ui_px(15.0));
+        self.sg_tolerance_up = Rect::new(field.x1 - ui_px(16.0), cy + 1.0, field.x1, cy + ui_px(11.0));
+        self.sg_tolerance_down = Rect::new(field.x1 - ui_px(16.0), cy + ui_px(11.0), field.x1, cy + ui_px(21.0));
+        tri(scene, self.sg_tolerance_up.center(), true, theme.text_dim);
+        tri(scene, self.sg_tolerance_down.center(), false, theme.text_dim);
+        cy += ui_px(38.0);
+
+        tcx.draw(scene, "Construction Guide Angles", 12.0, theme.text_dim, px, cy + ui_px(14.0));
+        cy += ui_px(20.0);
+        let step_w = ui_px(58.0);
+        for (i, deg) in self.working.sg_angles.into_iter().enumerate() {
+            let x = px + i as f64 * (step_w + ui_px(6.0));
+            let field = Rect::new(x, cy, x + step_w, cy + ui_px(22.0));
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &field.to_rounded_rect(ui_px(4.0)));
+            scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &field.to_rounded_rect(ui_px(4.0)));
+            tcx.draw(scene, &format!("{}°", trim(deg)), 11.5, theme.text, x + ui_px(6.0), cy + ui_px(15.0));
+            let up = Rect::new(field.x1 - ui_px(14.0), cy + 1.0, field.x1, cy + ui_px(11.0));
+            let down = Rect::new(field.x1 - ui_px(14.0), cy + ui_px(11.0), field.x1, cy + ui_px(21.0));
+            tri(scene, up.center(), true, theme.text_dim);
+            tri(scene, down.center(), false, theme.text_dim);
+            self.sg_angle_steppers.push((up, down));
+            let input = Rect::new(field.x0,field.y0,up.x0,field.y1);
+            self.sg_angle_fields.push(input);
+            if let Some((slot,editor)) = &mut self.sg_angle_edit {
+                if *slot == i { editor.paint(scene,tcx,theme,input,"Angle",true); }
+            }
+        }
+        cy += ui_px(38.0);
+
+        tcx.draw(scene, "Click an angle to type a value. Tolerance stays constant on screen.", 11.0, theme.text_dim, px, cy + ui_px(4.0));
+    }
+
     fn paint_debug(
         &mut self,
         scene: &mut Scene,
@@ -1202,6 +1366,29 @@ fn button(
 mod scale_tests {
     use super::*;
     use crate::window_dpi::WindowDpi;
+
+    #[test]
+    fn smart_guide_angle_fields_are_editable_and_stay_inside_the_card() {
+        let mut p=Prefs::new(Settings::default(),Default::default(),Default::default());
+        p.category=1;
+        let mut text=TextContext::new();
+        p.paint(&mut Scene::new(),&mut text,&Theme::default(),1800.0,1000.0);
+        assert_eq!(p.sg_angle_fields.len(),6);
+        for (i,r) in p.sg_angle_fields.clone().into_iter().enumerate() {
+            assert!(p.card().contains(r.origin()));
+            assert!(r.y1 < p.ok.y0);
+            assert!(matches!(p.on_press(r.center()),Hit::EditSgAngle(j) if i==j));
+        }
+        p.sg_angle_edit=Some((2,crate::text_field::TextField::new("22.5")));
+        p.commit_sg_angle();
+        assert_eq!(p.working.sg_angles[2],22.5);
+        p.sg_angle_edit=Some((2,crate::text_field::TextField::new("NaN")));
+        p.commit_sg_angle();
+        assert_eq!(p.working.sg_angles[2],22.5);
+        p.category=0;
+        p.paint(&mut Scene::new(),&mut text,&Theme::default(),1800.0,1000.0);
+        assert!(p.sg_angle_fields.is_empty());
+    }
 
     #[test]
     fn scale_buttons_share_painted_hit_geometry_at_each_dpi() {

@@ -34,7 +34,7 @@ mod history;
 mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
-pub use command::{Command, CommandOutcome, GradientRef, PasteStack, PathfinderOp};
+pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, PasteStack, PathfinderOp};
 pub use pathfinder::{has_visible_stroke, offset_path};
 pub use editor::Editor;
 pub use error::CommandError;
@@ -135,6 +135,85 @@ mod tests {
         let children = editor.document().children_of(amalith_core::ObjectParent::Layer(layer));
         assert_eq!(children.len(), 1);
         assert_eq!(children[0], id);
+    }
+
+    #[test]
+    fn join_anchors_cross_object_absorbs_the_other_and_undo_fully_restores_both() {
+        use amalith_core::Point;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let path_a = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: path_a, name: Some("A".into()) })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let path_b = amalith_core::PathData::polyline(&[Point::new(20.0, 0.0), Point::new(30.0, 0.0)]);
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath { layer, path: path_b, name: Some("B".into()) })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let a_before = editor.document().object(a).unwrap().clone();
+        let b_before = editor.document().object(b).unwrap().clone();
+        let children_before = editor.document().children_of(ObjectParent::Layer(layer)).to_vec();
+        assert_eq!(children_before, vec![a, b]);
+
+        // Join `a`'s last anchor (ordinal 1) to `b`'s first anchor
+        // (ordinal 0) — `a` survives, `b` is absorbed and removed.
+        editor
+            .execute(Command::JoinAnchors { anchor_a: (a, 1), anchor_b: (b, 0) })
+            .unwrap();
+
+        assert!(editor.document().object(b).is_none(), "the absorbed object is gone");
+        let merged = editor.document().object(a).unwrap().kind.path_data().unwrap();
+        assert_eq!(merged.subpaths().len(), 1);
+        let pts: Vec<Point> = merged.subpaths()[0].anchors.iter().map(|anc| anc.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(30.0, 0.0)]);
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[a]);
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(a).unwrap(), &a_before, "survivor's id/appearance/geometry restored exactly");
+        assert_eq!(editor.document().object(b).unwrap(), &b_before, "absorbed object reappears exactly as it was");
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), children_before.as_slice(), "z-order restored");
+    }
+
+    #[test]
+    fn join_anchors_same_object_closes_a_single_open_path() {
+        use amalith_core::Point;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        // `polygon` closes itself; a genuinely open triangle outline
+        // needs `polyline` instead, so this test exercises the "close an
+        // open path" branch of `join_anchors`.
+        let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(5.0, 10.0)]);
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreatePath { layer, path: open, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor.execute(Command::JoinAnchors { anchor_a: (id, 0), anchor_b: (id, 2) }).unwrap();
+        let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        assert_eq!(data.subpaths().len(), 1);
+        assert!(data.subpaths()[0].closed);
+        assert_eq!(data.subpaths()[0].anchors.len(), 3, "distinct ends stay distinct, just closed");
+
+        editor.undo().unwrap();
+        let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        assert!(!data.subpaths()[0].closed);
     }
 
     #[test]

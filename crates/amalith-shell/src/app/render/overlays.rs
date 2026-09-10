@@ -332,6 +332,105 @@ impl App {
         }
     }
 
+    /// Join-tool live preview: a rubber-band line from the drag's origin
+    /// endpoint to wherever it's currently over — a snapped endpoint, an
+    /// overlap crossing, or (while over nothing joinable) the bare
+    /// pointer — plus a small dot marking the current target.
+    pub(in crate::app) fn paint_join_preview(&mut self) {
+        if self.active_tool != Tool::Join {
+            return;
+        }
+        let Drag::JoinScrub { from, target, .. } = &self.drag else { return };
+        let Some(from_c) = self.join_candidates().into_iter().find(|c| (c.object, c.anchor) == *from) else {
+            return;
+        };
+        let accent = self.theme.accent;
+        let end = match target {
+            Some(join_tool::JoinTarget::Endpoint { point, .. }) => *point,
+            Some(join_tool::JoinTarget::Overlap { point, .. }) => *point,
+            None => self.pointer,
+        };
+        self.content.stroke(&Stroke::new(1.5), ID, accent, None, &Line::new(from_c.point, end));
+        self.content.fill(Fill::NonZero, ID, accent, None, &vello::kurbo::Circle::new(end, 4.0));
+    }
+
+    /// All guide geometry is clipped to the canvas, never over panels or menus.
+    pub(in crate::app) fn paint_smart_guides(&mut self) {
+        if !self.settings.smart_guides_enabled || self.pointer_win != self.main_id
+            || self.prefs.is_some() || self.ctx_menu.is_some() || self.palette.is_some() {
+            return;
+        }
+        let viewport = self.canvas_viewport();
+        if !viewport.contains(self.pointer) && matches!(self.drag, Drag::None) { return; }
+        let to_screen = self.doc.view.to_screen();
+        let ink = smart_guides::SMART_GUIDE_INK;
+        let (wl,hl) = self.main_logical_size().unwrap_or((1280.0,800.0));
+        self.content.push_clip_layer(Fill::NonZero, ID, &viewport);
+        if self.settings.sg_object_highlighting && matches!(self.drag, Drag::None) {
+            if let Some(id) = self.sg_hovered_path {
+                let doc = self.doc.editor.document();
+                if let Some(pd) = doc.object(id).and_then(|o| o.kind.path_data()) {
+                    // Transform the real path, retaining MoveTo boundaries; never
+                    // connect separate contours with a synthetic straight line.
+                    let path = to_screen * convert::affine(doc.world_transform(id)) * convert::bez_path(&pd.geometry);
+                    self.content.stroke(&Stroke::new(1.0), ID, ink.with_alpha(0.65), None, &path);
+                }
+            }
+        }
+        if let Some(hit) = self.smart_guide_hit.clone() { self.paint_smart_guide_hit(hit); }
+        if let Some(label) = self.sg_measurement_text() {
+            draw_tooltip(&mut self.content, &mut self.text, &self.theme, &label, self.pointer + Vec2::new(16.0,24.0), wl,hl);
+        }
+        self.content.pop_layer();
+    }
+
+    fn paint_smart_guide_hit(&mut self, hit: smart_guides::SmartGuideHit) {
+        use smart_guides::{SmartGuideHit as Hit, Axis};
+        let to_screen = self.doc.view.to_screen();
+        let ink = smart_guides::SMART_GUIDE_INK;
+        let viewport = self.canvas_viewport();
+        let (wl,hl) = self.main_logical_size().unwrap_or((1280.0,800.0));
+        let dash = Stroke::new(1.0).with_dashes(0.0, [4.0,3.0]);
+        match hit {
+            Hit::Multiple(hits) => for hit in hits { self.paint_smart_guide_hit(hit); },
+            Hit::AlignEdge { axis, value } => {
+                let (a,b) = match axis {
+                    Axis::X => { let x = (to_screen*Point::new(value,0.0)).x; (Point::new(x,viewport.y0),Point::new(x,viewport.y1)) },
+                    Axis::Y => { let y = (to_screen*Point::new(0.0,value)).y; (Point::new(viewport.x0,y),Point::new(viewport.x1,y)) },
+                };
+                self.content.stroke(&dash,ID,ink,None,&Line::new(a,b));
+            }
+            Hit::ConstructionAngle { from, degrees } => {
+                let sp = to_screen*from;
+                let dir = Vec2::new(degrees.to_radians().cos(),-degrees.to_radians().sin());
+                self.content.stroke(&dash,ID,ink,None,&Line::new(sp,sp+dir*(wl+hl)));
+                draw_tooltip(&mut self.content,&mut self.text,&self.theme,&format!("{degrees:.1}°"),self.pointer+Vec2::new(12.0,-24.0),wl,hl);
+            }
+            Hit::Spacing { gap_a, gap_b, px } => {
+                for (a,b) in [gap_a,gap_b] {
+                    let a = to_screen*a; let b = to_screen*b;
+                    self.content.stroke(&dash,ID,ink,None,&Line::new(a,b));
+                    let tick = if (b.x-a.x).abs() >= (b.y-a.y).abs() { Vec2::new(0.0,3.0) } else { Vec2::new(3.0,0.0) };
+                    for p in [a,b] { self.content.stroke(&Stroke::new(1.0),ID,ink,None,&Line::new(p-tick,p+tick)); }
+                }
+                draw_tooltip(&mut self.content,&mut self.text,&self.theme,&format!("{px:.1} pt"),to_screen*gap_a.0.midpoint(gap_a.1),wl,hl);
+            }
+            Hit::TransformReference { center, angle } => {
+                let sp = to_screen*center;
+                let dir = Vec2::new(angle.cos(),angle.sin());
+                self.content.stroke(&dash,ID,ink,None,&Line::new(sp,sp+dir*(wl+hl)));
+            }
+            other => {
+                if !self.settings.sg_anchor_path_labels { return; }
+                if let Some(p) = other.point() {
+                    let sp = to_screen*p;
+                    self.content.stroke(&Stroke::new(1.0),ID,ink,None,&vello::kurbo::Circle::new(sp,3.0));
+                    if let Some(label) = other.label() { self.text.draw(&mut self.content,label,11.0,ink,sp.x+8.0,sp.y-8.0); }
+                }
+            }
+        }
+    }
+
     /// The Free Transform tool's on-canvas mode flyout: Constrain,
     /// Transform, Perspective, Free Distort — a row of 4 small buttons
     /// hanging just below the selection.

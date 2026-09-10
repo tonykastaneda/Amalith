@@ -52,4 +52,6 @@ pub enum CommandError {
     CannotReparent,
     #[error("object {0} is not a blend group")]
     NotABlend(ObjectId),
+    #[error("select exactly two open-path endpoints to join")]
+    JoinNeedsTwoOpenEndpoints,
 }

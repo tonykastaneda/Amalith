@@ -26,6 +26,8 @@ mod gradient;
 mod guides;
 mod input;
 mod isolation;
+mod join_tool;
+mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
 mod offset_dialog;
@@ -43,7 +45,7 @@ pub(crate) use std::num::NonZeroUsize;
 pub(crate) use std::sync::Arc;
 pub(crate) use std::time::{Duration, Instant};
 
-pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, PasteStack};
+pub(crate) use amalith_commands::{Command, CommandOutcome, Editor, JoinTrim, PasteStack};
 pub(crate) use amalith_core::{ArtboardId, AssetId, Document, LayerId, ObjectId, StrokeStyle};
 pub(crate) use crate::anchors;
 pub(crate) use crate::canvas::{
@@ -367,6 +369,17 @@ enum Drag {
         index: usize,
         part: width_tool::WidthDragPart,
     },
+    /// Join tool: dragging from open endpoint `from` (flat anchor ordinal)
+    /// toward either another open endpoint (endpoint-connect) or across
+    /// another open path's terminal segment (overlap-trim). `path`
+    /// accumulates every doc-space point visited this gesture. `target` is
+    /// `None` while hovering nothing joinable — the live preview then just
+    /// draws a plain rubber-band line and release is a no-op.
+    JoinScrub {
+        from: (ObjectId, usize),
+        path: Vec<Point>,
+        target: Option<join_tool::JoinTarget>,
+    },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
         tool: Tool,
@@ -550,6 +563,8 @@ enum MenuAction {
     ToggleOutline,
     /// View ▸ Show Transparency Grid (⌘⇧D).
     ToggleTransparencyGrid,
+    /// View ▸ Smart Guides (⌘U).
+    ToggleSmartGuides,
     /// View ▸ Guides.
     ToggleGuides,
     ToggleGuideLock,
@@ -649,6 +664,7 @@ enum CtxAction {
     ToggleGuides,
     ToggleGuideLock,
     ReleaseGuides,
+    Join,
 }
 
 /// What a command-palette row does when chosen.
@@ -1236,6 +1252,12 @@ struct App {
     /// Transparency-grid checkerboard behind transparent artboards —
     /// View ▸ Show Transparency Grid, ⌘⇧D.
     transparency_grid: bool,
+    /// Smart Guides' last hover/drag hit, for the overlay painter — see
+    /// `smart_guides.rs`. Cleared whenever a drag ends or the feature is
+    /// toggled off.
+    smart_guide_hit: Option<smart_guides::SmartGuideHit>,
+    /// Object Highlighting: the path directly under the cursor, hover-only.
+    sg_hovered_path: Option<ObjectId>,
     /// Isolation-mode breadcrumb: the groups drilled into (outermost
     /// first). Empty = not isolated. Selection, hit-testing and the dim
     /// scrim scope to the last entry.
@@ -1428,6 +1450,8 @@ impl App {
             selected_guides: Vec::new(),
             outline_mode: false,
             transparency_grid: false,
+            smart_guide_hit: None,
+            sg_hovered_path: None,
             isolation: Vec::new(),
             iso_bar: Vec::new(),
             layer_drop: None,
@@ -1511,6 +1535,7 @@ impl App {
             self.guides_locked,
             self.outline_mode,
             self.transparency_grid,
+            self.settings.smart_guides_enabled,
         );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
@@ -2278,6 +2303,22 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// View ▸ Smart Guides (⌘U). Unlike Outline/Transparency Grid, this
+    /// state is a real persisted preference (see `Settings::smart_guides_
+    /// enabled`'s doc comment) — saved immediately, not just held in
+    /// memory for the session.
+    fn toggle_smart_guides(&mut self) {
+        self.settings.smart_guides_enabled = !self.settings.smart_guides_enabled;
+        settings::save(&self.settings);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_smart_guides(self.settings.smart_guides_enabled);
+        }
+        self.smart_guide_hit = None;
+        self.sg_hovered_path = None;
+        self.request_main_redraw();
+    }
+
     fn metric_cm_w() -> f64 { crate::metrics::with(|m| m.app_cm_w) }
     fn metric_cm_row() -> f64 { crate::metrics::with(|m| m.app_cm_row) }
     fn metric_cm_sep() -> f64 { crate::metrics::with(|m| m.app_cm_sep) }
@@ -2338,6 +2379,20 @@ impl App {
         }
     }
 
+    /// The two selected anchors, when both are open-path endpoints —
+    /// right-click Join's enabling condition. Uses `doc.anchor_sel` as-is
+    /// (already populated by shift-click in Direct Selection).
+    fn join_candidate(&self) -> Option<((ObjectId, usize), (ObjectId, usize))> {
+        let [a, b] = self.doc.anchor_sel[..] else { return None };
+        let doc = self.doc.editor.document();
+        let ok = |(id, n): (ObjectId, usize)| {
+            doc.object(id)
+                .and_then(|o| o.kind.path_data())
+                .is_some_and(|pd| amalith_core::anchor_is_open_endpoint(pd.subpaths(), n))
+        };
+        (ok(a) && ok(b)).then_some((a, b))
+    }
+
     /// Build and show the canvas context menu at `at` (screen px).
     fn open_ctx_menu(&mut self, at: Point) {
         let has_guides = !self.doc.editor.document().guides().is_empty();
@@ -2345,6 +2400,7 @@ impl App {
         let has_selection = !self.doc.selection.is_empty();
         let blend_group = self.selected_blend_group();
         let spine_candidate = self.replace_spine_candidate();
+        let join_candidate = self.join_candidate();
         let mut items = vec![
             CtxItem::Action {
                 label: "Reflect…".into(),
@@ -2358,6 +2414,14 @@ impl App {
             },
             CtxItem::Sep,
         ];
+        if !self.doc.anchor_sel.is_empty() {
+            items.push(CtxItem::Action {
+                label: "Join".into(),
+                action: CtxAction::Join,
+                enabled: join_candidate.is_some(),
+            });
+            items.push(CtxItem::Sep);
+        }
         if let [id] = self.doc.selection[..] {
             if let Some(amalith_core::ObjectKind::Text(td)) = self.doc.editor.document().object(id).map(|o| &o.kind) {
                 if let amalith_core::TextKind::Path(pt) = td.kind {
@@ -2480,6 +2544,13 @@ impl App {
                 CtxAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
                 CtxAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
                 CtxAction::ReleaseGuides => self.release_guides(),
+                CtxAction::Join => {
+                    if let Some((a, b)) = self.join_candidate() {
+                        let _ = self.doc.editor.execute(Command::JoinAnchors { anchor_a: a, anchor_b: b });
+                        self.doc.anchor_sel.clear();
+                        self.prune_selection();
+                    }
+                }
             }
         }
         true
@@ -3528,6 +3599,7 @@ impl App {
             }
             MenuAction::ToggleOutline => self.toggle_outline_mode(),
             MenuAction::ToggleTransparencyGrid => self.toggle_transparency_grid(),
+            MenuAction::ToggleSmartGuides => self.toggle_smart_guides(),
             MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
             MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
             MenuAction::ClearGuides => self.clear_guides(),
@@ -7366,6 +7438,7 @@ impl ApplicationHandler for App {
                 self.guides_locked,
                 self.outline_mode,
                 self.transparency_grid,
+                self.settings.smart_guides_enabled,
             );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);
@@ -7474,6 +7547,9 @@ impl ApplicationHandler for App {
             WindowEvent::CursorLeft { .. } => {
                 if Some(id) == self.pointer_win {
                     self.pointer_win = None;
+                    self.smart_guide_hit = None;
+                    self.sg_hovered_path = None;
+                    self.request_main_redraw();
                 }
                 self.update_canvas_cursor();
             }

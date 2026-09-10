@@ -59,6 +59,34 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
     None
 }
 
+/// `(id, bounds)` for every visible, unlocked, layer-direct-child object
+/// overlapping `visible` — Smart Guides' Alignment Guides candidate list.
+/// Same walk as `topmost_selectable_at`, minus `excluding` (the object(s)
+/// currently being dragged, which shouldn't snap to their own bounds).
+pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[ObjectId]) -> Vec<(ObjectId, Rect)> {
+    let mut out = Vec::new();
+    for layer in doc.layers().iter().rev() {
+        if !layer.visible {
+            continue;
+        }
+        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+            if excluding.contains(&id) {
+                continue;
+            }
+            let Some(obj) = doc.object(id) else { continue };
+            if !obj.visible || obj.locked {
+                continue;
+            }
+            if let Some(b) = bounds(doc, id) {
+                if overlaps(b, visible) {
+                    out.push((id, b));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Frontmost direct child of `group` whose bounds contain `point` —
 /// isolation-mode hit-testing, where selection is scoped to one group.
 ///

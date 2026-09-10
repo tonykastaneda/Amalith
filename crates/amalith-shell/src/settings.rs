@@ -90,6 +90,25 @@ fn parse(text: &str) -> Settings {
                     s.handle_size = size;
                 }
             }
+            "smart_guides_enabled" => s.smart_guides_enabled = v == "true",
+            "sg_alignment_guides" => s.sg_alignment_guides = v == "true",
+            "sg_anchor_path_labels" => s.sg_anchor_path_labels = v == "true",
+            "sg_object_highlighting" => s.sg_object_highlighting = v == "true",
+            "sg_measurement_labels" => s.sg_measurement_labels = v == "true",
+            "sg_construction_guides" => s.sg_construction_guides = v == "true",
+            "sg_transform_tools" => s.sg_transform_tools = v == "true",
+            "sg_spacing_guides" => s.sg_spacing_guides = v == "true",
+            "sg_tolerance" => {
+                if let Ok(n) = v.parse::<f64>() {
+                    if n.is_finite() { s.sg_tolerance = n.clamp(0.5, 50.0); }
+                }
+            }
+            "sg_angles" => {
+                let parsed: Vec<f64> = v.split(',').filter_map(|p| p.trim().parse::<f64>().ok()).collect();
+                if let Ok(angles) = <[f64; 6]>::try_from(parsed) {
+                    if angles.iter().all(|a| a.is_finite()) { s.sg_angles = angles; }
+                }
+            }
             _ => {
                 if let Some(name) = k.strip_prefix("tool.") {
                     if let Some(i) = Tool::ALL.iter().position(|t| tool_name(*t) == name) {
@@ -132,7 +151,10 @@ pub fn save(s: &Settings) {
 fn serialize(s: &Settings) -> String {
     let mut body = format!(
         "ui_scale = {}\nnudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\naccent = {:02x}{:02x}{:02x}\n\
-         show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhandle_size = {}\n",
+         show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhandle_size = {}\n\
+         smart_guides_enabled = {}\nsg_alignment_guides = {}\nsg_anchor_path_labels = {}\n\
+         sg_object_highlighting = {}\nsg_measurement_labels = {}\nsg_construction_guides = {}\n\
+         sg_transform_tools = {}\nsg_spacing_guides = {}\nsg_tolerance = {}\nsg_angles = {}\n",
         s.ui_scale,
         s.nudge_step,
         s.show_tooltips,
@@ -144,6 +166,16 @@ fn serialize(s: &Settings) -> String {
         s.show_cull_outline,
         s.cull_inset,
         s.handle_size.id_str(),
+        s.smart_guides_enabled,
+        s.sg_alignment_guides,
+        s.sg_anchor_path_labels,
+        s.sg_object_highlighting,
+        s.sg_measurement_labels,
+        s.sg_construction_guides,
+        s.sg_transform_tools,
+        s.sg_spacing_guides,
+        s.sg_tolerance,
+        s.sg_angles.map(|a| a.to_string()).join(","),
     );
     for (i, tool) in Tool::ALL.iter().enumerate() {
         let v = s.tool_keys[i].map_or_else(String::new, |c| c.to_string());
@@ -184,6 +216,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Arc => "Arc",
         Tool::Spiral => "Spiral",
         Tool::FreeTransform => "FreeTransform",
+        Tool::Join => "Join",
     }
 }
 
@@ -219,6 +252,16 @@ fn parse_hex(v: &str) -> Option<[u8; 3]> {
 mod scale_tests {
     use super::*;
 
+    #[test]
+    fn smart_guides_reject_nonfinite_preferences() {
+        let s=parse("sg_tolerance = NaN\nsg_angles = NaN,45,90,135,0,0\n");
+        assert_eq!(s.sg_tolerance,4.0);
+        assert_eq!(s.sg_angles,Settings::default().sg_angles);
+        let s=parse("sg_tolerance = inf\nsg_angles = 0,45,inf,135,0,0\n");
+        assert_eq!(s.sg_tolerance,4.0);
+        assert_eq!(s.sg_angles,Settings::default().sg_angles);
+    }
+
     /// Every scalar field of `Settings` must survive `save()` → `load()`
     /// (here, the equivalent `serialize`/`parse` pair) unchanged. Both the
     /// struct literal below and the destructure of `round_tripped` list
@@ -251,6 +294,16 @@ mod scale_tests {
             show_cull_outline: true,
             cull_inset: 42.5,
             handle_size: crate::handle_scale::HandleSize::Large,
+            smart_guides_enabled: false,
+            sg_alignment_guides: false,
+            sg_anchor_path_labels: false,
+            sg_object_highlighting: false,
+            sg_measurement_labels: false,
+            sg_construction_guides: false,
+            sg_transform_tools: false,
+            sg_spacing_guides: false,
+            sg_tolerance: 6.5,
+            sg_angles: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         };
         let round_tripped = parse(&serialize(&original));
 
@@ -266,6 +319,16 @@ mod scale_tests {
             show_cull_outline,
             cull_inset,
             handle_size,
+            smart_guides_enabled,
+            sg_alignment_guides,
+            sg_anchor_path_labels,
+            sg_object_highlighting,
+            sg_measurement_labels,
+            sg_construction_guides,
+            sg_transform_tools,
+            sg_spacing_guides,
+            sg_tolerance,
+            sg_angles,
         } = round_tripped;
         assert_eq!(ui_scale, original.ui_scale, "ui_scale did not round-trip");
         assert_eq!(nudge_step, original.nudge_step, "nudge_step did not round-trip");
@@ -278,6 +341,16 @@ mod scale_tests {
         assert_eq!(show_cull_outline, original.show_cull_outline, "show_cull_outline did not round-trip");
         assert_eq!(cull_inset, original.cull_inset, "cull_inset did not round-trip");
         assert_eq!(handle_size, original.handle_size, "handle_size did not round-trip");
+        assert_eq!(smart_guides_enabled, original.smart_guides_enabled, "smart_guides_enabled did not round-trip");
+        assert_eq!(sg_alignment_guides, original.sg_alignment_guides, "sg_alignment_guides did not round-trip");
+        assert_eq!(sg_anchor_path_labels, original.sg_anchor_path_labels, "sg_anchor_path_labels did not round-trip");
+        assert_eq!(sg_object_highlighting, original.sg_object_highlighting, "sg_object_highlighting did not round-trip");
+        assert_eq!(sg_measurement_labels, original.sg_measurement_labels, "sg_measurement_labels did not round-trip");
+        assert_eq!(sg_construction_guides, original.sg_construction_guides, "sg_construction_guides did not round-trip");
+        assert_eq!(sg_transform_tools, original.sg_transform_tools, "sg_transform_tools did not round-trip");
+        assert_eq!(sg_spacing_guides, original.sg_spacing_guides, "sg_spacing_guides did not round-trip");
+        assert_eq!(sg_tolerance, original.sg_tolerance, "sg_tolerance did not round-trip");
+        assert_eq!(sg_angles, original.sg_angles, "sg_angles did not round-trip");
     }
 
     #[test]

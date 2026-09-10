@@ -215,6 +215,26 @@ pub enum Command {
     },
     /// Removes anchor `anchor` (flat ordinal) from `object`.
     DeleteAnchor { object: ObjectId, anchor: usize },
+    /// Joins two open-path endpoint anchors — the Join tool's endpoint-
+    /// connect drag, or the right-click Join context-menu item.
+    /// `anchor_a`'s object always survives (keeps its id, appearance, and
+    /// z-order); when the two anchors belong to different objects,
+    /// `anchor_b`'s object is removed once its geometry (transformed into
+    /// `anchor_a`'s object's local space) has been appended and joined in
+    /// — the two objects must share a parent
+    /// (`CommandError::ObjectsSpanMultipleParents` otherwise, matching
+    /// `PathfinderOp`). Already-coincident endpoints collapse into one
+    /// shared anchor with no extra segment; otherwise a straight segment
+    /// connects them.
+    JoinAnchors {
+        anchor_a: (ObjectId, usize),
+        anchor_b: (ObjectId, usize),
+    },
+    /// The Join tool's overlap-trim drag: trims each of two open paths'
+    /// terminal segments back to where they cross, then joins the two
+    /// newly-coincident free ends — one undo step for the trim and the
+    /// join together.
+    TrimAndJoinPaths { a: JoinTrim, b: JoinTrim },
     /// Replaces `object`'s variable-width stroke profile outright (the
     /// Width tool's add / move / delete of a width point all compile to
     /// this, with the shell recomputing the whole list each time). Empty
@@ -455,6 +475,21 @@ pub enum Command {
         artboard: Option<ArtboardId>,
         spacing: Option<f64>,
     },
+}
+
+/// One side of a [`Command::TrimAndJoinPaths`]: where to cut one open
+/// path back to the shared intersection point the Join tool found.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JoinTrim {
+    pub object: ObjectId,
+    pub subpath: usize,
+    /// The free end being trimmed is that subpath's last anchor (`true`)
+    /// or first anchor (`false`).
+    pub at_end: bool,
+    /// Parameter along the terminal segment, in
+    /// `amalith_core::insert_anchor`/`trim_to_split`'s own
+    /// stored-direction convention.
+    pub t: f64,
 }
 
 /// Illustrator Pathfinder panel operations.

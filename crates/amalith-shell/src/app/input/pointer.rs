@@ -30,12 +30,15 @@ impl App {
         }
         self.update_canvas_cursor();
         self.refresh_tooltip();
+        self.refresh_smart_guides();
         // Redraw so any painted cursor glyph tracks the pointer — this
         // covers the scale / rotate / loaded-text glyphs, not just Glyph.
         // The Rotate tool shows path nodes but keeps the OS crosshair, so
         // it also needs a per-move repaint for the node hover-swell.
         if self.cursor_mode.is_drawn()
             || self.ctx_menu.is_some()
+            || self.smart_guide_hit.is_some()
+            || self.sg_hovered_path.is_some()
             || (matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
                 && !self.doc.selection.is_empty()
                 && matches!(self.drag, Drag::None))
@@ -116,7 +119,19 @@ impl App {
                 let start_doc = *start_doc;
                 let hit = *hit;
                 let already = *moved;
-                let dp = self.doc_point(self.pointer);
+                let raw_dp = self.doc_point(self.pointer);
+                // Smart Guides: snap the whole selection's bounding box to
+                // nearby objects' edges/centers before this becomes the
+                // live position — affects both the preview and the commit,
+                // since both derive from `last_doc`.
+                let (dp, sg_hit) = match select::union_bounds(self.doc.editor.document(), &self.doc.selection) {
+                    Some(bounds) => {
+                        let (delta, hit) = if self.shift_down { (snap8(raw_dp-start_doc),None) } else { self.sg_move_snap(raw_dp - start_doc, bounds, &self.doc.selection) };
+                        (start_doc + delta, hit)
+                    }
+                    None => (raw_dp, None),
+                };
+                self.smart_guide_hit = sg_hit;
                 // Click-to-set-key-object needs a slop so a 1px jitter
                 // isn't treated as a move. Threshold is screen px.
                 let screen = (dp - start_doc).hypot() * self.doc.view.zoom;
@@ -137,9 +152,17 @@ impl App {
             }
             Drag::MoveAnchors { start_doc, .. } => {
                 let start_doc = *start_doc;
+                let exclude: Vec<ObjectId> = self.doc.anchor_sel.iter().map(|&(id, _)| id).collect();
+                let raw = self.doc_point(self.pointer);
+                let origin = self.doc.anchor_sel.iter().flat_map(|&(id,n)| anchors::anchors_of(self.doc.editor.document(), id).into_iter().filter(move |(i,_)| *i == n).map(|(_,p)| p))
+                    .min_by(|a,b| (*a-start_doc).hypot2().total_cmp(&(*b-start_doc).hypot2())).unwrap_or(start_doc);
+                let proposed = origin + (raw-start_doc);
+                let (snapped, hit) = if self.shift_down { (origin+snap8(raw-start_doc),None) } else { self.sg_point_snap(proposed, &exclude) };
+                let dp = start_doc + (snapped-origin);
+                self.smart_guide_hit = hit;
                 self.drag = Drag::MoveAnchors {
                     start_doc,
-                    last_doc: self.doc_point(self.pointer),
+                    last_doc: dp,
                     moved: true,
                 };
                 self.request_main_redraw();
@@ -314,10 +337,13 @@ impl App {
                 tool, start_doc, ..
             } => {
                 let (tool, start_doc) = (*tool, *start_doc);
+                let raw=self.doc_point(self.pointer);
+                let (end,hit)=if self.shift_down { (raw,None) } else { self.sg_point_snap(raw,&[]) };
+                self.smart_guide_hit=hit;
                 self.drag = Drag::DrawShape {
                     tool,
                     start_doc,
-                    cur_doc: self.doc_point(self.pointer),
+                    cur_doc: end,
                 };
                 self.request_main_redraw();
             }
@@ -450,6 +476,14 @@ impl App {
                 self.drag = Drag::WidthPoint { object, points, index, part };
                 self.request_main_redraw();
             }
+            Drag::JoinScrub { from, path, .. } => {
+                let from = *from;
+                let mut path = path.clone();
+                path.push(self.doc_point(self.pointer));
+                let target = self.join_tool_move(from);
+                self.drag = Drag::JoinScrub { from, path, target };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -461,6 +495,9 @@ impl App {
                 let dp = self.doc_point(self.pointer);
                 let constrained = self.shift_down || (self.active_tool == Tool::FreeTransform && self.free_transform_constrain);
                 let m = handles::rotate_transform(center, start_angle, dp, constrained);
+                if self.settings.smart_guides_enabled && self.settings.sg_transform_tools {
+                    self.smart_guide_hit = Some(smart_guides::SmartGuideHit::TransformReference { center, angle: start_angle });
+                }
                 let preview = start_xf.iter().map(|(&id, &s)| {
                     let parent = if self.active_tool == Tool::FreeTransform {
                         let doc = self.doc.editor.document();
@@ -799,6 +836,9 @@ impl App {
                 self.set_tool(t);
             }
         }
+        self.smart_guide_hit = None;
+        self.sg_hovered_path = None;
+        self.request_main_redraw();
         match std::mem::take(&mut self.drag) {
             Drag::None
             | Drag::MasterWidth { .. }
@@ -1017,7 +1057,8 @@ impl App {
                         | Tool::Scale
                         | Tool::Blend
                         | Tool::Width
-                        | Tool::FreeTransform => return,
+                        | Tool::FreeTransform
+                        | Tool::Join => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1300,6 +1341,10 @@ impl App {
             Drag::WidthPoint { object, mut points, index, part } => {
                 self.width_tool_move(object, &mut points, index, part);
                 self.commit_width_point(object, points);
+            }
+            Drag::JoinScrub { from, .. } => {
+                let target = self.join_tool_move(from);
+                self.commit_join(from, target);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

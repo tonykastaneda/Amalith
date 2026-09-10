@@ -84,6 +84,11 @@ impl App {
             PaletteKind::Menu(MenuAction::ToggleTransparencyGrid),
         );
         add(
+            if self.settings.smart_guides_enabled { "Turn Off Smart Guides" } else { "Turn On Smart Guides" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleSmartGuides),
+        );
+        add(
             if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.to_string(),
             "View",
             PaletteKind::Menu(MenuAction::ToggleGuides),

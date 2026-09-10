@@ -24,6 +24,8 @@ pub(in crate::app) struct NativeMenu {
     outline_check: muda::CheckMenuItem,
     /// View ▸ Show Transparency Grid checkmark.
     transparency_grid_check: muda::CheckMenuItem,
+    /// View ▸ Smart Guides checkmark.
+    smart_guides_check: muda::CheckMenuItem,
     /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
     /// selection.
     convert_text_i: muda::MenuItem,
@@ -43,6 +45,7 @@ impl NativeMenu {
         guides_locked: bool,
         outline: bool,
         transparency_grid: bool,
+        smart_guides: bool,
     ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
@@ -215,6 +218,16 @@ impl NativeMenu {
                 Some(Accelerator::new(sup_shift, Code::KeyD)),
             ),
             MenuAction::ToggleTransparencyGrid,
+        );
+        let smart_guides_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Smart Guides",
+                true,
+                smart_guides,
+                Some(Accelerator::new(sup, Code::KeyU)),
+            ),
+            MenuAction::ToggleSmartGuides,
         );
         let guides_show_i = reg(
             &mut items,
@@ -399,6 +412,7 @@ impl NativeMenu {
                 &outline_i,
                 &transparency_grid_i,
                 &sep(),
+                &smart_guides_i,
                 &guides_show_i,
                 &guides_lock_i,
                 &clear_guides_i,
@@ -503,6 +517,7 @@ impl NativeMenu {
             color_mode_checks: (cmyk_i, rgb_i),
             outline_check: outline_i,
             transparency_grid_check: transparency_grid_i,
+            smart_guides_check: smart_guides_i,
             convert_text_i,
             clip_items: (clip_make_i, clip_release_i),
             _menu: menu,
@@ -523,6 +538,11 @@ impl NativeMenu {
     /// Match the View ▸ Show Transparency Grid checkmark to the live toggle.
     pub(in crate::app) fn sync_transparency_grid(&self, on: bool) {
         self.transparency_grid_check.set_checked(on);
+    }
+
+    /// Match the View ▸ Smart Guides checkmark to the live toggle.
+    pub(in crate::app) fn sync_smart_guides(&self, on: bool) {
+        self.smart_guides_check.set_checked(on);
     }
 
     /// Point/area convert item: `Some(true)` = an area-text object is

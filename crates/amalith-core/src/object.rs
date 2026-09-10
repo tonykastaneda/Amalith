@@ -447,12 +447,57 @@ pub fn set_anchor_smooth(subpaths: &mut [Subpath], n: usize, smooth: bool) {
     }
 }
 
+/// Split subpath `subpath`'s segment `local_segment` (0-based within that
+/// subpath only — segment `i` runs from anchor `i` to anchor `i+1`, or
+/// wrapping to anchor 0 for a closed subpath's last segment) at parameter
+/// `t` in `0..=1`, preserving the curve. Returns the new anchor's index
+/// within `subpath`'s own anchor list. Addressed per-subpath (rather than
+/// by a flat cross-subpath ordinal, as [`insert_anchor`] is) so a caller
+/// splitting segments in more than one subpath of the same array within a
+/// single edit doesn't have an earlier split's changed anchor count
+/// silently invalidate a later, pre-computed ordinal — see
+/// [`trim_to_split`], which needs exactly that.
+pub fn insert_anchor_in(subpaths: &mut [Subpath], subpath: usize, local_segment: usize, t: f64) -> Option<usize> {
+    let t = t.clamp(0.0, 1.0);
+    let sp = subpaths.get_mut(subpath)?;
+    let m = sp.anchors.len();
+    let li = local_segment;
+    if li >= if sp.closed { m } else { m.saturating_sub(1) } {
+        return None;
+    }
+    let a = sp.anchors[li];
+    let b = sp.anchors[(li + 1) % m];
+    let straight = a.handle_out.is_none() && b.handle_in.is_none();
+    let c1 = a.handle_out.unwrap_or(a.point);
+    let c2 = b.handle_in.unwrap_or(b.point);
+    let p01 = a.point.lerp(c1, t);
+    let p12 = c1.lerp(c2, t);
+    let p23 = c2.lerp(b.point, t);
+    let p012 = p01.lerp(p12, t);
+    let p123 = p12.lerp(p23, t);
+    let mid = p012.lerp(p123, t);
+    let new = Anchor {
+        point: mid,
+        handle_in: (!straight).then_some(p012),
+        handle_out: (!straight).then_some(p123),
+        mode: if straight {
+            HandleMode::Corner
+        } else {
+            HandleMode::Smooth
+        },
+    };
+    if !straight {
+        sp.anchors[li].handle_out = Some(p01);
+        sp.anchors[(li + 1) % m].handle_in = Some(p23);
+    }
+    sp.anchors.insert(li + 1, new);
+    Some(li + 1)
+}
+
 /// Split segment `seg` (flat ordinal; open subpaths contribute
 /// `anchors-1`, closed contribute `anchors`) at parameter `t` in `0..=1`,
 /// preserving the curve. Returns the new anchor's flat ordinal.
-#[allow(clippy::needless_range_loop)] // index reused for a later &mut borrow
 pub fn insert_anchor(subpaths: &mut [Subpath], seg: usize, t: f64) -> Option<usize> {
-    let t = t.clamp(0.0, 1.0);
     let mut acc_seg = 0;
     let mut acc_anchor = 0;
     for si in 0..subpaths.len() {
@@ -460,39 +505,131 @@ pub fn insert_anchor(subpaths: &mut [Subpath], seg: usize, t: f64) -> Option<usi
         let nseg = if subpaths[si].closed { m } else { m.saturating_sub(1) };
         if seg < acc_seg + nseg {
             let li = seg - acc_seg;
-            let sp = &mut subpaths[si];
-            let a = sp.anchors[li];
-            let b = sp.anchors[(li + 1) % m];
-            let straight = a.handle_out.is_none() && b.handle_in.is_none();
-            let c1 = a.handle_out.unwrap_or(a.point);
-            let c2 = b.handle_in.unwrap_or(b.point);
-            let p01 = a.point.lerp(c1, t);
-            let p12 = c1.lerp(c2, t);
-            let p23 = c2.lerp(b.point, t);
-            let p012 = p01.lerp(p12, t);
-            let p123 = p12.lerp(p23, t);
-            let mid = p012.lerp(p123, t);
-            let new = Anchor {
-                point: mid,
-                handle_in: (!straight).then_some(p012),
-                handle_out: (!straight).then_some(p123),
-                mode: if straight {
-                    HandleMode::Corner
-                } else {
-                    HandleMode::Smooth
-                },
-            };
-            if !straight {
-                sp.anchors[li].handle_out = Some(p01);
-                sp.anchors[(li + 1) % m].handle_in = Some(p23);
-            }
-            sp.anchors.insert(li + 1, new);
-            return Some(acc_anchor + li + 1);
+            return insert_anchor_in(subpaths, si, li, t).map(|new_li| acc_anchor + new_li);
         }
         acc_seg += nseg;
         acc_anchor += m;
     }
     None
+}
+
+/// True when anchor `n` is a free endpoint of an open subpath — the first
+/// or last anchor of a subpath whose `closed` is `false`. The sole
+/// eligibility test for Join, both the canvas tool and the context-menu
+/// item.
+pub fn anchor_is_open_endpoint(subpaths: &[Subpath], n: usize) -> bool {
+    let Some((si, ai)) = locate(subpaths, n) else { return false };
+    let sp = &subpaths[si];
+    !sp.closed && (ai == 0 || ai == sp.anchors.len() - 1)
+}
+
+/// Endpoints within this distance are already effectively the same point —
+/// [`join_anchors`] folds them into one anchor instead of leaving a
+/// (possibly zero-length, but still duplicate) connecting segment.
+const JOIN_EPS: f64 = 1e-6;
+
+/// Reverses a subpath's anchor walk order in place, swapping each anchor's
+/// `handle_in`/`handle_out` so the curve shape is preserved traveling the
+/// other way.
+fn reverse_subpath(sp: &mut Subpath) {
+    sp.anchors.reverse();
+    for a in &mut sp.anchors {
+        std::mem::swap(&mut a.handle_in, &mut a.handle_out);
+    }
+}
+
+/// Joins open-path free endpoints `a` and `b` (flat ordinals). A no-op if
+/// either isn't a genuine open-subpath endpoint ([`anchor_is_open_endpoint`])
+/// or `a == b`.
+///
+/// - **Same subpath** (`a`/`b` are that subpath's two distinct ends):
+///   closes it — coincident ends are folded into one anchor first, else
+///   Illustrator's default straight closing edge is left as-is (kurbo
+///   draws a closed subpath's wrap edge straight whenever neither
+///   adjoining handle is set, so nothing extra is needed for that case).
+/// - **Different subpaths**: concatenated into one. Whichever one's
+///   joining end is its *first* anchor is reversed first so both ends
+///   land tail-to-head; coincident ends are folded the same way.
+///
+/// Ordinals of anchors in *other* subpaths of the same array may shift
+/// after this call (one subpath is removed, one combined one is appended)
+/// — do not reuse a previously-resolved ordinal against `subpaths`
+/// afterward.
+pub fn join_anchors(subpaths: &mut Vec<Subpath>, a: usize, b: usize) {
+    if a == b { return; }
+    if !anchor_is_open_endpoint(subpaths, a) || !anchor_is_open_endpoint(subpaths, b) { return; }
+    let (Some((sa, ia)), Some((sb, ib))) = (locate(subpaths, a), locate(subpaths, b)) else { return };
+
+    if sa == sb {
+        let last = subpaths[sa].anchors.len() - 1;
+        if last == 0 || !((ia == 0 && ib == last) || (ia == last && ib == 0)) {
+            return;
+        }
+        let sp = &mut subpaths[sa];
+        if (sp.anchors[0].point - sp.anchors[last].point).hypot() < JOIN_EPS {
+            let tail = sp.anchors.pop().unwrap();
+            sp.anchors[0].handle_in = tail.handle_in;
+        }
+        sp.closed = true;
+        return;
+    }
+
+    let a_is_end = ia == subpaths[sa].anchors.len() - 1;
+    let b_is_end = ib == subpaths[sb].anchors.len() - 1;
+    let (hi, lo) = (sa.max(sb), sa.min(sb));
+    let sp_hi = subpaths.remove(hi);
+    let sp_lo = subpaths.remove(lo); // `lo < hi`, so removing `hi` first left `lo`'s index untouched.
+    let (mut first, first_is_end, mut second, second_is_start) = if sa < sb {
+        (sp_lo, a_is_end, sp_hi, !b_is_end)
+    } else {
+        (sp_hi, a_is_end, sp_lo, !b_is_end)
+    };
+    if !first_is_end {
+        reverse_subpath(&mut first);
+    }
+    if !second_is_start {
+        reverse_subpath(&mut second);
+    }
+
+    let last = first.anchors.len() - 1;
+    if (first.anchors[last].point - second.anchors[0].point).hypot() < JOIN_EPS {
+        let dup = second.anchors.remove(0);
+        first.anchors[last].handle_out = dup.handle_out;
+    }
+    first.anchors.extend(second.anchors);
+    subpaths.push(first);
+}
+
+/// Splits subpath `subpath`'s terminal segment (its last segment if
+/// `at_end`, else its first) at `t`, then discards every anchor on the far
+/// side of the new split point — the new split point becomes the
+/// subpath's fresh free end there, with its now-dangling outward handle
+/// cleared. Returns the new free end's index within its own subpath (`0`
+/// or the new last index). No-ops (`None`) on a closed subpath, or one
+/// that would drop below 2 anchors.
+///
+/// Used by the Join tool's overlap-trim: once the shell has located where
+/// two open paths' terminal segments cross, this snips each path back to
+/// exactly that point before [`join_anchors`] stitches the two newly
+/// coincident free ends together.
+pub fn trim_to_split(subpaths: &mut Vec<Subpath>, subpath: usize, at_end: bool, t: f64) -> Option<usize> {
+    let n = subpaths.get(subpath)?.anchors.len();
+    if subpaths[subpath].closed || n < 2 {
+        return None;
+    }
+    let local_segment = if at_end { n - 2 } else { 0 };
+    let split_local = insert_anchor_in(subpaths, subpath, local_segment, t)?;
+    let sp = &mut subpaths[subpath];
+    if at_end {
+        sp.anchors.truncate(split_local + 1);
+        let last = sp.anchors.len() - 1;
+        sp.anchors[last].handle_out = None;
+        Some(last)
+    } else {
+        sp.anchors.drain(0..split_local);
+        sp.anchors[0].handle_in = None;
+        Some(0)
+    }
 }
 
 /// Remove anchor `n`. When it sits between two other anchors, the
@@ -589,6 +726,16 @@ impl PathData {
         f(&mut self.subpaths);
         self.geometry = subpaths_to_bezpath(&self.subpaths);
         self.bounds = crate::geom::bez_path_bounds(&self.geometry);
+    }
+
+    /// Like [`Self::edit_subpaths`], but forwards `f`'s return value —
+    /// for mutators like [`trim_to_split`] that report back where they
+    /// landed.
+    pub fn edit_subpaths_ret<T>(&mut self, f: impl FnOnce(&mut Vec<Subpath>) -> T) -> T {
+        let ret = f(&mut self.subpaths);
+        self.geometry = subpaths_to_bezpath(&self.subpaths);
+        self.bounds = crate::geom::bez_path_bounds(&self.geometry);
+        ret
     }
 
 
@@ -1315,5 +1462,153 @@ mod path_data_tests {
         assert!(!legacy_json.contains("width_points"));
         let back: PathData = serde_json::from_str(&legacy_json).unwrap();
         assert!(back.width_points.is_empty());
+    }
+
+    fn two_anchor_open(p0: Point, p1: Point) -> Subpath {
+        Subpath {
+            anchors: vec![Anchor::corner(p0), Anchor::corner(p1)],
+            closed: false,
+        }
+    }
+
+    #[test]
+    fn join_anchors_same_subpath_closes_it() {
+        let mut sp = vec![two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
+        join_anchors(&mut sp, 0, 1);
+        assert_eq!(sp.len(), 1);
+        assert!(sp[0].closed);
+        assert_eq!(sp[0].anchors.len(), 2, "distinct ends stay distinct, just closed");
+    }
+
+    #[test]
+    fn join_anchors_same_subpath_coincident_ends_merge() {
+        let mut sp = vec![two_anchor_open(Point::new(0.0, 0.0), Point::new(0.0, 0.0))];
+        join_anchors(&mut sp, 0, 1);
+        assert_eq!(sp.len(), 1);
+        assert!(sp[0].closed);
+        assert_eq!(sp[0].anchors.len(), 1, "coincident ends fold into one anchor");
+    }
+
+    #[test]
+    fn join_anchors_different_subpaths_concatenates_tail_to_head() {
+        let mut sp = vec![
+            two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0)),
+            two_anchor_open(Point::new(20.0, 0.0), Point::new(30.0, 0.0)),
+        ];
+        // Join the second subpath's *first* anchor (ordinal 2) onto the
+        // first subpath's *last* anchor (ordinal 1) — no reversal needed.
+        join_anchors(&mut sp, 1, 2);
+        assert_eq!(sp.len(), 1);
+        assert!(!sp[0].closed);
+        let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(30.0, 0.0)]);
+    }
+
+    #[test]
+    fn join_anchors_reverses_a_subpath_when_its_joining_end_is_first() {
+        let mut sp = vec![
+            two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0)),
+            two_anchor_open(Point::new(30.0, 0.0), Point::new(20.0, 0.0)),
+        ];
+        // Ordinal 1 = end of subpath 0 (10,0); ordinal 2 = *start* of
+        // subpath 1 (30,0) — not adjacent, so subpath 1 must be reversed
+        // so its (20,0) end (currently last, ordinal 3) lands next to it.
+        join_anchors(&mut sp, 1, 3);
+        assert_eq!(sp.len(), 1);
+        let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0), Point::new(30.0, 0.0)]);
+    }
+
+    #[test]
+    fn join_anchors_keeps_each_anchors_own_handles_when_ends_are_distinct() {
+        let mut sp = vec![
+            Subpath {
+                anchors: vec![
+                    Anchor { point: Point::new(0.0, 0.0), handle_in: None, handle_out: None, mode: HandleMode::Corner },
+                    Anchor { point: Point::new(10.0, 0.0), handle_in: Some(Point::new(8.0, 2.0)), handle_out: None, mode: HandleMode::Corner },
+                ],
+                closed: false,
+            },
+            Subpath {
+                anchors: vec![
+                    Anchor { point: Point::new(20.0, 0.0), handle_in: None, handle_out: Some(Point::new(22.0, 2.0)), mode: HandleMode::Corner },
+                    Anchor { point: Point::new(30.0, 0.0), handle_in: None, handle_out: None, mode: HandleMode::Corner },
+                ],
+                closed: false,
+            },
+        ];
+        join_anchors(&mut sp, 1, 2);
+        assert_eq!(sp[0].anchors.len(), 4, "distinct (non-coincident) ends: no anchor is dropped");
+        assert_eq!(sp[0].anchors[1].handle_in, Some(Point::new(8.0, 2.0)));
+        assert_eq!(sp[0].anchors[1].handle_out, None);
+        assert_eq!(sp[0].anchors[2].handle_in, None);
+        assert_eq!(sp[0].anchors[2].handle_out, Some(Point::new(22.0, 2.0)));
+    }
+
+    #[test]
+    fn join_anchors_coincident_cross_subpath_ends_fold_handles_into_one_anchor() {
+        let mut sp = vec![
+            two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0)),
+            Subpath {
+                anchors: vec![
+                    Anchor { point: Point::new(10.0, 0.0), handle_in: None, handle_out: Some(Point::new(12.0, 2.0)), mode: HandleMode::Corner },
+                    Anchor::corner(Point::new(20.0, 0.0)),
+                ],
+                closed: false,
+            },
+        ];
+        join_anchors(&mut sp, 1, 2);
+        assert_eq!(sp[0].anchors.len(), 3, "the coincident duplicate at (10,0) is folded away");
+        let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0)]);
+        assert_eq!(sp[0].anchors[1].handle_out, Some(Point::new(12.0, 2.0)), "the surviving anchor picks up the dropped duplicate's out-handle");
+    }
+
+    #[test]
+    fn join_anchors_ignores_non_endpoints_and_closed_subpaths() {
+        let mut sp = vec![Subpath {
+            anchors: vec![Anchor::corner(Point::ZERO), Anchor::corner(Point::new(5.0, 0.0)), Anchor::corner(Point::new(10.0, 0.0))],
+            closed: false,
+        }];
+        let before = sp.clone();
+        join_anchors(&mut sp, 0, 1); // 1 is a middle anchor, not an end
+        assert_eq!(sp, before, "middle anchor is not a valid endpoint: no-op");
+
+        let mut closed = vec![Subpath { anchors: vec![Anchor::corner(Point::ZERO), Anchor::corner(Point::new(5.0, 0.0))], closed: true }];
+        let before = closed.clone();
+        join_anchors(&mut closed, 0, 1);
+        assert_eq!(closed, before, "closed subpath has no open endpoints: no-op");
+    }
+
+    #[test]
+    fn trim_to_split_straight_segment_snips_the_tail() {
+        let mut sp = vec![Subpath {
+            anchors: vec![Anchor::corner(Point::new(0.0, 0.0)), Anchor::corner(Point::new(10.0, 0.0)), Anchor::corner(Point::new(20.0, 0.0))],
+            closed: false,
+        }];
+        let new_i = trim_to_split(&mut sp, 0, true, 0.5).unwrap();
+        assert_eq!(new_i, 2);
+        assert_eq!(sp[0].anchors.len(), 3);
+        assert_eq!(sp[0].anchors[2].point, Point::new(15.0, 0.0));
+        assert!(sp[0].anchors[2].handle_out.is_none());
+    }
+
+    #[test]
+    fn trim_to_split_curved_segment_lands_on_the_curve() {
+        use kurbo::{CubicBez, ParamCurve};
+        let a = Anchor { point: Point::new(0.0, 0.0), handle_in: None, handle_out: Some(Point::new(10.0, 0.0)), mode: HandleMode::Corner };
+        let b = Anchor { point: Point::new(30.0, 0.0), handle_in: Some(Point::new(20.0, 10.0)), handle_out: None, mode: HandleMode::Smooth };
+        let orig = CubicBez::new(a.point, a.handle_out.unwrap(), b.handle_in.unwrap(), b.point);
+        let mut sp = vec![Subpath { anchors: vec![a, b], closed: false }];
+        let new_i = trim_to_split(&mut sp, 0, false, 0.5).unwrap();
+        assert_eq!(new_i, 0);
+        assert!((sp[0].anchors[0].point - orig.eval(0.5)).hypot() < 1e-9);
+        assert!(sp[0].anchors[0].handle_in.is_none());
+    }
+
+    #[test]
+    fn trim_to_split_rejects_closed_or_too_short() {
+        let mut closed = vec![Subpath { anchors: vec![Anchor::corner(Point::ZERO), Anchor::corner(Point::new(5.0, 0.0))], closed: true }];
+        assert!(trim_to_split(&mut closed, 0, true, 0.5).is_none());
     }
 }

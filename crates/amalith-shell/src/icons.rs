@@ -68,6 +68,7 @@ pub enum Icon {
     Arc,
     Spiral,
     FreeTransform,
+    Join,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -84,7 +85,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
-        | Icon::Arc | Icon::Spiral | Icon::FreeTransform => "",
+        | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join => "",
     }
 }
 
@@ -148,6 +149,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::FreeTransform {
         draw_free_transform_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Join {
+        draw_join_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -351,6 +356,19 @@ fn draw_width_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     diamond.line_to((cx - d, cy - thick));
     diamond.close_path();
     scene.fill(Fill::NonZero, ID, color, None, &diamond);
+}
+
+/// Two short strokes approaching from opposite corners, meeting at a dot —
+/// the Join tool.
+fn draw_join_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let sw = (box_.width() * 0.10).max(1.6);
+    let c = box_.center();
+    let r = box_.width().min(box_.height()) * 0.30;
+    let a = c + Vec2::new(-r, -r * 0.4);
+    let b = c + Vec2::new(r, r * 0.4);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a, c));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(c, b));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(c, sw * 0.9));
 }
 
 /// A quarter-ellipse sweeping from the bottom-left up to the top-right —
