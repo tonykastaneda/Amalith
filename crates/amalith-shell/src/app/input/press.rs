@@ -870,6 +870,12 @@ impl App {
                 if self.active_tool == Tool::Join && self.join_tool_press() {
                     return;
                 }
+                // Shape Builder: press with an eligible (2+ path) selection
+                // starts the merge/erase sweep; Alt at press decides which
+                // for the whole gesture.
+                if self.active_tool == Tool::ShapeBuilder && self.shape_builder_press() {
+                    return;
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under

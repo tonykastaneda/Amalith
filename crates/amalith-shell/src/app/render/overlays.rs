@@ -354,6 +354,40 @@ impl App {
         self.content.fill(Fill::NonZero, ID, accent, None, &vello::kurbo::Circle::new(end, 4.0));
     }
 
+    /// Highlights the hovered face, and every face swept this drag, over
+    /// a Shape Builder selection — plain drag in the theme accent
+    /// (what a release would merge), Alt-drag in `shape_builder::ERASE_INK`
+    /// (what a release would delete instead).
+    pub(in crate::app) fn paint_shape_builder_preview(&mut self) {
+        if self.active_tool != Tool::ShapeBuilder {
+            return;
+        }
+        // Keeps the region cache fresh for plain hovering, not just after
+        // the first press — a no-op re-check when the selection hasn't
+        // changed since it was last built.
+        self.shape_builder_cache();
+        let (erase, touched): (bool, Vec<usize>) = match &self.drag {
+            Drag::ShapeBuilderDrag { erase, touched } => (*erase, touched.clone()),
+            _ => (self.alt_down, Vec::new()),
+        };
+        let hovered = self.shape_builder_face_at(self.doc_point(self.pointer));
+        let Some(cache) = self.shape_builder.as_ref() else { return };
+        let to_screen = self.doc.view.to_screen();
+        let color = if erase { shape_builder::ERASE_INK } else { self.theme.accent };
+        for &i in &touched {
+            let path = to_screen * cache.faces[i].contour.clone();
+            self.content.fill(Fill::NonZero, ID, color.with_alpha(0.45), None, &path);
+            self.content.stroke(&Stroke::new(1.5), ID, color, None, &path);
+        }
+        if let Some(h) = hovered {
+            if !touched.contains(&h) {
+                let path = to_screen * cache.faces[h].contour.clone();
+                self.content.fill(Fill::NonZero, ID, color.with_alpha(0.25), None, &path);
+                self.content.stroke(&Stroke::new(1.0), ID, color, None, &path);
+            }
+        }
+    }
+
     /// All guide geometry is clipped to the canvas, never over panels or menus.
     pub(in crate::app) fn paint_smart_guides(&mut self) {
         if !self.settings.smart_guides_enabled || self.pointer_win != self.main_id

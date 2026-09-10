@@ -52,7 +52,7 @@ pub fn flatten_path(path: &BezPath) -> Vec<Vec<[f64; 2]>> {
     contours
 }
 
-fn contours_to_path(contours: &[Vec<[f64; 2]>]) -> Option<PathData> {
+pub(crate) fn contours_to_path(contours: &[Vec<[f64; 2]>]) -> Option<PathData> {
     if contours.is_empty() {
         return None;
     }
@@ -279,6 +279,25 @@ fn outline(inputs: &[PathInput]) -> Vec<PathResult> {
         .collect()
 }
 
+/// Each input's own contours minus `cut`, dropping any that vanish
+/// entirely. Keeps each survivor's own appearance — the Shape Builder
+/// tool uses this to give every object the drag touched back just the
+/// part it didn't sweep over.
+pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<PathResult> {
+    inputs
+        .iter()
+        .filter_map(|i| {
+            let remaining = overlay(&i.contours, cut, OverlayRule::Difference);
+            contours_to_path(&remaining).map(|path| PathResult { path, appearance: i.appearance })
+        })
+        .collect()
+}
+
+/// Whether `a` and `b` share any area at all.
+pub(crate) fn intersects(a: &[Vec<[f64; 2]>], b: &[Vec<[f64; 2]>]) -> bool {
+    !overlay(a, b, OverlayRule::Intersect).is_empty()
+}
+
 pub fn has_visible_stroke(a: &Appearance) -> bool {
     a.stroke != Paint::None && a.stroke_width > 0.05
 }
@@ -468,5 +487,32 @@ mod tests {
         let bb = out.geometry.bounding_box();
         assert!((bb.height() - 6.0).abs() < 0.5, "height {}", bb.height());
         assert!(out.geometry.elements().iter().any(|e| matches!(e, PathEl::ClosePath)));
+    }
+
+    #[test]
+    fn subtract_each_drops_a_fully_covered_input_and_notches_a_partial_one() {
+        let covered = rect_input(Rect::new(0.0, 0.0, 10.0, 10.0), (1.0, 0.0, 0.0));
+        let partial = rect_input(Rect::new(20.0, 0.0, 40.0, 10.0), (0.0, 1.0, 0.0));
+        let untouched = rect_input(Rect::new(60.0, 0.0, 70.0, 10.0), (0.0, 0.0, 1.0));
+        let cut = flatten_path(&PathData::rectangle(Rect::new(-5.0, -5.0, 30.0, 15.0)).geometry);
+        let out = subtract_each(&[covered, partial, untouched], &cut);
+        // `covered` vanishes entirely; `partial` survives, shrunk;
+        // `untouched` survives unchanged.
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].appearance.fill, Paint::Solid(Color::rgb(0.0, 1.0, 0.0)));
+        let partial_bb = out[0].path.geometry.bounding_box();
+        assert!((partial_bb.width() - 10.0).abs() < 0.5, "width {}", partial_bb.width());
+        assert_eq!(out[1].appearance.fill, Paint::Solid(Color::rgb(0.0, 0.0, 1.0)));
+        let untouched_bb = out[1].path.geometry.bounding_box();
+        assert!((untouched_bb.width() - 10.0).abs() < 0.5, "width {}", untouched_bb.width());
+    }
+
+    #[test]
+    fn intersects_is_true_only_when_two_contour_sets_actually_share_area() {
+        let a = flatten_path(&PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0)).geometry);
+        let overlapping = flatten_path(&PathData::rectangle(Rect::new(5.0, 5.0, 15.0, 15.0)).geometry);
+        let apart = flatten_path(&PathData::rectangle(Rect::new(20.0, 20.0, 30.0, 30.0)).geometry);
+        assert!(intersects(&a, &overlapping));
+        assert!(!intersects(&a, &apart));
     }
 }

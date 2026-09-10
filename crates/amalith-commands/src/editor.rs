@@ -1567,6 +1567,12 @@ impl Editor {
                 .collect(),
             Command::SetAssetSource { id, source } => vec![Edit::SetAssetSource { id, source }],
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
+            Command::ShapeBuilder {
+                objects,
+                touched,
+                erase,
+                appearance,
+            } => self.compile_shape_builder(objects, touched, erase, appearance)?,
             Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
             Command::OffsetPath { .. } => {
                 unreachable!("Editor::execute intercepts Command::OffsetPath before calling compile")
@@ -1817,6 +1823,101 @@ impl Editor {
             .map(|&id| Edit::RemoveObject { id })
             .collect();
 
+        for (i, result) in results.into_iter().enumerate() {
+            let geom = parent_world.inverse() * result.path.geometry.clone();
+            let path = PathData::from_bezpath(geom);
+            let mut object = Object::new(ObjectId::new(), parent, ObjectKind::Path(path));
+            object.appearance = result.appearance;
+            object.transform = Affine::IDENTITY;
+            edits.push(Edit::InsertObject {
+                object: Box::new(object),
+                index: insert_at + i,
+            });
+        }
+        Ok(edits)
+    }
+
+    /// See [`Command::ShapeBuilder`]. Only the objects that actually
+    /// overlap `touched` are ever removed/replaced — the rest of
+    /// `objects` (and every other sibling) keeps its id, name and
+    /// position untouched, unlike a plain Pathfinder op which always
+    /// consumes its whole input set.
+    fn compile_shape_builder(
+        &self,
+        objects: Vec<ObjectId>,
+        touched: PathData,
+        erase: bool,
+        appearance: Option<Appearance>,
+    ) -> Result<Vec<Edit>, CommandError> {
+        let ordered = self.path_objects_in_paint_order(&objects);
+        if ordered.len() < 2 {
+            return Err(CommandError::PathfinderNeedTwo);
+        }
+        let mut parent = None;
+        let mut inputs = Vec::new();
+        for &id in &ordered {
+            let obj = self
+                .document
+                .object(id)
+                .ok_or(CommandError::ObjectNotFound(id))?;
+            match parent {
+                None => parent = Some(obj.parent),
+                Some(p) if p == obj.parent => {}
+                Some(_) => return Err(CommandError::ObjectsSpanMultipleParents),
+            }
+            let path = self.world_path(id).ok_or(CommandError::NotAPath(id))?;
+            inputs.push((
+                id,
+                PathInput {
+                    contours: pathfinder::flatten_path(&path),
+                    appearance: obj.appearance,
+                },
+            ));
+        }
+        let parent = parent.unwrap();
+        let parent_world = match parent {
+            ObjectParent::Group(g) => self.document.world_transform(g),
+            ObjectParent::Layer(_) => Affine::IDENTITY,
+        };
+        let touched_contours = pathfinder::flatten_path(&touched.geometry);
+
+        let mut touched_ids = Vec::new();
+        let mut touched_inputs = Vec::new();
+        for (id, input) in inputs {
+            if pathfinder::intersects(&input.contours, &touched_contours) {
+                touched_ids.push(id);
+                touched_inputs.push(input);
+            }
+        }
+        if touched_ids.is_empty() {
+            return Err(CommandError::PathfinderEmpty);
+        }
+
+        let mut results = pathfinder::subtract_each(&touched_inputs, &touched_contours);
+        if !erase {
+            if let Some(app) = appearance {
+                if let Some(path) = pathfinder::contours_to_path(&touched_contours) {
+                    results.insert(0, crate::pathfinder::PathResult { path, appearance: app });
+                }
+            }
+        }
+
+        let selected: HashSet<ObjectId> = touched_ids.iter().copied().collect();
+        let siblings = self.document.children_of(parent);
+        let topmost = siblings
+            .iter()
+            .rposition(|id| selected.contains(id))
+            .unwrap();
+        let insert_at = siblings[..=topmost]
+            .iter()
+            .filter(|id| !selected.contains(id))
+            .count();
+
+        let mut edits: Vec<Edit> = touched_ids
+            .iter()
+            .rev()
+            .map(|&id| Edit::RemoveObject { id })
+            .collect();
         for (i, result) in results.into_iter().enumerate() {
             let geom = parent_world.inverse() * result.path.geometry.clone();
             let path = PathData::from_bezpath(geom);

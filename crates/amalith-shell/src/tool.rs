@@ -29,10 +29,11 @@ pub enum Tool {
     Spiral,
     FreeTransform,
     Join,
+    ShapeBuilder,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 25] = [
+    pub const ALL: [Tool; 26] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -58,6 +59,7 @@ impl Tool {
         Tool::Spiral,
         Tool::FreeTransform,
         Tool::Join,
+        Tool::ShapeBuilder,
     ];
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
@@ -104,6 +106,7 @@ impl Tool {
             Tool::Spiral => "Spiral",
             Tool::FreeTransform => "Free Transform",
             Tool::Join => "Join",
+            Tool::ShapeBuilder => "Shape Builder",
         }
     }
 
@@ -128,6 +131,7 @@ impl Tool {
             Tool::Blend => "W",
             Tool::Width => "⇧W",
             Tool::FreeTransform => "E",
+            Tool::ShapeBuilder => "⇧M",
             _ => "",
         }
     }
@@ -159,6 +163,7 @@ impl Tool {
             Tool::Spiral => Icon::Spiral,
             Tool::FreeTransform => Icon::FreeTransform,
             Tool::Join => Icon::Join,
+            Tool::ShapeBuilder => Icon::ShapeBuilder,
         }
     }
 }
@@ -229,7 +234,8 @@ mod tests {
                 | Tool::Arc
                 | Tool::Spiral
                 | Tool::FreeTransform
-                | Tool::Join => true,
+                | Tool::Join
+                | Tool::ShapeBuilder => true,
             }
         }
         for t in Tool::ALL {

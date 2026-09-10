@@ -515,6 +515,13 @@ impl App {
                 self.drag = Drag::JoinScrub { from, path, target };
                 self.request_main_redraw();
             }
+            Drag::ShapeBuilderDrag { erase, touched } => {
+                let erase = *erase;
+                let mut touched = touched.clone();
+                self.shape_builder_move(&mut touched);
+                self.drag = Drag::ShapeBuilderDrag { erase, touched };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -1123,7 +1130,8 @@ impl App {
                         | Tool::Blend
                         | Tool::Width
                         | Tool::FreeTransform
-                        | Tool::Join => return,
+                        | Tool::Join
+                        | Tool::ShapeBuilder => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1412,6 +1420,10 @@ impl App {
             Drag::JoinScrub { from, .. } => {
                 let target = self.join_tool_move(from);
                 self.commit_join(from, target);
+            }
+            Drag::ShapeBuilderDrag { erase, mut touched } => {
+                self.shape_builder_move(&mut touched);
+                self.commit_shape_builder(erase, touched);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

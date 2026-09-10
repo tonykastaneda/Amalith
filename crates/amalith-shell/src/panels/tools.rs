@@ -44,8 +44,8 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
 /// Selection ▸ Pen ▸ Type ▸ Line ▸ Shapes ▸ Rotate ▸ Scale ▸ Gradient ▸
 /// Eyedropper ▸ Blend ▸ Artboard ▸ Hand ▸ Zoom), with the tools that have
 /// no Illustrator-toolbar counterpart (Width, Arc, Spiral, Free Transform,
-/// Join) tacked on at the end rather than left out.
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 19] {
+/// Join, Shape Builder) tacked on at the end rather than left out.
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 20] {
     [
         Tool::Select,
         Tool::DirectSelect,
@@ -66,6 +66,7 @@ fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 19] {
         Tool::Spiral,
         Tool::FreeTransform,
         Tool::Join,
+        Tool::ShapeBuilder,
     ]
 }
 
@@ -81,7 +82,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64) -> f64 {
     let cols = if width >= 2.0 * metric_cell() + ui_px(6.0) { 2 } else { 1 };
-    let rows = 19usize.div_ceil(cols) as f64;
+    let rows = 20usize.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     metric_top() + rows * metric_cell() + ui_px(12.0) + metric_proxy_h()
 }

@@ -232,6 +232,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Spiral => "Spiral",
         Tool::FreeTransform => "FreeTransform",
         Tool::Join => "Join",
+        Tool::ShapeBuilder => "ShapeBuilder",
     }
 }
 

@@ -46,6 +46,25 @@ pub fn bez_path(src: &core::BezPath) -> vk::BezPath {
     out
 }
 
+/// vello → core: for feeding a document-space contour (already built in
+/// vello's kurbo, e.g. by `select::object_contour`) into `amalith-core`/
+/// `amalith-commands` geometry code, which pins the older kurbo.
+pub fn bez_path_to_core(src: &vk::BezPath) -> core::BezPath {
+    let mut out = core::BezPath::new();
+    for el in src.elements() {
+        out.push(match *el {
+            vk::PathEl::MoveTo(p) => core::PathEl::MoveTo(point_to_core(p)),
+            vk::PathEl::LineTo(p) => core::PathEl::LineTo(point_to_core(p)),
+            vk::PathEl::QuadTo(a, b) => core::PathEl::QuadTo(point_to_core(a), point_to_core(b)),
+            vk::PathEl::CurveTo(a, b, c) => {
+                core::PathEl::CurveTo(point_to_core(a), point_to_core(b), point_to_core(c))
+            }
+            vk::PathEl::ClosePath => core::PathEl::ClosePath,
+        });
+    }
+    out
+}
+
 pub fn color(c: amalith_core::Color) -> vello::peniko::Color {
     vello::peniko::Color::new([c.r, c.g, c.b, c.a])
 }

@@ -35,7 +35,7 @@ mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
 pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathfinderOp};
-pub use pathfinder::{has_visible_stroke, offset_path};
+pub use pathfinder::{apply as pathfinder_apply, flatten_path, has_visible_stroke, offset_path, PathInput, PathResult};
 pub use editor::Editor;
 pub use error::CommandError;
 
@@ -135,6 +135,111 @@ mod tests {
         let children = editor.document().children_of(amalith_core::ObjectParent::Layer(layer));
         assert_eq!(children.len(), 1);
         assert_eq!(children[0], id);
+    }
+
+    #[test]
+    fn shape_builder_merges_touched_faces_and_leaves_untouched_objects_alone() {
+        use amalith_core::{Appearance, PathData};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(c) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(100.0, 100.0, 110.0, 110.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let untouched_before = editor.document().object(c).unwrap().clone();
+
+        // The drag only ever swept the lens where `a` and `b` overlap.
+        let touched = PathData::rectangle(Rect::new(10.0, 10.0, 20.0, 20.0));
+        let merged_fill = Appearance { fill: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), ..Appearance::default() };
+        editor
+            .execute(Command::ShapeBuilder {
+                objects: vec![a, b, c],
+                touched,
+                erase: false,
+                appearance: Some(merged_fill),
+            })
+            .unwrap();
+
+        // `c` never overlapped the swept area — same id, byte-for-byte.
+        assert_eq!(editor.document().object(c).unwrap(), &untouched_before);
+        // `a` and `b` did overlap it — both get replaced.
+        assert!(editor.document().object(a).is_none());
+        assert!(editor.document().object(b).is_none());
+
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        // `c` (untouched) + `a`'s and `b`'s shrunk remainders + one new
+        // merged piece covering the swept lens.
+        assert_eq!(children.len(), 4);
+        let merged = children
+            .iter()
+            .copied()
+            .find(|&id| editor.document().object(id).unwrap().appearance.fill == merged_fill.fill)
+            .expect("no piece carries the merged appearance");
+        let bb = editor.document().object(merged).unwrap().kind.path_data().unwrap().local_bounds();
+        assert!((bb.width() - 10.0).abs() < 0.5, "width {}", bb.width());
+        assert!((bb.height() - 10.0).abs() < 0.5, "height {}", bb.height());
+
+        editor.undo().unwrap();
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children, &[a, b, c]);
+        assert_eq!(editor.document().object(a).unwrap().kind.path_data().unwrap().local_bounds(), Rect::new(0.0, 0.0, 20.0, 20.0));
+    }
+
+    #[test]
+    fn shape_builder_erase_removes_the_swept_area_and_adds_nothing() {
+        use amalith_core::PathData;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(30.0, 0.0, 50.0, 20.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        // Fully covers `a`, leaves `b` untouched.
+        let touched = PathData::rectangle(Rect::new(-5.0, -5.0, 25.0, 25.0));
+        editor
+            .execute(Command::ShapeBuilder { objects: vec![a, b], touched, erase: true, appearance: None })
+            .unwrap();
+
+        assert!(editor.document().object(a).is_none());
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children, &[b]);
+        assert_eq!(editor.document().object(b).unwrap().kind.path_data().unwrap().local_bounds(), Rect::new(30.0, 0.0, 50.0, 20.0));
+
+        editor.undo().unwrap();
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children, &[a, b]);
     }
 
     #[test]

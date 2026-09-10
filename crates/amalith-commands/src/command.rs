@@ -6,7 +6,7 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
+    Affine, Appearance, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
     GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
     StrokeStyle, TextData, Unit, Vec2,
 };
@@ -492,6 +492,22 @@ pub enum Command {
         offset: f64,
         join: amalith_core::LineJoin,
         miter_limit: f64,
+    },
+    /// The Shape Builder tool's one drag, resolved: `objects` is the
+    /// selection it was drawn over (paint order); `touched` is the union
+    /// of every face the drag actually swept across, in world space.
+    /// Every listed object that geometrically overlaps `touched` loses
+    /// that part of itself — the rest of the selection (and any part of
+    /// a touched object that wasn't swept) is untouched, keeping its own
+    /// id. Plain-dragging (`erase: false`) also adds one new object
+    /// covering `touched` with `appearance` (the face the drag started
+    /// on); Alt-dragging (`erase: true`) just removes it, and
+    /// `appearance` is ignored.
+    ShapeBuilder {
+        objects: Vec<ObjectId>,
+        touched: PathData,
+        erase: bool,
+        appearance: Option<Appearance>,
     },
     /// Align / distribute `objects` in document space. `key` is the object
     /// that stays put when `to` is [`AlignTo::KeyObject`]. `artboard` is

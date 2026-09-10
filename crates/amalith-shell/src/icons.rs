@@ -69,6 +69,7 @@ pub enum Icon {
     Spiral,
     FreeTransform,
     Join,
+    ShapeBuilder,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -85,7 +86,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
-        | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join => "",
+        | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder => "",
     }
 }
 
@@ -153,6 +154,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Join {
         draw_join_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::ShapeBuilder {
+        draw_shape_builder_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -369,6 +374,20 @@ fn draw_join_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a, c));
     scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(c, b));
     scene.fill(Fill::NonZero, ID, color, None, &Circle::new(c, sw * 0.9));
+}
+
+/// Two overlapping squares with their intersection filled solid — the
+/// Shape Builder tool.
+fn draw_shape_builder_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let s = box_.width().min(box_.height()) * 0.62;
+    let off = s * 0.42;
+    let c = box_.center();
+    let sw = (box_.width() * 0.09).max(1.4);
+    let a = Rect::new(c.x - off - s * 0.5, c.y - s * 0.5, c.x - off + s * 0.5, c.y + s * 0.5);
+    let b = Rect::new(c.x + off - s * 0.5, c.y - s * 0.5, c.x + off + s * 0.5, c.y + s * 0.5);
+    scene.fill(Fill::NonZero, ID, color, None, &a.intersect(b));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &a);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &b);
 }
 
 /// A quarter-ellipse sweeping from the bottom-left up to the top-right —

@@ -169,6 +169,7 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Blend => KeyChord::plain(KeyW),
         Tool::Width => KeyChord::with_shift(KeyW),
         Tool::FreeTransform => KeyChord::plain(KeyE),
+        Tool::ShapeBuilder => KeyChord::with_shift(KeyM),
         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral
         | Tool::Join => {
             return None

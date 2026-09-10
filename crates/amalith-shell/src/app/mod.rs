@@ -27,6 +27,7 @@ mod guides;
 mod input;
 mod isolation;
 mod join_tool;
+mod shape_builder;
 mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
@@ -380,6 +381,16 @@ enum Drag {
         from: (ObjectId, usize),
         path: Vec<Point>,
         target: Option<join_tool::JoinTarget>,
+    },
+    /// Shape Builder tool: sweeping across faces of
+    /// `self.shape_builder`'s region cache. `touched` accumulates the
+    /// index of every face the pointer has passed over this gesture, in
+    /// first-touched order (deduped) — the first entry's face donates
+    /// the merged result's appearance. `erase` is fixed for the whole
+    /// gesture from whether Alt was down at press.
+    ShapeBuilderDrag {
+        erase: bool,
+        touched: Vec<usize>,
     },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
@@ -1015,6 +1026,10 @@ struct App {
     /// swatch in the Layers panel. Free-floating like the color picker;
     /// never dockable, never in the Window menu.
     layer_dialog: Option<layerdlg::LayerOptionsDialog>,
+    /// The Shape Builder tool's region cache — rebuilt whenever the
+    /// selection it was built from stops matching the current one. See
+    /// `shape_builder::ShapeBuilderCache`.
+    shape_builder: Option<shape_builder::ShapeBuilderCache>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -1380,6 +1395,7 @@ impl App {
             pending_offset_dialog: false,
             layer_dialog: None,
             pending_layer_dialog: None,
+            shape_builder: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
