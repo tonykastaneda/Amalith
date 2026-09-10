@@ -425,7 +425,22 @@ impl App {
                 if let Some(p) = other.point() {
                     let sp = to_screen*p;
                     self.content.stroke(&Stroke::new(1.0),ID,ink,None,&vello::kurbo::Circle::new(sp,3.0));
-                    if let Some(label) = other.label() { self.text.draw(&mut self.content,label,11.0,ink,sp.x+8.0,sp.y-8.0); }
+                    if let Some(label) = other.label() {
+                        // Clamped to the canvas viewport, same idea as
+                        // `draw_tooltip`'s own edge handling — an anchor
+                        // near the canvas edge must not draw its label
+                        // half off-screen into a docked panel.
+                        const FS: f32 = 11.0;
+                        const MARGIN: f64 = 4.0;
+                        let tw = self.text.measure(label, FS);
+                        let mut lx = sp.x + 8.0;
+                        if lx + tw > viewport.x1 - MARGIN {
+                            lx = sp.x - 8.0 - tw;
+                        }
+                        lx = lx.clamp(viewport.x0 + MARGIN, (viewport.x1 - MARGIN - tw).max(viewport.x0 + MARGIN));
+                        let ly = (sp.y - 8.0).clamp(viewport.y0 + FS as f64 + MARGIN, viewport.y1 - MARGIN);
+                        self.text.draw(&mut self.content, label, FS, ink, lx, ly);
+                    }
                 }
             }
         }

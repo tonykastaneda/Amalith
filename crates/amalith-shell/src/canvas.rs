@@ -268,6 +268,11 @@ pub fn paint(
     // wherever an artboard has no explicit background fill, instead of
     // solid white paper.
     transparency_grid: bool,
+    // View ▸ Show Grid, ⌘' — a document-space ruled grid, `grid_spacing`
+    // canonical px apart, drawn under every artboard/object the same way
+    // the transparency checker is.
+    show_grid: bool,
+    grid_spacing: f64,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -294,6 +299,10 @@ pub fn paint(
 
     let vt = view.to_screen();
     let cull = cull_rect(viewport, cull_inset);
+
+    if show_grid {
+        paint_grid(scene, viewport, vt, view.zoom, grid_spacing);
+    }
 
     for (i, ab) in doc.artboards().iter().enumerate() {
         let r = vt.transform_rect_bbox(convert::rect(ab.rect));
@@ -1280,6 +1289,41 @@ fn stroke_path(
 /// convention (not theme-customizable, unlike `accent`), shared with the
 /// Gradient panel's own alpha-ramp checker in `panels/gradient.rs`.
 pub(crate) const TRANSPARENCY_CHECKER_DARK: Color = Color::from_rgb8(0xcc, 0xcc, 0xcc);
+
+/// View ▸ Show Grid: a ruled grid `spacing_doc` canonical px apart,
+/// covering the whole `viewport` the same way the transparency checker
+/// does — drawn before the artboard/object passes, so a solid artboard
+/// paper or opaque object naturally covers it, matching Illustrator's own
+/// grid-under-artwork layering.
+fn paint_grid(scene: &mut Scene, viewport: Rect, vt: Affine, zoom: f64, spacing_doc: f64) {
+    if !spacing_doc.is_finite() || spacing_doc <= 0.0 {
+        return;
+    }
+    let zoom = zoom.max(1e-6);
+    let spacing = spacing_doc * zoom;
+    // Below a few px apart the lines would just moiré into noise — same
+    // guard `paint_transparency_grid`'s fixed tile size doesn't need, but
+    // this one's spacing is user/zoom-driven, so it can get there.
+    if spacing < 3.0 {
+        return;
+    }
+    let ink = Color::from_rgb8(0x80, 0x80, 0x80).with_alpha(0.35);
+    let origin = vt * Point::ZERO;
+    let mut x = origin.x - (((origin.x - viewport.x0) / spacing).ceil()) * spacing;
+    while x <= viewport.x1 {
+        if x >= viewport.x0 {
+            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, ink, None, &Line::new((x, viewport.y0), (x, viewport.y1)));
+        }
+        x += spacing;
+    }
+    let mut y = origin.y - (((origin.y - viewport.y0) / spacing).ceil()) * spacing;
+    while y <= viewport.y1 {
+        if y >= viewport.y0 {
+            scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, ink, None, &Line::new((viewport.x0, y), (viewport.x1, y)));
+        }
+        y += spacing;
+    }
+}
 
 fn paint_transparency_grid(scene: &mut Scene, r: Rect, origin: Point) {
     const TILE: f64 = 8.0;

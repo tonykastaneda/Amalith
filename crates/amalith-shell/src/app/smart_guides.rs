@@ -171,12 +171,18 @@ fn pen_path(anchors: &[PenAnchor]) -> vello::kurbo::BezPath {
 
 /// Snap independently on both axes. Spacing only compares objects whose
 /// perpendicular extents overlap, so unrelated rows cannot attract a drag.
+/// `guides` are ruler-guide positions (each tagged with the single axis it
+/// runs fixed on) — checked alongside object edges/centers for alignment,
+/// but never fed into spacing (an infinitely long guide has no width to
+/// measure a gap against, and its perpendicular extent is unbounded, so it
+/// would otherwise "overlap" every row and contaminate every gap match).
 fn move_snap(
     moved: Rect,
     candidates: &[Rect],
     tol: f64,
     alignment: bool,
     spacing: bool,
+    guides: &[(Axis, f64)],
 ) -> (Vec2, Option<SmartGuideHit>) {
     let mut delta = Vec2::ZERO;
     let mut hits = Vec::new();
@@ -215,6 +221,14 @@ fn move_snap(
                             },
                         );
                     }
+                }
+            }
+            for &(guide_axis, target) in guides {
+                if guide_axis != axis {
+                    continue;
+                }
+                for origin in [lo, (lo + hi) * 0.5, hi] {
+                    offer(target - origin, SmartGuideHit::AlignEdge { axis, value: target });
                 }
             }
         }
@@ -320,6 +334,91 @@ fn move_snap(
     )
 }
 
+/// Drops an [`SmartGuideHit::AlignEdge`] on an axis its caller isn't
+/// actually moving along — [`App::sg_scale_snap`]'s edge-handle case,
+/// where `move_snap` still checks both axes generically but only one
+/// (or neither, for a corner vs. an edge handle) should ever be applied
+/// or even displayed. Non-`AlignEdge`/non-`Multiple` hits pass through
+/// untouched; a single-axis leftover unwraps out of `Multiple`.
+fn mask_axis_hit(hit: Option<SmartGuideHit>, changes_x: bool, changes_y: bool) -> Option<SmartGuideHit> {
+    match hit {
+        Some(SmartGuideHit::Multiple(hits)) => {
+            let mut kept: Vec<_> = hits
+                .into_iter()
+                .filter(|h| match h {
+                    SmartGuideHit::AlignEdge { axis: Axis::X, .. } => changes_x,
+                    SmartGuideHit::AlignEdge { axis: Axis::Y, .. } => changes_y,
+                    _ => true,
+                })
+                .collect();
+            match kept.len() {
+                0 => None,
+                1 => kept.pop(),
+                _ => Some(SmartGuideHit::Multiple(kept)),
+            }
+        }
+        other => other,
+    }
+}
+
+/// The extra single-axis point targets [`App::sg_scale_snap`] offers
+/// beyond plain edge/center alignment: matching each candidate's own
+/// width/height (Illustrator's "matching dimensions" cue), plus this same
+/// shape's own untouched-so-far dimension (a corner/edge landing there
+/// yields a perfect square or circle). Expressed as `(Axis, value)` pairs
+/// — the same shape ruler guides use — so they ride through `move_snap`'s
+/// existing single-axis alignment path without touching spacing.
+fn scale_dimension_guides(handle: Handle, bounds: Rect, candidates: &[Rect]) -> Vec<(Axis, f64)> {
+    let changes_x = !matches!(handle, Handle::N | Handle::S);
+    let changes_y = !matches!(handle, Handle::E | Handle::W);
+    let left = matches!(handle, Handle::Nw | Handle::W | Handle::Sw);
+    let top = matches!(handle, Handle::Nw | Handle::N | Handle::Ne);
+    // The opposite corner/edge stays put; the dragged one lands at that
+    // fixed coordinate plus (or minus, depending on which side is fixed)
+    // the target size.
+    let fixed_x = if left { bounds.x1 } else { bounds.x0 };
+    let fixed_y = if top { bounds.y1 } else { bounds.y0 };
+    let sign_x = if left { -1.0 } else { 1.0 };
+    let sign_y = if top { -1.0 } else { 1.0 };
+    let mut guides = Vec::new();
+    for r in candidates {
+        if changes_x {
+            guides.push((Axis::X, fixed_x + sign_x * r.width()));
+        }
+        if changes_y {
+            guides.push((Axis::Y, fixed_y + sign_y * r.height()));
+        }
+    }
+    if changes_x {
+        guides.push((Axis::X, fixed_x + sign_x * bounds.height()));
+    }
+    if changes_y {
+        guides.push((Axis::Y, fixed_y + sign_y * bounds.width()));
+    }
+    guides
+}
+
+/// Snaps a Shear-tool angle (already computed and clamped to its own
+/// `(-90°, 90°)` domain — see `Drag::ShearTool`'s own comment on why it
+/// can't use a plain full-circle `angle_to`) to the user's construction-
+/// angle list. Reusing `construction_snap` directly isn't an option: that
+/// solver measures a point's direction from an origin over the full
+/// circle, but a shear angle already *is* an angle, wrapped into a half-
+/// turn (a shear axis, like a reflection axis, repeats every 180°) rather
+/// than derived from one. Each preset angle is folded into that same
+/// domain before comparing.
+fn shear_angle_snap(raw_deg: f64, angles: &[f64], tol_deg: f64) -> Option<f64> {
+    angles
+        .iter()
+        .copied()
+        .filter(|a| a.is_finite())
+        .map(|a| ((a + 90.0).rem_euclid(180.0)) - 90.0)
+        .map(|a| (a, (a - raw_deg).abs()))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .filter(|&(_, err)| err <= tol_deg)
+        .map(|(a, _)| a)
+}
+
 fn construction_snap(
     from: Point,
     p: Point,
@@ -419,6 +518,23 @@ fn path_snap(paths: &[vello::kurbo::BezPath], p: Point, tol: f64) -> Option<Smar
         .or_else(|| nearest.map(|(_, point)| SmartGuideHit::Path { point }))
 }
 
+/// View ▸ Snap to Grid's own math: the nearest grid intersection,
+/// `spacing` canonical px apart. A non-finite or non-positive spacing is a
+/// no-op rather than a divide-by-zero/NaN result.
+fn nearest_grid_point(p: Point, spacing: f64) -> Point {
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return p;
+    }
+    Point::new((p.x / spacing).round() * spacing, (p.y / spacing).round() * spacing)
+}
+
+/// View ▸ Snap to Pixel's own math: the nearest whole document unit (this
+/// app's canonical px), independent of zoom — matching Illustrator's own
+/// "Align to Pixel Grid" rounding.
+fn nearest_pixel_point(p: Point) -> Point {
+    Point::new(p.x.round(), p.y.round())
+}
+
 impl App {
     /// Document-space snap tolerance for the current zoom.
     fn sg_tolerance_doc(&self) -> f64 {
@@ -431,18 +547,27 @@ impl App {
         if !self.settings.smart_guides_enabled || !self.settings.sg_anchor_path_labels {
             return None;
         }
-        self.sg_point_candidate(cursor_doc, &[])
+        self.sg_point_candidate(cursor_doc, &[], false)
     }
 
     /// The best point-shaped candidate (anchor/endpoint/path) near `p`,
-    /// excluding anchors on `exclude_objects`. Shared by hover and the
-    /// point-drag snap below.
-    fn sg_point_candidate(&self, p: Point, exclude_objects: &[ObjectId]) -> Option<SmartGuideHit> {
+    /// excluding the exact anchors in `exclude`. Anchor-level, not object-
+    /// level: dragging one anchor of a path can still land on a *sibling*
+    /// anchor, its object's own bounding-box center, or another of its own
+    /// segments — Illustrator doesn't blind a whole object just because
+    /// one of its points is being moved, only the point being dragged onto
+    /// itself is excluded. Shared by hover and the point-drag snap below.
+    /// `points_only` restricts this to the anchor scan alone — real
+    /// Illustrator's Snap to Point (its own View-menu toggle, independent
+    /// of Smart Guides entirely) only ever finds anchor points, never a
+    /// bounding-box center or a bare path segment; `false` is the fuller
+    /// scan Smart Guides itself uses.
+    fn sg_point_candidate(&self, p: Point, exclude: &[(ObjectId, usize)], points_only: bool) -> Option<SmartGuideHit> {
         let doc = self.doc.editor.document();
         let tol = self.sg_tolerance_doc();
         let best = anchors::anchors_within(doc, p, tol)
             .into_iter()
-            .filter(|(id, ..)| !exclude_objects.contains(id))
+            .filter(|(id, n, _)| !exclude.contains(&(*id, *n)))
             .min_by(|a, b| (a.2 - p).hypot2().partial_cmp(&(b.2 - p).hypot2()).unwrap());
         if let Some((id, n, ap)) = best {
             let is_end = doc
@@ -455,9 +580,12 @@ impl App {
                 SmartGuideHit::Anchor { point: ap }
             });
         }
+        if points_only {
+            return None;
+        }
         // A nearby object's bounding-box center — "center".
         let visible = self.visible_doc_rect();
-        let center_hit = select::visible_top_level_bounds(doc, visible, exclude_objects)
+        let center_hit = select::visible_top_level_bounds(doc, visible, &[])
             .into_iter()
             .map(|(_, b)| b.center())
             .filter(|c| (*c - p).hypot() <= tol)
@@ -465,11 +593,7 @@ impl App {
         if let Some(c) = center_hit {
             return Some(SmartGuideHit::Center { point: c });
         }
-        let leaves: Vec<ObjectId> = anchors::path_leaves(doc)
-            .into_iter()
-            .filter(|id| !exclude_objects.contains(id))
-            .collect();
-        let paths: Vec<_> = leaves
+        let paths: Vec<_> = anchors::path_leaves(doc)
             .into_iter()
             .filter_map(|id| {
                 let pd = doc.object(id)?.kind.path_data()?;
@@ -482,25 +606,46 @@ impl App {
     /// Drag-time point snap (moving a single anchor/handle, or the Join
     /// tool): scans, and if a hit is within tolerance, returns its exact
     /// point in place of the raw cursor — this is what makes the drag
-    /// actually *land*, not just show a label. `exclude_objects` keeps an
-    /// anchor from "snapping" to its own object's other anchors while
-    /// it's the thing being dragged... unless that's exactly the point
+    /// actually *land*, not just show a label. `exclude` keeps an anchor
+    /// from "snapping" onto itself while it's the thing being dragged
+    /// (sibling anchors on the same path, and that path's own center/
+    /// other segments, stay fair game) — unless that's exactly the point
     /// (Join deliberately passes an empty exclude list).
+    /// Arbitration when nothing above matches: View ▸ Snap to Grid, then
+    /// View ▸ Snap to Pixel, in that order — both independent of the
+    /// Smart Guides master switch entirely, same as real Illustrator
+    /// keeps them as their own View-menu systems, not Smart Guides
+    /// sub-features.
+    pub(in crate::app) fn sg_grid_pixel_fallback(&self, p: Point) -> Point {
+        if self.settings.snap_to_grid {
+            nearest_grid_point(p, self.settings.grid_spacing)
+        } else if self.settings.snap_to_pixel {
+            nearest_pixel_point(p)
+        } else {
+            p
+        }
+    }
+
     pub(in crate::app) fn sg_point_snap(
         &self,
         cursor_doc: Point,
-        exclude_objects: &[ObjectId],
+        exclude: &[(ObjectId, usize)],
     ) -> (Point, Option<SmartGuideHit>) {
-        if !self.settings.smart_guides_enabled {
-            return (cursor_doc, None);
-        }
-        match self.sg_point_candidate(cursor_doc, exclude_objects) {
-            Some(hit) => {
-                let p = hit.point().unwrap_or(cursor_doc);
-                (p, Some(hit))
+        // Snap to Point is its own View-menu toggle, independent of the
+        // Smart Guides master switch — but real Illustrator's version of
+        // it only ever finds anchor points, never a bounding-box center
+        // or bare path segment the way Smart Guides itself does, so it
+        // gets the restricted scan when Smart Guides isn't also on.
+        if self.settings.smart_guides_enabled {
+            if let Some(hit) = self.sg_point_candidate(cursor_doc, exclude, false) {
+                return (hit.point().unwrap_or(cursor_doc), Some(hit));
             }
-            None => (cursor_doc, None),
+        } else if self.settings.snap_to_point {
+            if let Some(hit) = self.sg_point_candidate(cursor_doc, exclude, true) {
+                return (hit.point().unwrap_or(cursor_doc), Some(hit));
+            }
         }
+        (self.sg_grid_pixel_fallback(cursor_doc), None)
     }
 
     /// Drag-time snap for moving a whole selection: `raw_delta` is the
@@ -514,26 +659,180 @@ impl App {
         bounds: Rect,
         exclude: &[ObjectId],
     ) -> (Vec2, Option<SmartGuideHit>) {
+        let moved = bounds + raw_delta;
+        if self.settings.smart_guides_enabled {
+            let candidates = self.sg_alignment_bounds(exclude, &[]);
+            let (adjustment, hit) = move_snap(
+                moved,
+                &candidates,
+                self.sg_tolerance_doc(),
+                self.settings.sg_alignment_guides,
+                self.settings.sg_spacing_guides,
+                &self.sg_guide_targets(),
+            );
+            if hit.is_some() {
+                return (raw_delta + adjustment, hit);
+            }
+        }
+        // No Smart Guide match (or Smart Guides is off entirely) — Snap
+        // to Grid/Pixel are their own View-menu systems, so they still
+        // get a say, snapping the moved bounds' own top-left corner.
+        let corner = self.sg_grid_pixel_fallback(moved.origin());
+        (raw_delta + (corner - moved.origin()), None)
+    }
+
+    /// [`Self::sg_move_snap`]'s artboard-manipulation counterpart: an
+    /// artboard being dragged is excluded from the artboard-rect
+    /// candidates (it can't snap to its own pre-drag position) but every
+    /// other artboard and every object still counts.
+    pub(in crate::app) fn sg_artboard_move_snap(
+        &self,
+        raw_delta: Vec2,
+        bounds: Rect,
+        exclude_artboard: amalith_core::ArtboardId,
+    ) -> (Vec2, Option<SmartGuideHit>) {
         if !self.settings.smart_guides_enabled {
             return (raw_delta, None);
         }
         let moved = bounds + raw_delta;
-        let candidates: Vec<_> = select::visible_top_level_bounds(
-            self.doc.editor.document(),
-            self.visible_doc_rect(),
-            exclude,
-        )
-        .into_iter()
-        .map(|(_, b)| b)
-        .collect();
+        let candidates = self.sg_alignment_bounds(&[], &[exclude_artboard]);
         let (adjustment, hit) = move_snap(
             moved,
             &candidates,
             self.sg_tolerance_doc(),
             self.settings.sg_alignment_guides,
             self.settings.sg_spacing_guides,
+            &self.sg_guide_targets(),
         );
         (raw_delta + adjustment, hit)
+    }
+
+    /// [`Self::sg_scale_snap`]'s artboard-manipulation counterpart, for
+    /// dragging an artboard's own resize handle.
+    pub(in crate::app) fn sg_artboard_resize_snap(
+        &self,
+        handle: Handle,
+        pointer: Point,
+        bounds: Rect,
+        exclude_artboard: amalith_core::ArtboardId,
+    ) -> (Point, Option<SmartGuideHit>) {
+        self.sg_scale_snap(handle, pointer, bounds, &[], &[exclude_artboard])
+    }
+
+    /// Drag-time snap for a bounding-box Scale handle: `pointer` is the raw
+    /// document-space cursor position that `handles::scaled_transform`
+    /// would otherwise use directly as the dragged corner/edge's new
+    /// position; `bounds` is the shape's own bounds *before* this drag (the
+    /// fixed opposite corner/edge lives on it). Snaps only the axis/axes
+    /// that handle actually moves — an edge handle (N/S/E/W) must never
+    /// pick up a cross-axis nudge from a candidate that only lines up on
+    /// the axis it doesn't control, or the opposite edge would silently
+    /// drift. Besides ordinary edge/center alignment, offers two more
+    /// point targets per axis, expressed the same way ruler guides are (a
+    /// single-axis value, so they can't contaminate the other axis or
+    /// spacing): matching another candidate's width/height (Illustrator's
+    /// "matching dimensions" cue), and matching *this* shape's own other,
+    /// unchanged dimension (a corner/edge landing exactly there yields a
+    /// perfect square or circle from a rectangle/ellipse).
+    /// `exclude_artboards` is for [`Self::sg_artboard_resize_snap`]'s own
+    /// reuse of this exact axis-masking, so a resized artboard can't snap
+    /// to its own (pre-drag) rect.
+    pub(in crate::app) fn sg_scale_snap(
+        &self,
+        handle: Handle,
+        pointer: Point,
+        bounds: Rect,
+        exclude: &[ObjectId],
+        exclude_artboards: &[amalith_core::ArtboardId],
+    ) -> (Point, Option<SmartGuideHit>) {
+        let changes_x = !matches!(handle, Handle::N | Handle::S);
+        let changes_y = !matches!(handle, Handle::E | Handle::W);
+        if self.settings.smart_guides_enabled && self.settings.sg_alignment_guides {
+            let candidates = self.sg_alignment_bounds(exclude, exclude_artboards);
+            let mut guides = self.sg_guide_targets();
+            guides.extend(scale_dimension_guides(handle, bounds, &candidates));
+            let moved = Rect::new(pointer.x, pointer.y, pointer.x, pointer.y);
+            let (d, hit) = move_snap(moved, &candidates, self.sg_tolerance_doc(), true, false, &guides);
+            if let Some(hit) = mask_axis_hit(hit, changes_x, changes_y) {
+                let mut snapped = pointer;
+                if changes_x {
+                    snapped.x += d.x;
+                }
+                if changes_y {
+                    snapped.y += d.y;
+                }
+                return (snapped, Some(hit));
+            }
+        }
+        // No Smart Guide match — Snap to Grid/Pixel still get a say,
+        // masked to the same axis/axes this handle actually moves.
+        let fallback = self.sg_grid_pixel_fallback(pointer);
+        let mut snapped = pointer;
+        if changes_x {
+            snapped.x = fallback.x;
+        }
+        if changes_y {
+            snapped.y = fallback.y;
+        }
+        (snapped, None)
+    }
+
+    /// Alignment-candidate rects for [`Self::sg_move_snap`] and the Pen
+    /// tool's alignment fallback: object bounds — scoped to the current
+    /// isolation group when isolated, the whole document otherwise,
+    /// matching Illustrator hiding the rest of the document as alignment
+    /// noise once you've drilled into a group — plus every artboard's own
+    /// rect and its bleed-expanded rect, which participate regardless of
+    /// isolation depth (artboards are document-level framing, not content).
+    /// `exclude_artboards` keeps an artboard being moved/resized from
+    /// snapping to its own (pre-drag) rect.
+    fn sg_alignment_bounds(&self, exclude: &[ObjectId], exclude_artboards: &[amalith_core::ArtboardId]) -> Vec<Rect> {
+        let doc = self.doc.editor.document();
+        let visible = self.visible_doc_rect();
+        let mut out: Vec<Rect> = match self.isolation_root() {
+            Some(root) => select::bounds_within(doc, root, visible, exclude),
+            None => select::visible_top_level_bounds(doc, visible, exclude),
+        }
+        .into_iter()
+        .map(|(_, b)| b)
+        .collect();
+        let bleed = doc.settings.bleed;
+        let overlaps = |a: Rect, b: Rect| a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0;
+        for ab in doc.artboards().iter().filter(|ab| !exclude_artboards.contains(&ab.id)) {
+            let r = convert::rect(ab.rect);
+            if overlaps(r, visible) {
+                out.push(r);
+            }
+            let bled = Rect::new(
+                r.x0 - bleed.left,
+                r.y0 - bleed.top,
+                r.x1 + bleed.right,
+                r.y1 + bleed.bottom,
+            );
+            if bled != r && overlaps(bled, visible) {
+                out.push(bled);
+            }
+        }
+        out
+    }
+
+    /// Ruler-guide positions as alignment targets, one axis each — empty
+    /// while guides are hidden (View ▸ Hide Guides), same as Illustrator
+    /// stops snapping to guides you can't see.
+    fn sg_guide_targets(&self) -> Vec<(Axis, f64)> {
+        if self.guides_hidden {
+            return Vec::new();
+        }
+        self.doc
+            .editor
+            .document()
+            .guides()
+            .iter()
+            .map(|g| match g.orient {
+                amalith_core::GuideOrient::Vertical => (Axis::X, g.pos),
+                amalith_core::GuideOrient::Horizontal => (Axis::Y, g.pos),
+            })
+            .collect()
     }
 
     pub(in crate::app) fn sg_construction_snap(
@@ -546,6 +845,67 @@ impl App {
         }
         construction_snap(from, p, &self.settings.sg_angles, self.sg_tolerance_doc())
             .map_or((p, None), |(p, h)| (p, Some(h)))
+    }
+
+    /// [`Self::sg_construction_snap`], but the candidate angle list is the
+    /// user's own construction angles *plus* every nearby visible object's
+    /// current rotation angle — so Rotate/Reflect can snap to line up with
+    /// another object's existing orientation, not just a fixed preset
+    /// list. `exclude` keeps the object(s) actually being transformed out
+    /// of their own candidate list (their pre-drag angle would otherwise
+    /// always be a trivial, uninteresting match right at the start of the
+    /// drag).
+    pub(in crate::app) fn sg_construction_snap_with_object_angles(
+        &self,
+        from: Point,
+        p: Point,
+        exclude: &[ObjectId],
+    ) -> (Point, Option<SmartGuideHit>) {
+        if !self.settings.smart_guides_enabled || !self.settings.sg_construction_guides {
+            return (p, None);
+        }
+        let mut angles = self.settings.sg_angles.to_vec();
+        angles.extend(self.nearby_rotation_angles(exclude));
+        construction_snap(from, p, &angles, self.sg_tolerance_doc()).map_or((p, None), |(p, h)| (p, Some(h)))
+    }
+
+    /// Every nearby visible object's own current rotation angle (degrees),
+    /// decomposed from its world transform — scoped to the isolation
+    /// group when isolated, same as every other alignment-candidate scan.
+    /// A near-zero-scale (degenerate) transform contributes nothing: its
+    /// rotation isn't meaningfully defined.
+    fn nearby_rotation_angles(&self, exclude: &[ObjectId]) -> Vec<f64> {
+        let doc = self.doc.editor.document();
+        let visible = self.visible_doc_rect();
+        let candidates = match self.isolation_root() {
+            Some(root) => select::bounds_within(doc, root, visible, exclude),
+            None => select::visible_top_level_bounds(doc, visible, exclude),
+        };
+        candidates
+            .into_iter()
+            .filter_map(|(id, _)| {
+                let m = convert::affine(doc.world_transform(id)).as_coeffs();
+                let scale = (m[0] * m[0] + m[1] * m[1]).sqrt();
+                (scale > 1e-9).then(|| (-m[1]).atan2(m[0]).to_degrees())
+            })
+            .collect()
+    }
+
+    /// [`Self::sg_construction_snap`]'s Shear-tool counterpart: `raw_deg`
+    /// is the already-clamped `(-90°, 90°)` shear angle; `pivot` is only
+    /// used to place the resulting reference ray. The tolerance is a fixed
+    /// couple of degrees rather than a doc-space/zoom-derived one — an
+    /// angle match isn't a spatial distance, the same way Shift's own 45°
+    /// lock here is zoom-independent too.
+    pub(in crate::app) fn sg_shear_snap(&self, pivot: Point, raw_deg: f64) -> (f64, Option<SmartGuideHit>) {
+        if !self.settings.smart_guides_enabled || !self.settings.sg_construction_guides {
+            return (raw_deg, None);
+        }
+        const TOL_DEG: f64 = 1.5;
+        match shear_angle_snap(raw_deg, &self.settings.sg_angles, TOL_DEG) {
+            Some(degrees) => (degrees, Some(SmartGuideHit::ConstructionAngle { from: pivot, degrees })),
+            None => (raw_deg, None),
+        }
     }
 
     /// The same resolution is used for the Pen preview and its committed click.
@@ -569,24 +929,32 @@ impl App {
                 return (hit.point().unwrap(), Some(hit));
             }
             if self.settings.sg_alignment_guides {
-                let doc = self.doc.editor.document();
-                let mut targets: Vec<_> =
-                    select::visible_top_level_bounds(doc, self.visible_doc_rect(), &[])
-                        .into_iter()
-                        .map(|(_, r)| r)
-                        .collect();
+                let mut targets = self.sg_alignment_bounds(&[], &[]);
                 targets.extend(
                     self.pen
                         .iter()
                         .map(|a| Rect::new(a.point.x, a.point.y, a.point.x, a.point.y)),
                 );
-                let (d, hit) = move_snap(Rect::new(p.x, p.y, p.x, p.y), &targets, tol, true, false);
+                let (d, hit) = move_snap(
+                    Rect::new(p.x, p.y, p.x, p.y),
+                    &targets,
+                    tol,
+                    true,
+                    false,
+                    &self.sg_guide_targets(),
+                );
                 if hit.is_some() {
                     return (p + d, hit);
                 }
             }
         }
-        from.map_or((p, None), |from| self.sg_construction_snap(from, p))
+        let (p2, hit2) = from.map_or((p, None), |from| self.sg_construction_snap(from, p));
+        if hit2.is_some() {
+            return (p2, hit2);
+        }
+        // Nothing above matched — Snap to Grid/Pixel still get the final
+        // say, same as every other point-placement path.
+        (self.sg_grid_pixel_fallback(p), None)
     }
 
     pub(in crate::app) fn sg_measurement_text(&self) -> Option<String> {
@@ -778,6 +1146,19 @@ mod tests {
     use vello::kurbo::BezPath;
 
     #[test]
+    fn shear_angle_snap_matches_a_preset_folded_into_the_half_turn_domain() {
+        // 0/45/90/135 fold to 0/45/90/-45 within (-90, 90] — 90 and -45
+        // (135 folded) are both directly reachable presets in that domain.
+        assert_eq!(shear_angle_snap(0.3, &[0., 45., 90., 135.], 1.5), Some(0.));
+        assert_eq!(shear_angle_snap(44.6, &[0., 45., 90., 135.], 1.5), Some(45.));
+        assert_eq!(shear_angle_snap(-44.7, &[0., 45., 90., 135.], 1.5), Some(-45.));
+        // Outside tolerance of every preset: no match.
+        assert_eq!(shear_angle_snap(20.0, &[0., 45.], 1.5), None);
+        // Non-finite presets are ignored, not propagated as NaN matches.
+        assert_eq!(shear_angle_snap(0.0, &[f64::NAN, f64::INFINITY, 0.0], 1.5), Some(0.));
+    }
+
+    #[test]
     fn live_pen_geometry_remains_available_for_labels_and_corner_transition() {
         let mut anchors = [
             PenAnchor {
@@ -862,6 +1243,7 @@ mod tests {
             4.,
             true,
             false,
+            &[],
         );
         assert_eq!(d, Vec2::new(-1., -2.));
         assert!(matches!(hit,Some(SmartGuideHit::Multiple(h)) if h.len()==2));
@@ -885,7 +1267,7 @@ mod tests {
                         r
                     }
                 };
-                let (d, hit) = move_snap(map(moved), &candidates.map(map), 4., false, true);
+                let (d, hit) = move_snap(map(moved), &candidates.map(map), 4., false, true, &[]);
                 let amount = if flip { 1. } else { -1. };
                 assert_eq!(
                     d,
@@ -900,7 +1282,7 @@ mod tests {
         }
         // Y alignment must not suppress an independent X spacing match.
         assert_eq!(
-            move_snap(moved, &candidates, 4., true, true).0,
+            move_snap(moved, &candidates, 4., true, true, &[]).0,
             Vec2::new(-1., 0.)
         );
     }
@@ -909,14 +1291,128 @@ mod tests {
     fn spacing_centers_between_neighbors_but_ignores_unrelated_rows() {
         let neighbors = [Rect::new(0., 0., 10., 10.), Rect::new(60., 0., 70., 10.)];
         assert_eq!(
-            move_snap(Rect::new(29., 0., 39., 10.), &neighbors, 4., false, true).0,
+            move_snap(Rect::new(29., 0., 39., 10.), &neighbors, 4., false, true, &[]).0,
             Vec2::new(1., 0.)
         );
         assert!(
-            move_snap(Rect::new(29., 100., 39., 110.), &neighbors, 4., false, true)
+            move_snap(Rect::new(29., 100., 39., 110.), &neighbors, 4., false, true, &[])
                 .1
                 .is_none()
         );
+    }
+
+    #[test]
+    fn ruler_guides_align_on_their_own_axis_only_and_stay_out_of_spacing() {
+        let moved = Rect::new(1., 1., 11., 11.);
+        // A vertical guide at x=0 should pull the moved rect's left edge
+        // onto it; a "guide" is single-axis, so it must never also offer
+        // itself as a Y-axis target.
+        let (d, hit) = move_snap(moved, &[], 4., true, false, &[(Axis::X, 0.)]);
+        assert_eq!(d, Vec2::new(-1., 0.));
+        assert!(matches!(
+            hit,
+            Some(SmartGuideHit::Multiple(h))
+                if matches!(h.as_slice(), [SmartGuideHit::AlignEdge { axis: Axis::X, value }] if *value == 0.)
+        ));
+
+        // Neither axis matches within tolerance — no hit, no NaN/garbage
+        // from treating the guide's infinite extent as real geometry.
+        let (d, hit) = move_snap(moved, &[], 4., true, false, &[(Axis::Y, 500.)]);
+        assert_eq!(d, Vec2::ZERO);
+        assert!(hit.is_none());
+
+        // Spacing must never see a guide as a zero-width neighbor object.
+        let (d, hit) = move_snap(moved, &[], 4., false, true, &[(Axis::X, 0.), (Axis::Y, 1.)]);
+        assert_eq!(d, Vec2::ZERO);
+        assert!(hit.is_none());
+    }
+
+    #[test]
+    fn nearest_grid_point_rounds_to_the_nearest_intersection() {
+        assert_eq!(nearest_grid_point(Point::new(23., 41.), 10.), Point::new(20., 40.));
+        assert_eq!(nearest_grid_point(Point::new(-23., -41.), 10.), Point::new(-20., -40.));
+        assert_eq!(nearest_grid_point(Point::new(25., 0.), 10.), Point::new(30., 0.), "exact half rounds away from zero, matching f64::round");
+        // Malformed spacing is a no-op, not a divide-by-zero/NaN result.
+        assert_eq!(nearest_grid_point(Point::new(23., 41.), 0.), Point::new(23., 41.));
+        assert_eq!(nearest_grid_point(Point::new(23., 41.), -5.), Point::new(23., 41.));
+        assert_eq!(nearest_grid_point(Point::new(23., 41.), f64::NAN), Point::new(23., 41.));
+    }
+
+    #[test]
+    fn nearest_pixel_point_rounds_to_the_nearest_whole_unit() {
+        assert_eq!(nearest_pixel_point(Point::new(23.4, 41.6)), Point::new(23., 42.));
+        assert_eq!(nearest_pixel_point(Point::new(-23.4, -41.6)), Point::new(-23., -42.));
+    }
+
+    #[test]
+    fn scale_dimension_guides_matches_a_candidates_size_from_the_fixed_corner() {
+        // Dragging the Se handle: Nw stays fixed, so the target x/y are
+        // measured forward (+) from bounds.x0/y0.
+        let bounds = Rect::new(0., 0., 10., 10.);
+        let candidates = [Rect::new(100., 100., 140., 130.)]; // width 40, height 30
+        let guides = scale_dimension_guides(Handle::Se, bounds, &candidates);
+        assert!(guides.contains(&(Axis::X, 40.)), "matches the candidate's width from the fixed left edge");
+        assert!(guides.contains(&(Axis::Y, 30.)), "matches the candidate's height from the fixed top edge");
+        // Square/circle self-cue: this shape's own other dimension (both
+        // 10 here, so both self-cues coincide with each other but not
+        // with the candidate's).
+        assert!(guides.contains(&(Axis::X, 10.)));
+        assert!(guides.contains(&(Axis::Y, 10.)));
+    }
+
+    #[test]
+    fn scale_dimension_guides_flips_sign_for_the_opposite_fixed_corner() {
+        // Dragging the Nw handle: Se (x1,y1) stays fixed, so growing the
+        // shape means moving the dragged corner *backward* (-) from it.
+        let bounds = Rect::new(0., 0., 10., 10.);
+        let candidates = [Rect::new(100., 100., 140., 130.)];
+        let guides = scale_dimension_guides(Handle::Nw, bounds, &candidates);
+        assert!(guides.contains(&(Axis::X, 10. - 40.)));
+        assert!(guides.contains(&(Axis::Y, 10. - 30.)));
+    }
+
+    #[test]
+    fn scale_dimension_guides_edge_handle_only_offers_its_own_axis() {
+        // An E handle only moves x — no Y-axis guide should ever appear,
+        // matching an edge handle's own axis restriction elsewhere.
+        let bounds = Rect::new(0., 0., 10., 20.);
+        let candidates = [Rect::new(100., 100., 140., 130.)];
+        let guides = scale_dimension_guides(Handle::E, bounds, &candidates);
+        assert!(guides.iter().all(|(axis, _)| *axis == Axis::X));
+        // Square cue: width should be able to match this shape's own
+        // (unchanged) height of 20, landing at x = 0 + 20 = 20.
+        assert!(guides.contains(&(Axis::X, 20.)));
+    }
+
+    #[test]
+    fn mask_axis_hit_drops_the_inactive_axis_so_an_edge_handle_cant_drift_sideways() {
+        let both = Some(SmartGuideHit::Multiple(vec![
+            SmartGuideHit::AlignEdge { axis: Axis::X, value: 5. },
+            SmartGuideHit::AlignEdge { axis: Axis::Y, value: 9. },
+        ]));
+        // An E/W edge handle only moves X — the Y match must disappear
+        // entirely, not just go unapplied, so no misleading line is drawn.
+        assert!(matches!(
+            mask_axis_hit(both.clone(), true, false),
+            Some(SmartGuideHit::AlignEdge { axis: Axis::X, value }) if value == 5.
+        ));
+        // An N/S edge handle only moves Y.
+        assert!(matches!(
+            mask_axis_hit(both.clone(), false, true),
+            Some(SmartGuideHit::AlignEdge { axis: Axis::Y, value }) if value == 9.
+        ));
+        // A corner handle keeps both.
+        assert!(matches!(mask_axis_hit(both, true, true), Some(SmartGuideHit::Multiple(h)) if h.len() == 2));
+        // Neither axis active (shouldn't happen for a real handle, but must not panic): nothing survives.
+        let both = Some(SmartGuideHit::Multiple(vec![
+            SmartGuideHit::AlignEdge { axis: Axis::X, value: 5. },
+            SmartGuideHit::AlignEdge { axis: Axis::Y, value: 9. },
+        ]));
+        assert!(mask_axis_hit(both, false, false).is_none());
+        // Non-alignment hits and "no hit" pass straight through.
+        assert!(mask_axis_hit(None, true, true).is_none());
+        let spacing = Some(SmartGuideHit::Spacing { gap_a: (Point::ZERO, Point::ZERO), gap_b: (Point::ZERO, Point::ZERO), px: 4. });
+        assert!(matches!(mask_axis_hit(spacing, false, false), Some(SmartGuideHit::Spacing { .. })));
     }
 
     #[test]

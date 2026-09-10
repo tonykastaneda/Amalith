@@ -305,6 +305,20 @@ pub struct Settings {
     /// Construction Guides' preset angles (degrees from the last anchor);
     /// 6 slots, matching Illustrator's own Smart Guides preferences.
     pub sg_angles: [f64; 6],
+    /// View ▸ Show Grid (⌘'). A real persisted preference, same reasoning
+    /// as `smart_guides_enabled`.
+    pub show_grid: bool,
+    /// View ▸ Snap to Grid (⇧⌘').
+    pub snap_to_grid: bool,
+    /// View ▸ Snap to Pixel — rounds to the nearest whole document unit.
+    pub snap_to_pixel: bool,
+    /// View ▸ Snap to Point (⌥⌘') — anchor-point snapping independent of
+    /// the Smart Guides master switch; Illustrator ships this on by
+    /// default and most users never turn it off.
+    pub snap_to_point: bool,
+    /// Grid line spacing, canonical px. Illustrator's own default is 1
+    /// inch (72pt).
+    pub grid_spacing: f64,
 }
 
 impl Settings {
@@ -340,6 +354,11 @@ impl Default for Settings {
             sg_spacing_guides: true,
             sg_tolerance: 4.0,
             sg_angles: [0.0, 45.0, 90.0, 135.0, 0.0, 0.0],
+            show_grid: false,
+            snap_to_grid: false,
+            snap_to_pixel: false,
+            snap_to_point: true,
+            grid_spacing: 72.0,
         }
     }
 }
@@ -374,6 +393,8 @@ pub struct Prefs {
     cat_rows: Vec<Rect>,
     inc_up: Rect,
     inc_down: Rect,
+    grid_up: Rect,
+    grid_down: Rect,
     check_tips: Rect,
     check_home: Rect,
     check_fps: Rect,
@@ -419,6 +440,8 @@ pub enum Hit {
     Backdrop,
     Category(usize),
     IncStep(f64),
+    /// General page: View ▸ Show Grid's line spacing, canonical px.
+    SetGridSpacing(f64),
     ToggleTips,
     ToggleHome,
     ToggleFps,
@@ -484,6 +507,8 @@ impl Prefs {
             cat_rows: Vec::new(),
             inc_up: Rect::ZERO,
             inc_down: Rect::ZERO,
+            grid_up: Rect::ZERO,
+            grid_down: Rect::ZERO,
             check_tips: Rect::ZERO,
             check_home: Rect::ZERO,
             check_fps: Rect::ZERO,
@@ -566,6 +591,12 @@ impl Prefs {
         }
         if self.inc_down.contains(p) {
             return Hit::IncStep((self.working.nudge_step - 0.5).max(0.5));
+        }
+        if self.grid_up.contains(p) {
+            return Hit::SetGridSpacing((self.working.grid_spacing + 1.0).min(10_000.0));
+        }
+        if self.grid_down.contains(p) {
+            return Hit::SetGridSpacing((self.working.grid_spacing - 1.0).max(1.0));
         }
         if self.check_tips.contains(p) {
             return Hit::ToggleTips;
@@ -702,6 +733,8 @@ impl Prefs {
         self.bind_rows.clear();
         self.inc_up = Rect::ZERO;
         self.inc_down = Rect::ZERO;
+        self.grid_up = Rect::ZERO;
+        self.grid_down = Rect::ZERO;
         self.check_tips = Rect::ZERO;
         self.check_home = Rect::ZERO;
         self.check_fps = Rect::ZERO;
@@ -772,6 +805,28 @@ impl Prefs {
         self.inc_down = Rect::new(field.x1 - ui_px(16.0), cy + ui_px(11.0), field.x1, cy + ui_px(21.0));
         tri(scene, self.inc_up.center(), true, theme.text_dim);
         tri(scene, self.inc_down.center(), false, theme.text_dim);
+        cy += ui_px(44.0);
+
+        // View ▸ Show Grid's line spacing — its own system, not a Smart
+        // Guides sub-feature, but this is the only numeric preference it
+        // has, so it lives on General next to the other plain numbers
+        // rather than needing a whole page of its own.
+        tcx.draw(scene, "Grid Spacing", 12.0, theme.text_dim, px, cy + ui_px(14.0));
+        let gfield = Rect::new(fx, cy, fx + ui_px(90.0), cy + ui_px(22.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &gfield.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &gfield.to_rounded_rect(ui_px(4.0)));
+        tcx.draw(
+            scene,
+            &format!("{} pt", trim(self.working.grid_spacing)),
+            12.0,
+            theme.text,
+            fx + ui_px(8.0),
+            cy + ui_px(15.0),
+        );
+        self.grid_up = Rect::new(gfield.x1 - ui_px(16.0), cy + 1.0, gfield.x1, cy + ui_px(11.0));
+        self.grid_down = Rect::new(gfield.x1 - ui_px(16.0), cy + ui_px(11.0), gfield.x1, cy + ui_px(21.0));
+        tri(scene, self.grid_up.center(), true, theme.text_dim);
+        tri(scene, self.grid_down.center(), false, theme.text_dim);
         cy += ui_px(44.0);
 
         self.check_tips = checkbox(scene, tcx, theme, px, cy, "Show Tool Tips", self.working.show_tooltips);

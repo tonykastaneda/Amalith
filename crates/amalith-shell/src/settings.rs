@@ -109,6 +109,15 @@ fn parse(text: &str) -> Settings {
                     if angles.iter().all(|a| a.is_finite()) { s.sg_angles = angles; }
                 }
             }
+            "show_grid" => s.show_grid = v == "true",
+            "snap_to_grid" => s.snap_to_grid = v == "true",
+            "snap_to_pixel" => s.snap_to_pixel = v == "true",
+            "snap_to_point" => s.snap_to_point = v == "true",
+            "grid_spacing" => {
+                if let Ok(n) = v.parse::<f64>() {
+                    if n.is_finite() { s.grid_spacing = n.clamp(1.0, 10_000.0); }
+                }
+            }
             _ => {
                 if let Some(name) = k.strip_prefix("tool.") {
                     if let Some(i) = Tool::ALL.iter().position(|t| tool_name(*t) == name) {
@@ -154,7 +163,8 @@ fn serialize(s: &Settings) -> String {
          show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhandle_size = {}\n\
          smart_guides_enabled = {}\nsg_alignment_guides = {}\nsg_anchor_path_labels = {}\n\
          sg_object_highlighting = {}\nsg_measurement_labels = {}\nsg_construction_guides = {}\n\
-         sg_transform_tools = {}\nsg_spacing_guides = {}\nsg_tolerance = {}\nsg_angles = {}\n",
+         sg_transform_tools = {}\nsg_spacing_guides = {}\nsg_tolerance = {}\nsg_angles = {}\n\
+         show_grid = {}\nsnap_to_grid = {}\nsnap_to_pixel = {}\nsnap_to_point = {}\ngrid_spacing = {}\n",
         s.ui_scale,
         s.nudge_step,
         s.show_tooltips,
@@ -176,6 +186,11 @@ fn serialize(s: &Settings) -> String {
         s.sg_spacing_guides,
         s.sg_tolerance,
         s.sg_angles.map(|a| a.to_string()).join(","),
+        s.show_grid,
+        s.snap_to_grid,
+        s.snap_to_pixel,
+        s.snap_to_point,
+        s.grid_spacing,
     );
     for (i, tool) in Tool::ALL.iter().enumerate() {
         let v = s.tool_keys[i].map_or_else(String::new, |c| c.to_string());
@@ -304,6 +319,11 @@ mod scale_tests {
             sg_spacing_guides: false,
             sg_tolerance: 6.5,
             sg_angles: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            show_grid: true,
+            snap_to_grid: true,
+            snap_to_pixel: true,
+            snap_to_point: false,
+            grid_spacing: 36.0,
         };
         let round_tripped = parse(&serialize(&original));
 
@@ -329,6 +349,11 @@ mod scale_tests {
             sg_spacing_guides,
             sg_tolerance,
             sg_angles,
+            show_grid,
+            snap_to_grid,
+            snap_to_pixel,
+            snap_to_point,
+            grid_spacing,
         } = round_tripped;
         assert_eq!(ui_scale, original.ui_scale, "ui_scale did not round-trip");
         assert_eq!(nudge_step, original.nudge_step, "nudge_step did not round-trip");
@@ -351,6 +376,11 @@ mod scale_tests {
         assert_eq!(sg_spacing_guides, original.sg_spacing_guides, "sg_spacing_guides did not round-trip");
         assert_eq!(sg_tolerance, original.sg_tolerance, "sg_tolerance did not round-trip");
         assert_eq!(sg_angles, original.sg_angles, "sg_angles did not round-trip");
+        assert_eq!(show_grid, original.show_grid, "show_grid did not round-trip");
+        assert_eq!(snap_to_grid, original.snap_to_grid, "snap_to_grid did not round-trip");
+        assert_eq!(snap_to_pixel, original.snap_to_pixel, "snap_to_pixel did not round-trip");
+        assert_eq!(snap_to_point, original.snap_to_point, "snap_to_point did not round-trip");
+        assert_eq!(grid_spacing, original.grid_spacing, "grid_spacing did not round-trip");
     }
 
     #[test]

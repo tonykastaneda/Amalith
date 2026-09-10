@@ -26,6 +26,8 @@ pub(in crate::app) struct NativeMenu {
     transparency_grid_check: muda::CheckMenuItem,
     /// View ▸ Smart Guides checkmark.
     smart_guides_check: muda::CheckMenuItem,
+    /// View ▸ Show Grid / Snap to Grid / Snap to Pixel / Snap to Point.
+    grid_checks: (muda::CheckMenuItem, muda::CheckMenuItem, muda::CheckMenuItem, muda::CheckMenuItem),
     /// Type ▸ Convert to Area/Point Type — label + enabled tracks the
     /// selection.
     convert_text_i: muda::MenuItem,
@@ -46,6 +48,10 @@ impl NativeMenu {
         outline: bool,
         transparency_grid: bool,
         smart_guides: bool,
+        show_grid: bool,
+        snap_to_grid: bool,
+        snap_to_pixel: bool,
+        snap_to_point: bool,
     ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
@@ -228,6 +234,36 @@ impl NativeMenu {
                 Some(Accelerator::new(sup, Code::KeyU)),
             ),
             MenuAction::ToggleSmartGuides,
+        );
+        let show_grid_i = reg(
+            &mut items,
+            CheckMenuItem::new("Show Grid", true, show_grid, Some(Accelerator::new(sup, Code::Quote))),
+            MenuAction::ToggleShowGrid,
+        );
+        let snap_to_grid_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Snap to Grid",
+                true,
+                snap_to_grid,
+                Some(Accelerator::new(sup_shift, Code::Quote)),
+            ),
+            MenuAction::ToggleSnapToGrid,
+        );
+        let snap_to_pixel_i = reg(
+            &mut items,
+            CheckMenuItem::new("Snap to Pixel", true, snap_to_pixel, None),
+            MenuAction::ToggleSnapToPixel,
+        );
+        let snap_to_point_i = reg(
+            &mut items,
+            CheckMenuItem::new(
+                "Snap to Point",
+                true,
+                snap_to_point,
+                Some(Accelerator::new(sup_alt, Code::Quote)),
+            ),
+            MenuAction::ToggleSnapToPoint,
         );
         let guides_show_i = reg(
             &mut items,
@@ -413,6 +449,14 @@ impl NativeMenu {
                 &transparency_grid_i,
                 &sep(),
                 &smart_guides_i,
+                &sep(),
+                &show_grid_i,
+                &sep(),
+                &snap_to_grid_i,
+                &snap_to_pixel_i,
+                &sep(),
+                &snap_to_point_i,
+                &sep(),
                 &guides_show_i,
                 &guides_lock_i,
                 &clear_guides_i,
@@ -518,6 +562,7 @@ impl NativeMenu {
             outline_check: outline_i,
             transparency_grid_check: transparency_grid_i,
             smart_guides_check: smart_guides_i,
+            grid_checks: (show_grid_i, snap_to_grid_i, snap_to_pixel_i, snap_to_point_i),
             convert_text_i,
             clip_items: (clip_make_i, clip_release_i),
             _menu: menu,
@@ -543,6 +588,26 @@ impl NativeMenu {
     /// Match the View ▸ Smart Guides checkmark to the live toggle.
     pub(in crate::app) fn sync_smart_guides(&self, on: bool) {
         self.smart_guides_check.set_checked(on);
+    }
+
+    /// Match the View ▸ Show Grid checkmark to the live toggle.
+    pub(in crate::app) fn sync_show_grid(&self, on: bool) {
+        self.grid_checks.0.set_checked(on);
+    }
+
+    /// Match the View ▸ Snap to Grid checkmark to the live toggle.
+    pub(in crate::app) fn sync_snap_to_grid(&self, on: bool) {
+        self.grid_checks.1.set_checked(on);
+    }
+
+    /// Match the View ▸ Snap to Pixel checkmark to the live toggle.
+    pub(in crate::app) fn sync_snap_to_pixel(&self, on: bool) {
+        self.grid_checks.2.set_checked(on);
+    }
+
+    /// Match the View ▸ Snap to Point checkmark to the live toggle.
+    pub(in crate::app) fn sync_snap_to_point(&self, on: bool) {
+        self.grid_checks.3.set_checked(on);
     }
 
     /// Point/area convert item: `Some(true)` = an area-text object is

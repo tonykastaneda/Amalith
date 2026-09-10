@@ -59,10 +59,14 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
     None
 }
 
-/// `(id, bounds)` for every visible, unlocked, layer-direct-child object
-/// overlapping `visible` — Smart Guides' Alignment Guides candidate list.
-/// Same walk as `topmost_selectable_at`, minus `excluding` (the object(s)
-/// currently being dragged, which shouldn't snap to their own bounds).
+/// `(id, bounds)` for every visible, layer-direct-child object overlapping
+/// `visible` — Smart Guides' Alignment Guides candidate list. Same walk as
+/// `topmost_selectable_at`, minus `excluding` (the object(s) currently
+/// being dragged, which shouldn't snap to their own bounds) — but unlike
+/// that hit-test, a **locked** object is still included: Illustrator keeps
+/// locked artwork as a live alignment reference (it's exactly the kind of
+/// fixed geometry you'd want to align new work to), it just can't be
+/// clicked or dragged itself.
 pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[ObjectId]) -> Vec<(ObjectId, Rect)> {
     let mut out = Vec::new();
     for layer in doc.layers().iter().rev() {
@@ -74,13 +78,50 @@ pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[Obje
                 continue;
             }
             let Some(obj) = doc.object(id) else { continue };
-            if !obj.visible || obj.locked {
+            if !obj.visible {
                 continue;
             }
             if let Some(b) = bounds(doc, id) {
                 if overlaps(b, visible) {
                     out.push((id, b));
                 }
+            }
+        }
+    }
+    out
+}
+
+/// The isolation-scoped sibling of [`visible_top_level_bounds`]: `(id,
+/// bounds)` for every visible child of `group` overlapping `visible` —
+/// Alignment Guides while isolated into a group, matching Illustrator's
+/// own scoping (isolating hides the rest of the document as alignment
+/// noise, same as it hides it from selection). Skips a clip group's own
+/// mask child, same as [`topmost_in`] — it's a cutout shape, not content
+/// to align against — and a blend group's generated in-between steps,
+/// which aren't independent objects at all. Locked children still count,
+/// same reasoning as `visible_top_level_bounds`.
+pub fn bounds_within(doc: &Document, group: ObjectId, visible: Rect, excluding: &[ObjectId]) -> Vec<(ObjectId, Rect)> {
+    let (clip, blend) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (g.clip, g.blend),
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for &id in doc.children_of(ObjectParent::Group(group)).iter().rev() {
+        if Some(id) == clip || excluding.contains(&id) {
+            continue;
+        }
+        if let Some(b) = blend {
+            if id != b.start && id != b.end {
+                continue;
+            }
+        }
+        let Some(obj) = doc.object(id) else { continue };
+        if !obj.visible {
+            continue;
+        }
+        if let Some(b) = bounds(doc, id) {
+            if overlaps(b, visible) {
+                out.push((id, b));
             }
         }
     }
@@ -295,4 +336,74 @@ pub fn selection_quad(doc: &Document, ids: &[ObjectId]) -> Option<[vello::kurbo:
         return Some(crate::handles::rect_quad(local).map(|p| m * p));
     }
     union_bounds(doc, ids).map(crate::handles::rect_quad)
+}
+
+#[cfg(test)]
+mod smart_guide_bounds_tests {
+    use super::*;
+    use amalith_core::{GroupData, Layer, LayerId, Object, PathData};
+
+    fn rect_path(id: ObjectId, parent: ObjectParent, r: amalith_core::geom::Rect, locked: bool) -> Object {
+        let mut o = Object::new(id, parent, ObjectKind::Path(PathData::rectangle(r)));
+        o.locked = locked;
+        o
+    }
+
+    #[test]
+    fn visible_top_level_bounds_still_includes_locked_objects() {
+        let mut doc = Document::new("locked");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(
+            rect_path(id, ObjectParent::Layer(layer), amalith_core::geom::Rect::new(0., 0., 10., 10.), true),
+            0,
+        )
+        .unwrap();
+        let found = visible_top_level_bounds(&doc, Rect::new(-100., -100., 100., 100.), &[]);
+        assert_eq!(found.len(), 1, "a locked object is still a valid alignment target");
+        assert_eq!(found[0].0, id);
+    }
+
+    #[test]
+    fn bounds_within_skips_the_clip_mask_and_blend_steps_but_keeps_locked_content() {
+        let mut doc = Document::new("clip");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let group = ObjectId::new();
+        let mask = ObjectId::new();
+        let content = ObjectId::new();
+        doc.insert_object(
+            Object::new(group, ObjectParent::Layer(layer), ObjectKind::Group(GroupData { clip: Some(mask), ..GroupData::default() })),
+            0,
+        )
+        .unwrap();
+        doc.insert_object(
+            rect_path(mask, ObjectParent::Group(group), amalith_core::geom::Rect::new(0., 0., 5., 5.), false),
+            0,
+        )
+        .unwrap();
+        doc.insert_object(
+            rect_path(content, ObjectParent::Group(group), amalith_core::geom::Rect::new(20., 20., 30., 30.), true),
+            1,
+        )
+        .unwrap();
+        let found = bounds_within(&doc, group, Rect::new(-100., -100., 100., 100.), &[]);
+        assert_eq!(found.len(), 1, "the mask is excluded, the locked content is not");
+        assert_eq!(found[0].0, content);
+    }
+
+    #[test]
+    fn bounds_within_is_empty_for_a_non_group() {
+        let mut doc = Document::new("bare");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(
+            rect_path(id, ObjectParent::Layer(layer), amalith_core::geom::Rect::new(0., 0., 10., 10.), false),
+            0,
+        )
+        .unwrap();
+        assert!(bounds_within(&doc, id, Rect::new(-100., -100., 100., 100.), &[]).is_empty());
+    }
 }

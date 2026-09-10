@@ -152,7 +152,12 @@ impl App {
             }
             Drag::MoveAnchors { start_doc, .. } => {
                 let start_doc = *start_doc;
-                let exclude: Vec<ObjectId> = self.doc.anchor_sel.iter().map(|&(id, _)| id).collect();
+                // Anchor-level, not object-level: dragging one anchor of a
+                // path can still snap onto a *sibling* anchor of the same
+                // path (or its own center/other segments) — only the
+                // anchors actually being dragged are excluded from
+                // attracting themselves.
+                let exclude: Vec<(ObjectId, usize)> = self.doc.anchor_sel.clone();
                 let raw = self.doc_point(self.pointer);
                 let origin = self.doc.anchor_sel.iter().flat_map(|&(id,n)| anchors::anchors_of(self.doc.editor.document(), id).into_iter().filter(move |(i,_)| *i == n).map(|(_,p)| p))
                     .min_by(|a,b| (*a-start_doc).hypot2().total_cmp(&(*b-start_doc).hypot2())).unwrap_or(start_doc);
@@ -377,10 +382,23 @@ impl App {
             }
             Drag::MoveArtboard { id, start_doc, .. } => {
                 let (id, start_doc) = (*id, *start_doc);
+                let raw = self.doc_point(self.pointer);
+                let (delta, hit) = if self.shift_down {
+                    (snap8(raw - start_doc), None)
+                } else {
+                    let bounds = self
+                        .doc.editor
+                        .document()
+                        .artboard(id)
+                        .map(|a| convert::rect(a.rect))
+                        .unwrap_or_default();
+                    self.sg_artboard_move_snap(raw - start_doc, bounds, id)
+                };
+                self.smart_guide_hit = hit;
                 self.drag = Drag::MoveArtboard {
                     id,
                     start_doc,
-                    last_doc: self.doc_point(self.pointer),
+                    last_doc: start_doc + delta,
                 };
                 self.request_main_redraw();
             }
@@ -393,12 +411,36 @@ impl App {
             } => {
                 let (id, handle, start_rect, start_doc) =
                     (*id, *handle, *start_rect, *start_doc);
+                let raw = self.doc_point(self.pointer);
+                let dp = if self.shift_down {
+                    self.smart_guide_hit = None;
+                    raw
+                } else {
+                    // `cur_doc - start_doc` is a *relative* delta added to
+                    // `start_rect`'s edge (the press point needn't land
+                    // exactly on the handle's pixel) — unlike Scale's own
+                    // `pointer`, which *is* the corner directly. Recover
+                    // the actual candidate edge point first, snap that,
+                    // then translate the snap back into the same
+                    // `cur_doc` space `resize_rect` expects.
+                    let sr = convert::rect(start_rect);
+                    let left = matches!(handle, Handle::Nw | Handle::W | Handle::Sw);
+                    let right = matches!(handle, Handle::Ne | Handle::E | Handle::Se);
+                    let top = matches!(handle, Handle::Nw | Handle::N | Handle::Ne);
+                    let bottom = matches!(handle, Handle::Sw | Handle::S | Handle::Se);
+                    let edge_x = if left { sr.x0 } else if right { sr.x1 } else { raw.x };
+                    let edge_y = if top { sr.y0 } else if bottom { sr.y1 } else { raw.y };
+                    let raw_edge = Point::new(edge_x + (raw.x - start_doc.x), edge_y + (raw.y - start_doc.y));
+                    let (snapped_edge, hit) = self.sg_artboard_resize_snap(handle, raw_edge, sr, id);
+                    self.smart_guide_hit = hit;
+                    raw + (snapped_edge - raw_edge)
+                };
                 self.drag = Drag::ResizeArtboard {
                     id,
                     handle,
                     start_rect,
                     start_doc,
-                    cur_doc: self.doc_point(self.pointer),
+                    cur_doc: dp,
                 };
                 self.request_main_redraw();
             }
@@ -410,7 +452,10 @@ impl App {
             } => {
                 let (handle, start_bounds) = (*handle, *start_bounds);
                 let start_xf = start_xf.clone();
-                let dp = self.doc_point(self.pointer);
+                let raw = self.doc_point(self.pointer);
+                let exclude: Vec<ObjectId> = start_xf.keys().copied().collect();
+                let (dp, hit) = self.sg_scale_snap(handle, raw, start_bounds, &exclude, &[]);
+                self.smart_guide_hit = hit;
                 // Free Transform's Constrain toggle forces the same
                 // uniform-scale behavior Shift gives every other tool.
                 let uniform = self.shift_down
@@ -478,12 +523,24 @@ impl App {
             } => {
                 let (center, start_angle) = (*center, *start_angle);
                 let start_xf = start_xf.clone();
-                let dp = self.doc_point(self.pointer);
+                let raw = self.doc_point(self.pointer);
                 let constrained = self.shift_down || (self.active_tool == Tool::FreeTransform && self.free_transform_constrain);
+                // Shift's fixed 45° lock wins outright; otherwise the
+                // user's own construction-angle list gets first say, and
+                // the plain pre-drag reference line is the fallback when
+                // neither applies — the same priority Pen's construction
+                // guides already use (an exact match beats a generic cue).
+                let (dp, angle_hit) = if constrained {
+                    (raw, None)
+                } else {
+                    let exclude: Vec<ObjectId> = start_xf.keys().copied().collect();
+                    self.sg_construction_snap_with_object_angles(center, raw, &exclude)
+                };
                 let m = handles::rotate_transform(center, start_angle, dp, constrained);
-                if self.settings.smart_guides_enabled && self.settings.sg_transform_tools {
-                    self.smart_guide_hit = Some(smart_guides::SmartGuideHit::TransformReference { center, angle: start_angle });
-                }
+                self.smart_guide_hit = angle_hit.or_else(|| {
+                    (self.settings.smart_guides_enabled && self.settings.sg_transform_tools)
+                        .then_some(smart_guides::SmartGuideHit::TransformReference { center, angle: start_angle })
+                });
                 let preview = start_xf.iter().map(|(&id, &s)| {
                     let parent = if self.active_tool == Tool::FreeTransform {
                         let doc = self.doc.editor.document();
@@ -559,7 +616,17 @@ impl App {
                 // pressed or released mid-drag, same as Illustrator.
                 let copy = self.alt_down;
                 let start_xf = start_xf.clone();
-                let dp = self.doc_point(self.pointer);
+                let raw = self.doc_point(self.pointer);
+                let (dp, angle_hit) = if self.shift_down {
+                    (raw, None)
+                } else {
+                    let exclude: Vec<ObjectId> = start_xf.keys().copied().collect();
+                    self.sg_construction_snap_with_object_angles(pivot, raw, &exclude)
+                };
+                self.smart_guide_hit = angle_hit.or_else(|| {
+                    (self.settings.smart_guides_enabled && self.settings.sg_transform_tools)
+                        .then_some(smart_guides::SmartGuideHit::TransformReference { center: pivot, angle: start_angle })
+                });
                 let m = handles::rotate_transform(pivot, start_angle, dp, self.shift_down);
                 let preview = start_xf.iter().map(|(id, s)| (*id, m * *s)).collect();
                 let moved =
@@ -585,7 +652,14 @@ impl App {
                 let (pivot, press, was_moved) = (*pivot, *press, *moved);
                 let copy = self.alt_down;
                 let start_xf = start_xf.clone();
-                let dp = self.doc_point(self.pointer);
+                let raw = self.doc_point(self.pointer);
+                let (dp, angle_hit) = if self.shift_down {
+                    (raw, None)
+                } else {
+                    let exclude: Vec<ObjectId> = start_xf.keys().copied().collect();
+                    self.sg_construction_snap_with_object_angles(pivot, raw, &exclude)
+                };
+                self.smart_guide_hit = angle_hit;
                 let mut axis_deg = handles::angle_to(pivot, dp).to_degrees();
                 if self.shift_down {
                     axis_deg = (axis_deg / 45.0).round() * 45.0;
@@ -617,6 +691,11 @@ impl App {
                 let mut shear_deg = v.y.atan2(v.x.abs()).to_degrees();
                 if self.shift_down {
                     shear_deg = (shear_deg / 45.0).round() * 45.0;
+                    self.smart_guide_hit = None;
+                } else {
+                    let (snapped, hit) = self.sg_shear_snap(pivot, shear_deg);
+                    shear_deg = snapped;
+                    self.smart_guide_hit = hit;
                 }
                 shear_deg = shear_deg.clamp(-89.0, 89.0);
                 let m = handles::shear_transform(pivot, shear_deg, 0.0);
@@ -1198,8 +1277,10 @@ impl App {
                 ..
             } => {
                 if !moved {
-                    // A click, not a drag: re-place the reference point.
-                    self.transform_pivot = Some(self.doc_point(self.pointer));
+                    // A click, not a drag: re-place the reference point,
+                    // snapping it onto a nearby anchor/center/guide the
+                    // same way any other point placement does.
+                    self.transform_pivot = Some(self.sg_point_snap(self.doc_point(self.pointer), &[]).0);
                 } else if preview != start_xf {
                     let sample = self.doc.selection.first().copied();
                     let delta = sample.and_then(|id| self.preview_delta(&preview, id));
@@ -1239,7 +1320,7 @@ impl App {
             | Drag::ScaleTool { start_xf, preview, copy, moved, .. } => {
                 if !moved {
                     // A click, not a drag: re-place the reference point.
-                    self.transform_pivot = Some(self.doc_point(self.pointer));
+                    self.transform_pivot = Some(self.sg_point_snap(self.doc_point(self.pointer), &[]).0);
                 } else if preview != start_xf {
                     let sample = self.doc.selection.first().copied();
                     let delta = sample.and_then(|id| self.preview_delta(&preview, id));

@@ -375,6 +375,11 @@ impl App {
                         p.working.nudge_step = v;
                     }
                 }
+                prefs::Hit::SetGridSpacing(v) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.grid_spacing = v;
+                    }
+                }
                 prefs::Hit::ToggleTips => {
                     if let Some(p) = &mut self.prefs {
                         p.working.show_tooltips = !p.working.show_tooltips;

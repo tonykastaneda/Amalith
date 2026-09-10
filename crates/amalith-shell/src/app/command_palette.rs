@@ -89,6 +89,26 @@ impl App {
             PaletteKind::Menu(MenuAction::ToggleSmartGuides),
         );
         add(
+            if self.settings.show_grid { "Hide Grid" } else { "Show Grid" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleShowGrid),
+        );
+        add(
+            if self.settings.snap_to_grid { "Turn Off Snap to Grid" } else { "Turn On Snap to Grid" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleSnapToGrid),
+        );
+        add(
+            if self.settings.snap_to_pixel { "Turn Off Snap to Pixel" } else { "Turn On Snap to Pixel" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleSnapToPixel),
+        );
+        add(
+            if self.settings.snap_to_point { "Turn Off Snap to Point" } else { "Turn On Snap to Point" }.to_string(),
+            "View",
+            PaletteKind::Menu(MenuAction::ToggleSnapToPoint),
+        );
+        add(
             if self.guides_hidden { "Show Guides" } else { "Hide Guides" }.to_string(),
             "View",
             PaletteKind::Menu(MenuAction::ToggleGuides),

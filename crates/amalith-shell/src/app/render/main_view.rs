@@ -102,6 +102,9 @@ pub(in crate::app) fn paint_main(
     outline_mode: bool,
     // View ▸ Show Transparency Grid, ⌘⇧D.
     transparency_grid: bool,
+    // View ▸ Show Grid, ⌘'.
+    show_grid: bool,
+    grid_spacing: f64,
     // Isolation-mode group, if any.
     isolate: Option<ObjectId>,
     // Layers panel drag-reorder indicator: (visible-row index, into-container).
@@ -178,6 +181,8 @@ pub(in crate::app) fn paint_main(
         outline_mode,
         isolate,
         transparency_grid,
+        show_grid,
+        grid_spacing,
     );
 
     if let Some(m) = marquee {

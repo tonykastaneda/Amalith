@@ -568,6 +568,14 @@ enum MenuAction {
     ToggleTransparencyGrid,
     /// View ▸ Smart Guides (⌘U).
     ToggleSmartGuides,
+    /// View ▸ Show Grid (⌘').
+    ToggleShowGrid,
+    /// View ▸ Snap to Grid (⇧⌘').
+    ToggleSnapToGrid,
+    /// View ▸ Snap to Pixel.
+    ToggleSnapToPixel,
+    /// View ▸ Snap to Point (⌥⌘').
+    ToggleSnapToPoint,
     /// View ▸ Guides.
     ToggleGuides,
     ToggleGuideLock,
@@ -1548,6 +1556,10 @@ impl App {
             self.outline_mode,
             self.transparency_grid,
             self.settings.smart_guides_enabled,
+            self.settings.show_grid,
+            self.settings.snap_to_grid,
+            self.settings.snap_to_pixel,
+            self.settings.snap_to_point,
         );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
@@ -2329,6 +2341,51 @@ impl App {
         }
         self.smart_guide_hit = None;
         self.sg_hovered_path = None;
+        self.request_main_redraw();
+    }
+
+    /// View ▸ Show Grid (⌘'). A real persisted preference, same reasoning
+    /// as Smart Guides.
+    fn toggle_show_grid(&mut self) {
+        self.settings.show_grid = !self.settings.show_grid;
+        settings::save(&self.settings);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_show_grid(self.settings.show_grid);
+        }
+        self.request_main_redraw();
+    }
+
+    /// View ▸ Snap to Grid (⇧⌘').
+    fn toggle_snap_to_grid(&mut self) {
+        self.settings.snap_to_grid = !self.settings.snap_to_grid;
+        settings::save(&self.settings);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_snap_to_grid(self.settings.snap_to_grid);
+        }
+        self.request_main_redraw();
+    }
+
+    /// View ▸ Snap to Pixel.
+    fn toggle_snap_to_pixel(&mut self) {
+        self.settings.snap_to_pixel = !self.settings.snap_to_pixel;
+        settings::save(&self.settings);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_snap_to_pixel(self.settings.snap_to_pixel);
+        }
+        self.request_main_redraw();
+    }
+
+    /// View ▸ Snap to Point (⌥⌘').
+    fn toggle_snap_to_point(&mut self) {
+        self.settings.snap_to_point = !self.settings.snap_to_point;
+        settings::save(&self.settings);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(m) = &self.native_menu {
+            m.sync_snap_to_point(self.settings.snap_to_point);
+        }
         self.request_main_redraw();
     }
 
@@ -3726,6 +3783,10 @@ impl App {
             MenuAction::ToggleOutline => self.toggle_outline_mode(),
             MenuAction::ToggleTransparencyGrid => self.toggle_transparency_grid(),
             MenuAction::ToggleSmartGuides => self.toggle_smart_guides(),
+            MenuAction::ToggleShowGrid => self.toggle_show_grid(),
+            MenuAction::ToggleSnapToGrid => self.toggle_snap_to_grid(),
+            MenuAction::ToggleSnapToPixel => self.toggle_snap_to_pixel(),
+            MenuAction::ToggleSnapToPoint => self.toggle_snap_to_point(),
             MenuAction::ToggleGuides => self.set_guides_hidden(!self.guides_hidden),
             MenuAction::ToggleGuideLock => self.set_guides_locked(!self.guides_locked),
             MenuAction::ClearGuides => self.clear_guides(),
@@ -7574,6 +7635,10 @@ impl ApplicationHandler for App {
                 self.outline_mode,
                 self.transparency_grid,
                 self.settings.smart_guides_enabled,
+                self.settings.show_grid,
+                self.settings.snap_to_grid,
+                self.settings.snap_to_pixel,
+                self.settings.snap_to_point,
             );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);

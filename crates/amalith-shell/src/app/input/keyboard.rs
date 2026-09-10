@@ -619,6 +619,11 @@ impl App {
                     KeyCode::KeyU if !self.shift_down => {
                         self.toggle_smart_guides();
                     }
+                    // ⌘' Show Grid, ⇧⌘' Snap to Grid, ⌥⌘' Snap to Point —
+                    // same Windows-parity redundancy as ⌘Y/⌘U above.
+                    KeyCode::Quote if self.alt_down => self.toggle_snap_to_point(),
+                    KeyCode::Quote if self.shift_down => self.toggle_snap_to_grid(),
+                    KeyCode::Quote => self.toggle_show_grid(),
                     // View zoom: ⌘+ / ⌘− step, ⌘0 fit, ⌘1 actual size.
                     // `Equal` is the `=`/`+` key; on most layouts ⌘+ needs
                     // Shift, so accept it with or without.

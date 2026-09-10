@@ -596,6 +596,8 @@ impl App {
                 &guide_lines,
                 self.outline_mode,
                 self.transparency_grid,
+                self.settings.show_grid,
+                self.settings.grid_spacing,
                 iso_root,
                 self.layer_drop.map(|(_, _, row, into)| (row, into)),
                 ab_bar,
