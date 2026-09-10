@@ -235,6 +235,25 @@ pub enum Command {
     /// newly-coincident free ends — one undo step for the trim and the
     /// join together.
     TrimAndJoinPaths { a: JoinTrim, b: JoinTrim },
+    /// Grows an open path with anchors placed while resuming it from one
+    /// of its own free endpoints (Pen tool, clicking an existing open
+    /// path's end instead of starting a new one) — the live-drawing
+    /// complement to `JoinAnchors`, which only connects two endpoints
+    /// that already exist. `endpoint` replaces `subpath`'s own endpoint
+    /// anchor (carrying forward any handle reshaped by the first new
+    /// drag); `new_anchors` walks away from it in placement order,
+    /// regardless of `at_end` — see `amalith_core::extend_open_subpath`.
+    /// `close` seals the whole subpath into a loop afterward (clicking
+    /// back near the resume point itself, the only close gesture the
+    /// live-drawing preview can detect while resuming).
+    ExtendOpenPath {
+        object: ObjectId,
+        subpath: usize,
+        at_end: bool,
+        endpoint: amalith_core::Anchor,
+        new_anchors: Vec<amalith_core::Anchor>,
+        close: bool,
+    },
     /// Replaces `object`'s variable-width stroke profile outright (the
     /// Width tool's add / move / delete of a width point all compile to
     /// this, with the shell recomputing the whole list each time). Empty

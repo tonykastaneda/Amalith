@@ -347,7 +347,7 @@ impl App {
             // shown while just moving the mouse (not yet dragging a
             // handle) never matches what Shift is actually about to do.
             let hover = self.sg_pen_snap(self.doc_point(self.pointer)).0;
-            let near_close = self.pen.len() >= 3
+            let near_close = self.pen.len() >= 2
                 && self
                     .pen
                     .first()

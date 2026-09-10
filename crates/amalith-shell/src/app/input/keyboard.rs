@@ -717,6 +717,7 @@ impl App {
                         } else {
                             self.pen.clear();
                             self.pen_redo.clear();
+                            self.pen_resume = None;
                             self.doc.anchor_sel.clear();
                             self.doc.selection.clear();
                             self.selected_guides.clear();

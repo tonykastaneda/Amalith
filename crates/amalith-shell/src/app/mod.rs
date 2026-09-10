@@ -388,14 +388,17 @@ enum Drag {
     },
     /// Pen tool: dragging a bezier handle out of the anchor just placed.
     /// `from` is that anchor's point (document space), for the drag-slop
-    /// test and Shift constraint. While `space_last` is `Some`, Space is
+    /// test and Shift constraint. While `space_anchor` is `Some`, Space is
     /// held and the drag is instead sliding the anchor itself (handles
-    /// carried rigidly, curvature frozen); it stores the previous cursor
-    /// point for the incremental translation.
+    /// carried rigidly, curvature frozen) — it stores `(anchor point,
+    /// pointer point)` as they were the moment Space was first pressed, so
+    /// each frame recomputes the proposed position from that fixed origin
+    /// (not by accumulating per-frame deltas) the same way `MoveAnchors`
+    /// does, which is what lets Smart Guides snap it without drift.
     PenHandle {
         anchor: usize,
         from: Point,
-        space_last: Option<Point>,
+        space_anchor: Option<(Point, Point)>,
     },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
     PickColor { in_hue: bool },
@@ -1187,6 +1190,14 @@ struct App {
     /// shorter instead of undoing the whole object. Cleared by any other
     /// action.
     last_pen: Option<(ObjectId, Vec<PenAnchor>, bool)>,
+    /// Set instead of starting a brand new path when the Pen tool's first
+    /// click landed on an existing open path's free endpoint — `(object,
+    /// subpath index, at_end)`. `self.pen[0]` is then a live-editable copy
+    /// of that endpoint (not a new anchor) and `commit_pen` grows the real
+    /// object via `Command::ExtendOpenPath` instead of `CreatePath`.
+    /// Cleared alongside `pen` becoming empty, so it never outlives the
+    /// session it was seeded for.
+    pen_resume: Option<(ObjectId, usize, bool)>,
     /// Rubber-band rect (screen px) while a marquee drag is live.
     marquee: Option<Rect>,
     theme: Theme,
@@ -1425,6 +1436,7 @@ impl App {
             pen: Vec::new(),
             pen_redo: Vec::new(),
             last_pen: None,
+            pen_resume: None,
             marquee: None,
             theme: Theme::default(),
             pointer: Point::ZERO,
@@ -1687,6 +1699,7 @@ impl App {
         self.drag = Drag::None;
         self.pen.clear();
         self.pen_redo.clear();
+        self.pen_resume = None;
         self.last_pen = None;
         self.marquee = None;
         self.picker = None;
@@ -3133,24 +3146,30 @@ impl App {
         let Drag::PenHandle {
             anchor,
             from,
-            space_last,
+            space_anchor,
         } = &self.drag
         else {
             return;
         };
-        let (anchor, from, space_last) = (*anchor, *from, *space_last);
+        let (anchor, from, space_anchor) = (*anchor, *from, *space_anchor);
         let dp = self.doc_point(self.pointer);
 
         // Space held: slide the anchor itself under the cursor, carrying
         // its handles rigidly so the curvature pulled so far is frozen.
         // Releasing Space resumes the handle pull from the new position.
+        // The proposed position is recomputed from the fixed origin
+        // captured when Space was first pressed (not accumulated frame to
+        // frame), so Smart Guides can snap it — same shape as
+        // `Drag::MoveAnchors`'s own origin-based snap.
         if self.space_down {
-            let Some(a) = self.pen.get_mut(anchor) else {
-                return;
-            };
-            if let Some(prev) = space_last {
-                let d = dp - prev;
-                a.point += d;
+            let (anchor_origin, pointer_origin) =
+                space_anchor.unwrap_or_else(|| (self.pen.get(anchor).map_or(from, |a| a.point), dp));
+            let proposed = anchor_origin + (dp - pointer_origin);
+            let (snapped, hit) = self.sg_point_snap(proposed, &[]);
+            self.smart_guide_hit = hit;
+            if let Some(a) = self.pen.get_mut(anchor) {
+                let d = snapped - a.point;
+                a.point = snapped;
                 if let Some(h) = a.handle_in.as_mut() {
                     *h += d;
                 }
@@ -3158,22 +3177,21 @@ impl App {
                     *h += d;
                 }
             }
-            let new_from = a.point;
             self.drag = Drag::PenHandle {
                 anchor,
-                from: new_from,
-                space_last: Some(dp),
+                from: snapped,
+                space_anchor: Some((anchor_origin, pointer_origin)),
             };
             self.request_main_redraw();
             return;
         }
         // Space just released — drop the marker; `from` already tracks the
         // anchor's (possibly moved) point, so the pull resumes from there.
-        if space_last.is_some() {
+        if space_anchor.is_some() {
             self.drag = Drag::PenHandle {
                 anchor,
                 from,
-                space_last: None,
+                space_anchor: None,
             };
         }
 
@@ -3191,8 +3209,14 @@ impl App {
             };
             a.handle_out = Some(h);
             if alt {
+                // Split the handle: the outgoing side keeps following the
+                // cursor independently, while the incoming side freezes at
+                // whatever shape it already had the moment Alt was
+                // pressed — held from the start of the drag (still `None`
+                // then) this makes a plain corner; pressed after dragging
+                // out a smooth point first, it preserves that curve into
+                // the anchor while only the outgoing tangent keeps moving.
                 a.mode = amalith_core::HandleMode::Corner;
-                a.handle_in = None;
             } else {
                 a.mode = amalith_core::HandleMode::Symmetric;
                 a.handle_in = Some(Point::new(a.point.x * 2.0 - h.x, a.point.y * 2.0 - h.y));
@@ -3226,27 +3250,90 @@ impl App {
         anchors::segment_at(self.doc.editor.document(), &paths, dp, r)
     }
 
+    /// When `(id, n)` is a free endpoint of an open path, the seed for
+    /// resuming it with the Pen tool: a document-space `PenAnchor` copy of
+    /// that endpoint (so `self.pen` can grow it exactly like a freshly
+    /// placed anchor), plus which subpath/end it belongs to. Its
+    /// `handle_in`/`handle_out` are normalized into the same "facing back
+    /// into what's already drawn" / "facing forward, not yet drawn"
+    /// meaning a fresh anchor's fields have regardless of which real end
+    /// is being resumed — swapped from the real anchor's own fields when
+    /// resuming from the *first* anchor, since `subpaths_to_bezpath`'s
+    /// convention makes that anchor's `handle_out` the one shaping the
+    /// existing path rather than `handle_in`. `commit_pen` and
+    /// `extend_open_subpath` share this same convention, so the round
+    /// trip needs no further translation.
+    fn pen_resume_seed(&self, id: ObjectId, n: usize) -> Option<(PenAnchor, usize, bool)> {
+        let doc = self.doc.editor.document();
+        let pd = doc.object(id)?.kind.path_data()?;
+        let (subpath, at_end) = amalith_core::open_endpoint_subpath(pd.subpaths(), n)?;
+        let a = amalith_core::anchor_at(pd.subpaths(), n)?;
+        let m = convert::affine(doc.world_transform(id));
+        let to_doc = |p: amalith_core::Point| m * convert::point(p);
+        let (local_in, local_out) = if at_end {
+            (a.handle_in, a.handle_out)
+        } else {
+            (a.handle_out, a.handle_in)
+        };
+        let seed = PenAnchor {
+            point: to_doc(a.point),
+            handle_in: local_in.map(to_doc),
+            handle_out: local_out.map(to_doc),
+            mode: a.mode,
+        };
+        Some((seed, subpath, at_end))
+    }
+
     /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` joins
-    /// the last anchor back to the first.
+    /// the last anchor back to the first. When `self.pen_resume` is set
+    /// (the session started by clicking an existing open path's free
+    /// endpoint rather than empty canvas), this instead grows that path
+    /// in place via `Command::ExtendOpenPath` — a single undoable step,
+    /// but not one `pen_undo_step` can walk back one anchor at a time the
+    /// way a freshly created path can (that mechanism is specific to
+    /// `last_pen`/`CreatePath`); ⌘Z still undoes the whole extension.
     fn commit_pen(&mut self, closed: bool) {
         self.pen_redo.clear();
         if self.pen.len() < 2 {
             self.pen.clear();
+            self.pen_resume = None;
             self.last_pen = None;
             return;
         }
         let anchors: Vec<PenAnchor> = std::mem::take(&mut self.pen);
         let cp = |p: Point| amalith_core::Point::new(p.x, p.y);
+        let to_core = |a: &PenAnchor| amalith_core::Anchor {
+            point: cp(a.point),
+            handle_in: a.handle_in.map(cp),
+            handle_out: a.handle_out.map(cp),
+            mode: a.mode,
+        };
+        if let Some((object, subpath, at_end)) = self.pen_resume.take() {
+            // The resumed object's own transform may not be identity (it
+            // could be moved/rotated/scaled) — `self.pen`'s points are
+            // document space, but `ExtendOpenPath` edits local-space
+            // anchors, same as every other anchor-editing command.
+            let inv = convert::affine(self.doc.editor.document().world_transform(object)).inverse();
+            let to_local = |a: &PenAnchor| amalith_core::Anchor {
+                point: convert::point_to_core(inv * a.point),
+                handle_in: a.handle_in.map(|h| convert::point_to_core(inv * h)),
+                handle_out: a.handle_out.map(|h| convert::point_to_core(inv * h)),
+                mode: a.mode,
+            };
+            let _ = self.doc.editor.execute(Command::ExtendOpenPath {
+                object,
+                subpath,
+                at_end,
+                endpoint: to_local(&anchors[0]),
+                new_anchors: anchors[1..].iter().map(to_local).collect(),
+                close: closed,
+            });
+            self.doc.selection = vec![object];
+            self.request_main_redraw();
+            return;
+        }
         let subpath = amalith_core::Subpath {
-            anchors: anchors
-                .iter()
-                .map(|a| amalith_core::Anchor {
-                    point: cp(a.point),
-                    handle_in: a.handle_in.map(cp),
-                    handle_out: a.handle_out.map(cp),
-                    mode: a.mode,
-                })
-                .collect(),
+            anchors: anchors.iter().map(to_core).collect(),
             closed,
         };
         let path = amalith_core::PathData::from_subpaths(vec![subpath]);
@@ -4627,6 +4714,7 @@ impl App {
             }
             self.pen.clear();
             self.pen_redo.clear();
+            self.pen_resume = None;
         }
         if t != Tool::DirectSelect {
             self.doc.anchor_sel.clear();
@@ -5680,6 +5768,14 @@ impl App {
         }
         if let Some(p) = self.pen.pop() {
             self.pen_redo.push(p);
+            if self.pen.is_empty() {
+                // Popping the resume seed itself abandons the resume —
+                // a further ⌘Z falls through to the ordinary document
+                // undo stack instead (there's nothing pen-specific left
+                // to step back through). Redo past this point restarts
+                // as a fresh path rather than re-resuming.
+                self.pen_resume = None;
+            }
             self.request_main_redraw();
             return true;
         }

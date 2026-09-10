@@ -523,6 +523,28 @@ pub fn anchor_is_open_endpoint(subpaths: &[Subpath], n: usize) -> bool {
     !sp.closed && (ai == 0 || ai == sp.anchors.len() - 1)
 }
 
+/// `(subpath index, at_end)` for anchor `n`, when it's a genuine open-path
+/// free endpoint ([`anchor_is_open_endpoint`]) — `at_end` is true when `n`
+/// is that subpath's *last* anchor, false when it's the first. Resolves in
+/// one pass what a caller would otherwise need `anchor_is_open_endpoint`
+/// plus its own index math for — the Pen tool's "resume this open path"
+/// entry point (extending it with [`extend_open_subpath`]) needs exactly
+/// this pair.
+pub fn open_endpoint_subpath(subpaths: &[Subpath], n: usize) -> Option<(usize, bool)> {
+    let (si, ai) = locate(subpaths, n)?;
+    let sp = &subpaths[si];
+    if sp.closed {
+        return None;
+    }
+    if ai == 0 {
+        Some((si, false))
+    } else if ai == sp.anchors.len() - 1 {
+        Some((si, true))
+    } else {
+        None
+    }
+}
+
 /// Endpoints within this distance are already effectively the same point —
 /// [`join_anchors`] folds them into one anchor instead of leaving a
 /// (possibly zero-length, but still duplicate) connecting segment.
@@ -598,6 +620,50 @@ pub fn join_anchors(subpaths: &mut Vec<Subpath>, a: usize, b: usize) {
     }
     first.anchors.extend(second.anchors);
     subpaths.push(first);
+}
+
+/// Grows an open subpath's free end with anchors placed while still
+/// drawing it — the live-drawing complement to [`join_anchors`] (which
+/// connects two already-*finished* endpoints; this instead extends one
+/// that's still in progress, so there is no second existing endpoint to
+/// join to yet).
+///
+/// `endpoint` replaces the subpath's own endpoint anchor outright (so a
+/// handle change made while dragging out the first new anchor — reshaping
+/// that pre-existing joint — is preserved); its `point` must match the
+/// endpoint being extended. `new_anchors` walks away from that endpoint,
+/// in the order they were placed, in the same `handle_in`-shapes-the-
+/// incoming-curve convention [`subpaths_to_bezpath`] uses throughout —
+/// regardless of `at_end`, so a caller extending either end never needs
+/// to pre-reverse anything itself.
+///
+/// A no-op on a closed or empty subpath, or an out-of-range index.
+pub fn extend_open_subpath(
+    subpaths: &mut Vec<Subpath>,
+    subpath: usize,
+    at_end: bool,
+    endpoint: Anchor,
+    new_anchors: Vec<Anchor>,
+) {
+    let Some(sp) = subpaths.get_mut(subpath) else { return };
+    if sp.closed || sp.anchors.is_empty() {
+        return;
+    }
+    if at_end {
+        *sp.anchors.last_mut().unwrap() = endpoint;
+        sp.anchors.extend(new_anchors);
+    } else {
+        let mut ep = endpoint;
+        std::mem::swap(&mut ep.handle_in, &mut ep.handle_out);
+        *sp.anchors.first_mut().unwrap() = ep;
+        let mut prefix = new_anchors;
+        prefix.reverse();
+        for a in &mut prefix {
+            std::mem::swap(&mut a.handle_in, &mut a.handle_out);
+        }
+        prefix.append(&mut sp.anchors);
+        sp.anchors = prefix;
+    }
 }
 
 /// Splits subpath `subpath`'s terminal segment (its last segment if
@@ -1562,6 +1628,64 @@ mod path_data_tests {
         let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
         assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0)]);
         assert_eq!(sp[0].anchors[1].handle_out, Some(Point::new(12.0, 2.0)), "the surviving anchor picks up the dropped duplicate's out-handle");
+    }
+
+    #[test]
+    fn open_endpoint_subpath_identifies_which_end_and_rejects_interior_or_closed() {
+        let sp = vec![
+            two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0)),
+            Subpath { anchors: vec![Anchor::corner(Point::ZERO), Anchor::corner(Point::new(1.0, 0.0)), Anchor::corner(Point::new(2.0, 0.0))], closed: true },
+        ];
+        assert_eq!(open_endpoint_subpath(&sp, 0), Some((0, false)));
+        assert_eq!(open_endpoint_subpath(&sp, 1), Some((0, true)));
+        assert_eq!(open_endpoint_subpath(&sp, 2), None, "closed subpath has no free endpoint");
+        assert_eq!(open_endpoint_subpath(&sp, 3), None, "interior anchor of the closed subpath");
+        assert_eq!(open_endpoint_subpath(&sp, 99), None);
+    }
+
+    #[test]
+    fn extend_open_subpath_at_end_appends_forward() {
+        let mut sp = vec![two_anchor_open(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
+        let endpoint = Anchor { point: Point::new(10.0, 0.0), handle_in: Some(Point::new(9.0, 1.0)), handle_out: None, mode: HandleMode::Smooth };
+        let new_anchors = vec![Anchor { point: Point::new(20.0, 0.0), handle_in: Some(Point::new(15.0, 2.0)), handle_out: None, mode: HandleMode::Corner }];
+        extend_open_subpath(&mut sp, 0, true, endpoint, new_anchors);
+        assert_eq!(sp.len(), 1);
+        let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0)]);
+        assert_eq!(sp[0].anchors[1].handle_in, Some(Point::new(9.0, 1.0)), "the reshaped joint at the old endpoint survives");
+        assert_eq!(sp[0].anchors[2].handle_in, Some(Point::new(15.0, 2.0)));
+    }
+
+    #[test]
+    fn extend_open_subpath_prepends_and_reverses_when_not_at_end() {
+        let mut sp = vec![two_anchor_open(Point::new(10.0, 0.0), Point::new(20.0, 0.0))];
+        // Resuming from the subpath's *first* anchor (10,0): `endpoint` and
+        // `new_anchors` arrive in the same "walking away from the endpoint"
+        // orientation as the `at_end` case — the function reverses them
+        // itself to prepend in real document order.
+        let endpoint = Anchor { point: Point::new(10.0, 0.0), handle_in: Some(Point::new(11.0, 1.0)), handle_out: None, mode: HandleMode::Smooth };
+        let new_anchors = vec![Anchor { point: Point::new(0.0, 0.0), handle_in: Some(Point::new(5.0, 2.0)), handle_out: None, mode: HandleMode::Corner }];
+        extend_open_subpath(&mut sp, 0, false, endpoint, new_anchors);
+        assert_eq!(sp.len(), 1);
+        let pts: Vec<Point> = sp[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(20.0, 0.0)], "new anchor lands before the old start, in document order");
+        // The old start anchor's reshaped joint (`endpoint.handle_in`) was
+        // facing the new anchor, so it lands on the real anchor's
+        // `handle_out` once prepended (swap on write).
+        assert_eq!(sp[0].anchors[1].handle_out, Some(Point::new(11.0, 1.0)));
+        assert_eq!(sp[0].anchors[0].handle_out, Some(Point::new(5.0, 2.0)));
+    }
+
+    #[test]
+    fn extend_open_subpath_ignores_closed_or_missing_subpaths() {
+        let mut closed = vec![Subpath { anchors: two_anchor_open(Point::ZERO, Point::new(1.0, 0.0)).anchors, closed: true }];
+        let before = closed.clone();
+        extend_open_subpath(&mut closed, 0, true, Anchor::corner(Point::new(1.0, 0.0)), vec![Anchor::corner(Point::new(2.0, 0.0))]);
+        assert_eq!(closed, before, "closed subpath is left untouched");
+
+        let mut empty: Vec<Subpath> = Vec::new();
+        extend_open_subpath(&mut empty, 0, true, Anchor::corner(Point::ZERO), vec![]);
+        assert!(empty.is_empty(), "an out-of-range index is a no-op, not a panic");
     }
 
     #[test]

@@ -1114,8 +1114,11 @@ impl App {
                 // handles out of it. Click the first anchor to close.
                 if self.active_tool == Tool::Pen {
                     // Not drawing yet and over an existing anchor of the
-                    // selected path — select it (so the Convert bar shows)
-                    // rather than starting a fresh path on top of it.
+                    // selected path: a free endpoint resumes drawing from
+                    // it (Illustrator's own Pen behavior — hover an open
+                    // path's end and the cursor offers to continue it);
+                    // any other anchor is just selected (so the Convert
+                    // bar shows) rather than starting a fresh path on it.
                     if self.pen.is_empty() {
                         let paths = self.node_paths();
                         if !paths.is_empty() {
@@ -1125,6 +1128,19 @@ impl App {
                                 dp,
                                 6.0 / self.doc.view.zoom,
                             ) {
+                                if let Some((seed, subpath, at_end)) = self.pen_resume_seed(a.0, a.1) {
+                                    self.doc.anchor_sel.clear();
+                                    self.pen_resume = Some((a.0, subpath, at_end));
+                                    self.pen = vec![seed];
+                                    self.pen_redo.clear();
+                                    self.drag = Drag::PenHandle {
+                                        anchor: 0,
+                                        from: seed.point,
+                                        space_anchor: None,
+                                    };
+                                    self.request_main_redraw();
+                                    return;
+                                }
                                 self.doc.anchor_sel = vec![a];
                                 self.request_main_redraw();
                                 return;
@@ -1156,8 +1172,11 @@ impl App {
                         self.request_main_redraw();
                         return;
                     }
+                    // Illustrator allows closing with just 2 anchors — each
+                    // side of the loop can still carry its own curve (a
+                    // "leaf" shape), so nothing below 2 is degenerate.
                     let close_r = 8.0 / self.doc.view.zoom;
-                    if self.pen.len() >= 3
+                    if self.pen.len() >= 2
                         && self
                             .pen
                             .first()
@@ -1178,7 +1197,7 @@ impl App {
                     self.drag = Drag::PenHandle {
                         anchor: self.pen.len() - 1,
                         from: p,
-                        space_last: None,
+                        space_anchor: None,
                     };
                     self.request_main_redraw();
                     return;

@@ -1011,6 +1011,18 @@ impl Editor {
                 }
                 self.splice_join(oa, data_a, na, ob, data_b, nb)?
             }
+            Command::ExtendOpenPath { object, subpath, at_end, endpoint, new_anchors, close } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| {
+                    amalith_core::extend_open_subpath(sp, subpath, at_end, endpoint, new_anchors);
+                    if close {
+                        if let Some(s) = sp.get_mut(subpath) {
+                            s.closed = true;
+                        }
+                    }
+                });
+                vec![Edit::SetPathData { id: object, data }]
+            }
             Command::TrimAndJoinPaths { a, b } => {
                 let mut data_a = self.path_data(a.object)?;
                 let local_a = data_a

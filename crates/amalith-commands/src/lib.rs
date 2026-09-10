@@ -217,6 +217,73 @@ mod tests {
     }
 
     #[test]
+    fn extend_open_path_grows_from_the_end_and_undoes_back_to_the_original() {
+        use amalith_core::{Anchor, HandleMode, Point};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreatePath { layer, path: open, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::ExtendOpenPath {
+                object: id,
+                subpath: 0,
+                at_end: true,
+                endpoint: Anchor { point: Point::new(10.0, 0.0), handle_in: None, handle_out: None, mode: HandleMode::Corner },
+                new_anchors: vec![Anchor::corner(Point::new(10.0, 10.0))],
+                close: false,
+            })
+            .unwrap();
+        let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        let pts: Vec<Point> = data.subpaths()[0].anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)]);
+
+        editor.undo().unwrap();
+        let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        assert_eq!(data.subpaths()[0].anchors.len(), 2, "undo restores the pre-resume path exactly");
+    }
+
+    #[test]
+    fn extend_open_path_can_close_the_subpath_in_the_same_step() {
+        use amalith_core::{Anchor, HandleMode, Point};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreatePath { layer, path: open, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::ExtendOpenPath {
+                object: id,
+                subpath: 0,
+                at_end: true,
+                endpoint: Anchor { point: Point::new(10.0, 0.0), handle_in: None, handle_out: None, mode: HandleMode::Corner },
+                new_anchors: vec![Anchor::corner(Point::new(10.0, 10.0))],
+                close: true,
+            })
+            .unwrap();
+        let data = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        assert!(data.subpaths()[0].closed);
+    }
+
+    #[test]
     fn set_width_points_replaces_the_profile_and_undoes() {
         use amalith_core::{PathData, Point, WidthPoint};
         let mut editor = new_editor();
