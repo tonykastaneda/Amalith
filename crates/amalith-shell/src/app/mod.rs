@@ -6525,6 +6525,16 @@ impl App {
             let sz = win.inner_size();
             (mid, Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor()))
         };
+        // A Tools master has no groups/tabs at all — it's a single fixed
+        // grid, painted directly from `frame.body` (see `render/mod.rs`'s
+        // `master.is_tools()` branch) rather than through the group loop
+        // below, which every *other* master goes through. Route its tip
+        // the same special way, or it can never be reached at all.
+        if self.dock.master(master_id).is_some_and(Master::is_tools) {
+            let frame = self.build_master_frame(master_id, bounds);
+            let ctx = self.tip_ctx();
+            return panels::tip(PanelId(PanelKind::Tools), frame.body, self.pointer, &ctx);
+        }
         let frame = self.build_master_frame(master_id, bounds);
         for g in &frame.groups {
             if g.tab_strip.contains(self.pointer) {
