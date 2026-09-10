@@ -21,6 +21,13 @@ pub(in crate::app) const ERASE_INK: Color = Color::from_rgb8(0xff, 0x3b, 0x30);
 /// whichever selected object was topmost there.
 pub(in crate::app) struct ShapeBuilderFace {
     pub contour: BezPath,
+    /// The exact flattened contours Pathfinder Divide produced for this
+    /// face — kept verbatim (not re-derived from `contour` later) so a
+    /// commit re-unions the *same* polygon two adjacent faces already
+    /// agree on the shared edge of, rather than two independently
+    /// round-tripped copies that can drift a hair apart and leave a
+    /// self-intersecting sliver where they're supposed to meet exactly.
+    core_contours: Vec<Vec<[f64; 2]>>,
     pub appearance: Appearance,
 }
 
@@ -71,6 +78,7 @@ fn build_cache(doc: &Document, selection: &[ObjectId]) -> Option<ShapeBuilderCac
         .into_iter()
         .map(|r| ShapeBuilderFace {
             contour: convert::bez_path(&r.path.geometry),
+            core_contours: amalith_commands::flatten_path(&r.path.geometry),
             appearance: r.appearance,
         })
         .collect();
@@ -137,11 +145,30 @@ impl App {
         if touched.is_empty() {
             return;
         }
-        let mut combined = BezPath::new();
-        for &i in &touched {
-            combined.extend(cache.faces[i].contour.clone());
+        // A real boolean union, not a bare concatenation of the touched
+        // faces' own boundaries — two adjacent faces agree on their
+        // shared edge in principle, but each is its own independent
+        // `PathResult`, and simply drawing both loops into one path
+        // trusts that shared edge to be bit-for-bit identical. Handing
+        // both through the same overlay engine that produced them
+        // resolves that edge properly instead of risking a sliver of
+        // self-intersecting garbage right where they're supposed to meet.
+        let touched_inputs: Vec<PathInput> = touched
+            .iter()
+            .map(|&i| PathInput {
+                contours: cache.faces[i].core_contours.clone(),
+                appearance: cache.faces[i].appearance,
+            })
+            .collect();
+        let united = pathfinder_apply(PathfinderOp::Unite, &touched_inputs);
+        let Some((first, rest)) = united.split_first() else {
+            return;
+        };
+        let mut combined = first.path.geometry.clone();
+        for r in rest {
+            combined.extend(r.path.geometry.elements().iter().copied());
         }
-        let touched_path = amalith_core::PathData::from_bezpath(convert::bez_path_to_core(&combined));
+        let touched_path = amalith_core::PathData::from_bezpath(combined);
         let appearance = cache.faces[touched[0]].appearance;
         let objects = cache.source.clone();
 
@@ -160,5 +187,140 @@ impl App {
         }
         self.shape_builder = None;
         self.request_main_redraw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use amalith_core::PathData;
+    use kurbo::Shape as _;
+    type CoreRect = amalith_core::geom::Rect;
+
+    /// Two circles the user selected and asked Shape Builder to merge —
+    /// exactly stacked, same size and position, matching the reported
+    /// "two circles on top of each other" repro.
+    fn stacked_circles() -> (Editor, ObjectId, ObjectId) {
+        let mut editor = Editor::new(Document::new("Test"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let r = CoreRect::new(0.0, 0.0, 40.0, 40.0);
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: PathData::ellipse(r), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath { layer, path: PathData::ellipse(r), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        (editor, a, b)
+    }
+
+    /// Two circles that only partially overlap, like the actual bug
+    /// report's Venn diagram — `divide` splits this into 3 faces
+    /// (A-only, the lens, B-only).
+    fn overlapping_circles() -> (Editor, ObjectId, ObjectId) {
+        let mut editor = Editor::new(Document::new("Test"));
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath {
+                layer,
+                path: PathData::ellipse(CoreRect::new(0.0, 0.0, 40.0, 40.0)),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath {
+                layer,
+                path: PathData::ellipse(CoreRect::new(20.0, 0.0, 60.0, 40.0)),
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        (editor, a, b)
+    }
+
+    /// Reproduces the bug report exactly: a drag that swept faces 0 and
+    /// 1 (A-only plus the shared lens — "all of A") of a real 3-face
+    /// overlap must union into one clean piece, not fragment into a
+    /// disconnected sliver where the two faces' independently-derived
+    /// edges don't quite line up.
+    #[test]
+    fn merging_two_adjacent_faces_of_a_real_overlap_yields_one_clean_piece() {
+        let (editor, a, b) = overlapping_circles();
+        let cache = build_cache(editor.document(), &[a, b]).unwrap();
+        assert_eq!(cache.faces.len(), 3, "two partially-overlapping circles should divide into 3 faces");
+
+        let touched = [0usize, 1usize];
+        let touched_inputs: Vec<PathInput> = touched
+            .iter()
+            .map(|&i| PathInput {
+                contours: cache.faces[i].core_contours.clone(),
+                appearance: cache.faces[i].appearance,
+            })
+            .collect();
+        let united = pathfinder_apply(PathfinderOp::Unite, &touched_inputs);
+        assert_eq!(united.len(), 1, "adjacent faces should union into exactly one piece, not fragment");
+
+        // The union of "A-only" + "the lens" is just all of circle A —
+        // its bounds should match A's own 40x40 bounding box, not be
+        // inflated by a stray sliver hanging off it.
+        let bb = united[0].path.geometry.bounding_box();
+        assert!((bb.width() - 40.0).abs() < 0.5, "width {}", bb.width());
+        assert!((bb.height() - 40.0).abs() < 0.5, "height {}", bb.height());
+    }
+
+    #[test]
+    fn stacked_circles_are_eligible_and_form_one_face() {
+        let (editor, a, b) = stacked_circles();
+        let cache = build_cache(editor.document(), &[a, b]).expect("2 paths should be eligible");
+        assert_eq!(cache.faces.len(), 1, "two identical circles should divide into exactly one face");
+    }
+
+    #[test]
+    fn hovering_the_circle_center_finds_that_one_face() {
+        let (editor, a, b) = stacked_circles();
+        let cache = build_cache(editor.document(), &[a, b]).unwrap();
+        let center = Point::new(20.0, 20.0);
+        let hit = cache.faces.iter().position(|f| f.contour.winding(center) != 0);
+        assert_eq!(hit, Some(0), "the circle's own center should land inside its one face");
+    }
+
+    #[test]
+    fn dragging_across_the_only_face_merges_both_circles_into_one_object() {
+        let (mut editor, a, b) = stacked_circles();
+        let cache = build_cache(editor.document(), &[a, b]).unwrap();
+        assert_eq!(cache.faces.len(), 1);
+        let touched_path =
+            PathData::from_bezpath(convert::bez_path_to_core(&cache.faces[0].contour));
+        let outcome = editor
+            .execute(Command::ShapeBuilder {
+                objects: vec![a, b],
+                touched: touched_path,
+                erase: false,
+                appearance: Some(cache.faces[0].appearance),
+            })
+            .unwrap();
+        assert!(matches!(outcome, CommandOutcome::Object(_)), "merging should yield the new object");
+        assert!(editor.document().object(a).is_none(), "both originals should be consumed");
+        assert!(editor.document().object(b).is_none());
     }
 }
