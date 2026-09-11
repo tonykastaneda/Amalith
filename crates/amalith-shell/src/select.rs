@@ -71,10 +71,6 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
             if !hit {
                 continue;
             }
-            eprintln!(
-                "[TSA_DEBUG] point={point:?} -> {id:?} kind={:?} bounds={b:?} fill={:?} stroke={:?} stroke_width={}",
-                std::mem::discriminant(&obj.kind), obj.appearance.fill, obj.appearance.stroke, obj.appearance.stroke_width
-            );
             return Some(id);
         }
     }

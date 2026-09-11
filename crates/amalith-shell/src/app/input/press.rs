@@ -1378,7 +1378,6 @@ impl App {
                         Some(root) => select::topmost_in(self.doc.editor.document(), root, dp, hit_r),
                         None => select::topmost_selectable_at(self.doc.editor.document(), dp, visible),
                     };
-                    eprintln!("[DS_DEBUG] dp={dp:?} shown.len()={} candidate={candidate:?}", shown.len());
                     if let Some(id) = candidate {
                         // A press on an object's body/fill (not a node):
                         // select it, revealing its nodes, and arm a move

@@ -1527,7 +1527,6 @@ impl App {
             }
             Drag::AnchorMarquee { start } => {
                 let moved = (self.pointer - start).hypot() > 3.0;
-                eprintln!("[AM_DEBUG] start={start:?} pointer={:?} moved={moved} shift={}", self.pointer, self.shift_down);
                 if moved {
                     // A real drag: rubber-band every node inside the box,
                     // across all paths — Illustrator's white-arrow marquee
