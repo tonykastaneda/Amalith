@@ -27,6 +27,8 @@
 //! inverse edits rather than re-running commands.
 mod align;
 mod command;
+mod curvefit;
+mod curve_restore;
 mod edit;
 mod editor;
 mod error;
@@ -35,7 +37,7 @@ mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
 pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathfinderOp};
-pub use pathfinder::{apply as pathfinder_apply, flatten_path, has_visible_stroke, offset_path, PathInput, PathResult};
+pub use pathfinder::{shape_builder_regions, shape_builder_union, polygon_path,apply as pathfinder_apply, flatten_path, has_visible_stroke, offset_path, PathInput, PathResult};
 pub use editor::Editor;
 pub use error::CommandError;
 

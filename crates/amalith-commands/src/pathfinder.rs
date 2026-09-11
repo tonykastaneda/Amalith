@@ -11,17 +11,14 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use i_overlay::mesh::outline::offset::OutlineOffset;
-use kurbo::{flatten, stroke, BezPath, Cap, Join, PathEl, Point, Stroke, StrokeOpts};
+use kurbo::{flatten, stroke, BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 use crate::command::PathfinderOp;
 
 /// How closely a flattened polygon edge has to track the real curve
-/// (document-space points) before every Pathfinder-based op — boolean
-/// ops, Shape Builder, Offset Path, Expand Stroke. The flattened result
-/// *is* the operation's permanent output geometry (there's no re-fit
-/// back to Béziers afterward), so this is the difference between a
-/// curve staying visually smooth after a merge and coming out visibly
-/// faceted — worth keeping tight even though it costs more points.
+/// (document-space points) for boolean topology. Shape Builder keeps these
+/// polygons until all region operations finish, then restores source curves.
+/// Other Pathfinder operations currently use the curve-fitting fallback.
 const TOL: f64 = 0.05;
 
 pub struct PathInput {
@@ -59,6 +56,11 @@ pub fn flatten_path(path: &BezPath) -> Vec<Vec<[f64; 2]>> {
     contours
 }
 
+/// Turns Pathfinder's flattened polygon output back into an editable
+/// path — fitting real cubic Béziers onto each contour (see
+/// [`crate::curvefit`]) rather than leaving one straight-line anchor per
+/// flattened vertex, which is what actually got computed but never what
+/// a person wants to see or edit afterward.
 pub(crate) fn contours_to_path(contours: &[Vec<[f64; 2]>]) -> Option<PathData> {
     if contours.is_empty() {
         return None;
@@ -68,11 +70,7 @@ pub(crate) fn contours_to_path(contours: &[Vec<[f64; 2]>]) -> Option<PathData> {
         if c.len() < 3 {
             continue;
         }
-        path.move_to(Point::new(c[0][0], c[0][1]));
-        for p in &c[1..] {
-            path.line_to(Point::new(p[0], p[1]));
-        }
-        path.close_path();
+        path.extend(crate::curvefit::fit_closed_contour(c));
     }
     if path.elements().is_empty() {
         None
@@ -103,18 +101,45 @@ fn overlay(
     let a = a.to_vec();
     let b = b.to_vec();
     let shapes: Vec<Vec<Vec<[f64; 2]>>> = a.overlay(&b, rule, FillRule::NonZero);
-    shapes.into_iter().flatten().filter(|c| contour_area(c) > MIN_CONTOUR_AREA).collect()
+    shapes.into_iter().flatten().filter(|c| !is_sliver(c)).collect()
 }
 
-/// Below this (document-space units², so ~0.1×0.1pt) a contour isn't real
-/// content — it's numerical noise. `i_overlay` computes a cut's two sides
-/// as independent boolean passes (e.g. `divide`'s own `leftover`/`hit`),
-/// and where their edges are supposed to meet exactly, floating-point
-/// rounding can instead leave a razor-thin sliver polygon along the seam.
+/// A contour that isn't real content — it's numerical noise. `i_overlay`
+/// computes a cut's two sides as independent boolean passes (e.g.
+/// `divide`'s own `leftover`/`hit`), and where their edges are supposed
+/// to meet exactly, floating-point rounding can instead leave a sliver
+/// polygon along the seam. That sliver can be *thin and long* (running
+/// the whole length of the seam) rather than merely tiny, so area alone
+/// doesn't catch it — a hairline-thin sliver the length of a real curve
+/// can easily clear a small area floor. Checking area against perimeter
+/// instead catches both: a real shape's area scales with perimeter², a
+/// sliver's scales linearly (area ≈ perimeter/2 × its own width), so
+/// dividing them back out recovers that effective width directly.
 /// Every `overlay` call site funnels through here so no Pathfinder op
-/// (boolean ops, Shape Builder, Divide, Trim, …) ever turns one of those
-/// slivers into a real, separately-selectable output object.
-const MIN_CONTOUR_AREA: f64 = 0.01;
+/// (boolean ops, Shape Builder, Divide, Trim, …) ever turns one of these
+/// into a real, separately-selectable output object.
+const MIN_EFFECTIVE_WIDTH: f64 = 0.05;
+
+fn is_sliver(c: &[[f64; 2]]) -> bool {
+    let perimeter = contour_perimeter(c);
+    if perimeter < 1e-9 {
+        return true;
+    }
+    contour_area(c) / (perimeter * 0.5) < MIN_EFFECTIVE_WIDTH
+}
+
+fn contour_perimeter(c: &[[f64; 2]]) -> f64 {
+    if c.len() < 2 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..c.len() {
+        let [x1, y1] = c[i];
+        let [x2, y2] = c[(i + 1) % c.len()];
+        sum += ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+    }
+    sum
+}
 
 fn contour_area(c: &[[f64; 2]]) -> f64 {
     if c.len() < 3 {
@@ -122,8 +147,11 @@ fn contour_area(c: &[[f64; 2]]) -> f64 {
     }
     let mut sum = 0.0;
     for i in 0..c.len() {
-        let (x1, y1) = (c[i][0], c[i][1]);
-        let [x2, y2] = c[(i + 1) % c.len()];
+        // Translate to the first vertex before the shoelace sum to avoid
+        // cancellation for tiny regions far from the document origin.
+        let (x1, y1) = (c[i][0]-c[0][0], c[i][1]-c[0][1]);
+        let next = c[(i + 1) % c.len()];
+        let (x2,y2)=(next[0]-c[0][0],next[1]-c[0][1]);
         sum += x1 * y2 - x2 * y1;
     }
     (sum * 0.5).abs()
@@ -147,6 +175,84 @@ fn paths_from_contours(contours: Vec<Vec<[f64; 2]>>, appearance: Appearance) -> 
 fn no_stroke(mut a: Appearance) -> Appearance {
     a.stroke = Paint::None;
     a
+}
+
+/// A connected region with its hole contours, still in the boolean engine's
+/// polygon representation. Never fit curves between topology operations.
+pub struct ShapeRegion {
+    pub contours: Vec<Vec<[f64;2]>>,
+    pub appearance: Appearance,
+}
+
+pub fn polygon_path(contours: &[Vec<[f64;2]>]) -> PathData {
+    let mut p=BezPath::new();
+    for c in contours.iter().filter(|c|c.len()>=3) {
+        p.move_to((c[0][0],c[0][1]));
+        for q in &c[1..] { p.line_to((q[0],q[1])); }
+        p.close_path();
+    }
+    PathData::from_bezpath(p)
+}
+
+fn region_overlay(a: &[Vec<[f64;2]>],b: &[Vec<[f64;2]>],rule: OverlayRule) -> Vec<Vec<[f64;2]>> {
+    // Unlike the general Pathfinder sliver heuristic, do not discard real
+    // narrow artwork based on a fixed document-unit width.
+    let adapter=i_overlay::i_float::adapter::FloatPointAdapter::<[f64;2],i32>::with_iter(a.iter().flatten().chain(b.iter().flatten()));
+    let grid_noise=adapter.inv_scale()*8.0;
+    let shapes: Vec<Vec<Vec<[f64;2]>>>=a.to_vec().overlay(&b.to_vec(),rule,FillRule::NonZero);
+    // Separate float overlays can disagree by a few integer-grid units on
+    // an intersection. Remove only that precision-scale residue, rather
+    // than deleting legitimate details with a fixed 0.05pt width cutoff.
+    shapes.into_iter().flatten().filter(|c|contour_area(c)>contour_perimeter(c)*0.5*grid_noise).collect()
+}
+
+pub fn shape_builder_union(inputs: &[PathInput]) -> Vec<Vec<[f64;2]>> {
+    let mut out=Vec::new();
+    for input in inputs { out=region_overlay(&out,&input.contours,OverlayRule::Union); }
+    out
+}
+
+pub fn shape_builder_regions(inputs: &[PathInput]) -> Vec<ShapeRegion> {
+    let mut pieces: Vec<ShapeRegion>=Vec::new();
+    for input in inputs {
+        let mut next=Vec::new();
+        let mut covered=Vec::new();
+        for piece in pieces {
+            let remaining=region_overlay(&piece.contours,&input.contours,OverlayRule::Difference);
+            if !remaining.is_empty() { next.push(ShapeRegion { contours:remaining,appearance:piece.appearance }); }
+            let hit=region_overlay(&piece.contours,&input.contours,OverlayRule::Intersect);
+            if !hit.is_empty() { next.push(ShapeRegion { contours:hit,appearance:input.appearance }); }
+            covered=region_overlay(&covered,&piece.contours,OverlayRule::Union);
+        }
+        let novel=region_overlay(&input.contours,&covered,OverlayRule::Difference);
+        if !novel.is_empty() { next.push(ShapeRegion { contours:novel,appearance:input.appearance }); }
+        pieces=next;
+    }
+    // One face per connected component, with holes kept attached to its outer
+    // boundary. Disjoint islands must not be activated by the same hover hit.
+    pieces.into_iter().flat_map(|p| {
+        let shapes: Vec<Vec<Vec<[f64;2]>>>=p.contours.overlay(&Vec::<Vec<[f64;2]>>::new(),OverlayRule::Subject,FillRule::NonZero);
+        shapes.into_iter().map(move |contours|ShapeRegion { contours,appearance:p.appearance })
+    }).collect()
+}
+
+pub(crate) fn shape_builder_results(inputs: &[PathInput],cut: &[Vec<[f64;2]>],sources: &[BezPath],appearance: Option<Appearance>) -> (Vec<usize>,Vec<PathResult>) {
+    let mut consumed=Vec::new();
+    let mut result=Vec::new();
+    if let Some(appearance)=appearance {
+        let path=PathData::from_bezpath(crate::curve_restore::restore(cut,sources));
+        result.push(PathResult { path,appearance });
+    }
+    for (i,input) in inputs.iter().enumerate() {
+        if region_overlay(&input.contours,cut,OverlayRule::Intersect).is_empty() { continue; }
+        consumed.push(i);
+        let remaining=region_overlay(&input.contours,cut,OverlayRule::Difference);
+        if !remaining.is_empty() {
+            let path=PathData::from_bezpath(crate::curve_restore::restore(&remaining,sources));
+            result.push(PathResult { path,appearance:input.appearance });
+        }
+    }
+    (consumed,result)
 }
 
 /// Run a Pathfinder op. `inputs` is back → front.
@@ -313,6 +419,7 @@ fn outline(inputs: &[PathInput]) -> Vec<PathResult> {
 /// entirely. Keeps each survivor's own appearance — the Shape Builder
 /// tool uses this to give every object the drag touched back just the
 /// part it didn't sweep over.
+#[cfg(test)]
 pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<PathResult> {
     inputs
         .iter()
@@ -324,6 +431,7 @@ pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<
 }
 
 /// Whether `a` and `b` share any area at all.
+#[cfg(test)]
 pub(crate) fn intersects(a: &[Vec<[f64; 2]>], b: &[Vec<[f64; 2]>]) -> bool {
     !overlay(a, b, OverlayRule::Intersect).is_empty()
 }
@@ -430,7 +538,7 @@ pub fn expand_stroke(path: &BezPath, appearance: &Appearance) -> Option<PathData
 mod tests {
     use super::*;
     use amalith_core::Color;
-    use kurbo::{Rect, Shape};
+    use kurbo::{Point, Rect, Shape};
 
     fn rect_input(r: Rect, fill: (f32, f32, f32)) -> PathInput {
         PathInput {
@@ -441,6 +549,30 @@ mod tests {
                 ..Appearance::default()
             },
         }
+    }
+
+    #[test]
+    fn shape_builder_keeps_disconnected_regions_separate_and_holes_attached() {
+        let a=rect_input(Rect::new(0.,0.,10.,10.),(1.,0.,0.));
+        let b=rect_input(Rect::new(20.,0.,30.,10.),(1.,0.,0.));
+        let mut contours=a.contours.clone(); contours.extend(b.contours);
+        let pieces=shape_builder_regions(&[PathInput { contours,appearance:a.appearance }]);
+        assert_eq!(pieces.len(),2,"one region per disconnected island");
+        let mut outer=flatten_path(&PathData::rectangle(Rect::new(0.,0.,100.,100.)).geometry);
+        let mut hole=flatten_path(&PathData::rectangle(Rect::new(20.,20.,80.,80.)).geometry);
+        hole[0].reverse(); outer.extend(hole);
+        let pieces=shape_builder_regions(&[PathInput { contours:outer,appearance:a.appearance }]);
+        assert_eq!(pieces.len(),1);
+        assert_eq!(pieces[0].contours.len(),2,"a hole is part of its face, not another fillable region");
+        assert_eq!(polygon_path(&pieces[0].contours).geometry.winding(Point::new(50.,50.)),0);
+    }
+
+    #[test]
+    fn shape_builder_does_not_discard_real_thin_shapes() {
+        let thin=rect_input(Rect::new(0.,0.,100.,0.01),(1.,0.,0.));
+        let other=rect_input(Rect::new(200.,0.,210.,10.),(0.,0.,1.));
+        let regions=shape_builder_regions(&[thin,other]);
+        assert_eq!(regions.len(),2,"a thin drawn rectangle is content, not a sliver heuristic");
     }
 
     #[test]
@@ -536,6 +668,24 @@ mod tests {
         let real = vec![vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]];
         let out = overlay(&sliver, &real, OverlayRule::Union);
         assert_eq!(out.len(), 1, "the disjoint sliver should be filtered, leaving only the real square");
+    }
+
+    #[test]
+    fn overlay_drops_a_sliver_that_is_long_but_hairline_thin() {
+        // A real bug: a sliver running the length of a whole seam (here,
+        // 200 units) can clear a small *area* floor even at a hairline
+        // width, since area is length × width — it has to be caught by
+        // its effective width instead.
+        let long_thin_sliver = vec![vec![
+            [500.0, 500.0],
+            [700.0, 500.0],
+            [700.0, 500.0005],
+            [500.0, 500.0005],
+        ]];
+        let real = vec![vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]];
+        assert!(contour_area(&long_thin_sliver[0]) > 0.01, "sanity: this sliver's raw area alone would have slipped past a naive area-only floor");
+        let out = overlay(&long_thin_sliver, &real, OverlayRule::Union);
+        assert_eq!(out.len(), 1, "the long, hairline-thin sliver should be filtered by effective width, not just area");
     }
 
     #[test]

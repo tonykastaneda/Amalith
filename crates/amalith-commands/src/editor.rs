@@ -1850,11 +1850,12 @@ impl Editor {
         appearance: Option<Appearance>,
     ) -> Result<Vec<Edit>, CommandError> {
         let ordered = self.path_objects_in_paint_order(&objects);
-        if ordered.len() < 2 {
+        if ordered.is_empty() {
             return Err(CommandError::PathfinderNeedTwo);
         }
         let mut parent = None;
         let mut inputs = Vec::new();
+        let mut sources = Vec::new();
         for &id in &ordered {
             let obj = self
                 .document
@@ -1866,6 +1867,7 @@ impl Editor {
                 Some(_) => return Err(CommandError::ObjectsSpanMultipleParents),
             }
             let path = self.world_path(id).ok_or(CommandError::NotAPath(id))?;
+            sources.push(path.clone());
             inputs.push((
                 id,
                 PathInput {
@@ -1881,26 +1883,10 @@ impl Editor {
         };
         let touched_contours = pathfinder::flatten_path(&touched.geometry);
 
-        let mut touched_ids = Vec::new();
-        let mut touched_inputs = Vec::new();
-        for (id, input) in inputs {
-            if pathfinder::intersects(&input.contours, &touched_contours) {
-                touched_ids.push(id);
-                touched_inputs.push(input);
-            }
-        }
-        if touched_ids.is_empty() {
-            return Err(CommandError::PathfinderEmpty);
-        }
-
-        let mut results = pathfinder::subtract_each(&touched_inputs, &touched_contours);
-        if !erase {
-            if let Some(app) = appearance {
-                if let Some(path) = pathfinder::contours_to_path(&touched_contours) {
-                    results.insert(0, crate::pathfinder::PathResult { path, appearance: app });
-                }
-            }
-        }
+        let (ids,inputs): (Vec<_>,Vec<_>)=inputs.into_iter().unzip();
+        let (consumed,results)=pathfinder::shape_builder_results(&inputs,&touched_contours,&sources,if erase { None } else { appearance.or_else(||inputs.last().map(|i|i.appearance)) });
+        let touched_ids: Vec<_>=consumed.into_iter().map(|i|ids[i]).collect();
+        if touched_ids.is_empty() { return Err(CommandError::PathfinderEmpty); }
 
         let selected: HashSet<ObjectId> = touched_ids.iter().copied().collect();
         let siblings = self.document.children_of(parent);
