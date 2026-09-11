@@ -63,6 +63,33 @@ pub(in crate::app) fn width_handle_points(t: &WidthTarget, wp: &amalith_core::Wi
 }
 
 impl App {
+    /// Seeds every eligible selected object's `width_points` from a
+    /// preset taper shape (Options bar ▸ Stroke ▸ Profile) — same
+    /// eligibility as [`Self::width_target`] (open, single-subpath
+    /// `Path`), just over the whole selection at once rather than
+    /// requiring exactly one. Ignored objects are silently skipped, same
+    /// as the Width tool itself silently doing nothing on them.
+    pub(in crate::app) fn apply_width_profile(&mut self, preset: amalith_core::WidthProfilePreset) {
+        for id in self.doc.selection.clone() {
+            let doc = self.doc.editor.document();
+            let Some(obj) = doc.object(id) else { continue };
+            let amalith_core::ObjectKind::Path(pd) = &obj.kind else { continue };
+            if pd.subpaths().len() != 1 || pd.subpaths()[0].closed {
+                continue;
+            }
+            let Some(pts) = pd.flattened_points(0.05).into_iter().next() else { continue };
+            let arc = amalith_core::ArcLengthPath::new(&pts, false);
+            let total = arc.total_length();
+            if total <= 0.0 {
+                continue;
+            }
+            let base_half = obj.appearance.stroke_width * 0.5;
+            let points = amalith_core::preset_points(preset, total, base_half);
+            let _ = self.doc.editor.execute(Command::SetWidthPoints { object: id, points });
+        }
+        self.request_main_redraw();
+    }
+
     /// The single selected object's width-tool target, or `None` when the
     /// tool doesn't apply right now: not exactly one object selected, not
     /// a plain `Path`, closed, multi-subpath, or degenerate.

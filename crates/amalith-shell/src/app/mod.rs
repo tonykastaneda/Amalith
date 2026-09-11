@@ -1071,6 +1071,9 @@ struct App {
     panel_menu: Option<PanelMenu>,
     /// Options-bar Align To dropdown, anchored at the button (screen px).
     align_to_menu: Option<Rect>,
+    /// Options-bar Stroke Width Profile dropdown, anchored at the button
+    /// (screen px).
+    width_profile_menu: Option<Rect>,
     /// Hover tooltip, if the pointer has been resting on a labelled control.
     tooltip: Option<Tooltip>,
     /// Layers panel search: the current filter text, and whether the field
@@ -1409,6 +1412,7 @@ impl App {
             font_menu: None,
             panel_menu: None,
             align_to_menu: None,
+            width_profile_menu: None,
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
@@ -2131,6 +2135,7 @@ impl App {
                 .collect(),
         };
         self.align_to_menu = None;
+        self.width_profile_menu = None;
         self.font_menu = Some(FontMenuState {
             kind,
             anchor,
@@ -2717,6 +2722,52 @@ impl App {
         true
     }
 
+    fn metric_wp_w() -> f64 { crate::metrics::with(|m| m.app_wp_w) }
+    fn metric_wp_row() -> f64 { crate::metrics::with(|m| m.app_wp_row) }
+    fn metric_wp_pad() -> f64 { crate::metrics::with(|m| m.app_wp_pad) }
+
+    fn width_profile_menu_rect(anchor: Rect) -> Rect {
+        let h = Self::metric_wp_pad() * 2.0 + Self::metric_wp_row() * amalith_core::WidthProfilePreset::ALL.len() as f64;
+        Rect::new(
+            anchor.x1 - Self::metric_wp_w(),
+            anchor.y1 + ui_px(2.0),
+            anchor.x1,
+            anchor.y1 + ui_px(2.0) + h,
+        )
+    }
+
+    /// Click while the Stroke Width Profile dropdown is open. Consumes
+    /// the press, same shape as `align_to_menu_click`.
+    fn width_profile_menu_click(&mut self, p: Point) -> bool {
+        let Some(anchor) = self.width_profile_menu else {
+            return false;
+        };
+        if anchor.contains(p) {
+            self.width_profile_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let fly = Self::width_profile_menu_rect(anchor);
+        if !fly.contains(p) {
+            self.width_profile_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let mut y = fly.y0 + Self::metric_wp_pad();
+        for preset in amalith_core::WidthProfilePreset::ALL {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_wp_row());
+            if row.contains(p) {
+                self.width_profile_menu = None;
+                self.apply_panel_action(panels::Action::SetWidthProfile(preset), false);
+                return true;
+            }
+            y += Self::metric_wp_row();
+        }
+        self.width_profile_menu = None;
+        self.request_main_redraw();
+        true
+    }
+
     fn metric_pm_w() -> f64 { crate::metrics::with(|m| m.app_pm_w) }
     fn metric_pm_row() -> f64 { crate::metrics::with(|m| m.app_pm_row) }
     fn metric_pm_sep() -> f64 { crate::metrics::with(|m| m.app_pm_sep) }
@@ -2753,6 +2804,7 @@ impl App {
     fn toggle_panel_menu(&mut self, panel: PanelId, anchor: Rect, win: WindowId) {
         self.font_menu = None;
         self.align_to_menu = None;
+        self.width_profile_menu = None;
         if self
             .panel_menu
             .as_ref()
@@ -5407,6 +5459,7 @@ impl App {
             pointer: self.pointer,
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
+            width_profile_menu: self.width_profile_menu.is_some(),
             artboard: self.artboard_bar(),
             artboard_edit: None,
             artboard_link: self.artboard_link,
@@ -5461,6 +5514,7 @@ impl App {
             pointer: self.pointer,
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
+            width_profile_menu: self.width_profile_menu.is_some(),
             artboard: self.artboard_bar(),
             artboard_edit: self.artboard_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             artboard_link: self.artboard_link,
@@ -6477,6 +6531,7 @@ impl App {
             || !matches!(self.drag, Drag::None)
             || self.font_menu.is_some()
             || self.align_to_menu.is_some()
+            || self.width_profile_menu.is_some()
             || self.ruler_menu.is_some()
             || self.ctx_menu.is_some()
             || self.prefs.is_some()
@@ -6870,6 +6925,8 @@ impl App {
             && self.workspace_prompt.is_none()
             && !self.manage_workspaces
             && self.confirm_close.is_none()
+            && self.align_to_menu.is_none()
+            && self.width_profile_menu.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {

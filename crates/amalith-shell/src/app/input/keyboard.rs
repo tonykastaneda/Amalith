@@ -306,6 +306,15 @@ impl App {
             }
             return;
         }
+        if self.width_profile_menu.is_some() {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.width_profile_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
         if self.ruler_menu.is_some() {
             if event.state.is_pressed()
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))

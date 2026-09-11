@@ -583,6 +583,7 @@ impl App {
                 self.xform_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                 self.align_to,
                 self.align_to_menu.is_some(),
+                self.width_profile_menu.is_some(),
                 self.align_spacing,
                 self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
                 self.stroke_weight_edit.as_ref().map(|(s, _)| s.as_str()),
@@ -902,6 +903,7 @@ impl App {
             }
             self.paint_font_menu();
             self.paint_align_to_menu();
+            self.paint_width_profile_menu();
             self.paint_isolation_bar();
             self.paint_ruler_menu();
             self.paint_ctx_menu();

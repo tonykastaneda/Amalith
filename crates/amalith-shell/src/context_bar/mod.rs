@@ -84,6 +84,8 @@ pub struct Ctx<'a> {
     pub align_to: amalith_commands::AlignTo,
     /// True while the options-bar Align To dropdown is open.
     pub align_to_menu: bool,
+    /// True while the options-bar Stroke Width Profile dropdown is open.
+    pub width_profile_menu: bool,
     /// The selected artboard (Artboard tool) — flips the `artboard` segment
     /// on and everything else off.
     pub artboard: Option<artboard::ArtboardBar>,

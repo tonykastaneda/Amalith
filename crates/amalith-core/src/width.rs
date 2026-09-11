@@ -110,6 +110,97 @@ pub fn width_outline(arc: &ArcLengthPath, points: &[WidthPoint], base_half: f64)
     Some(bez)
 }
 
+/// Illustrator's built-in "Width Profile" presets — a handful of canned
+/// taper shapes you can drop onto a stroke instead of hand-placing width
+/// points. Picking one just seeds [`preset_points`]'s output as that
+/// object's `width_points`; the points are then ordinary, freely
+/// draggable width points from then on, exactly as if placed by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthProfilePreset {
+    Uniform,
+    /// Point → wide → point, symmetric (the classic "lens").
+    Profile1,
+    /// Two lenses in a row, pinched to a point in the middle (a "bowtie").
+    Profile2,
+    /// Point → wide plateau → point (flat through the middle, a hex).
+    Profile3,
+    /// Wide at the start, tapering to a sharp point at the end.
+    Profile4,
+    /// Point at the start, widening to a peak past the midpoint, back to
+    /// a point at the end — the peak skewed toward the far end.
+    Profile5,
+    /// Point at the start, a broad rounded hump through the back half,
+    /// easing down to the end — the roundest, widest-reaching profile.
+    Profile6,
+}
+
+impl WidthProfilePreset {
+    pub const ALL: [WidthProfilePreset; 7] = [
+        WidthProfilePreset::Uniform,
+        WidthProfilePreset::Profile1,
+        WidthProfilePreset::Profile2,
+        WidthProfilePreset::Profile3,
+        WidthProfilePreset::Profile4,
+        WidthProfilePreset::Profile5,
+        WidthProfilePreset::Profile6,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            WidthProfilePreset::Uniform => "Uniform",
+            WidthProfilePreset::Profile1 => "Width Profile 1",
+            WidthProfilePreset::Profile2 => "Width Profile 2",
+            WidthProfilePreset::Profile3 => "Width Profile 3",
+            WidthProfilePreset::Profile4 => "Width Profile 4",
+            WidthProfilePreset::Profile5 => "Width Profile 5",
+            WidthProfilePreset::Profile6 => "Width Profile 6",
+        }
+    }
+}
+
+/// How much wider than the base stroke a preset's peak gets — a fixed
+/// multiple of the base half-width, so the taper stays proportional to
+/// whatever weight the stroke already has rather than a fixed size.
+const PEAK: f64 = 3.0;
+
+/// The `width_points` a preset produces for a path of `total_length`
+/// (arc-length units) whose base half-width is `base_half`. `Uniform`
+/// is always the empty list — clearing back to a plain uniform stroke.
+pub fn preset_points(preset: WidthProfilePreset, total_length: f64, base_half: f64) -> Vec<WidthPoint> {
+    let peak = base_half * PEAK;
+    let at = |t: f64, half: f64| WidthPoint {
+        distance: total_length * t,
+        left: half,
+        right: half,
+    };
+    match preset {
+        WidthProfilePreset::Uniform => Vec::new(),
+        WidthProfilePreset::Profile1 => vec![at(0.0, 0.0), at(0.5, peak), at(1.0, 0.0)],
+        WidthProfilePreset::Profile2 => vec![
+            at(0.0, 0.0),
+            at(0.25, peak),
+            at(0.5, 0.0),
+            at(0.75, peak),
+            at(1.0, 0.0),
+        ],
+        WidthProfilePreset::Profile3 => vec![
+            at(0.0, 0.0),
+            at(0.15, peak),
+            at(0.85, peak),
+            at(1.0, 0.0),
+        ],
+        WidthProfilePreset::Profile4 => vec![at(0.0, peak), at(1.0, 0.0)],
+        WidthProfilePreset::Profile5 => vec![at(0.0, 0.0), at(0.65, peak), at(1.0, 0.0)],
+        WidthProfilePreset::Profile6 => vec![
+            at(0.0, 0.0),
+            at(0.15, peak * 0.7),
+            at(0.4, peak),
+            at(0.8, peak),
+            at(1.0, 0.0),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +242,53 @@ mod tests {
         let bounds = crate::geom::bez_path_bounds(&outline);
         assert!((bounds.height() - 16.0).abs() < 1e-6);
         assert!((bounds.y0 + 8.0).abs() < 1e-6);
+    }
+
+    /// `WidthProfilePreset::ALL` is hand-written, not derived — same
+    /// compile-enforced safety net as `Tool::ALL`: `covered` is an
+    /// exhaustive match with no wildcard, so adding a variant and
+    /// forgetting it here fails to *compile*, not just fails to pass.
+    #[test]
+    fn width_profile_preset_all_covers_every_variant_exactly_once() {
+        fn covered(p: WidthProfilePreset) -> bool {
+            match p {
+                WidthProfilePreset::Uniform
+                | WidthProfilePreset::Profile1
+                | WidthProfilePreset::Profile2
+                | WidthProfilePreset::Profile3
+                | WidthProfilePreset::Profile4
+                | WidthProfilePreset::Profile5
+                | WidthProfilePreset::Profile6 => true,
+            }
+        }
+        for p in WidthProfilePreset::ALL {
+            assert!(covered(p), "{p:?} missing from the exhaustive check above");
+        }
+        let mut seen: Vec<WidthProfilePreset> = Vec::new();
+        for p in WidthProfilePreset::ALL {
+            assert!(!seen.contains(&p), "{p:?} appears more than once in ALL");
+            seen.push(p);
+        }
+    }
+
+    #[test]
+    fn uniform_preset_is_always_empty() {
+        assert!(preset_points(WidthProfilePreset::Uniform, 100.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn profile1_tapers_to_a_point_at_both_ends_and_peaks_in_the_middle() {
+        let pts = preset_points(WidthProfilePreset::Profile1, 100.0, 2.0);
+        assert_eq!(width_at(&pts, 100.0, 2.0, 0.0), (0.0, 0.0));
+        assert_eq!(width_at(&pts, 100.0, 2.0, 100.0), (0.0, 0.0));
+        let (l, r) = width_at(&pts, 100.0, 2.0, 50.0);
+        assert_eq!((l, r), (6.0, 6.0), "peak should be base_half * PEAK (2.0 * 3.0)");
+    }
+
+    #[test]
+    fn profile4_is_a_one_sided_taper_from_wide_to_a_point() {
+        let pts = preset_points(WidthProfilePreset::Profile4, 100.0, 2.0);
+        assert_eq!(width_at(&pts, 100.0, 2.0, 0.0), (6.0, 6.0));
+        assert_eq!(width_at(&pts, 100.0, 2.0, 100.0), (0.0, 0.0));
     }
 }

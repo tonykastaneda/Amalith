@@ -493,6 +493,19 @@ impl App {
                     self.align_to_menu = Some(anchor);
                 }
             }
+            panels::Action::OpenWidthProfileMenu(anchor) => {
+                self.font_menu = None;
+                self.panel_menu = None;
+                self.align_to_menu = None;
+                if self.width_profile_menu.is_some() {
+                    self.width_profile_menu = None;
+                } else {
+                    self.width_profile_menu = Some(anchor);
+                }
+            }
+            panels::Action::SetWidthProfile(preset) => {
+                self.apply_width_profile(preset);
+            }
             // --- context bar ---
             panels::Action::StepWeight(d) => self.step_weight(d),
             panels::Action::StepOpacity(d) => self.step_opacity(d),

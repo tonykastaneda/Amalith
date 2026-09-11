@@ -383,6 +383,11 @@ pub enum Action {
     BeginAlignSpacingEdit,
     /// Options-bar Align To dropdown, anchored at the button rect.
     OpenAlignToMenu(Rect),
+    /// Options-bar Stroke Width Profile dropdown, anchored at the button rect.
+    OpenWidthProfileMenu(Rect),
+    /// Seeds every eligible selected object's `width_points` from a named
+    /// preset taper shape — see `amalith_core::WidthProfilePreset`.
+    SetWidthProfile(amalith_core::WidthProfilePreset),
     /// Context bar "Embed" button — copy a Linked image's bytes into the
     /// document's own asset store and switch its source to Embedded.
     EmbedAsset(AssetId),

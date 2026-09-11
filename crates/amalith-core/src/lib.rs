@@ -54,5 +54,5 @@ pub use object::{
 pub use swatch::{Color, Swatch};
 pub use units::{Length, Unit};
 pub use warp::Homography;
-pub use width::{width_at, width_outline, WidthPoint};
+pub use width::{preset_points, width_at, width_outline, WidthPoint, WidthProfilePreset};
 pub use xform::{RefPoint, TransformValues};

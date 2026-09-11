@@ -253,6 +253,9 @@ impl App {
         if self.align_to_menu.is_some() && self.align_to_menu_click(self.pointer) {
             return;
         }
+        if self.width_profile_menu.is_some() && self.width_profile_menu_click(self.pointer) {
+            return;
+        }
         if self.ruler_menu.is_some() {
             self.ruler_menu_click(self.pointer);
             return;
