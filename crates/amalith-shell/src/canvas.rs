@@ -107,13 +107,23 @@ pub struct DragPreview<'a> {
     pub width_points: Option<(ObjectId, &'a [amalith_core::WidthPoint])>,
 }
 
-/// One area-text box being resized by a Selection-tool handle drag.
+/// One area-text box being resized by a Selection-tool handle drag, or
+/// previewed live by the Area Type Options dialog (`origin_delta` is
+/// always `Vec2::ZERO` for the latter — the dialog only ever changes
+/// size / alignment, never position).
 #[derive(Clone, Copy)]
 pub struct TextBoxPreview {
     pub id: ObjectId,
     pub width: f64,
-    pub height: f64,
+    /// `None` mirrors `TextKind::Area`'s own "auto" height — grows to
+    /// fit the content instead of clipping to a fixed value.
+    pub height: Option<f64>,
     pub origin_delta: Vec2,
+    /// Area Type Options dialog only — a live `cross_align` override
+    /// (vertical text's column-block alignment within the box). `None`
+    /// keeps the object's own committed value, which a resize-handle
+    /// drag never touches.
+    pub cross_align: Option<amalith_core::TextAlign>,
 }
 
 /// Anchor markers for the Direct Selection tool.
@@ -632,9 +642,11 @@ pub fn paint(
             .and_then(|tbs| {
                 let mut acc: Option<Rect> = None;
                 for tb in tbs {
-                    let c = doc.object(tb.id)?.transform.as_coeffs();
+                    let obj = doc.object(tb.id)?;
+                    let c = obj.transform.as_coeffs();
                     let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
-                    let r = Rect::new(x0, y0, x0 + tb.width, y0 + tb.height);
+                    let h = tb.height.unwrap_or_else(|| obj.kind.own_local_bounds().map_or(0.0, |b| b.height()));
+                    let r = Rect::new(x0, y0, x0 + tb.width, y0 + h);
                     acc = Some(acc.map_or(r, |a| a.union(r)));
                 }
                 let r = acc?;
@@ -835,11 +847,12 @@ pub fn paint(
                     {
                         let c = doc.object(id).map(|o| o.transform.as_coeffs()).unwrap();
                         let (x0, y0) = (c[4] + tb.origin_delta.x, c[5] + tb.origin_delta.y);
+                        let h = tb.height.unwrap_or_else(|| t.local_bounds.height());
                         Some([
                             Point::new(x0, y0),
                             Point::new(x0 + tb.width, y0),
-                            Point::new(x0 + tb.width, y0 + tb.height),
-                            Point::new(x0, y0 + tb.height),
+                            Point::new(x0 + tb.width, y0 + h),
+                            Point::new(x0, y0 + h),
                         ])
                     } else {
                         select::selection_quad(doc, &[id])
@@ -904,21 +917,61 @@ pub fn paint(
                 if td.content.is_empty() {
                     continue;
                 }
-                let m = vt * convert::affine(doc.world_transform(id));
-                let guide = theme.accent.with_alpha(0.55);
-                let frame_h = match td.kind {
-                    TextKind::Area { height, .. } => height,
+                // Follow a live resize *or* the Area Type Options dialog's
+                // Preview override the same way the glyphs themselves do
+                // (`paint_object`, below) — this used to always read the
+                // committed width/height/cross_align straight off `td`,
+                // so toggling Preview moved the text but left the guides
+                // planted at the old position.
+                let tb = match td.kind {
+                    TextKind::Area { .. } => drag.and_then(|d| d.text_boxes.iter().copied().find(|tb| tb.id == id)),
                     TextKind::Point | TextKind::Path(_) => None,
                 };
-                let v = crate::vertical_text::layout(
+                let mut m = vt * convert::affine(doc.world_transform(id));
+                if let Some(tb) = tb {
+                    m *= Affine::translate(tb.origin_delta);
+                }
+                let guide = theme.accent.with_alpha(0.55);
+                let frame_h = match (tb, td.kind) {
+                    (Some(tb), _) => tb.height,
+                    (None, TextKind::Area { height, .. }) => height,
+                    (None, TextKind::Point | TextKind::Path(_)) => None,
+                };
+                let frame_w = match (tb, td.kind) {
+                    (Some(tb), _) => Some(tb.width),
+                    (None, TextKind::Area { width, .. }) => Some(width),
+                    (None, TextKind::Point | TextKind::Path(_)) => None,
+                };
+                let mut v = crate::vertical_text::layout(
                     text,
                     &td.content,
                     &td.style,
                     frame_h,
                 );
-                for (x, bottom_y) in v.column_guides() {
-                    let top = m * Point::new(x, 0.0);
-                    let bottom = m * Point::new(x, bottom_y);
+                if let (TextKind::Area { .. }, Some(h)) = (td.kind, frame_h) {
+                    v.area_along_align(td.align, h);
+                }
+                // Match the same cross-align / point-align shift the
+                // content itself is drawn at (`textedit::paint_text_data`)
+                // so the guide still sits under each column's real center.
+                let cross_align = tb.and_then(|tb| tb.cross_align).unwrap_or(td.cross_align);
+                let (dx, dy) = match (tb, td.kind) {
+                    (Some(tb), _) => (v.area_cross_shift(cross_align, tb.width), 0.0),
+                    (None, TextKind::Area { width, .. }) => (v.area_cross_shift(cross_align, width), 0.0),
+                    (None, TextKind::Point | TextKind::Path(_)) => {
+                        (0.0, crate::vertical_text::point_align_dy(td.align, v.height()))
+                    }
+                };
+                for (x, top_y, bottom_y) in v.column_guides() {
+                    // Don't draw guides for columns clipped past a
+                    // fixed-width box's left edge — columns only ever
+                    // march further left as the loop goes on, so once
+                    // one's past, every later one is too.
+                    if frame_w.is_some_and(|w| x + dx < -w - 0.5) {
+                        break;
+                    }
+                    let top = m * Point::new(x + dx, top_y + dy);
+                    let bottom = m * Point::new(x + dx, bottom_y + dy);
                     scene.stroke(&Stroke::new(0.75), Affine::IDENTITY, guide, None, &Line::new(top, bottom));
                 }
                 continue;
@@ -946,7 +999,7 @@ pub fn paint(
             if let Some(tb) = tb {
                 td.kind = amalith_core::TextKind::Area {
                     width: tb.width,
-                    height: Some(tb.height),
+                    height: tb.height,
                 };
             }
             if td.content.is_empty() {
@@ -1770,8 +1823,11 @@ fn paint_object(
                     let mut preview = td.clone();
                     preview.kind = amalith_core::TextKind::Area {
                         width: tb.width,
-                        height: Some(tb.height),
+                        height: tb.height,
                     };
+                    if let Some(a) = tb.cross_align {
+                        preview.cross_align = a;
+                    }
                     let pm = m * Affine::translate(tb.origin_delta);
                     crate::textedit::paint_text_data(scene, text, &preview, pm, color);
                 } else if td.is_threaded() {

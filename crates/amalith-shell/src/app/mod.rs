@@ -32,6 +32,7 @@ mod shape_builder;
 mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
+mod area_type_dialog;
 mod layer_dialog;
 mod offset_dialog;
 mod render;
@@ -61,7 +62,7 @@ pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
-    about, appicon, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
+    about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
     icons, layerdlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
     settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
@@ -589,6 +590,10 @@ enum MenuAction {
     ClipRelease,
     /// Type ▸ Convert to Area / Point Type (toggles by selection state).
     ConvertTextKind,
+    /// Type ▸ Area Type Options… — needs an `ActiveEventLoop` to spawn its
+    /// floating dialog; sets `pending_area_type_dialog` for
+    /// `about_to_wait` to pick up, same as `OffsetPath` does.
+    AreaTypeOptions,
     /// Help ▸ Amalith Help — opens the docs site.
     HelpDocs,
     /// View ▸ Outline (⌘Y).
@@ -1047,6 +1052,10 @@ struct App {
     /// swatch in the Layers panel. Free-floating like the color picker;
     /// never dockable, never in the Window menu.
     layer_dialog: Option<layerdlg::LayerOptionsDialog>,
+    /// The Area Type Options dialog, opened from Type ▸ Area Type
+    /// Options… for a single selected Area Type frame. Free-floating like
+    /// the color picker; never dockable, never in the Window menu.
+    area_type_dialog: Option<areatypedlg::AreaTypeDialog>,
     /// The Shape Builder tool's region cache — rebuilt whenever the
     /// selection it was built from stops matching the current one. See
     /// `shape_builder::ShapeBuilderCache`.
@@ -1063,6 +1072,8 @@ struct App {
     /// Same reason as `pending_export`, for the Layer Options dialog —
     /// which layer to open it for.
     pending_layer_dialog: Option<amalith_core::LayerId>,
+    /// Same reason as `pending_export`, for the Area Type Options dialog.
+    pending_area_type_dialog: bool,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -1099,6 +1110,9 @@ struct App {
     /// Options-bar Stroke Width Profile dropdown, anchored at the button
     /// (screen px).
     width_profile_menu: Option<Rect>,
+    /// Options-bar "Area Type" alignment dropdown, anchored at the button
+    /// (screen px).
+    area_align_menu: Option<Rect>,
     /// Hover tooltip, if the pointer has been resting on a labelled control.
     tooltip: Option<Tooltip>,
     /// Layers panel search: the current filter text, and whether the field
@@ -1424,6 +1438,8 @@ impl App {
             pending_offset_dialog: false,
             layer_dialog: None,
             pending_layer_dialog: None,
+            area_type_dialog: None,
+            pending_area_type_dialog: false,
             shape_builder: None,
             eraser_size: 20.0,
             home: home::Home::new(recent::load()),
@@ -1440,6 +1456,7 @@ impl App {
             panel_menu: None,
             align_to_menu: None,
             width_profile_menu: None,
+            area_align_menu: None,
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
@@ -2164,6 +2181,7 @@ impl App {
         };
         self.align_to_menu = None;
         self.width_profile_menu = None;
+        self.area_align_menu = None;
         self.font_menu = Some(FontMenuState {
             kind,
             anchor,
@@ -2796,6 +2814,52 @@ impl App {
         true
     }
 
+    fn metric_aa_w() -> f64 { crate::metrics::with(|m| m.app_aa_w) }
+    fn metric_aa_row() -> f64 { crate::metrics::with(|m| m.app_aa_row) }
+    fn metric_aa_pad() -> f64 { crate::metrics::with(|m| m.app_aa_pad) }
+
+    fn area_align_menu_rect(anchor: Rect) -> Rect {
+        let h = Self::metric_aa_pad() * 2.0 + Self::metric_aa_row() * context_bar::area_type::OPTIONS.len() as f64;
+        Rect::new(
+            anchor.x0,
+            anchor.y1 + ui_px(2.0),
+            anchor.x0 + Self::metric_aa_w(),
+            anchor.y1 + ui_px(2.0) + h,
+        )
+    }
+
+    /// Click while the options-bar "Area Type" dropdown is open. Consumes
+    /// the press, same shape as `align_to_menu_click`.
+    fn area_align_menu_click(&mut self, p: Point) -> bool {
+        let Some(anchor) = self.area_align_menu else {
+            return false;
+        };
+        if anchor.contains(p) {
+            self.area_align_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let fly = Self::area_align_menu_rect(anchor);
+        if !fly.contains(p) {
+            self.area_align_menu = None;
+            self.request_main_redraw();
+            return true;
+        }
+        let mut y = fly.y0 + Self::metric_aa_pad();
+        for (align, _) in context_bar::area_type::OPTIONS {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_aa_row());
+            if row.contains(p) {
+                self.area_align_menu = None;
+                self.apply_panel_action(panels::Action::SetCrossAlign(align), false);
+                return true;
+            }
+            y += Self::metric_aa_row();
+        }
+        self.area_align_menu = None;
+        self.request_main_redraw();
+        true
+    }
+
     fn metric_pm_w() -> f64 { crate::metrics::with(|m| m.app_pm_w) }
     fn metric_pm_row() -> f64 { crate::metrics::with(|m| m.app_pm_row) }
     fn metric_pm_sep() -> f64 { crate::metrics::with(|m| m.app_pm_sep) }
@@ -2833,6 +2897,7 @@ impl App {
         self.font_menu = None;
         self.align_to_menu = None;
         self.width_profile_menu = None;
+        self.area_align_menu = None;
         if self
             .panel_menu
             .as_ref()
@@ -3901,6 +3966,7 @@ impl App {
                     }
                 }
             }
+            MenuAction::AreaTypeOptions => self.pending_area_type_dialog = true,
             MenuAction::ToggleOutline => self.toggle_outline_mode(),
             MenuAction::ToggleTransparencyGrid => self.toggle_transparency_grid(),
             MenuAction::ToggleSmartGuides => self.toggle_smart_guides(),
@@ -5022,6 +5088,56 @@ impl App {
         self.para_defaults
     }
 
+    /// Whether the Paragraph panel should draw its alignment icons
+    /// vertical-oriented — same source order as `active_text_align`.
+    fn active_text_vertical(&self) -> bool {
+        if let Some(te) = &self.text_edit {
+            return te.vertical();
+        }
+        for &id in &self.doc.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            {
+                return t.vertical;
+            }
+        }
+        false
+    }
+
+    /// Whether the active text context is (or would create) an Area Type
+    /// frame — gates the options-bar "Area Type" alignment dropdown,
+    /// which is meaningless for Point/Path text (no box width to align
+    /// columns within).
+    fn active_text_kind_is_area(&self) -> bool {
+        if let Some(te) = &self.text_edit {
+            return matches!(te.kind(), amalith_core::TextKind::Area { .. });
+        }
+        for &id in &self.doc.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            {
+                return matches!(t.kind, amalith_core::TextKind::Area { .. });
+            }
+        }
+        false
+    }
+
+    /// Vertical Area Type's cross-axis alignment the options-bar
+    /// dropdown shows — same source order as `active_text_align`.
+    fn active_cross_align(&self) -> amalith_core::TextAlign {
+        if let Some(te) = &self.text_edit {
+            return te.cross_align();
+        }
+        for &id in &self.doc.selection {
+            if let Some(amalith_core::ObjectKind::Text(t)) =
+                self.doc.editor.document().object(id).map(|o| &o.kind)
+            {
+                return t.cross_align;
+            }
+        }
+        amalith_core::TextAlign::Start
+    }
+
     /// Apply an alignment to the live edit, else the selected text
     /// objects, else the new-text default.
     fn edit_text_align(&mut self, align: amalith_core::TextAlign) {
@@ -5030,6 +5146,16 @@ impl App {
             self.request_main_redraw();
         } else if !self.edit_selected_text_data(|d| d.align = align) {
             self.text_align_default = align;
+            self.request_main_redraw();
+        }
+    }
+
+    /// Apply a vertical Area Type cross-align the same way.
+    fn edit_cross_align(&mut self, align: amalith_core::TextAlign) {
+        if let Some(te) = &mut self.text_edit {
+            te.set_cross_align(align);
+            self.request_main_redraw();
+        } else if !self.edit_selected_text_data(|d| d.cross_align = align) {
             self.request_main_redraw();
         }
     }
@@ -5517,6 +5643,10 @@ impl App {
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
             embed_target: None,
+            text_vertical: false,
+            text_kind_is_area: false,
+            text_cross_align: amalith_core::TextAlign::Start,
+            area_align_menu: self.area_align_menu.is_some(),
         }
     }
 
@@ -5574,6 +5704,10 @@ impl App {
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
             embed_target: self.embed_target(),
+            text_vertical: self.active_text_vertical(),
+            text_kind_is_area: self.active_text_kind_is_area(),
+            text_cross_align: self.active_cross_align(),
+            area_align_menu: self.area_align_menu.is_some(),
         }
     }
 
@@ -5620,6 +5754,7 @@ impl App {
             align: self.text_align_default,
             paragraph: self.para_defaults,
             vertical,
+            cross_align: amalith_core::TextAlign::Start,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
@@ -5708,6 +5843,7 @@ impl App {
             align: self.text_align_default,
             paragraph: self.para_defaults,
             vertical,
+            cross_align: amalith_core::TextAlign::Start,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
@@ -5746,6 +5882,7 @@ impl App {
             paragraph: self.para_defaults,
             // A threaded frame is always horizontal — see `thread.rs`.
             vertical: false,
+            cross_align: amalith_core::TextAlign::Start,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
@@ -5926,6 +6063,7 @@ impl App {
             td.align,
             td.paragraph,
             td.vertical,
+            td.cross_align,
             &td.content,
             &mut self.text,
         );
@@ -6463,6 +6601,9 @@ impl App {
             text_align: amalith_core::TextAlign::Start,
             text_paragraph: amalith_core::Paragraph::default(),
             text_editing: false,
+            text_vertical: false,
+            text_kind_is_area: false,
+            text_cross_align: amalith_core::TextAlign::Start,
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
@@ -6489,6 +6630,7 @@ impl App {
             blend_dialog: None,
             offset_dialog: None,
             layer_dialog: None,
+            area_type_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6524,6 +6666,9 @@ impl App {
             text_align: self.active_text_align(),
             text_paragraph: self.active_text_paragraph(),
             text_editing: self.text_edit.is_some(),
+            text_vertical: self.active_text_vertical(),
+            text_kind_is_area: self.active_text_kind_is_area(),
+            text_cross_align: self.active_cross_align(),
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
@@ -6547,6 +6692,7 @@ impl App {
             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, false)),
             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
+            area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
         }
@@ -6603,6 +6749,7 @@ impl App {
             || self.font_menu.is_some()
             || self.align_to_menu.is_some()
             || self.width_profile_menu.is_some()
+            || self.area_align_menu.is_some()
             || self.ruler_menu.is_some()
             || self.ctx_menu.is_some()
             || self.prefs.is_some()
@@ -6998,6 +7145,7 @@ impl App {
             && self.confirm_close.is_none()
             && self.align_to_menu.is_none()
             && self.width_profile_menu.is_none()
+            && self.area_align_menu.is_none()
             && !over_stroke_flyout
             && self.canvas_viewport().contains(self.pointer);
         let mode = if !over {
@@ -7652,6 +7800,9 @@ impl ApplicationHandler for App {
         }
         if let Some(id) = self.pending_layer_dialog.take() {
             self.spawn_layer_dialog(event_loop, id);
+        }
+        if std::mem::take(&mut self.pending_area_type_dialog) {
+            self.spawn_area_type_dialog(event_loop);
         }
         if self.pending_fit {
             self.fit_view();

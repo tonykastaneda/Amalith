@@ -131,6 +131,17 @@ pub struct Ctx<'a> {
     pub text_paragraph: amalith_core::Paragraph,
     /// True while a text object has the caret (Character panel shows "live").
     pub text_editing: bool,
+    /// The active text context is vertical — the Paragraph panel draws
+    /// vertical-oriented alignment icons and the options bar shows the
+    /// "Area Type" cross-align dropdown instead of nothing.
+    pub text_vertical: bool,
+    /// The active text context is (or would create) an Area Type frame —
+    /// gates the "Area Type" cross-align dropdown, meaningless for
+    /// Point/Path text.
+    pub text_kind_is_area: bool,
+    /// Vertical Area Type's cross-axis alignment (`TextData::cross_align`)
+    /// the options-bar dropdown edits.
+    pub text_cross_align: amalith_core::TextAlign,
     /// Installed font family names, sorted (for the family dropdown).
     pub font_families: &'a [String],
     /// Layers panel: the current filter text (empty = show everything).
@@ -182,6 +193,9 @@ pub struct Ctx<'a> {
     /// float-only panel is being drawn / hit-tested.
     pub offset_dialog: Option<(&'a crate::offsetdlg::OffsetDialog, bool)>,
     pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
+    /// The Area Type Options dialog + caret-blink phase, when the
+    /// `areatypedlg` float-only panel is being drawn / hit-tested.
+    pub area_type_dialog: Option<(&'a crate::areatypedlg::AreaTypeDialog, bool)>,
     /// The gradient the Gradient panel edits (a clone of the pooled
     /// target), plus the selected stop index. `None` when the selection
     /// has no gradient paint.
@@ -389,6 +403,10 @@ pub enum Action {
     /// Seeds every eligible selected object's `width_points` from a named
     /// preset taper shape — see `amalith_core::WidthProfilePreset`.
     SetWidthProfile(amalith_core::WidthProfilePreset),
+    /// Options-bar "Area Type" alignment dropdown, anchored at the button.
+    OpenAreaAlignMenu(Rect),
+    /// Vertical Area Type's cross-axis alignment (`TextData::cross_align`).
+    SetCrossAlign(amalith_core::TextAlign),
     /// Context bar "Embed" button — copy a Linked image's bytes into the
     /// document's own asset store and switch its source to Embedded.
     EmbedAsset(AssetId),
@@ -402,6 +420,7 @@ pub enum Action {
     /// App applies it directly (field focus, join pick, Preview, OK/Cancel).
     OffsetHit(crate::offsetdlg::Hit),
     LayerDialogHit(crate::layerdlg::Hit),
+    AreaTypeHit(crate::areatypedlg::Hit),
     // --- Links panel ---
     /// A row was clicked — just highlights it.
     SelectAsset(AssetId),
@@ -524,6 +543,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::layerdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        PanelKind::AreaTypeDlg => {
+            if let Some((dlg, caret)) = ctx.area_type_dialog {
+                crate::areatypedlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
         PanelKind::Unknown(_) => {}
     }
 }
@@ -590,6 +614,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
             None => Action::None,
         },
+        PanelKind::AreaTypeDlg => match ctx.area_type_dialog {
+            Some((dlg, _)) => Action::AreaTypeHit(crate::areatypedlg::hit(dlg, body, local)),
+            None => Action::None,
+        },
         PanelKind::Unknown(_) => Action::None,
     }
 }
@@ -630,6 +658,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Blenddlg => crate::blenddlg::body_height(),
         PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
         PanelKind::LayerOptionsDlg => crate::layerdlg::body_height(),
+        PanelKind::AreaTypeDlg => crate::areatypedlg::body_height(),
         PanelKind::ShapedlgRect
         | PanelKind::ShapedlgRound
         | PanelKind::ShapedlgEllipse

@@ -1164,6 +1164,17 @@ pub struct TextData {
     /// for `TextKind::Path`, which stays horizontal-only.
     #[serde(default)]
     pub vertical: bool,
+    /// Vertical Area Type only: where the block of columns sits within
+    /// the box's width when the columns don't fill it — Illustrator's
+    /// "Area Type" options-bar dropdown. Reuses `TextAlign`'s four
+    /// buckets: `Start` hugs the box's right edge (columns' natural
+    /// starting point — the default), `End` hugs the left edge,
+    /// `Center` centers the block, and any `Justify*` spreads the
+    /// columns evenly across the full width. Meaningless for
+    /// horizontal text and for Point-kind vertical text (no box width
+    /// to align within).
+    #[serde(default)]
+    pub cross_align: TextAlign,
     pub local_bounds: Rect,
     /// Text threading (linked area-text frames). The story's text lives on
     /// the head frame (`thread_prev == None`); each downstream frame keeps
@@ -1191,6 +1202,7 @@ impl Default for TextData {
             align: TextAlign::Start,
             paragraph: Paragraph::default(),
             vertical: false,
+            cross_align: TextAlign::Start,
             local_bounds: Rect::ZERO,
             thread_next: None,
             thread_prev: None,

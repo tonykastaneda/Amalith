@@ -61,7 +61,8 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         | PanelKind::XformdlgShear
         | PanelKind::Blenddlg
         | PanelKind::Offsetdlg
-        | PanelKind::LayerOptionsDlg => GENERIC,
+        | PanelKind::LayerOptionsDlg
+        | PanelKind::AreaTypeDlg => GENERIC,
         // Unrecognized panel id (an old/future/typo'd string round-tripped
         // from a saved layout).
         PanelKind::Unknown(_) => GENERIC,

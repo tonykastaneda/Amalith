@@ -60,6 +60,7 @@ pub enum PanelKind {
     Blenddlg,
     Offsetdlg,
     LayerOptionsDlg,
+    AreaTypeDlg,
     Unknown(&'static str),
 }
 
@@ -67,7 +68,7 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 26] = [
+    pub const ALL: [PanelKind; 27] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
@@ -94,6 +95,7 @@ impl PanelKind {
         PanelKind::Blenddlg,
         PanelKind::Offsetdlg,
         PanelKind::LayerOptionsDlg,
+        PanelKind::AreaTypeDlg,
     ];
 
     /// The stable on-disk id — identical to the string literals every
@@ -129,6 +131,7 @@ impl PanelKind {
             PanelKind::Blenddlg => "blenddlg",
             PanelKind::Offsetdlg => "offsetdlg",
             PanelKind::LayerOptionsDlg => "layeroptionsdlg",
+            PanelKind::AreaTypeDlg => "areatypedlg",
             PanelKind::Unknown(s) => s,
         }
     }
@@ -164,6 +167,7 @@ impl PanelKind {
             "blenddlg" => PanelKind::Blenddlg,
             "offsetdlg" => PanelKind::Offsetdlg,
             "layeroptionsdlg" => PanelKind::LayerOptionsDlg,
+            "areatypedlg" => PanelKind::AreaTypeDlg,
             other => PanelKind::Unknown(Box::leak(other.to_string().into_boxed_str())),
         }
     }
@@ -197,6 +201,7 @@ impl PanelKind {
             PanelKind::Blenddlg => "Blend Options",
             PanelKind::Offsetdlg => "Offset Path",
             PanelKind::LayerOptionsDlg => "Layer Options",
+            PanelKind::AreaTypeDlg => "Area Type Options",
             PanelKind::Unknown(s) => s,
         }
     }
@@ -863,11 +868,12 @@ mod tests {
                 | PanelKind::XformdlgShear
                 | PanelKind::Blenddlg
                 | PanelKind::Offsetdlg
-                | PanelKind::LayerOptionsDlg => true,
+                | PanelKind::LayerOptionsDlg
+                | PanelKind::AreaTypeDlg => true,
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 26);
+        assert_eq!(PanelKind::ALL.len(), 27);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }
@@ -888,7 +894,7 @@ mod tests {
         for k in PanelKind::ALL {
             assert_eq!(PanelKind::from_id_str(k.id_str()), k);
         }
-        let expected: [(PanelKind, &str); 26] = [
+        let expected: [(PanelKind, &str); 27] = [
             (PanelKind::Tools, "tools"),
             (PanelKind::Layers, "layers"),
             (PanelKind::Links, "links"),
@@ -915,6 +921,7 @@ mod tests {
             (PanelKind::Blenddlg, "blenddlg"),
             (PanelKind::Offsetdlg, "offsetdlg"),
             (PanelKind::LayerOptionsDlg, "layeroptionsdlg"),
+            (PanelKind::AreaTypeDlg, "areatypedlg"),
         ];
         for (kind, literal) in expected {
             assert_eq!(kind.id_str(), literal, "{kind:?}'s id_str drifted from the pre-refactor literal");

@@ -798,6 +798,46 @@ impl App {
         }
     }
 
+    /// The options-bar "Area Type" dropdown — same popover shape as
+    /// `paint_align_to_menu`.
+    pub(in crate::app) fn paint_area_align_menu(&mut self) {
+        let Some(anchor) = self.area_align_menu else {
+            return;
+        };
+        let fly = Self::area_align_menu_rect(anchor);
+        let th = &self.theme;
+        self.content.fill(Fill::NonZero, ID, th.bg, None, &fly.to_rounded_rect(ui_px(4.0)));
+        self.content.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &fly.to_rounded_rect(ui_px(4.0)));
+        let mut y = fly.y0 + Self::metric_aa_pad();
+        let cur = self.active_cross_align();
+        for (align, label) in context_bar::area_type::OPTIONS {
+            let row = Rect::new(fly.x0, y, fly.x1, y + Self::metric_aa_row());
+            if row.contains(self.pointer) {
+                self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &row);
+            }
+            let on = cur == align;
+            if on {
+                self.text.draw(
+                    &mut self.content,
+                    "✓",
+                    12.0,
+                    th.accent,
+                    row.x0 + ui_px(10.0),
+                    row.center().y + ui_px(4.0),
+                );
+            }
+            self.text.draw(
+                &mut self.content,
+                label,
+                12.5,
+                if on { th.accent } else { th.text },
+                row.x0 + ui_px(28.0),
+                row.center().y + ui_px(4.5),
+            );
+            y += Self::metric_aa_row();
+        }
+    }
+
     pub(in crate::app) fn paint_panel_menu(&mut self, wl: f64, hl: f64) {
         let Some(m) = self.panel_menu else {
             return;

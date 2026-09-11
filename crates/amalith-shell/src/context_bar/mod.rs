@@ -31,6 +31,7 @@ use crate::theme::Theme;
 mod align;
 mod anchor;
 pub(crate) mod artboard;
+pub(crate) mod area_type;
 mod character;
 mod embed;
 mod fill_stroke;
@@ -98,6 +99,16 @@ pub struct Ctx<'a> {
     /// The single selected object's asset, when it's a Linked image —
     /// flips the `embed` segment's "Embed" button on.
     pub embed_target: Option<amalith_core::AssetId>,
+    /// The active text context is vertical — flips the `area_type` segment
+    /// on (together with `text_kind_is_area`).
+    pub text_vertical: bool,
+    /// The active text context is (or would create) an Area Type frame.
+    pub text_kind_is_area: bool,
+    /// Vertical Area Type's cross-axis alignment the `area_type` segment's
+    /// dropdown shows / edits.
+    pub text_cross_align: amalith_core::TextAlign,
+    /// True while the options-bar "Area Type" alignment dropdown is open.
+    pub area_align_menu: bool,
 }
 
 /// Identifies a segment so callers (e.g. the Stroke flyout anchor) can
@@ -114,6 +125,7 @@ pub enum SegKind {
     Align,
     Artboard,
     Embed,
+    AreaType,
 }
 
 struct Segment {
@@ -134,6 +146,7 @@ const SEGMENTS: &[Segment] = &[
     align::SEGMENT,
     anchor::SEGMENT,
     character::SEGMENT,
+    area_type::SEGMENT,
     fill_stroke::SEGMENT,
     stroke::SEGMENT,
     opacity::SEGMENT,

@@ -64,6 +64,8 @@ pub struct TextEdit {
     /// all, word/char movement) even when this is `true`; only point-based
     /// hit-testing and the Up/Down/Left/Right key mapping are swapped.
     vertical: bool,
+    /// Vertical Area Type only — see `TextData::cross_align`.
+    cross_align: TextAlign,
     /// Kept in sync with `editor`'s text/style after every edit — the
     /// source of truth for rendering, hit-testing, and caret/selection
     /// rects when `vertical` is set.
@@ -81,6 +83,7 @@ impl TextEdit {
         align: TextAlign,
         paragraph: Paragraph,
         vertical: bool,
+        cross_align: TextAlign,
         seed: &str,
         tcx: &mut TextContext,
     ) -> Self {
@@ -97,7 +100,7 @@ impl TextEdit {
             }
         }
         editor.set_alignment(alignment(align));
-        let v_layout = vertical_text::layout(tcx, seed, &style, wrap_h_for(kind));
+        let v_layout = v_layout_for(tcx, seed, &style, kind, align);
         let mut this = Self {
             object,
             origin,
@@ -111,6 +114,7 @@ impl TextEdit {
             thread_prev: None,
             touched: !seed.is_empty(),
             vertical,
+            cross_align,
             v_layout,
         };
         this.apply_style(&style, tcx);
@@ -123,7 +127,22 @@ impl TextEdit {
     fn refresh_v_layout(&mut self, tcx: &mut TextContext) {
         if self.vertical {
             let content = self.text();
-            self.v_layout = vertical_text::layout(tcx, &content, &self.style, wrap_h_for(self.kind));
+            self.v_layout = v_layout_for(tcx, &content, &self.style, self.kind, self.align);
+        }
+    }
+
+    /// The `(dx, dy)` shift vertical content is drawn/hit-tested at, on
+    /// top of `v_layout`'s own unshifted coordinates: Area Type's
+    /// `cross_align` (mutates `v_layout` in place for `Justify*` — see
+    /// `VerticalLayout::justify_columns` — rather than a plain shift),
+    /// or Point/Path's per-object `align`, the vertical analogue of
+    /// `point_align_dx`. Call after `refresh_v_layout`.
+    fn vertical_content_shift(&mut self) -> (f64, f64) {
+        match self.kind {
+            TextKind::Area { width, .. } => (self.v_layout.area_cross_shift(self.cross_align, width), 0.0),
+            TextKind::Point | TextKind::Path(_) => {
+                (0.0, vertical_text::point_align_dy(self.align, self.v_layout.height()))
+            }
         }
     }
 
@@ -193,6 +212,18 @@ impl TextEdit {
         self.kind
     }
 
+    pub fn vertical(&self) -> bool {
+        self.vertical
+    }
+
+    pub fn cross_align(&self) -> TextAlign {
+        self.cross_align
+    }
+
+    pub fn set_cross_align(&mut self, align: TextAlign) {
+        self.cross_align = align;
+    }
+
     pub fn set_path_geometry(&mut self, path: Option<amalith_core::PathData>) {
         self.path_geometry = path;
     }
@@ -206,6 +237,11 @@ impl TextEdit {
         // placeholder text appear stuck until the user typed something.
         let (font, layout) = tcx.parts();
         self.editor.refresh_layout(font, layout);
+        // Vertical Area Type's along-column alignment lives on `v_layout`
+        // itself (see `v_layout_for`), not on the parley editor refreshed
+        // above — without this, the Paragraph panel's alignment buttons
+        // stayed cosmetic for a live vertical Area Type edit.
+        self.refresh_v_layout(tcx);
     }
 
     pub fn paragraph(&self) -> Paragraph {
@@ -527,7 +563,10 @@ impl TextEdit {
             // for vertical) horizontal layout — resolve against the real
             // column layout instead, then just move the underlying
             // editor's logical caret to that byte offset.
-            let byte = self.v_layout.hit_test(Point::new(p.0 as f64, p.1 as f64));
+            let (dx, dy) = self.vertical_content_shift();
+            let byte = self
+                .v_layout
+                .hit_test(Point::new(p.0 as f64 - dx, p.1 as f64 - dy));
             let (fc, lc) = tcx.parts();
             let mut drv = self.editor.driver(fc, lc);
             if clicks >= 3 {
@@ -548,7 +587,10 @@ impl TextEdit {
 
     pub fn pointer_drag(&mut self, p: (f32, f32), tcx: &mut TextContext) {
         if self.vertical {
-            let byte = self.v_layout.hit_test(Point::new(p.0 as f64, p.1 as f64));
+            let (dx, dy) = self.vertical_content_shift();
+            let byte = self
+                .v_layout
+                .hit_test(Point::new(p.0 as f64 - dx, p.1 as f64 - dy));
             let (fc, lc) = tcx.parts();
             self.editor.driver(fc, lc).extend_selection_to_byte(byte);
             return;
@@ -833,13 +875,15 @@ impl TextEdit {
             }
             _ => false,
         };
+        let (dx, dy) = self.vertical_content_shift();
+        let cxf = xf * Affine::translate((dx, dy));
         for r in self.selection_rects() {
-            scene.fill(Fill::NonZero, xf, theme_blue.multiply_alpha(0.35), None, &r);
+            scene.fill(Fill::NonZero, cxf, theme_blue.multiply_alpha(0.35), None, &r);
         }
-        self.v_layout.draw(scene, xf, color);
+        self.v_layout.draw(scene, cxf, color);
         if caret_on && !self.is_composing() {
             if let Some(c) = self.caret_rect() {
-                scene.fill(Fill::NonZero, xf, color, None, &c);
+                scene.fill(Fill::NonZero, cxf, color, None, &c);
             }
         }
         if box_clip {
@@ -848,14 +892,20 @@ impl TextEdit {
         if let TextKind::Area { width, height } = self.kind {
             let box_h = height.unwrap_or_else(|| self.v_layout.height()).max(1.0);
             scene.stroke(&Stroke::new(1.0), xf, theme_blue, None, &Rect::new(-width, 0.0, 0.0, box_h));
-            if let Some(fixed) = height {
-                if self.v_layout.height() > fixed {
-                    // Overflow past the box's LEFT edge (columns march
-                    // leftward) — the vertical analogue of the horizontal
-                    // overset tab past the bottom edge.
-                    let m = Rect::new(-width - 6.0, 0.0, -width, 6.0);
-                    scene.fill(Fill::NonZero, xf, TEXT_OVERSET_INK, None, &m);
-                }
+            // Vertical text overflows a box mainly by needing MORE
+            // COLUMNS than its width holds — not by a column growing
+            // taller than a fixed height (columns already wrap at that
+            // height by construction). Checking height alone let a
+            // too-narrow frame silently clip text past its left edge
+            // with no warning at all.
+            let width_overflow = self.v_layout.width() > width + 0.5;
+            let height_overflow = height.is_some_and(|fixed| self.v_layout.height() > fixed + 0.5);
+            if width_overflow || height_overflow {
+                // Overflow past the box's LEFT edge (columns march
+                // leftward) — the vertical analogue of the horizontal
+                // overset tab past the bottom edge.
+                let m = Rect::new(-width - 6.0, 0.0, -width, 6.0);
+                scene.fill(Fill::NonZero, xf, TEXT_OVERSET_INK, None, &m);
             }
         }
     }
@@ -879,7 +929,8 @@ impl TextEdit {
                 ),
                 TextKind::Point | TextKind::Path(_) => {
                     let b = self.v_layout.bounds();
-                    amalith_core::Rect::new(b.x0, b.y0, b.x1, b.y1)
+                    let dy = vertical_text::point_align_dy(self.align, self.v_layout.height());
+                    amalith_core::Rect::new(b.x0, b.y0 + dy, b.x1, b.y1 + dy)
                 }
             }
         } else {
@@ -916,6 +967,7 @@ impl TextEdit {
             align: self.align,
             paragraph: self.paragraph,
             vertical: self.vertical,
+            cross_align: self.cross_align,
             local_bounds: bounds,
             thread_next: self.thread_next,
             thread_prev: self.thread_prev,
@@ -990,6 +1042,20 @@ fn wrap_h_for(kind: TextKind) -> Option<f64> {
     }
 }
 
+/// Shapes `content` into a fresh [`VerticalLayout`] and — for a
+/// fixed-height Area box only — applies the Paragraph panel's along-
+/// column alignment on top (see `VerticalLayout::area_along_align`; an
+/// auto-size box has no fixed wrap height to align a short column
+/// within, so it's skipped there, same as `wrap_h_for` already leaves
+/// point/path text unwrapped).
+fn v_layout_for(tcx: &mut TextContext, content: &str, style: &TextStyle, kind: TextKind, align: TextAlign) -> VerticalLayout {
+    let mut v = vertical_text::layout(tcx, content, style, wrap_h_for(kind));
+    if let TextKind::Area { height: Some(h), .. } = kind {
+        v.area_along_align(align, h);
+    }
+    v
+}
+
 /// Anchor offset for point text: the click point is the left edge for
 /// left-align, the centre for centre-align, the right edge for right-align
 /// (Illustrator point-type behaviour). `w` is the laid-out text width.
@@ -1060,15 +1126,27 @@ pub fn paint_text_data(
         return;
     }
     if td.vertical {
-        let v = vertical_text::layout(tcx, &td.content, &td.style, wrap_h_for(td.kind));
+        let mut v = vertical_text::layout(tcx, &td.content, &td.style, wrap_h_for(td.kind));
+        if let TextKind::Area { height: Some(h), .. } = td.kind {
+            v.area_along_align(td.align, h);
+        }
+        // Clip whenever either axis overflows the box — a too-narrow
+        // frame (more columns than fit the width) used to draw straight
+        // past the box uncontained; only a too-short fixed height was
+        // ever clipped before.
         let clip = match td.kind {
-            TextKind::Area { width, height: Some(h) } if v.height() > h + 0.5 => {
-                scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(-width, 0.0, 0.0, h));
+            TextKind::Area { width, height } if v.width() > width + 0.5 || height.is_some_and(|h| v.height() > h + 0.5) => {
+                let box_h = height.unwrap_or_else(|| v.height());
+                scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(-width, 0.0, 0.0, box_h));
                 true
             }
             _ => false,
         };
-        v.draw(scene, xf, color);
+        let (dx, dy) = match td.kind {
+            TextKind::Area { width, .. } => (v.area_cross_shift(td.cross_align, width), 0.0),
+            TextKind::Point | TextKind::Path(_) => (0.0, vertical_text::point_align_dy(td.align, v.height())),
+        };
+        v.draw(scene, xf * Affine::translate((dx, dy)), color);
         if clip {
             scene.pop_layer();
         }
@@ -1121,7 +1199,10 @@ pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::
             }
             TextKind::Point | TextKind::Path(_) => {
                 let b = v.bounds();
-                amalith_core::Rect::new(b.x0, b.y0, b.x1.max(b.x0 + 1.0), b.y1.max(b.y0 + 1.0))
+                let dy = vertical_text::point_align_dy(td.align, v.height());
+                let y0 = b.y0 + dy;
+                let y1 = (b.y1 + dy).max(y0 + 1.0);
+                amalith_core::Rect::new(b.x0, y0, b.x1.max(b.x0 + 1.0), y1)
             }
         };
     }
@@ -1186,6 +1267,7 @@ mod tests {
             TextAlign::Start,
             Paragraph::default(),
             false,
+            TextAlign::Start,
             "Lorem ipsum",
             &mut tcx,
         );
@@ -1208,6 +1290,7 @@ mod tests {
             TextAlign::Start,
             Paragraph::default(),
             true,
+            TextAlign::Start,
             "AB\nCD",
             &mut tcx,
         );
@@ -1237,6 +1320,7 @@ mod tests {
             TextAlign::Start,
             Paragraph::default(),
             true,
+            TextAlign::Start,
             "Hi",
             &mut tcx,
         );

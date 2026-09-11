@@ -48,6 +48,16 @@ pub fn frame_overset(doc: &Document, tcx: &mut TextContext, id: ObjectId) -> boo
             .map(|hd| slices(doc, hd, tcx).get(&id).is_some_and(|s| s.overset))
             .unwrap_or(false);
     }
+    if td.vertical {
+        // A horizontal probe (below) shapes vertical content as one
+        // width-wrapped paragraph, which is meaningless — and it only
+        // ever checked height, when vertical text mainly overflows by
+        // needing more columns (width). Use the real vertical layout and
+        // check both axes, matching `TextEdit::render_vertical`'s own
+        // overflow check.
+        let v = crate::vertical_text::layout(tcx, &td.content, &td.style, Some(h));
+        return v.width() > width + 0.5 || v.height() > h + 0.5;
+    }
     let probe = TextData {
         path_geometry: None,
         content: td.content.clone(),
@@ -61,6 +71,7 @@ pub fn frame_overset(doc: &Document, tcx: &mut TextContext, id: ObjectId) -> boo
         // Threading (overflow linking) doesn't apply to vertical text — v1
         // scope — so a threading probe is always horizontal.
         vertical: false,
+        cross_align: amalith_core::TextAlign::Start,
         local_bounds: amalith_core::Rect::ZERO,
         thread_next: None,
         thread_prev: None,
@@ -141,6 +152,7 @@ pub fn slices(
             align: head_td.align,
             paragraph: head_td.paragraph,
             vertical: false,
+            cross_align: amalith_core::TextAlign::Start,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,

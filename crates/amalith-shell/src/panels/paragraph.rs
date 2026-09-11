@@ -150,7 +150,12 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         };
         scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(ui_px(4.0)));
         scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &r.to_rounded_rect(ui_px(4.0)));
-        align_glyph(scene, *r, a, if on { th.on_accent } else { th.text });
+        let ink = if on { th.on_accent } else { th.text };
+        if ctx.text_vertical {
+            align_glyph_vertical(scene, *r, a, ink);
+        } else {
+            align_glyph(scene, *r, a, ink);
+        }
     }
 
     // List dropdowns — display only for now.
@@ -300,6 +305,50 @@ fn align_glyph(scene: &mut Scene, r: Rect, a: TextAlign, ink: Color) {
     }
 }
 
+/// The vertical-tick "text columns" glyph an alignment button draws when
+/// the active text object is vertical (top-to-bottom columns instead of
+/// left-to-right lines) — a mechanical transpose of [`align_glyph`]:
+/// columns run right-to-left (matching vertical-writing order — column 0,
+/// the tallest tick, sits furthest right, the same order
+/// `vertical_text::VerticalLayout` lays real columns out in), and each
+/// tick's vertical position maps `Start`/`End` to top/bottom the way
+/// `align_glyph` maps them to left/right.
+fn align_glyph_vertical(scene: &mut Scene, r: Rect, a: TextAlign, ink: Color) {
+    let s = Stroke::new(ui_px(1.3));
+    for (x, y0, y1) in align_ticks_vertical(r, a) {
+        scene.stroke(&s, ID, ink, None, &Line::new((x, y0), (x, y1)));
+    }
+}
+
+/// The 4 `(x, y0, y1)` tick segments [`align_glyph_vertical`] draws — split
+/// out from the drawing call so the alignment math itself (which edge each
+/// tick hugs) is unit-testable without a `Scene`.
+fn align_ticks_vertical(r: Rect, a: TextAlign) -> [(f64, f64, f64); 4] {
+    let cy = r.center().y;
+    let full = r.height() * 0.62;
+    let heights: [f64; 4] = if a.is_justified() {
+        let last = match a {
+            TextAlign::JustifyAll => 1.0,
+            TextAlign::JustifyRight | TextAlign::JustifyCenter => 0.55,
+            _ => 0.65,
+        };
+        [1.0, 1.0, 1.0, last]
+    } else {
+        [1.0, 0.6, 0.85, 0.45]
+    };
+    std::array::from_fn(|i| {
+        let hf = heights[i];
+        let x = r.x1 - r.width() * 0.28 - i as f64 * (r.width() * 0.15);
+        let bh = full * hf;
+        let (y0, y1) = match a {
+            TextAlign::Center | TextAlign::JustifyCenter => (cy - bh / 2.0, cy + bh / 2.0),
+            TextAlign::End | TextAlign::JustifyRight => (cy + full / 2.0 - bh, cy + full / 2.0),
+            _ => (cy - full / 2.0, cy - full / 2.0 + bh),
+        };
+        (x, y0, y1)
+    })
+}
+
 fn list_icon(scene: &mut Scene, r: Rect, bullet: bool, ink: Color) {
     let s = Stroke::new(ui_px(1.1));
     for i in 0..3 {
@@ -400,4 +449,53 @@ pub fn tip(body: Rect, p: Point, _ctx: &Ctx) -> Option<&'static str> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vertical_align_ticks_run_right_to_left_matching_column_order() {
+        let r = Rect::new(0.0, 0.0, 40.0, 24.0);
+        let ticks = align_ticks_vertical(r, TextAlign::Start);
+        for t in &ticks {
+            assert!(t.2 > t.1, "each tick must be a real vertical segment");
+        }
+        let xs: Vec<f64> = ticks.iter().map(|t| t.0).collect();
+        assert!(
+            xs.windows(2).all(|w| w[0] > w[1]),
+            "column 0 sits furthest right, matching VerticalLayout's own right-to-left order"
+        );
+    }
+
+    #[test]
+    fn vertical_align_start_hugs_the_top_edge() {
+        let r = Rect::new(0.0, 0.0, 40.0, 100.0);
+        let ticks = align_ticks_vertical(r, TextAlign::Start);
+        let top = ticks[0].1;
+        for t in &ticks {
+            assert!((t.1 - top).abs() < 1e-9, "Start hugs a shared top edge, varying only how far each tick reaches down");
+        }
+    }
+
+    #[test]
+    fn vertical_align_end_hugs_the_bottom_edge() {
+        let r = Rect::new(0.0, 0.0, 40.0, 100.0);
+        let ticks = align_ticks_vertical(r, TextAlign::End);
+        let bottom = ticks[0].2;
+        for t in &ticks {
+            assert!((t.2 - bottom).abs() < 1e-9, "End hugs a shared bottom edge, varying only how far each tick reaches up");
+        }
+    }
+
+    #[test]
+    fn vertical_align_center_centers_every_tick_on_the_same_midline() {
+        let r = Rect::new(0.0, 0.0, 40.0, 100.0);
+        let cy = r.center().y;
+        let ticks = align_ticks_vertical(r, TextAlign::Center);
+        for t in &ticks {
+            assert!(((t.1 + t.2) / 2.0 - cy).abs() < 1e-9, "Center keeps every tick's own midpoint on the button's centerline");
+        }
+    }
 }

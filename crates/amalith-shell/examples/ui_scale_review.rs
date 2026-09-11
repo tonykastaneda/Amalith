@@ -50,6 +50,9 @@ fn main() {
             text_align: amalith_core::TextAlign::Start,
             text_paragraph: Default::default(),
             text_editing: false,
+            text_vertical: false,
+            text_kind_is_area: false,
+            text_cross_align: amalith_core::TextAlign::Start,
             font_families: &[],
             layer_query: "",
             layer_search_focused: false,
@@ -73,6 +76,7 @@ fn main() {
             blend_dialog: None,
             offset_dialog: None,
             layer_dialog: None,
+            area_type_dialog: None,
             gradient: None,
             gradient_edit: None,
         };

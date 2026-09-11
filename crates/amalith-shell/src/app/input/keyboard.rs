@@ -272,6 +272,11 @@ impl App {
             self.layer_dialog_key(&event);
             return;
         }
+        // The Area Type Options dialog takes every key while open.
+        if self.area_type_dialog.is_some() {
+            self.area_type_dialog_key(&event);
+            return;
+        }
         // The Export for Screens dialog takes every key while open.
         if self.export.is_some() {
             self.export_key(&event);
@@ -312,6 +317,15 @@ impl App {
                 && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
             {
                 self.width_profile_menu = None;
+                self.request_main_redraw();
+            }
+            return;
+        }
+        if self.area_align_menu.is_some() {
+            if event.state.is_pressed()
+                && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape))
+            {
+                self.area_align_menu = None;
                 self.request_main_redraw();
             }
             return;

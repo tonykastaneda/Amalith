@@ -63,6 +63,12 @@ struct VColumn {
     x: f64,
     start: usize,
     clusters: Vec<VCluster>,
+    /// Vertical Area Type only — the along-column shift/spacing
+    /// [`VerticalLayout::area_along_align`] applies to a column shorter
+    /// than the frame's wrap height. `0.0` / `row_h` (hug the top, no
+    /// extra spacing) until that runs.
+    y_offset: f64,
+    row_pitch: f64,
 }
 
 /// A fully laid-out vertical text block, ready to draw / hit-test /
@@ -84,7 +90,7 @@ pub fn layout(tcx: &mut TextContext, content: &str, style: &TextStyle, wrap_h: O
     let col_w = style.size;
     if content.is_empty() {
         return VerticalLayout {
-            columns: vec![VColumn { x: 0.0, start: 0, clusters: Vec::new() }],
+            columns: vec![VColumn { x: 0.0, start: 0, clusters: Vec::new(), y_offset: 0.0, row_pitch: row_h }],
             row_h,
             col_w,
         };
@@ -98,7 +104,7 @@ pub fn layout(tcx: &mut TextContext, content: &str, style: &TextStyle, wrap_h: O
     parley_layout.break_all_lines(None);
 
     let mut columns: Vec<VColumn> = Vec::new();
-    let mut cur = VColumn { x: 0.0, start: 0, clusters: Vec::new() };
+    let mut cur = VColumn { x: 0.0, start: 0, clusters: Vec::new(), y_offset: 0.0, row_pitch: row_h };
     let mut cur_h = 0.0f64;
 
     for line in parley_layout.lines() {
@@ -108,7 +114,7 @@ pub fn layout(tcx: &mut TextContext, content: &str, style: &TextStyle, wrap_h: O
                     let next_start = cluster.byte_range.start;
                     columns.push(std::mem::replace(
                         &mut cur,
-                        VColumn { x: 0.0, start: next_start, clusters: Vec::new() },
+                        VColumn { x: 0.0, start: next_start, clusters: Vec::new(), y_offset: 0.0, row_pitch: row_h },
                     ));
                     cur_h = 0.0;
                 }
@@ -124,7 +130,7 @@ pub fn layout(tcx: &mut TextContext, content: &str, style: &TextStyle, wrap_h: O
         if !cur.clusters.is_empty() {
             columns.push(std::mem::replace(
                 &mut cur,
-                VColumn { x: 0.0, start: line.text_range().end, clusters: Vec::new() },
+                VColumn { x: 0.0, start: line.text_range().end, clusters: Vec::new(), y_offset: 0.0, row_pitch: row_h },
             ));
             cur_h = 0.0;
         }
@@ -136,6 +142,41 @@ pub fn layout(tcx: &mut TextContext, content: &str, style: &TextStyle, wrap_h: O
         col.x = -(i as f64) * col_w;
     }
     VerticalLayout { columns, row_h, col_w }
+}
+
+/// Vertical Area Type only — Illustrator's "Area Type" alignment
+/// dropdown: where the block of columns sits within the box's width
+/// (`frame_w`) when it doesn't fill it (`used_w < frame_w`). The x-shift
+/// to add to every column's `x` (and to a hit-test point before handing
+/// it to [`VerticalLayout::hit_test`] — see `TextEdit::pointer_down`).
+/// `Start` needs no shift: [`layout`] already anchors column 0 flush
+/// against `x = 0`, which is the box's own right edge. `Justify*`
+/// doesn't shift the block at all — see
+/// [`VerticalLayout::justify_columns`], which widens the gaps between
+/// columns instead so the block fills the frame edge-to-edge.
+pub fn cross_align_dx(align: amalith_core::TextAlign, used_w: f64, frame_w: f64) -> f64 {
+    use amalith_core::TextAlign;
+    let slack = frame_w - used_w;
+    match align {
+        TextAlign::Center => -slack / 2.0,
+        TextAlign::End => -slack,
+        _ => 0.0,
+    }
+}
+
+/// Point-kind vertical text only — the vertical analogue of
+/// `textedit::point_align_dx`: the click point is the column's top edge
+/// for `Start` (content hangs below the click, today's only behavior),
+/// the vertical center for `Center`, the bottom edge for `End` (content
+/// sits above the click). Reuses the object's own `TextAlign`, not the
+/// Area Type cross-axis field.
+pub fn point_align_dy(align: amalith_core::TextAlign, content_h: f64) -> f64 {
+    use amalith_core::TextAlign;
+    match align {
+        TextAlign::Center | TextAlign::JustifyCenter => -content_h / 2.0,
+        TextAlign::End | TextAlign::JustifyRight => -content_h,
+        _ => 0.0,
+    }
 }
 
 /// Shapes `content` into an unwrapped parley layout — the shared first
@@ -219,29 +260,111 @@ pub(crate) fn flat_clusters(tcx: &mut TextContext, content: &str, style: &TextSt
 }
 
 impl VerticalLayout {
+    /// A column's own bottom edge, local space — its `y_offset` plus
+    /// `n - 1` gaps at its own `row_pitch` (`0.0` / `row_h` until
+    /// [`Self::area_along_align`] runs) plus one final row's real glyph
+    /// height (`row_h` — the row *pitch* widens for `Justify*`, but a
+    /// glyph's own cell never does).
+    fn column_bottom(&self, c: &VColumn) -> f64 {
+        let n = c.clusters.len().max(1);
+        c.y_offset + (n - 1) as f64 * c.row_pitch + self.row_h
+    }
+
     /// Total width of the laid-out block (all columns), local space.
     pub fn width(&self) -> f64 {
         self.columns.len() as f64 * self.col_w
     }
 
-    /// `(x, bottom_y)` for each column's own baseline guide — Illustrator
-    /// draws a vertical line down a vertical-text column's center
-    /// (`x`), the same role a horizontal line under each line of
-    /// horizontal text plays, from the column's top (`y = 0`) down to
-    /// its own content's bottom edge.
-    pub fn column_guides(&self) -> Vec<(f64, f64)> {
-        self.columns
-            .iter()
-            .map(|c| (c.x, c.clusters.len().max(1) as f64 * self.row_h))
-            .collect()
+    /// Vertical Area Type's `Justify*` cross-align: widens the gaps
+    /// between columns (not the glyphs within them — see the module doc
+    /// comment's "known v1 simplifications") so the block fills
+    /// `frame_w` edge-to-edge instead of hugging the right edge. A no-op
+    /// with one column or fewer (nothing to widen a gap between) or once
+    /// the block already fills or overflows the frame.
+    pub fn justify_columns(&mut self, frame_w: f64) {
+        let n = self.columns.len();
+        if n < 2 {
+            return;
+        }
+        let used_w = self.width();
+        if used_w >= frame_w {
+            return;
+        }
+        let pitch = self.col_w + (frame_w - used_w) / (n - 1) as f64;
+        for (i, col) in self.columns.iter_mut().enumerate() {
+            col.x = -(i as f64) * pitch;
+        }
+    }
+
+    /// Vertical Area Type's complete cross-axis shift: column 0 sits at
+    /// `x = 0` with its glyphs *centered* there (see `draw`), so its own
+    /// right edge actually falls at `col_w / 2` — past the frame's real
+    /// right edge, which is `x = 0`. Every cross-align mode needs that
+    /// half-column tucked back in first, or "hug the right edge"
+    /// (`Start`, no further shift) actually overflows the frame by half
+    /// a character width. Mutates `self` in place for `Justify*` (see
+    /// `justify_columns`); returns the additional x-shift to apply on
+    /// top (`0.0` for `Justify*`, since widening the gaps already fills
+    /// the frame).
+    pub fn area_cross_shift(&mut self, cross_align: amalith_core::TextAlign, frame_w: f64) -> f64 {
+        let tuck = -self.col_w * 0.5;
+        if cross_align.is_justified() {
+            self.justify_columns(frame_w);
+            tuck
+        } else {
+            tuck + cross_align_dx(cross_align, self.width(), frame_w)
+        }
+    }
+
+    /// `(x, top_y, bottom_y)` for each column's own baseline guide —
+    /// Illustrator draws a vertical line down a vertical-text column's
+    /// center (`x`), the same role a horizontal line under each line of
+    /// horizontal text plays, from the column's own top edge (`0.0`
+    /// unless [`Self::area_along_align`] shifted it) down to its
+    /// content's bottom edge.
+    pub fn column_guides(&self) -> Vec<(f64, f64, f64)> {
+        self.columns.iter().map(|c| (c.x, c.y_offset, self.column_bottom(c))).collect()
     }
 
     /// Height of the tallest column, local space.
     pub fn height(&self) -> f64 {
-        self.columns
-            .iter()
-            .map(|c| c.clusters.len().max(1) as f64 * self.row_h)
-            .fold(0.0, f64::max)
+        self.columns.iter().map(|c| self.column_bottom(c)).fold(0.0, f64::max)
+    }
+
+    /// Vertical Area Type only — the Paragraph panel's alignment
+    /// (`TextData::align`) applied along each column's own top-to-bottom
+    /// axis, the vertical transpose of how horizontal Area Type's
+    /// per-line alignment positions a line within the frame's width.
+    /// Only a column shorter than the frame's wrap height (typically a
+    /// paragraph's last column, or a short block) has slack to apply
+    /// this to; a column already filling — or overflowing — `wrap_h` is
+    /// left hugging the top untouched. `Justify*` widens the gaps
+    /// *between* rows (mirroring [`Self::justify_columns`], which widens
+    /// the gaps between columns) rather than shifting the column, and
+    /// only with 2+ rows to widen a gap between.
+    pub fn area_along_align(&mut self, align: amalith_core::TextAlign, wrap_h: f64) {
+        use amalith_core::TextAlign;
+        for col in &mut self.columns {
+            let n = col.clusters.len();
+            if n == 0 {
+                continue;
+            }
+            let slack = wrap_h - n as f64 * self.row_h;
+            if slack <= 0.0 {
+                continue;
+            }
+            if align.is_justified() {
+                if n >= 2 {
+                    col.row_pitch = self.row_h + slack / (n - 1) as f64;
+                }
+                continue;
+            }
+            col.y_offset = match align {
+                TextAlign::Center => slack / 2.0,
+                TextAlign::End => slack,
+                _ => 0.0,
+            };
+        }
     }
 
     /// Local bounding box (column 0 at `x = 0`, extending negative for
@@ -315,7 +438,7 @@ impl VerticalLayout {
     }
 
     fn row_rect(&self, col: &VColumn, row: usize) -> Rect {
-        let y0 = row as f64 * self.row_h;
+        let y0 = col.y_offset + row as f64 * col.row_pitch;
         Rect::new(col.x - self.col_w * 0.5, y0, col.x + self.col_w * 0.5, y0 + self.row_h)
     }
 
@@ -327,10 +450,11 @@ impl VerticalLayout {
         let (ci, ri) = self.locate(byte);
         let col = &self.columns[ci];
         if col.clusters.is_empty() {
-            return Rect::new(col.x - self.col_w * 0.5, -0.75, col.x + self.col_w * 0.5, 0.75);
+            let y = col.y_offset;
+            return Rect::new(col.x - self.col_w * 0.5, y - 0.75, col.x + self.col_w * 0.5, y + 0.75);
         }
         let c = &col.clusters[ri];
-        let y = ri as f64 * self.row_h + if byte >= c.byte_range.end { self.row_h } else { 0.0 };
+        let y = col.y_offset + ri as f64 * col.row_pitch + if byte >= c.byte_range.end { self.row_h } else { 0.0 };
         Rect::new(col.x - self.col_w * 0.5, y - 0.75, col.x + self.col_w * 0.5, y + 0.75)
     }
 
@@ -370,9 +494,10 @@ impl VerticalLayout {
         if col.clusters.is_empty() {
             return col.start;
         }
-        let row = ((p.y / self.row_h).floor().max(0.0) as usize).min(col.clusters.len() - 1);
+        let rel = (p.y - col.y_offset).max(0.0);
+        let row = ((rel / col.row_pitch).floor() as usize).min(col.clusters.len() - 1);
         let c = &col.clusters[row];
-        let row_top = row as f64 * self.row_h;
+        let row_top = col.y_offset + row as f64 * col.row_pitch;
         let frac = ((p.y - row_top) / self.row_h).clamp(0.0, 1.0);
         if frac > 0.5 {
             c.byte_range.end
@@ -385,7 +510,7 @@ impl VerticalLayout {
     pub fn draw(&self, scene: &mut Scene, xf: Affine, color: Color) {
         for col in &self.columns {
             for (ri, c) in col.clusters.iter().enumerate() {
-                let y = ri as f64 * self.row_h + self.row_h * 0.8;
+                let y = col.y_offset + ri as f64 * col.row_pitch + self.row_h * 0.8;
                 let cx = col.x - c.advance as f64 * 0.5;
                 scene
                     .draw_glyphs(&c.font)
@@ -522,6 +647,84 @@ mod tests {
     }
 
     #[test]
+    fn cross_align_dx_shifts_the_block_to_hug_the_named_edge() {
+        use amalith_core::TextAlign;
+        // A 40px-wide block in a 100px frame: 60px of slack.
+        assert_eq!(cross_align_dx(TextAlign::Start, 40.0, 100.0), 0.0, "Start hugs the box's right edge (x = 0), unshifted");
+        assert_eq!(cross_align_dx(TextAlign::Center, 40.0, 100.0), -30.0, "Center splits the slack either side");
+        assert_eq!(cross_align_dx(TextAlign::End, 40.0, 100.0), -60.0, "End pushes the block's left edge out to the frame's left edge");
+        assert_eq!(cross_align_dx(TextAlign::JustifyAll, 40.0, 100.0), 0.0, "Justify* widens column gaps instead of shifting the block");
+    }
+
+    #[test]
+    fn point_align_dy_hangs_centers_or_lifts_the_column_off_the_click() {
+        use amalith_core::TextAlign;
+        assert_eq!(point_align_dy(TextAlign::Start, 80.0), 0.0, "Start hangs the column below the click point");
+        assert_eq!(point_align_dy(TextAlign::Center, 80.0), -40.0);
+        assert_eq!(point_align_dy(TextAlign::End, 80.0), -80.0, "End sits the column's bottom edge on the click point");
+    }
+
+    #[test]
+    fn justify_columns_widens_gaps_to_fill_the_frame_without_touching_column_width() {
+        let mut tcx = TextContext::new();
+        // Force 3 columns with a 20px-tall wrap height under 20pt/24px lines.
+        let mut l = layout(&mut tcx, "A\nB\nC", &style(), None);
+        assert_eq!(l.columns.len(), 3);
+        let col_w = l.col_w;
+        l.justify_columns(300.0);
+        assert_eq!(l.columns[0].x, 0.0, "the first column stays flush against the right edge");
+        let last_x = l.columns[2].x;
+        assert!(last_x < -2.0 * col_w, "later columns push further left than their unjustified spacing");
+        assert_eq!(l.width(), 3.0 * col_w, "justify widens gaps, not the columns' own drawn width");
+    }
+
+    #[test]
+    fn justify_columns_is_a_no_op_with_one_column_or_when_already_overflowing() {
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "Hi", &style(), None);
+        assert_eq!(l.columns.len(), 1);
+        l.justify_columns(500.0);
+        assert_eq!(l.columns[0].x, 0.0);
+    }
+
+    #[test]
+    fn area_cross_shift_tucks_column_zeros_real_right_edge_flush_with_the_frame() {
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "Hi", &style(), None);
+        let col_w = l.col_w;
+        // Start: no cross-align slack (frame == used width), just the
+        // half-column tuck — column 0's drawn right edge (x + col_w/2)
+        // must land exactly on the frame's own right edge (local x = 0).
+        let dx = l.area_cross_shift(amalith_core::TextAlign::Start, l.width());
+        assert_eq!(dx, -col_w * 0.5);
+        assert_eq!(l.columns[0].x + dx + col_w * 0.5, 0.0, "column 0's real right edge must sit flush at the frame's right edge, not half a column past it");
+    }
+
+    #[test]
+    fn area_cross_shift_end_still_hugs_the_frames_left_edge_after_the_tuck() {
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "Hi", &style(), None);
+        let col_w = l.col_w;
+        let frame_w = 100.0;
+        let dx = l.area_cross_shift(amalith_core::TextAlign::End, frame_w);
+        // The block's left edge (last column's x - col_w/2) must sit
+        // exactly at the frame's left edge (-frame_w).
+        let last = l.columns.last().unwrap();
+        assert_eq!(last.x + dx - col_w * 0.5, -frame_w);
+    }
+
+    #[test]
+    fn area_cross_shift_justify_mutates_columns_and_returns_only_the_tuck() {
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "A\nB\nC", &style(), None);
+        let col_w = l.col_w;
+        assert_eq!(l.columns.len(), 3);
+        let dx = l.area_cross_shift(amalith_core::TextAlign::JustifyAll, 300.0);
+        assert_eq!(dx, -col_w * 0.5, "Justify* widens gaps instead of shifting the block further");
+        assert!(l.columns[2].x < -2.0 * col_w, "justify_columns must actually have run");
+    }
+
+    #[test]
     fn flat_clusters_is_a_single_unbroken_sequence_for_path_text() {
         let mut tcx = TextContext::new();
         let (clusters, overflow) = flat_clusters(&mut tcx, "Hello", &style());
@@ -573,9 +776,66 @@ mod tests {
         let guides = l.column_guides();
         assert_eq!(guides.len(), 2);
         assert_eq!(guides[0].0, 0.0, "column 0's guide runs down x=0");
-        assert_eq!(guides[0].1, 2.0 * l.row_h, "column 0 ('AB') is 2 rows tall");
+        assert_eq!(guides[0].1, 0.0, "column 0's guide starts at the top, unaligned");
+        assert_eq!(guides[0].2, 2.0 * l.row_h, "column 0 ('AB') is 2 rows tall");
         assert_eq!(guides[1].0, -l.col_w, "column 1's guide sits one column-width to the left");
-        assert_eq!(guides[1].1, 1.0 * l.row_h, "column 1 ('C') is 1 row tall");
+        assert_eq!(guides[1].2, 1.0 * l.row_h, "column 1 ('C') is 1 row tall");
+    }
+
+    #[test]
+    fn area_along_align_centers_a_short_columns_content_within_the_wrap_height() {
+        use amalith_core::TextAlign;
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "A", &style(), None);
+        let row_h = l.row_h;
+        // One row (row_h tall) in a 100px-tall frame: 100 - row_h of slack.
+        l.area_along_align(TextAlign::Center, 100.0);
+        let slack = 100.0 - row_h;
+        assert_eq!(l.columns[0].y_offset, slack / 2.0);
+        let guides = l.column_guides();
+        assert_eq!(guides[0].1, slack / 2.0, "the guide's top follows the centered content");
+        assert_eq!(guides[0].2, slack / 2.0 + row_h);
+    }
+
+    #[test]
+    fn area_along_align_end_hugs_the_frames_bottom_edge() {
+        use amalith_core::TextAlign;
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "A", &style(), None);
+        let row_h = l.row_h;
+        l.area_along_align(TextAlign::End, 100.0);
+        assert_eq!(l.columns[0].y_offset, 100.0 - row_h);
+    }
+
+    #[test]
+    fn area_along_align_justify_widens_row_spacing_not_row_height() {
+        use amalith_core::TextAlign;
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "A\nB", &style(), Some(24.0)); // force 2 columns, 1 row each
+        // Merge into a single 2-row column instead by wrapping tall enough:
+        let mut l2 = layout(&mut tcx, "AB", &style(), None);
+        let row_h = l2.row_h;
+        l2.area_along_align(TextAlign::JustifyAll, 100.0);
+        let slack = 100.0 - 2.0 * row_h;
+        assert_eq!(l2.columns[0].row_pitch, row_h + slack, "the single gap between the 2 rows absorbs all the slack");
+        assert_eq!(l2.height(), 100.0, "justify must fill the frame exactly");
+        // A single-row column can't justify (no gap to widen) — falls
+        // through untouched, same as `justify_columns` with < 2 columns.
+        assert_eq!(l.columns.len(), 2, "sanity: the forced-wrap setup really produced 2 one-row columns");
+        l.area_along_align(TextAlign::JustifyAll, 100.0);
+        assert_eq!(l.columns[0].row_pitch, row_h);
+    }
+
+    #[test]
+    fn area_along_align_leaves_a_full_or_overflowing_column_alone() {
+        use amalith_core::TextAlign;
+        let mut tcx = TextContext::new();
+        let mut l = layout(&mut tcx, "AB", &style(), None);
+        let row_h = l.row_h;
+        l.area_along_align(TextAlign::Center, 2.0 * row_h);
+        assert_eq!(l.columns[0].y_offset, 0.0, "no slack at exactly the wrap height");
+        l.area_along_align(TextAlign::Center, row_h);
+        assert_eq!(l.columns[0].y_offset, 0.0, "no slack when the column already overflows the wrap height");
     }
 
     #[test]

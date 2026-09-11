@@ -434,7 +434,12 @@ impl NativeMenu {
             MenuItem::new("Convert to Area Type", false, None),
             MenuAction::ConvertTextKind,
         );
-        let type_menu = Submenu::with_items("Type", true, &[&convert_text_i]).expect("type menu");
+        let area_type_options_i = reg(
+            &mut items,
+            MenuItem::new("Area Type Options…", true, None),
+            MenuAction::AreaTypeOptions,
+        );
+        let type_menu = Submenu::with_items("Type", true, &[&convert_text_i, &area_type_options_i]).expect("type menu");
         let view = Submenu::with_items(
             "View",
             true,

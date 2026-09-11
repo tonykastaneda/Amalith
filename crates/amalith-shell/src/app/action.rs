@@ -279,6 +279,48 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::AreaTypeHit(hit) => {
+                match hit {
+                    areatypedlg::Hit::Width => {
+                        if let Some(dlg) = self.area_type_dialog.as_mut() {
+                            dlg.focus = areatypedlg::Field::Width;
+                        }
+                    }
+                    areatypedlg::Hit::Height => {
+                        if let Some(dlg) = self.area_type_dialog.as_mut() {
+                            dlg.focus = areatypedlg::Field::Height;
+                        }
+                    }
+                    areatypedlg::Hit::Align(i) => {
+                        if let Some(dlg) = self.area_type_dialog.as_mut() {
+                            // Start hugs the box's right edge ("Right"),
+                            // End hugs the left ("Left") — matches
+                            // `areatypedlg::ALIGNS` / `context_bar::area_type::OPTIONS`.
+                            dlg.align = [
+                                amalith_core::TextAlign::Start,
+                                amalith_core::TextAlign::Center,
+                                amalith_core::TextAlign::End,
+                                amalith_core::TextAlign::JustifyAll,
+                            ][i];
+                        }
+                    }
+                    areatypedlg::Hit::AutoSize => {
+                        if let Some(dlg) = self.area_type_dialog.as_mut() {
+                            dlg.auto_size = !dlg.auto_size;
+                        }
+                    }
+                    areatypedlg::Hit::Preview => {
+                        if let Some(dlg) = self.area_type_dialog.as_mut() {
+                            dlg.preview = !dlg.preview;
+                        }
+                    }
+                    areatypedlg::Hit::Ok => self.close_area_type_dialog(area_type_dialog::AreaTypeClose::Ok),
+                    areatypedlg::Hit::Cancel => self.close_area_type_dialog(area_type_dialog::AreaTypeClose::Cancel),
+                    areatypedlg::Hit::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
             panels::Action::XformHit(hit) => {
                 if let xformdlg::Hit::Dial(field, _, center) = hit {
                     self.drag = Drag::XformDialAngle { field, center };
@@ -487,6 +529,7 @@ impl App {
             panels::Action::OpenAlignToMenu(anchor) => {
                 self.font_menu = None;
                 self.panel_menu = None;
+                self.area_align_menu = None;
                 if self.align_to_menu.is_some() {
                     self.align_to_menu = None;
                 } else {
@@ -497,6 +540,7 @@ impl App {
                 self.font_menu = None;
                 self.panel_menu = None;
                 self.align_to_menu = None;
+                self.area_align_menu = None;
                 if self.width_profile_menu.is_some() {
                     self.width_profile_menu = None;
                 } else {
@@ -505,6 +549,20 @@ impl App {
             }
             panels::Action::SetWidthProfile(preset) => {
                 self.apply_width_profile(preset);
+            }
+            panels::Action::OpenAreaAlignMenu(anchor) => {
+                self.font_menu = None;
+                self.panel_menu = None;
+                self.align_to_menu = None;
+                self.width_profile_menu = None;
+                if self.area_align_menu.is_some() {
+                    self.area_align_menu = None;
+                } else {
+                    self.area_align_menu = Some(anchor);
+                }
+            }
+            panels::Action::SetCrossAlign(align) => {
+                self.edit_cross_align(align);
             }
             // --- context bar ---
             panels::Action::StepWeight(d) => self.step_weight(d),

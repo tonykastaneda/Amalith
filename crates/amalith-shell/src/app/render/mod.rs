@@ -65,14 +65,30 @@ impl App {
                             TextBoxPreview {
                                 id,
                                 width: r.width(),
-                                height: r.height(),
+                                height: Some(r.height()),
                                 origin_delta: Vec2::new(r.x0 - origin.x, r.y0 - origin.y),
+                                cross_align: None,
                             }
                         })
                     })
                     .collect()
             }
-            _ => Vec::new(),
+            // No live resize drag — fall through to the Area Type Options
+            // dialog's own live preview, if it's open with Preview on.
+            _ => self
+                .area_type_dialog
+                .as_ref()
+                .filter(|d| d.preview)
+                .map(|d| {
+                    vec![TextBoxPreview {
+                        id: d.target,
+                        width: d.resolved_width(),
+                        height: if d.auto_size { None } else { Some(d.resolved_height()) },
+                        origin_delta: Vec2::ZERO,
+                        cross_align: Some(d.align),
+                    }]
+                })
+                .unwrap_or_default(),
         };
 
         let preview = match &self.drag {
@@ -221,6 +237,18 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: Some((*object, points.as_slice())),
+            }),
+            _ if !resize_previews.is_empty() => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                dup_xf: false,
+                anchors: None,
+                handle: None,
+                text_boxes: &resize_previews,
+                path_text: None,
+                width_points: None,
             }),
             _ => None,
         };
@@ -476,6 +504,9 @@ impl App {
         let panel_text_align = self.active_text_align();
         let panel_text_paragraph = self.active_text_paragraph();
         let panel_text_editing = self.text_edit.is_some();
+        let panel_text_vertical = self.active_text_vertical();
+        let panel_text_kind_is_area = self.active_text_kind_is_area();
+        let panel_text_cross_align = self.active_cross_align();
         let rotate_pivot = matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
             .then(|| self.transform_tool_pivot())
             .flatten();
@@ -572,6 +603,9 @@ impl App {
                 panel_text_align,
                 panel_text_paragraph,
                 panel_text_editing,
+                panel_text_vertical,
+                panel_text_kind_is_area,
+                panel_text_cross_align,
                 &self.font_families,
                 &self.layer_query,
                 self.layer_search_focused,
@@ -585,6 +619,7 @@ impl App {
                 self.align_to,
                 self.align_to_menu.is_some(),
                 self.width_profile_menu.is_some(),
+                self.area_align_menu.is_some(),
                 self.align_spacing,
                 self.align_spacing_edit.as_ref().map(|(s, _)| s.as_str()),
                 self.stroke_weight_edit.as_ref().map(|(s, _)| s.as_str()),
@@ -669,6 +704,9 @@ impl App {
                             text_align: panel_text_align,
                             text_paragraph: panel_text_paragraph,
                             text_editing: panel_text_editing,
+                            text_vertical: panel_text_vertical,
+                            text_kind_is_area: panel_text_kind_is_area,
+                            text_cross_align: panel_text_cross_align,
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
@@ -692,6 +730,7 @@ impl App {
                             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                            area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                         };
@@ -736,6 +775,9 @@ impl App {
                                 text_align: panel_text_align,
                                 text_paragraph: panel_text_paragraph,
                                 text_editing: panel_text_editing,
+                            text_vertical: panel_text_vertical,
+                            text_kind_is_area: panel_text_kind_is_area,
+                            text_cross_align: panel_text_cross_align,
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
@@ -763,6 +805,7 @@ impl App {
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                            area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -813,6 +856,9 @@ impl App {
                                 text_align: panel_text_align,
                                 text_paragraph: panel_text_paragraph,
                                 text_editing: panel_text_editing,
+                            text_vertical: panel_text_vertical,
+                            text_kind_is_area: panel_text_kind_is_area,
+                            text_cross_align: panel_text_cross_align,
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
@@ -836,6 +882,7 @@ impl App {
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                            area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
                             };
@@ -908,6 +955,7 @@ impl App {
             self.paint_font_menu();
             self.paint_align_to_menu();
             self.paint_width_profile_menu();
+            self.paint_area_align_menu();
             self.paint_isolation_bar();
             self.paint_ruler_menu();
             self.paint_ctx_menu();

@@ -34,6 +34,9 @@ impl App {
         if self.offset_wheel(dy) {
             return;
         }
+        if self.area_type_wheel(dy) {
+            return;
+        }
         if self.shape_wheel(dy) {
             return;
         }

@@ -50,6 +50,7 @@ pub mod lod;
 pub mod macdrop;
 pub mod newdoc;
 pub mod layerdlg;
+pub mod areatypedlg;
 pub mod offsetdlg;
 pub mod palette;
 pub mod panel_icon;

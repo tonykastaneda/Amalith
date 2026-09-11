@@ -74,6 +74,9 @@ pub(in crate::app) fn paint_main(
     text_align: amalith_core::TextAlign,
     text_paragraph: amalith_core::Paragraph,
     text_editing: bool,
+    text_vertical: bool,
+    text_kind_is_area: bool,
+    text_cross_align: amalith_core::TextAlign,
     font_families: &[String],
     layer_query: &str,
     layer_search_focused: bool,
@@ -87,6 +90,7 @@ pub(in crate::app) fn paint_main(
     align_to: amalith_commands::AlignTo,
     align_to_menu: bool,
     width_profile_menu: bool,
+    area_align_menu: bool,
     align_spacing: Option<f64>,
     align_spacing_edit: Option<&str>,
     stroke_weight_edit: Option<&str>,
@@ -592,6 +596,9 @@ pub(in crate::app) fn paint_main(
         text_align,
         text_paragraph,
         text_editing,
+        text_vertical,
+        text_kind_is_area,
+        text_cross_align,
         font_families,
         layer_query,
         layer_search_focused,
@@ -615,6 +622,7 @@ pub(in crate::app) fn paint_main(
         blend_dialog: None,
         offset_dialog: None,
         layer_dialog: None,
+        area_type_dialog: None,
         gradient: gradient.clone(),
         gradient_edit,
     };
@@ -776,6 +784,10 @@ pub(in crate::app) fn paint_main(
             },
             _ => None,
         },
+        text_vertical,
+        text_kind_is_area,
+        text_cross_align,
+        area_align_menu,
     };
     context_bar::paint(scene, text, opt_bar_rect(width), &cbar);
     // The Stroke flyout is painted by the overlay pass (after the rulers)
