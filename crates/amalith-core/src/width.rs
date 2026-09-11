@@ -120,7 +120,7 @@ pub enum WidthProfilePreset {
     Uniform,
     /// Point → wide → point, symmetric (the classic "lens").
     Profile1,
-    /// Two lenses in a row, pinched to a point in the middle (a "bowtie").
+    /// Two unequal rounded lobes connected by a narrow waist.
     Profile2,
     /// Point → wide plateau → point (flat through the middle, a hex).
     Profile3,
@@ -129,8 +129,7 @@ pub enum WidthProfilePreset {
     /// Point at the start, widening to a peak past the midpoint, back to
     /// a point at the end — the peak skewed toward the far end.
     Profile5,
-    /// Point at the start, a broad rounded hump through the back half,
-    /// easing down to the end — the roundest, widest-reaching profile.
+    /// A rounded, one-sided arch with the path forming its flat edge.
     Profile6,
 }
 
@@ -158,46 +157,64 @@ impl WidthProfilePreset {
     }
 }
 
-/// How much wider than the base stroke a preset's peak gets — a fixed
-/// multiple of the base half-width, so the taper stays proportional to
-/// whatever weight the stroke already has rather than a fixed size.
-const PEAK: f64 = 3.0;
-
-/// The `width_points` a preset produces for a path of `total_length`
-/// (arc-length units) whose base half-width is `base_half`. `Uniform`
-/// is always the empty list — clearing back to a plain uniform stroke.
+/// Width presets normalized to the stroke weight. Curved silhouettes are
+/// sampled into ordinary width points so rendering, editing, and previews
+/// all use the same geometry without introducing a second profile format.
 pub fn preset_points(preset: WidthProfilePreset, total_length: f64, base_half: f64) -> Vec<WidthPoint> {
-    let peak = base_half * PEAK;
-    let at = |t: f64, half: f64| WidthPoint {
+    let at = |t: f64, left: f64, right: f64| WidthPoint {
         distance: total_length * t,
-        left: half,
-        right: half,
+        left: base_half * left,
+        right: base_half * right,
     };
     match preset {
         WidthProfilePreset::Uniform => Vec::new(),
-        WidthProfilePreset::Profile1 => vec![at(0.0, 0.0), at(0.5, peak), at(1.0, 0.0)],
-        WidthProfilePreset::Profile2 => vec![
-            at(0.0, 0.0),
-            at(0.25, peak),
-            at(0.5, 0.0),
-            at(0.75, peak),
-            at(1.0, 0.0),
-        ],
         WidthProfilePreset::Profile3 => vec![
-            at(0.0, 0.0),
-            at(0.15, peak),
-            at(0.85, peak),
-            at(1.0, 0.0),
+            at(0.0, 0.0, 0.0), at(0.125, 1.0, 1.0),
+            at(0.875, 1.0, 1.0), at(1.0, 0.0, 0.0),
         ],
-        WidthProfilePreset::Profile4 => vec![at(0.0, peak), at(1.0, 0.0)],
-        WidthProfilePreset::Profile5 => vec![at(0.0, 0.0), at(0.65, peak), at(1.0, 0.0)],
-        WidthProfilePreset::Profile6 => vec![
-            at(0.0, 0.0),
-            at(0.15, peak * 0.7),
-            at(0.4, peak),
-            at(0.8, peak),
-            at(1.0, 0.0),
-        ],
+        WidthProfilePreset::Profile4 => vec![at(0.0, 1.0, 1.0), at(1.0, 0.0, 0.0)],
+        _ => (0..=64).map(|i| {
+            let t = i as f64 / 64.0;
+            let lens = |u: f64| 4.0 * u * (1.0 - u);
+            let half = match preset {
+                WidthProfilePreset::Profile1 | WidthProfilePreset::Profile6 => lens(t),
+                WidthProfilePreset::Profile2 => {
+                    // A smaller leading lobe and a larger trailing lobe,
+                    // joined by a narrow, nonzero waist.
+                    let nodes = [(0.0, 0.0), (0.20, 0.82), (0.40, 0.12), (0.73, 1.0), (1.0, 0.0)];
+                    let i = nodes.partition_point(|n| n.0 <= t).saturating_sub(1).min(3);
+                    let (x0, y0) = nodes[i];
+                    let (x1, y1) = nodes[i + 1];
+                    let u = (t - x0) / (x1 - x0);
+                    // Horizontal tangents at the internal extrema; pointed
+                    // outer ends rather than rounded capsule ends.
+                    let m0 = if i == 0 { 1.5 * (y1 - y0) } else { 0.0 };
+                    let m1 = if i == 3 { 1.5 * (y1 - y0) } else { 0.0 };
+                    (2.0*u*u*u - 3.0*u*u + 1.0)*y0
+                        + (u*u*u - 2.0*u*u + u)*m0
+                        + (-2.0*u*u*u + 3.0*u*u)*y1
+                        + (u*u*u - u*u)*m1
+                }
+                WidthProfilePreset::Profile5 => {
+                    if t <= 0.70 {
+                        let u = t / 0.70;
+                        // A long fine entry swelling into the far-end bulb.
+                        u + u*u - u*u*u
+                    } else {
+                        let u = (t - 0.70) / 0.30;
+                        1.0 - u*u
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let half = half.clamp(0.0, 1.0);
+            if preset == WidthProfilePreset::Profile6 {
+                // The path is the flat edge; the entire width lies on one side.
+                at(t, 0.0, 2.0 * half)
+            } else {
+                at(t, half, half)
+            }
+        }).collect(),
     }
 }
 
@@ -282,13 +299,32 @@ mod tests {
         assert_eq!(width_at(&pts, 100.0, 2.0, 0.0), (0.0, 0.0));
         assert_eq!(width_at(&pts, 100.0, 2.0, 100.0), (0.0, 0.0));
         let (l, r) = width_at(&pts, 100.0, 2.0, 50.0);
-        assert_eq!((l, r), (6.0, 6.0), "peak should be base_half * PEAK (2.0 * 3.0)");
+        assert_eq!((l, r), (2.0, 2.0), "peak should preserve the stroke weight");
+    }
+
+    #[test]
+    fn rounded_profiles_and_asymmetric_arch_match_their_silhouettes() {
+        let lens = preset_points(WidthProfilePreset::Profile1, 100.0, 5.0);
+        assert!((width_at(&lens, 100.0, 5.0, 25.0).0 - 3.75).abs() < 1e-9);
+        let lobes = preset_points(WidthProfilePreset::Profile2, 100.0, 5.0);
+        let waist = width_at(&lobes, 100.0, 5.0, 40.0).0;
+        assert!(waist > 0.0 && waist < 1.0);
+        assert!(width_at(&lobes, 100.0, 5.0, 73.0).0 > width_at(&lobes, 100.0, 5.0, 20.0).0);
+        let arch = preset_points(WidthProfilePreset::Profile6, 100.0, 5.0);
+        assert!(arch.iter().all(|p| p.left == 0.0));
+        assert_eq!(width_at(&arch, 100.0, 5.0, 50.0), (0.0, 10.0));
+        for preset in WidthProfilePreset::ALL {
+            for p in preset_points(preset, 100.0, 5.0) {
+                assert!(p.left >= 0.0 && p.right >= 0.0);
+                assert!(p.left + p.right <= 10.0 + 1e-9);
+            }
+        }
     }
 
     #[test]
     fn profile4_is_a_one_sided_taper_from_wide_to_a_point() {
         let pts = preset_points(WidthProfilePreset::Profile4, 100.0, 2.0);
-        assert_eq!(width_at(&pts, 100.0, 2.0, 0.0), (6.0, 6.0));
+        assert_eq!(width_at(&pts, 100.0, 2.0, 0.0), (2.0, 2.0));
         assert_eq!(width_at(&pts, 100.0, 2.0, 100.0), (0.0, 0.0));
     }
 }

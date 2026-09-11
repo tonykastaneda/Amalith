@@ -37,6 +37,7 @@ mod fill_stroke;
 mod opacity;
 mod status;
 mod stroke;
+pub(crate) use stroke::paint_width_profile_icon;
 mod xform;
 
 const ID: vello::kurbo::Affine = vello::kurbo::Affine::IDENTITY;
@@ -86,6 +87,7 @@ pub struct Ctx<'a> {
     pub align_to_menu: bool,
     /// True while the options-bar Stroke Width Profile dropdown is open.
     pub width_profile_menu: bool,
+    pub width_points: Option<&'a [amalith_core::WidthPoint]>,
     /// The selected artboard (Artboard tool) — flips the `artboard` segment
     /// on and everything else off.
     pub artboard: Option<artboard::ArtboardBar>,

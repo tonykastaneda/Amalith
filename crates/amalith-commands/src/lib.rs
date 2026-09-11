@@ -470,6 +470,30 @@ mod tests {
     }
 
     #[test]
+    fn stroke_weight_scales_width_profile_and_undo_restores_it() {
+        use amalith_core::{PathData, Point, WidthPoint};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer {
+            name: "Widths".into(), index: None,
+        }).unwrap() else { panic!() };
+        let CommandOutcome::Object(id) = editor.execute(Command::CreatePath {
+            layer, path: PathData::polyline(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0)]), name: None,
+        }).unwrap() else { panic!() };
+        editor.execute(Command::SetStrokeWidth { objects: vec![id], width: 4.0 }).unwrap();
+        let points = vec![WidthPoint { distance: 50.0, left: 0.0, right: 4.0 }];
+        editor.execute(Command::SetWidthPoints { object: id, points: points.clone() }).unwrap();
+        editor.execute(Command::SetStrokeWidth { objects: vec![id], width: 10.0 }).unwrap();
+        let path = editor.document().object(id).unwrap().kind.path_data().unwrap();
+        assert_eq!(path.width_points[0], WidthPoint { distance: 50.0, left: 0.0, right: 10.0 });
+        editor.undo().unwrap();
+        let obj = editor.document().object(id).unwrap();
+        assert_eq!(obj.appearance.stroke_width, 4.0);
+        assert_eq!(obj.kind.path_data().unwrap().width_points, points);
+        editor.redo().unwrap();
+        assert_eq!(editor.document().object(id).unwrap().kind.path_data().unwrap().width_points[0].right, 10.0);
+    }
+
+    #[test]
     fn create_artboard_undo_redo_roundtrip() {
         let mut editor = new_editor();
         let outcome = editor

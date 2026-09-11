@@ -376,18 +376,26 @@ fn draw_join_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     scene.fill(Fill::NonZero, ID, color, None, &Circle::new(c, sw * 0.9));
 }
 
-/// Two overlapping squares with their intersection filled solid — the
-/// Shape Builder tool.
+/// Overlapping round regions with a solid shared face — Shape Builder.
 fn draw_shape_builder_glyph(scene: &mut Scene, box_: Rect, color: Color) {
-    let s = box_.width().min(box_.height()) * 0.62;
-    let off = s * 0.42;
+    let scale = box_.width().min(box_.height()) / 24.0;
     let c = box_.center();
-    let sw = (box_.width() * 0.09).max(1.4);
-    let a = Rect::new(c.x - off - s * 0.5, c.y - s * 0.5, c.x - off + s * 0.5, c.y + s * 0.5);
-    let b = Rect::new(c.x + off - s * 0.5, c.y - s * 0.5, c.x + off + s * 0.5, c.y + s * 0.5);
-    scene.fill(Fill::NonZero, ID, color, None, &a.intersect(b));
-    scene.stroke(&Stroke::new(sw), ID, color, None, &a);
-    scene.stroke(&Stroke::new(sw), ID, color, None, &b);
+    let transform = Affine::translate((c.x - 12.0 * scale, c.y - 12.0 * scale))
+        * Affine::scale(scale);
+    let stroke = Stroke::new(1.8);
+    // Keep the shared region readable at toolbar size without extending
+    // either circle beyond the icon's padding.
+    let mut shared = BezPath::new();
+    shared.move_to((12.0, 6.347));
+    shared.curve_to((9.904, 7.459), (8.6, 9.627), (8.6, 12.0));
+    shared.curve_to((8.6, 14.373), (9.904, 16.541), (12.0, 17.653));
+    shared.curve_to((14.096, 16.541), (15.4, 14.373), (15.4, 12.0));
+    shared.curve_to((15.4, 9.627), (14.096, 7.459), (12.0, 6.347));
+    shared.close_path();
+    scene.fill(Fill::NonZero, transform, color, None, &shared);
+    for x in [9.0, 15.0] {
+        scene.stroke(&stroke, transform, color, None, &Circle::new((x, 12.0), 6.4));
+    }
 }
 
 /// A quarter-ellipse sweeping from the bottom-left up to the top-right —
@@ -454,37 +462,35 @@ fn draw_gradient_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     scene.stroke(&Stroke::new((w * 0.08).max(1.2)), ID, color, None, &r);
 }
 
-/// A pipette — bulb top-right, tip bottom-left — the Eyedropper tool.
+/// A diagonal pipette with an open glass tube, collar, and rubber bulb.
 fn draw_eyedropper_glyph(scene: &mut Scene, box_: Rect, color: Color) {
-    let w = box_.width();
-    let h = box_.height();
-    let tip = Point::new(box_.x0 + w * 0.16, box_.y1 - h * 0.16);
-    let neck = Point::new(box_.x0 + w * 0.60, box_.y0 + h * 0.40);
-    // Barrel.
-    scene.stroke(
-        &Stroke::new((w * 0.13).max(2.0)),
-        ID,
-        color,
-        None,
-        &Line::new(tip, neck),
-    );
-    // Bulb.
-    scene.stroke(
-        &Stroke::new((w * 0.10).max(1.6)),
-        ID,
-        color,
-        None,
-        &Line::new(neck, Point::new(box_.x1 - w * 0.16, box_.y0 + h * 0.16)),
-    );
-    scene.fill(
-        Fill::NonZero,
-        ID,
-        color,
-        None,
-        &Circle::new(Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.20), w * 0.13),
-    );
-    // A drop at the tip.
-    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(tip, w * 0.055));
+    let scale = box_.width().min(box_.height()) / 24.0;
+    let c = box_.center();
+    let transform = Affine::translate((c.x - 12.0 * scale, c.y - 12.0 * scale))
+        * Affine::scale(scale);
+    let mut tube = BezPath::new();
+    tube.move_to((12.0, 8.5));
+    tube.line_to((4.6, 15.9));
+    tube.line_to((4.1, 18.0));
+    tube.line_to((2.8, 19.3));
+    tube.line_to((4.7, 21.2));
+    tube.line_to((6.0, 19.9));
+    tube.line_to((8.1, 19.4));
+    tube.line_to((15.5, 12.0));
+    tube.close_path();
+    scene.stroke(&Stroke::new(1.7), transform, color, None, &tube);
+
+    let mut bulb = BezPath::new();
+    bulb.move_to((13.0, 7.5));
+    bulb.line_to((16.8, 3.7));
+    bulb.curve_to((19.6, 0.9), (23.1, 4.4), (20.3, 7.2));
+    bulb.line_to((16.5, 11.0));
+    bulb.line_to((17.7, 12.2));
+    bulb.line_to((16.2, 13.7));
+    bulb.line_to((10.3, 7.8));
+    bulb.line_to((11.8, 6.3));
+    bulb.close_path();
+    scene.fill(Fill::NonZero, transform, color, None, &bulb);
 }
 
 /// A four-finger mitt + thumb — the Hand tool.

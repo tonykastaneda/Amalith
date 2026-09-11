@@ -1545,10 +1545,26 @@ impl Editor {
                         .chain(stroke.map(|paint| Edit::SetStroke { id, paint }))
                 })
                 .collect(),
-            Command::SetStrokeWidth { objects, width } => objects
-                .into_iter()
-                .map(|id| Edit::SetStrokeWidth { id, width })
-                .collect(),
+            Command::SetStrokeWidth { objects, width } => {
+                let mut edits = Vec::new();
+                for id in objects {
+                    if let Some(obj) = self.document.object(id) {
+                        if let Some(path) = obj.kind.path_data() {
+                            if !path.width_points.is_empty() && obj.appearance.stroke_width > 0.0 {
+                                let mut data = path.clone();
+                                let ratio = width / obj.appearance.stroke_width;
+                                for point in &mut data.width_points {
+                                    point.left *= ratio;
+                                    point.right *= ratio;
+                                }
+                                edits.push(Edit::SetPathData { id, data });
+                            }
+                        }
+                    }
+                    edits.push(Edit::SetStrokeWidth { id, width });
+                }
+                edits
+            },
             Command::SetStrokeStyle { objects, style } => objects
                 .into_iter()
                 .map(|id| Edit::SetStrokeStyle { id, style })

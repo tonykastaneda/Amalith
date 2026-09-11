@@ -5460,6 +5460,8 @@ impl App {
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
             width_profile_menu: self.width_profile_menu.is_some(),
+            width_points: self.doc.selection.first().and_then(|id| self.doc.editor.document().object(*id))
+                .and_then(|o| o.kind.path_data()).map(|p| p.width_points.as_slice()),
             artboard: self.artboard_bar(),
             artboard_edit: None,
             artboard_link: self.artboard_link,
@@ -5515,6 +5517,8 @@ impl App {
             align_to: self.align_to,
             align_to_menu: self.align_to_menu.is_some(),
             width_profile_menu: self.width_profile_menu.is_some(),
+            width_points: self.doc.selection.first().and_then(|id| self.doc.editor.document().object(*id))
+                .and_then(|o| o.kind.path_data()).map(|p| p.width_points.as_slice()),
             artboard: self.artboard_bar(),
             artboard_edit: self.artboard_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             artboard_link: self.artboard_link,

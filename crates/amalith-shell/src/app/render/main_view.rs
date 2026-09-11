@@ -759,6 +759,8 @@ pub(in crate::app) fn paint_main(
         align_to,
         align_to_menu,
         width_profile_menu,
+        width_points: selection.first().and_then(|id| doc.object(*id))
+            .and_then(|o| o.kind.path_data()).map(|p| p.width_points.as_slice()),
         artboard: artboard_bar,
         artboard_edit,
         artboard_link,

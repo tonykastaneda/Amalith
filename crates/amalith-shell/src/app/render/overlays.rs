@@ -707,16 +707,22 @@ impl App {
             if row.contains(self.pointer) {
                 self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &row);
             }
-            let preview = Rect::new(row.x0 + ui_px(10.0), row.y0 + ui_px(5.0), row.x1 - ui_px(90.0), row.y1 - ui_px(5.0));
-            paint_width_profile_icon(&mut self.content, preview, preset, th.text);
-            self.text.draw(
-                &mut self.content,
-                preset.label(),
-                12.0,
-                th.text,
-                row.x1 - ui_px(82.0),
-                row.center().y + ui_px(4.0),
+            let uniform = preset == amalith_core::WidthProfilePreset::Uniform;
+            let preview = Rect::new(
+                row.x0 + ui_px(10.0), row.y0 + ui_px(5.0),
+                row.x1 - ui_px(if uniform { 75.0 } else { 10.0 }), row.y1 - ui_px(5.0),
             );
+            crate::context_bar::paint_width_profile_icon(&mut self.content, preview, preset, th.text);
+            if uniform {
+                self.text.draw(
+                    &mut self.content,
+                    preset.label(),
+                    12.0,
+                    th.text,
+                    row.x1 - ui_px(65.0),
+                    row.center().y + ui_px(4.0),
+                );
+            }
             y += Self::metric_wp_row();
         }
     }
@@ -950,43 +956,4 @@ fn paint_free_distort_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     p.line_to((box_.x0 + w * 0.12, box_.y1 - h * 0.24));
     p.close_path();
     scene.stroke(&Stroke::new((w * 0.09).max(1.2)), ID, color, None, &p);
-}
-
-/// A flat filled ribbon preview of `preset`'s taper shape, spanning
-/// `box_` left to right — the Width Profile dropdown's per-row icon.
-/// Built from the same `preset_points`/`width_at` math a real object's
-/// ribbon uses, just sampled straight across a nominal unit-length
-/// "path" instead of a real one, purely for the preview.
-fn paint_width_profile_icon(scene: &mut Scene, box_: Rect, preset: amalith_core::WidthProfilePreset, color: Color) {
-    if preset == amalith_core::WidthProfilePreset::Uniform {
-        let y = box_.center().y;
-        scene.stroke(&Stroke::new(1.5), ID, color, None, &Line::new((box_.x0, y), (box_.x1, y)));
-        return;
-    }
-    const BASE_HALF: f64 = 1.0;
-    const STEPS: usize = 24;
-    let points = amalith_core::preset_points(preset, 1.0, BASE_HALF);
-    // Half the row height per side, minus a little headroom, over the
-    // largest half-width any preset actually reaches (PEAK == 3.0×).
-    let scale = (box_.height() * 0.5 - 1.0).max(1.0) / (BASE_HALF * 3.0);
-    let cy = box_.center().y;
-    let mut top = Vec::with_capacity(STEPS + 1);
-    let mut bottom = Vec::with_capacity(STEPS + 1);
-    for i in 0..=STEPS {
-        let t = i as f64 / STEPS as f64;
-        let x = box_.x0 + (box_.x1 - box_.x0) * t;
-        let (l, r) = amalith_core::width_at(&points, 1.0, BASE_HALF, t);
-        top.push(Point::new(x, cy - l * scale));
-        bottom.push(Point::new(x, cy + r * scale));
-    }
-    let mut ribbon = BezPath::new();
-    ribbon.move_to(top[0]);
-    for p in &top[1..] {
-        ribbon.line_to(*p);
-    }
-    for p in bottom.iter().rev() {
-        ribbon.line_to(*p);
-    }
-    ribbon.close_path();
-    scene.fill(Fill::NonZero, ID, color, None, &ribbon);
 }
