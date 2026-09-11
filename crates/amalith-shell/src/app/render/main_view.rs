@@ -864,18 +864,27 @@ pub(in crate::app) fn paint_main(
     {
         use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
         match cursor_mode {
-            CanvasCursor::PathType => {
+            CanvasCursor::IBeam(vertical) | CanvasCursor::PathType(vertical) => {
+                // Built centered on the origin, then rotated 90° in place
+                // for Vertical Type mode — Illustrator turns this same
+                // glyph rather than using a visually distinct cursor, so
+                // holding Shift to preview vertical placement (see
+                // `effective_tool`) reads as the same tool, just turned.
                 let mut cursor = BezPath::new();
-                cursor.move_to((pointer.x, pointer.y - 9.0));
-                cursor.line_to((pointer.x, pointer.y + 7.0));
-                cursor.move_to((pointer.x - 4.0, pointer.y - 9.0));
-                cursor.line_to((pointer.x + 4.0, pointer.y - 9.0));
-                cursor.move_to((pointer.x - 4.0, pointer.y + 7.0));
-                cursor.line_to((pointer.x + 4.0, pointer.y + 7.0));
-                cursor.move_to((pointer.x - 9.0, pointer.y + 5.0));
-                cursor.curve_to((pointer.x - 3.0, pointer.y - 2.0), (pointer.x + 5.0, pointer.y + 12.0), (pointer.x + 12.0, pointer.y + 3.0));
+                cursor.move_to((0.0, -9.0));
+                cursor.line_to((0.0, 7.0));
+                cursor.move_to((-4.0, -9.0));
+                cursor.line_to((4.0, -9.0));
+                cursor.move_to((-4.0, 7.0));
+                cursor.line_to((4.0, 7.0));
+                if matches!(cursor_mode, CanvasCursor::PathType(_)) {
+                    cursor.move_to((-9.0, 5.0));
+                    cursor.curve_to((-3.0, -2.0), (5.0, 12.0), (12.0, 3.0));
+                }
+                let angle = if vertical { FRAC_PI_2 } else { 0.0 };
+                let xf = Affine::translate(pointer.to_vec2()) * Affine::rotate(angle);
                 for (ink, width) in [(vello::peniko::Color::WHITE, 4.0), (vello::peniko::Color::BLACK, 1.5)] {
-                    scene.stroke(&vello::kurbo::Stroke::new(width), ID, ink, None, &cursor);
+                    scene.stroke(&vello::kurbo::Stroke::new(width), xf, ink, None, &cursor);
                 }
             }
             CanvasCursor::FitUp => icons::draw_fit_up_cursor(scene, pointer),

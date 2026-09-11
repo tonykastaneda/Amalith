@@ -1088,8 +1088,10 @@ impl App {
                         | Tool::PathType
                         | Tool::VerticalPathType
                 ) {
+                    // Shift temporarily swaps to this tool's vertical (or
+                    // horizontal) sibling — see `effective_tool`.
                     let vertical = matches!(
-                        self.active_tool,
+                        self.effective_tool(),
                         Tool::VerticalText | Tool::VerticalAreaType | Tool::VerticalPathType
                     );
                     if self.text_edit.is_some() {

@@ -255,7 +255,7 @@ impl App {
             )),
             // Type tool rubber-band → the area-text box being dragged out.
             Drag::DrawText { start_doc, cur_doc } => Some((
-                if self.active_tool == Tool::VerticalText { Tool::VerticalText } else { Tool::Text },
+                self.effective_tool(),
                 convert::rect(shape_rect(
                     *start_doc,
                     *cur_doc,

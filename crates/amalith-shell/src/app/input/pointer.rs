@@ -1156,8 +1156,11 @@ impl App {
             }
             Drag::TextSelect | Drag::NewdocSelect { .. } => {}
             Drag::DrawText { start_doc, cur_doc } => {
-                let vertical = matches!(self.active_tool, Tool::VerticalText | Tool::VerticalAreaType);
-                let forced_area = matches!(self.active_tool, Tool::AreaType | Tool::VerticalAreaType);
+                // Shift temporarily swaps to this tool's vertical (or
+                // horizontal) sibling — see `effective_tool`.
+                let effective = self.effective_tool();
+                let vertical = matches!(effective, Tool::VerticalText | Tool::VerticalAreaType);
+                let forced_area = matches!(effective, Tool::AreaType | Tool::VerticalAreaType);
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if forced_area || (r.width() > 4.0 && r.height() > 4.0) {
                     // A real drag → area / paragraph type. The dragged

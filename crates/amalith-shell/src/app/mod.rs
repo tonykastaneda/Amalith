@@ -906,9 +906,12 @@ enum CanvasCursor {
     Grabbing,
     /// Magnifier glyph — Space+⌘ scrubby zoom (＋ or － by direction).
     Zoom,
-    /// I-beam — the Type tool.
-    IBeam,
-    PathType,
+    /// I-beam — the Type tool. `bool` is Vertical Type mode (either the
+    /// tool itself, or a horizontal one with Shift held as a temporary
+    /// preview) — Illustrator rotates the same glyph 90° for it rather
+    /// than using a visually distinct cursor.
+    IBeam(bool),
+    PathType(bool),
     /// Drawn double-arrow scale cursors — hovering a transform grip.
     ScaleNS,
     ScaleEW,
@@ -933,7 +936,8 @@ impl CanvasCursor {
         matches!(
             self,
             CanvasCursor::Glyph
-                | CanvasCursor::PathType
+                | CanvasCursor::IBeam(_)
+                | CanvasCursor::PathType(_)
                 | CanvasCursor::Zoom
                 | CanvasCursor::ScaleNS
                 | CanvasCursor::ScaleEW
@@ -3153,10 +3157,15 @@ impl App {
 
     /// The tool pointer input actually routes to. Holding ⌘ while the
     /// black arrow is active is Illustrator's temporary white-arrow
-    /// gesture (⌘+Space stays reserved for zoom).
+    /// gesture (⌘+Space stays reserved for zoom); holding Shift with any
+    /// Type-tool-family tool active temporarily swaps to that tool's
+    /// opposite-orientation sibling (Text ↔ Vertical Text, and so on) —
+    /// Illustrator's own "hold Shift to place vertical type" gesture.
     fn effective_tool(&self) -> Tool {
         if self.direct_via_cmd() {
             Tool::DirectSelect
+        } else if self.shift_down {
+            shift_swapped_type_tool(self.active_tool).unwrap_or(self.active_tool)
         } else {
             self.active_tool
         }
@@ -7014,13 +7023,34 @@ impl App {
             CanvasCursor::Grabbing
         } else {
             match self.effective_tool() {
-                Tool::Text => {
-                    let target = select::topmost_path_near(self.doc.editor.document(), self.doc_point(self.pointer), self.visible_doc_rect(), 4.0 / self.doc.view.zoom);
-                    if self.text_edit.is_none() && target.is_some() { CanvasCursor::PathType } else { CanvasCursor::IBeam }
-                },
-                // No type-on-a-path for the Vertical Type Tool — always
-                // the plain caret cursor, never `PathType`.
-                Tool::VerticalText => CanvasCursor::IBeam,
+                // The plain Type / Vertical Type tools infer type-on-a-path
+                // from hovering a bare path's outline, same as a plain
+                // click there does (see `press.rs`); Area Type / Vertical
+                // Area Type never do, matching that they always force a box.
+                Tool::Text | Tool::VerticalText | Tool::AreaType | Tool::VerticalAreaType => {
+                    let vertical = matches!(self.effective_tool(), Tool::VerticalText | Tool::VerticalAreaType);
+                    let over_path = matches!(self.effective_tool(), Tool::Text | Tool::VerticalText)
+                        && select::topmost_path_near(self.doc.editor.document(), self.doc_point(self.pointer), self.visible_doc_rect(), 4.0 / self.doc.view.zoom).is_some();
+                    if self.text_edit.is_none() && over_path {
+                        CanvasCursor::PathType(vertical)
+                    } else {
+                        CanvasCursor::IBeam(vertical)
+                    }
+                }
+                // Path Type / Vertical Path Type only ever do anything
+                // over a bare path — the curved cursor previews that;
+                // elsewhere it's just the plain caret, signaling "a click
+                // here won't do anything".
+                Tool::PathType | Tool::VerticalPathType => {
+                    let vertical = self.effective_tool() == Tool::VerticalPathType;
+                    let over_path = self.text_edit.is_none()
+                        && select::topmost_path_near(self.doc.editor.document(), self.doc_point(self.pointer), self.visible_doc_rect(), 4.0 / self.doc.view.zoom).is_some();
+                    if over_path {
+                        CanvasCursor::PathType(vertical)
+                    } else {
+                        CanvasCursor::IBeam(vertical)
+                    }
+                }
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
                 Tool::Hand => CanvasCursor::Grab,
                 Tool::Zoom => {
@@ -7077,7 +7107,9 @@ impl App {
                     CanvasCursor::Crosshair => CursorIcon::Crosshair,
                     CanvasCursor::Grab => CursorIcon::Grab,
                     CanvasCursor::Grabbing => CursorIcon::Grabbing,
-                    CanvasCursor::IBeam => CursorIcon::Text,
+                    // IBeam/PathType are custom-drawn now (see `is_drawn`)
+                    // so the OS cursor stays hidden for them either way —
+                    // no `CursorIcon::Text` arm needed.
                     _ => CursorIcon::Default,
                 });
             }
@@ -8187,6 +8219,45 @@ fn tool_flyout_row(anchor: Rect, i: usize) -> Rect {
     let x = anchor.x1 + ui_px(8.0);
     let y = anchor.y0 + i as f64 * metric_tool_flyout_row();
     Rect::new(x, y, x + metric_tool_flyout_w(), y + metric_tool_flyout_row())
+}
+
+/// `t`'s opposite-orientation Type-tool sibling (Text ↔ Vertical Text,
+/// Area Type ↔ Vertical Area Type, Path Type ↔ Vertical Path Type), or
+/// `None` if `t` isn't part of the Type tool family at all.
+fn shift_swapped_type_tool(t: Tool) -> Option<Tool> {
+    Some(match t {
+        Tool::Text => Tool::VerticalText,
+        Tool::VerticalText => Tool::Text,
+        Tool::AreaType => Tool::VerticalAreaType,
+        Tool::VerticalAreaType => Tool::AreaType,
+        Tool::PathType => Tool::VerticalPathType,
+        Tool::VerticalPathType => Tool::PathType,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod shift_swapped_type_tool_tests {
+    use super::*;
+
+    #[test]
+    fn every_type_family_tool_swaps_to_its_opposite_orientation_sibling() {
+        let pairs = [
+            (Tool::Text, Tool::VerticalText),
+            (Tool::AreaType, Tool::VerticalAreaType),
+            (Tool::PathType, Tool::VerticalPathType),
+        ];
+        for (h, v) in pairs {
+            assert_eq!(shift_swapped_type_tool(h), Some(v), "{h:?} should swap to {v:?}");
+            assert_eq!(shift_swapped_type_tool(v), Some(h), "{v:?} should swap back to {h:?}");
+        }
+    }
+
+    #[test]
+    fn a_non_type_tool_never_swaps() {
+        assert_eq!(shift_swapped_type_tool(Tool::Select), None);
+        assert_eq!(shift_swapped_type_tool(Tool::Pen), None);
+    }
 }
 
 /// Fractional (0..1) hotspot of a tool's cursor glyph within its box —
