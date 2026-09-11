@@ -70,7 +70,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 100.0, 100.0),
         );
-        object.appearance.fill = Paint::Gradient(gid);
+        object.appearance.set_fill(Paint::Gradient(gid));
         let object_id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -81,7 +81,7 @@ mod tests {
         assert_eq!(loaded.gradients().len(), 1);
         assert_eq!(loaded.gradient(gid), Some(&gradient));
         assert_eq!(
-            loaded.object(object_id).unwrap().appearance.fill,
+            loaded.object(object_id).unwrap().appearance.fill(),
             Paint::Gradient(gid)
         );
     }
@@ -101,7 +101,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 40.0, 40.0),
         );
-        object.appearance.fill = Paint::Gradient(gid);
+        object.appearance.set_fill(Paint::Gradient(gid));
         let object_id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -126,7 +126,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 40.0, 40.0),
         );
-        object.appearance.fill = Paint::Gradient(gid);
+        object.appearance.set_fill(Paint::Gradient(gid));
         let object_id = object.id;
         document.insert_object(object, 0).unwrap();
 

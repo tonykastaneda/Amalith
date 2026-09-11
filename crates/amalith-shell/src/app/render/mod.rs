@@ -557,7 +557,7 @@ impl App {
                 self.active_tool,
                 self.active_slot,
                 self.picker,
-                representative,
+                representative.clone(),
                 fill_mixed,
                 stroke_mixed,
                 self.doc.fill,
@@ -685,7 +685,7 @@ impl App {
                             selection: &self.doc.selection,
                             active_tool: self.active_tool,
                             pointer: self.pointer,
-                            representative,
+                            representative: representative.clone(),
                             fill_mixed,
                             stroke_mixed,
                             active_slot: self.active_slot,
@@ -756,7 +756,7 @@ impl App {
                                 selection: &self.doc.selection,
                                 active_tool: self.active_tool,
                                 pointer: self.pointer,
-                                representative,
+                                representative: representative.clone(),
                                 fill_mixed,
                                 stroke_mixed,
                                 active_slot: self.active_slot,
@@ -837,7 +837,7 @@ impl App {
                                 selection: &self.doc.selection,
                                 active_tool: self.active_tool,
                                 pointer: self.pointer,
-                                representative,
+                                representative: representative.clone(),
                                 fill_mixed,
                                 stroke_mixed,
                                 active_slot: self.active_slot,
@@ -902,7 +902,8 @@ impl App {
             // popover isn't hidden by the ruler strip.
             if self.stroke_popover {
                 let shown_weight = representative
-                    .map(|a| a.stroke_width)
+                    .as_ref()
+                    .map(|a| a.stroke_width())
                     .unwrap_or(self.doc.stroke_w);
                 stroke_panel::paint(
                     &mut self.content,
@@ -923,7 +924,7 @@ impl App {
                     .doc.editor
                     .document()
                     .object(obj)
-                    .and_then(|o| o.appearance.fill.color())
+                    .and_then(|o| o.appearance.fill().color())
                     .map(convert::color)
                     .unwrap_or(vello::peniko::Color::from_rgb8(0, 0, 0));
                 let caret_on = self.text_blink_on();

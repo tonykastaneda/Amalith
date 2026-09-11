@@ -630,12 +630,12 @@ impl App {
                 continue;
             };
             let screen_offset = vt * convert::bez_path(&offset_pd.geometry);
-            if let Some(c) = obj.appearance.fill.color().map(convert::color) {
+            if let Some(c) = obj.appearance.fill().color().map(convert::color) {
                 self.content.fill(Fill::NonZero, ID, c, None, &screen_offset);
             }
-            if let Some(c) = obj.appearance.stroke.color().map(convert::color) {
+            if let Some(c) = obj.appearance.stroke().color().map(convert::color) {
                 self.content.stroke(
-                    &Stroke::new((obj.appearance.stroke_width * zoom).max(0.5)),
+                    &Stroke::new((obj.appearance.stroke_width() * zoom).max(0.5)),
                     ID,
                     c,
                     None,

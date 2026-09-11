@@ -114,7 +114,7 @@ fn build_cache(doc: &Document, selection: &[ObjectId]) -> Option<ShapeBuilderCac
     for &id in &ids {
         let contour = select::object_contour(doc, id)?;
         let core_path = convert::bez_path_to_core(&contour);
-        let appearance = doc.object(id)?.appearance;
+        let appearance = doc.object(id)?.appearance.clone();
         inputs.push(PathInput {
             contours: amalith_commands::flatten_path(&core_path),
             appearance,
@@ -225,7 +225,7 @@ impl App {
             .iter()
             .map(|&i| PathInput {
                 contours: cache.faces[i].core_contours.clone(),
-                appearance: cache.faces[i].appearance,
+                appearance: cache.faces[i].appearance.clone(),
             })
             .collect();
         let contours = amalith_commands::shape_builder_union(&touched_inputs);
@@ -233,7 +233,7 @@ impl App {
             return;
         }
         let touched_path = amalith_commands::polygon_path(&contours);
-        let appearance = cache.faces[touched[0]].appearance;
+        let appearance = cache.faces[touched[0]].appearance.clone();
         let objects = cache.source.clone();
 
         let before: std::collections::HashSet<_> =
@@ -280,7 +280,7 @@ mod tests {
             .iter()
             .map(|f| PathInput {
                 contours: f.core_contours.clone(),
-                appearance: f.appearance,
+                appearance: f.appearance.clone(),
             })
             .collect();
         let geometry =
@@ -291,7 +291,7 @@ mod tests {
                 objects: vec![a, b],
                 touched: PathData::from_bezpath(geometry),
                 erase: false,
-                appearance: Some(cache.faces[0].appearance),
+                appearance: Some(cache.faces[0].appearance.clone()),
             })
             .unwrap();
         let objects: Vec<_> = editor.document().objects().collect();
@@ -366,7 +366,7 @@ mod tests {
             .iter()
             .map(|f| PathInput {
                 contours: f.core_contours.clone(),
-                appearance: f.appearance,
+                appearance: f.appearance.clone(),
             })
             .collect();
         let touched =
@@ -376,7 +376,7 @@ mod tests {
                 objects: ids.clone(),
                 touched,
                 erase: false,
-                appearance: Some(cache.faces[0].appearance),
+                appearance: Some(cache.faces[0].appearance.clone()),
             })
             .unwrap();
         let objects: Vec<_> = editor.document().objects().collect();
@@ -551,7 +551,7 @@ mod tests {
             .iter()
             .map(|&i| PathInput {
                 contours: cache.faces[i].core_contours.clone(),
-                appearance: cache.faces[i].appearance,
+                appearance: cache.faces[i].appearance.clone(),
             })
             .collect();
         let united = pathfinder_apply(PathfinderOp::Unite, &touched_inputs);
@@ -658,7 +658,7 @@ mod tests {
                 objects: vec![a, b],
                 touched: touched_path,
                 erase: false,
-                appearance: Some(cache.faces[0].appearance),
+                appearance: Some(cache.faces[0].appearance.clone()),
             })
             .unwrap();
         assert!(

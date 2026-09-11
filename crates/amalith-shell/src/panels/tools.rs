@@ -157,8 +157,8 @@ fn proxy(body: Rect) -> Proxy {
 /// Fill or stroke color for the proxy: the selection's if there is one,
 /// else the document's current "next object" paint.
 fn slot_paints(ctx: &Ctx) -> (Paint, Paint) {
-    match ctx.representative {
-        Some(a) => (a.fill, a.stroke),
+    match &ctx.representative {
+        Some(a) => (a.fill(), a.stroke()),
         None => (ctx.cur_fill, ctx.cur_stroke),
     }
 }

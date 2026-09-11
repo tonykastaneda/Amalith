@@ -90,7 +90,7 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
 /// which would reject all but a click landing on that exact float
 /// coordinate.
 fn path_hit(doc: &Document, id: ObjectId, appearance: &amalith_core::Appearance, point: Point) -> bool {
-    let filled = appearance.fill != amalith_core::Paint::None && point_in_fill(doc, id, point);
+    let filled = appearance.fill() != amalith_core::Paint::None && point_in_fill(doc, id, point);
     if filled {
         return true;
     }
@@ -101,8 +101,8 @@ fn path_hit(doc: &Document, id: ObjectId, appearance: &amalith_core::Appearance,
     // wide enough that a click meant for one of several closely packed
     // shapes could register against its unstroked neighbor's outline
     // instead of missing cleanly.
-    let has_stroke = appearance.stroke != amalith_core::Paint::None && appearance.stroke_width > 0.0;
-    has_stroke && near_contour(doc, id, point, appearance.stroke_width * 0.5)
+    let has_stroke = appearance.stroke() != amalith_core::Paint::None && appearance.stroke_width() > 0.0;
+    has_stroke && near_contour(doc, id, point, appearance.stroke_width() * 0.5)
 }
 
 /// Whether `point` (doc space) lands on real content somewhere inside
@@ -530,10 +530,10 @@ mod smart_guide_bounds_tests {
         let left = ObjectId::new();
         let right = ObjectId::new();
         let mut left_obj = Object::new(left, ObjectParent::Layer(layer), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(0., 0., 100., 100.))));
-        left_obj.appearance.stroke = Paint::None;
+        left_obj.appearance.set_stroke(Paint::None);
         doc.insert_object(left_obj, 0).unwrap();
         let mut right_obj = Object::new(right, ObjectParent::Layer(layer), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(101., 0., 201., 100.))));
-        right_obj.appearance.stroke = Paint::None;
+        right_obj.appearance.set_stroke(Paint::None);
         doc.insert_object(right_obj, 1).unwrap();
         let visible = Rect::new(-1000., -1000., 1000., 1000.);
 
@@ -586,8 +586,8 @@ mod smart_guide_bounds_tests {
         doc.insert_layer(Layer::new(layer, "Layer"), 0);
         let id = ObjectId::new();
         let mut obj = Object::new(id, ObjectParent::Layer(layer), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(0., 0., 100., 100.))));
-        obj.appearance.fill = Paint::None;
-        obj.appearance.stroke_width = 4.0;
+        obj.appearance.set_fill(Paint::None);
+        obj.appearance.set_stroke_width(4.0);
         doc.insert_object(obj, 0).unwrap();
         let visible = Rect::new(-1000., -1000., 1000., 1000.);
 
@@ -622,8 +622,8 @@ mod smart_guide_bounds_tests {
             ObjectParent::Layer(layer),
             ObjectKind::Path(PathData::from_bezpath(crate::convert::bez_path_to_core(&geometry))),
         );
-        obj.appearance.fill = Paint::None;
-        obj.appearance.stroke_width = 4.0;
+        obj.appearance.set_fill(Paint::None);
+        obj.appearance.set_stroke_width(4.0);
         doc.insert_object(obj, 0).unwrap();
         let visible = Rect::new(-1000., -1000., 1000., 1000.);
 
@@ -654,7 +654,7 @@ mod smart_guide_bounds_tests {
             ObjectParent::Layer(layer),
             ObjectKind::Path(PathData::from_bezpath(crate::convert::bez_path_to_core(&geometry))),
         );
-        obj.appearance.stroke_width = 4.0;
+        obj.appearance.set_stroke_width(4.0);
         // `fill` defaults to a real color (not `Paint::None`) on a fresh
         // `Appearance`, matching a newly drawn path's inherited tool state.
         doc.insert_object(obj, 0).unwrap();
@@ -709,11 +709,11 @@ mod smart_guide_bounds_tests {
         // bounding box, leaving its whole center empty.
         let left = ObjectId::new();
         let mut left_obj = Object::new(left, ObjectParent::Group(group), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(0., 0., 4., 100.))));
-        left_obj.appearance.stroke = Paint::None;
+        left_obj.appearance.set_stroke(Paint::None);
         doc.insert_object(left_obj, 0).unwrap();
         let right = ObjectId::new();
         let mut right_obj = Object::new(right, ObjectParent::Group(group), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(196., 0., 200., 100.))));
-        right_obj.appearance.stroke = Paint::None;
+        right_obj.appearance.set_stroke(Paint::None);
         doc.insert_object(right_obj, 1).unwrap();
         let visible = Rect::new(-1000., -1000., 1000., 1000.);
 

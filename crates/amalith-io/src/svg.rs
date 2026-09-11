@@ -16,8 +16,8 @@
 //! so pasting a complex real-world SVG still recovers whatever Amalith
 //! *can* represent instead of failing outright.
 use amalith_core::{
-    Affine, Appearance, Color, Document, GradientKind, GroupData, LayerId, LineCap, LineJoin, Object,
-    ObjectId, ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
+    Affine, Appearance, AppearanceItem, Color, Document, GradientKind, GroupData, LayerId, LineCap,
+    LineJoin, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
 };
 use kurbo::BezPath;
 use std::collections::HashMap;
@@ -210,7 +210,7 @@ fn freeform_fill<'d>(
     appearance: &Appearance,
     document: &'d Document,
 ) -> Option<&'d amalith_core::Gradient> {
-    match appearance.fill {
+    match appearance.fill() {
         Paint::Gradient(id) => document
             .gradient(id)
             .filter(|g| g.kind == GradientKind::Freeform),
@@ -303,9 +303,9 @@ fn emit_freeform_path(
         }
     }
     // Stroke only — a freeform *fill* never touches the stroke.
-    if appearance.stroke.is_visible() {
-        let mut stroke_only = *appearance;
-        stroke_only.fill = Paint::None;
+    if appearance.stroke().is_visible() {
+        let mut stroke_only = appearance.clone();
+        stroke_only.set_fill(Paint::None);
         stroke_only.opacity = 1.0;
         let attrs = paint_attrs(&stroke_only, document, defs);
         out.push_str(&format!("<path d=\"{d}\"{attrs} />"));
@@ -321,11 +321,11 @@ fn emit_freeform_path(
 /// into another app renders it as a plain black square regardless of its
 /// real appearance. This is the fix for exactly that.
 fn paint_attrs(appearance: &Appearance, document: &Document, defs: &mut Defs) -> String {
-    let mut attrs = paint_attr("fill", appearance.fill, document, defs);
-    attrs.push_str(&paint_attr("stroke", appearance.stroke, document, defs));
-    if appearance.stroke.is_visible() {
-        attrs.push_str(&format!(" stroke-width=\"{}\"", appearance.stroke_width));
-        let style = &appearance.stroke_style;
+    let mut attrs = paint_attr("fill", appearance.fill(), document, defs);
+    attrs.push_str(&paint_attr("stroke", appearance.stroke(), document, defs));
+    if appearance.stroke().is_visible() {
+        attrs.push_str(&format!(" stroke-width=\"{}\"", appearance.stroke_width()));
+        let style = appearance.stroke_style();
         attrs.push_str(match style.cap {
             LineCap::Butt => " stroke-linecap=\"butt\"",
             LineCap::Round => " stroke-linecap=\"round\"",
@@ -502,12 +502,10 @@ fn attr_f64(node: &roxmltree::Node, name: &str) -> Option<f64> {
 /// listed class that declares a given property wins (a sufficient,
 /// deterministic subset for Illustrator's normally single-class output).
 fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appearance {
-    let mut appearance = Appearance {
-        fill: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
-        stroke: Paint::None,
-        stroke_width: Appearance::DEFAULT_STROKE_WIDTH,
-        ..Appearance::default()
-    };
+    let mut fill_paint = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
+    let mut stroke_paint = Paint::None;
+    let mut sw = Appearance::DEFAULT_STROKE_WIDTH;
+    let mut obj_opacity = 1.0f32;
     let inline_style = node
         .attribute("style")
         .map(parse_declarations)
@@ -525,25 +523,31 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     let dashoffset = resolve_property(node, &inline_style, class_styles, "stroke-dashoffset");
 
     if let Some(fill) = fill.as_deref() {
-        appearance.fill = parse_paint(fill, fill_opacity.as_deref());
+        fill_paint = parse_paint(fill, fill_opacity.as_deref());
     }
     if let Some(stroke) = stroke.as_deref() {
-        appearance.stroke = parse_paint(stroke, stroke_opacity.as_deref());
+        stroke_paint = parse_paint(stroke, stroke_opacity.as_deref());
     }
     if let Some(width) = stroke_width.and_then(|width| width.trim().parse().ok()) {
-        appearance.stroke_width = width;
+        sw = width;
     }
     if let Some(opacity) = opacity.and_then(|opacity| opacity.trim().parse().ok()) {
-        appearance.opacity = opacity;
+        obj_opacity = opacity;
     }
-    appearance.stroke_style = parse_stroke_style(
+    let stroke_style = parse_stroke_style(
         linecap.as_deref(),
         linejoin.as_deref(),
         miterlimit.as_deref(),
         dasharray.as_deref(),
         dashoffset.as_deref(),
     );
-    appearance
+    Appearance {
+        items: vec![
+            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true },
+            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true },
+        ],
+        opacity: obj_opacity,
+    }
 }
 
 /// Maps SVG's `stroke-linecap` / `-linejoin` / `-miterlimit` /
@@ -921,12 +925,10 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 10.0, 10.0),
         );
-        object.appearance = Appearance {
-            fill: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
-            stroke: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)),
-            stroke_width: 10.0,
-            ..Appearance::default()
-        };
+        object.appearance = Appearance::default();
+        object.appearance.set_fill(Paint::Solid(Color::rgb(0.0, 1.0, 0.0)));
+        object.appearance.set_stroke(Paint::Solid(Color::rgb(1.0, 0.0, 0.0)));
+        object.appearance.set_stroke_width(10.0);
         let id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -949,8 +951,8 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 40.0, 40.0),
         );
-        object.appearance.stroke = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
-        object.appearance.stroke_style = StrokeStyle {
+        object.appearance.set_stroke(Paint::Solid(Color::rgb(0.0, 0.0, 0.0)));
+        object.appearance.set_stroke_style(StrokeStyle {
             cap: LineCap::Round,
             join: LineJoin::Bevel,
             miter_limit: 8.0,
@@ -959,7 +961,7 @@ mod tests {
             dashed: true,
             dash: [6.0, 3.0, 0.0, 0.0, 0.0, 0.0],
             dash_offset: 2.0,
-        };
+        });
         let id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -970,7 +972,7 @@ mod tests {
         assert!(svg.contains("stroke-dashoffset=\"2\""), "svg was: {svg}");
 
         let imported = import_svg(&svg).unwrap();
-        let style = imported.objects[&imported.roots[0]].appearance.stroke_style;
+        let style = imported.objects[&imported.roots[0]].appearance.stroke_style();
         assert_eq!(style.cap, LineCap::Round);
         assert_eq!(style.join, LineJoin::Bevel);
         assert!(style.dashed);
@@ -990,12 +992,10 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 10.0, 10.0),
         );
-        object.appearance = Appearance {
-            fill: Paint::None,
-            stroke: Paint::None,
-            stroke_width: 10.0,
-            ..Appearance::default()
-        };
+        object.appearance = Appearance::default();
+        object.appearance.set_fill(Paint::None);
+        object.appearance.set_stroke(Paint::None);
+        object.appearance.set_stroke_width(10.0);
         let id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -1018,12 +1018,10 @@ mod tests {
             ObjectParent::Layer(layer_id),
             Rect::new(0.0, 0.0, 10.0, 10.0),
         );
-        object.appearance = Appearance {
-            fill: Paint::Solid(Color::rgb(0.2, 0.4, 0.6)),
-            stroke: Paint::None,
-            stroke_width: 10.0,
-            ..Appearance::default()
-        };
+        object.appearance = Appearance::default();
+        object.appearance.set_fill(Paint::Solid(Color::rgb(0.2, 0.4, 0.6)));
+        object.appearance.set_stroke(Paint::None);
+        object.appearance.set_stroke_width(10.0);
         let id = object.id;
         document.insert_object(object, 0).unwrap();
 
@@ -1031,8 +1029,8 @@ mod tests {
         let imported = import_svg(&svg).unwrap();
         let imported_object = &imported.objects[&imported.roots[0]];
 
-        assert_eq!(imported_object.appearance.stroke, Paint::None);
-        let Paint::Solid(fill) = imported_object.appearance.fill else {
+        assert_eq!(imported_object.appearance.stroke(), Paint::None);
+        let Paint::Solid(fill) = imported_object.appearance.fill() else {
             panic!("expected a solid fill");
         };
         assert!((fill.r - 0.2).abs() < 0.01, "fill was {fill:?}");
@@ -1050,10 +1048,10 @@ mod tests {
         let imported = import_svg(svg).unwrap();
         let object = &imported.objects[&imported.roots[0]];
         assert_eq!(
-            object.appearance.fill,
+            object.appearance.fill(),
             Paint::Solid(Color::rgb(0.0, 0.0, 0.0))
         );
-        assert_eq!(object.appearance.stroke, Paint::None);
+        assert_eq!(object.appearance.stroke(), Paint::None);
     }
 
     #[test]
@@ -1064,10 +1062,10 @@ mod tests {
         let imported = import_svg(svg).unwrap();
         let object = &imported.objects[&imported.roots[0]];
         assert_eq!(
-            object.appearance.fill,
+            object.appearance.fill(),
             Paint::Solid(Color::rgb(1.0, 0.0, 0.0))
         );
-        assert_eq!(object.appearance.stroke, Paint::None);
+        assert_eq!(object.appearance.stroke(), Paint::None);
     }
 
     #[test]
@@ -1085,7 +1083,7 @@ mod tests {
         assert_eq!(imported.roots.len(), 2);
         for id in imported.roots {
             assert_eq!(
-                imported.objects[&id].appearance.fill,
+                imported.objects[&id].appearance.fill(),
                 Paint::Solid(Color::rgb(158.0 / 255.0, 171.0 / 255.0, 235.0 / 255.0))
             );
         }
@@ -1101,14 +1099,14 @@ mod tests {
         let imported = import_svg(svg).unwrap();
         let appearance = &imported.objects[&imported.roots[0]].appearance;
         assert_eq!(
-            appearance.fill,
+            appearance.fill(),
             Paint::Solid(Color::rgb(18.0 / 255.0, 52.0 / 255.0, 86.0 / 255.0))
         );
         assert_eq!(
-            appearance.stroke,
+            appearance.stroke(),
             Paint::Solid(Color::rgb(171.0 / 255.0, 205.0 / 255.0, 239.0 / 255.0))
         );
-        assert_eq!(appearance.stroke_width, 3.0);
+        assert_eq!(appearance.stroke_width(), 3.0);
     }
 
     #[test]
@@ -1122,12 +1120,12 @@ mod tests {
 
         let imported = import_svg(svg).unwrap();
         assert_eq!(
-            imported.objects[&imported.roots[0]].appearance.fill,
+            imported.objects[&imported.roots[0]].appearance.fill(),
             Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
             "class declarations beat presentation attributes"
         );
         assert_eq!(
-            imported.objects[&imported.roots[1]].appearance.fill,
+            imported.objects[&imported.roots[1]].appearance.fill(),
             Paint::Solid(Color::rgb(0.0, 0.0, 1.0)),
             "inline style declarations beat class declarations"
         );

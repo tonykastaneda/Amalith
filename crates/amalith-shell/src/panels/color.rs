@@ -157,8 +157,8 @@ fn layout(body: Rect, mode: ColorSpace, recent_n: usize) -> Lay {
 
 fn slot_paint(ctx: &Ctx) -> Paint {
     match ctx.active_slot {
-        PaintSlot::Fill => ctx.representative.map(|a| a.fill).unwrap_or(ctx.cur_fill),
-        PaintSlot::Stroke => ctx.representative.map(|a| a.stroke).unwrap_or(ctx.cur_stroke),
+        PaintSlot::Fill => ctx.representative.as_ref().map(|a| a.fill()).unwrap_or(ctx.cur_fill),
+        PaintSlot::Stroke => ctx.representative.as_ref().map(|a| a.stroke()).unwrap_or(ctx.cur_stroke),
     }
 }
 
@@ -365,8 +365,8 @@ fn draw_thumb(scene: &mut Scene, track: Rect, t: f32, color: Color) {
 pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let th = ctx.theme;
     let l = layout(body, ctx.color_mode, ctx.recent.len().max(1));
-    let (fill, stroke) = match ctx.representative {
-        Some(a) => (a.fill, a.stroke),
+    let (fill, stroke) = match &ctx.representative {
+        Some(a) => (a.fill(), a.stroke()),
         None => (ctx.cur_fill, ctx.cur_stroke),
     };
     let paint = slot_paint(ctx);

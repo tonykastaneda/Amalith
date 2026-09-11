@@ -57,7 +57,8 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         None => {
             let w = ctx
                 .representative
-                .map(|a| a.stroke_width)
+                .as_ref()
+                .map(|a| a.stroke_width())
                 .unwrap_or(ctx.cur_weight);
             format!("{w:.1} px")
         }
@@ -69,7 +70,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
     scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &profile);
     let icon = Rect::new(profile.x0 + ui_px(6.0), profile.y0 + ui_px(4.0), profile.x0 + ui_px(30.0), profile.y1 - ui_px(4.0));
     let points = ctx.width_points.unwrap_or(&[]);
-    let base_half = ctx.representative.map(|a| a.stroke_width).unwrap_or(ctx.cur_weight) * 0.5;
+    let base_half = ctx.representative.as_ref().map(|a| a.stroke_width()).unwrap_or(ctx.cur_weight) * 0.5;
     let total = points.last().map(|p| p.distance).unwrap_or(1.0);
     let preset = amalith_core::WidthProfilePreset::ALL.into_iter().find(|preset| {
         let expected = amalith_core::preset_points(*preset, total, base_half);

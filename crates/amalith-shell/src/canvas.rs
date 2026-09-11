@@ -1558,10 +1558,10 @@ fn paint_object(
         Some(a) => vt * a,
         None => vt * off * convert::affine(obj.transform),
     };
-    let fill = obj.appearance.fill.color().map(convert::color);
-    let stroke = obj.appearance.stroke.color().map(convert::color);
-    let sw = obj.appearance.stroke_width;
-    let style = obj.appearance.stroke_style;
+    let fill = obj.appearance.fill().color().map(convert::color);
+    let stroke = obj.appearance.stroke().color().map(convert::color);
+    let sw = obj.appearance.stroke_width();
+    let style = obj.appearance.stroke_style();
     // Object-level opacity (Illustrator's Transparency panel / the
     // options-bar Opacity field) — a layer alpha over everything this
     // object paints, not a per-paint color multiply, so an overlapping
@@ -1603,7 +1603,7 @@ fn paint_object(
     // or on a stroke (Illustrator restricts freeform to fills; a freeform
     // stroke keeps the single-gradient placeholder rather than needing a
     // stroke-shaped clip for the layered composite).
-    let fill_freeform = match obj.appearance.fill {
+    let fill_freeform = match obj.appearance.fill() {
         amalith_core::Paint::Gradient(gid) => doc
             .gradient(gid)
             .filter(|g| g.kind == amalith_core::GradientKind::Freeform),
@@ -1612,9 +1612,9 @@ fn paint_object(
     let fill_grad = if fill_freeform.is_some() {
         None
     } else {
-        resolve_grad(obj.appearance.fill)
+        resolve_grad(obj.appearance.fill())
     };
-    let stroke_grad = resolve_grad(obj.appearance.stroke);
+    let stroke_grad = resolve_grad(obj.appearance.stroke());
     // A variable-width stroke (Width tool) renders as a filled ribbon —
     // caps/joins/dashes are baked into that outline's own geometry rather
     // than a vello `Stroke`, so a dashed variable-width stroke falls back

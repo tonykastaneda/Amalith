@@ -577,7 +577,7 @@ pub(in crate::app) fn paint_main(
         selection,
         active_tool,
         pointer,
-        representative,
+        representative: representative.clone(),
         fill_mixed,
         stroke_mixed,
         active_slot,

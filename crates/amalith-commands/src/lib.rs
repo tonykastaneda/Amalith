@@ -73,7 +73,7 @@ mod tests {
         assert_eq!(text.path_geometry.as_ref(), source.kind.path_data());
         assert_eq!(converted.transform, source.transform);
         assert_eq!(converted.parent, source.parent);
-        assert_eq!(converted.appearance.stroke, Paint::None);
+        assert_eq!(converted.appearance.stroke(), Paint::None);
         assert_eq!(editor.document().children_of(source.parent), &[id, sibling]);
         editor.undo().unwrap();
         assert_eq!(editor.document().object(id).unwrap(), &source);
@@ -172,13 +172,14 @@ mod tests {
 
         // The drag only ever swept the lens where `a` and `b` overlap.
         let touched = PathData::rectangle(Rect::new(10.0, 10.0, 20.0, 20.0));
-        let merged_fill = Appearance { fill: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), ..Appearance::default() };
+        let mut merged_fill = Appearance::default();
+        merged_fill.set_fill(Paint::Solid(Color::rgb(0.0, 1.0, 0.0)));
         editor
             .execute(Command::ShapeBuilder {
                 objects: vec![a, b, c],
                 touched,
                 erase: false,
-                appearance: Some(merged_fill),
+                appearance: Some(merged_fill.clone()),
             })
             .unwrap();
 
@@ -195,7 +196,7 @@ mod tests {
         let merged = children
             .iter()
             .copied()
-            .find(|&id| editor.document().object(id).unwrap().appearance.fill == merged_fill.fill)
+            .find(|&id| editor.document().object(id).unwrap().appearance.fill() == merged_fill.fill())
             .expect("no piece carries the merged appearance");
         let bb = editor.document().object(merged).unwrap().kind.path_data().unwrap().local_bounds();
         assert!((bb.width() - 10.0).abs() < 0.5, "width {}", bb.width());
@@ -593,7 +594,7 @@ mod tests {
         assert_eq!(path.width_points[0], WidthPoint { distance: 50.0, left: 0.0, right: 10.0 });
         editor.undo().unwrap();
         let obj = editor.document().object(id).unwrap();
-        assert_eq!(obj.appearance.stroke_width, 4.0);
+        assert_eq!(obj.appearance.stroke_width(), 4.0);
         assert_eq!(obj.kind.path_data().unwrap().width_points, points);
         editor.redo().unwrap();
         assert_eq!(editor.document().object(id).unwrap().kind.path_data().unwrap().width_points[0].right, 10.0);
@@ -2583,11 +2584,11 @@ mod tests {
         else {
             panic!()
         };
-        let appearance = editor.document().object(object).unwrap().appearance;
-        assert!(matches!(appearance.fill, Paint::Solid(_)));
-        assert!(matches!(appearance.stroke, Paint::Solid(_)));
+        let appearance = editor.document().object(object).unwrap().appearance.clone();
+        assert!(matches!(appearance.fill(), Paint::Solid(_)));
+        assert!(matches!(appearance.stroke(), Paint::Solid(_)));
         assert_eq!(
-            appearance.stroke_width,
+            appearance.stroke_width(),
             amalith_core::Appearance::DEFAULT_STROKE_WIDTH
         );
     }
@@ -2627,7 +2628,7 @@ mod tests {
         };
         assert_eq!(editor.document().gradients().len(), 1);
         assert_eq!(
-            editor.document().object(obj).unwrap().appearance.fill,
+            editor.document().object(obj).unwrap().appearance.fill(),
             Paint::Gradient(gid)
         );
 
@@ -2661,14 +2662,14 @@ mod tests {
         editor.undo().unwrap(); // undo apply: pool entry + paint both revert
         assert!(editor.document().gradients().is_empty());
         assert!(matches!(
-            editor.document().object(obj).unwrap().appearance.fill,
+            editor.document().object(obj).unwrap().appearance.fill(),
             Paint::Solid(_)
         ));
 
         editor.redo().unwrap();
         assert_eq!(editor.document().gradients().len(), 1);
         assert_eq!(
-            editor.document().object(obj).unwrap().appearance.fill,
+            editor.document().object(obj).unwrap().appearance.fill(),
             Paint::Gradient(gid)
         );
     }
@@ -2700,7 +2701,7 @@ mod tests {
         };
         let a = create(&mut editor);
         let b = create(&mut editor);
-        let original_fill = editor.document().object(a).unwrap().appearance.fill;
+        let original_fill = editor.document().object(a).unwrap().appearance.fill();
 
         let red = Paint::Solid(Color::rgb(1.0, 0.0, 0.0));
         editor
@@ -2709,8 +2710,8 @@ mod tests {
                 paint: red,
             })
             .unwrap();
-        assert_eq!(editor.document().object(a).unwrap().appearance.fill, red);
-        assert_eq!(editor.document().object(b).unwrap().appearance.fill, red);
+        assert_eq!(editor.document().object(a).unwrap().appearance.fill(), red);
+        assert_eq!(editor.document().object(b).unwrap().appearance.fill(), red);
 
         editor
             .execute(Command::SetStroke {
@@ -2719,30 +2720,30 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.stroke,
+            editor.document().object(a).unwrap().appearance.stroke(),
             Paint::None
         );
         assert_eq!(
-            editor.document().object(b).unwrap().appearance.stroke,
+            editor.document().object(b).unwrap().appearance.stroke(),
             Paint::None
         );
 
         editor.undo().unwrap(); // undo stroke
         assert!(matches!(
-            editor.document().object(a).unwrap().appearance.stroke,
+            editor.document().object(a).unwrap().appearance.stroke(),
             Paint::Solid(_)
         ));
         editor.undo().unwrap(); // undo fill
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.fill,
+            editor.document().object(a).unwrap().appearance.fill(),
             original_fill
         );
 
         editor.redo().unwrap(); // redo fill
         editor.redo().unwrap(); // redo stroke
-        assert_eq!(editor.document().object(a).unwrap().appearance.fill, red);
+        assert_eq!(editor.document().object(a).unwrap().appearance.fill(), red);
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.stroke,
+            editor.document().object(a).unwrap().appearance.stroke(),
             Paint::None
         );
     }
@@ -2772,7 +2773,7 @@ mod tests {
         };
         let a = create(&mut editor);
         let b = create(&mut editor);
-        let original_width = editor.document().object(a).unwrap().appearance.stroke_width;
+        let original_width = editor.document().object(a).unwrap().appearance.stroke_width();
         let original_opacity = editor.document().object(a).unwrap().appearance.opacity;
 
         editor
@@ -2782,11 +2783,11 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.stroke_width,
+            editor.document().object(a).unwrap().appearance.stroke_width(),
             3.5
         );
         assert_eq!(
-            editor.document().object(b).unwrap().appearance.stroke_width,
+            editor.document().object(b).unwrap().appearance.stroke_width(),
             3.5
         );
 
@@ -2812,14 +2813,14 @@ mod tests {
         );
         editor.undo().unwrap();
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.stroke_width,
+            editor.document().object(a).unwrap().appearance.stroke_width(),
             original_width
         );
 
         editor.redo().unwrap();
         editor.redo().unwrap();
         assert_eq!(
-            editor.document().object(a).unwrap().appearance.stroke_width,
+            editor.document().object(a).unwrap().appearance.stroke_width(),
             3.5
         );
         assert_eq!(
@@ -2854,7 +2855,7 @@ mod tests {
         };
         let a = create(&mut editor);
         let b = create(&mut editor);
-        let original = editor.document().object(a).unwrap().appearance.stroke_style;
+        let original = editor.document().object(a).unwrap().appearance.stroke_style();
 
         let style = StrokeStyle {
             cap: LineCap::Round,
@@ -2871,15 +2872,15 @@ mod tests {
                 style,
             })
             .unwrap();
-        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, style);
-        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style, style);
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style(), style);
+        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style(), style);
 
         editor.undo().unwrap();
-        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, original);
-        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style, original);
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style(), original);
+        assert_eq!(editor.document().object(b).unwrap().appearance.stroke_style(), original);
 
         editor.redo().unwrap();
-        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style, style);
+        assert_eq!(editor.document().object(a).unwrap().appearance.stroke_style(), style);
     }
 
     #[test]

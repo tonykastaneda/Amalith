@@ -2011,11 +2011,11 @@ impl App {
         match self.active_slot {
             panels::PaintSlot::Fill => self
                 .representative()
-                .map(|a| a.fill)
+                .map(|a| a.fill())
                 .unwrap_or(self.doc.fill),
             panels::PaintSlot::Stroke => self
                 .representative()
-                .map(|a| a.stroke)
+                .map(|a| a.stroke())
                 .unwrap_or(self.doc.stroke),
         }
     }
@@ -3137,7 +3137,7 @@ impl App {
         self.doc.selection
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
-            .map(|o| o.appearance)
+            .map(|o| o.appearance.clone())
     }
 
     /// The single selected object's asset, when it's a Linked image — for
@@ -4009,7 +4009,7 @@ impl App {
             .doc.selection
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
-            .map(|o| o.appearance.stroke_width)
+            .map(|o| o.appearance.stroke_width())
             .unwrap_or(self.doc.stroke_w);
         // Quarter-point steps below 1pt (0, .25, .5, .75), whole-point
         // steps at/above it — 1pt → 2pt going up, but 1pt → 0.75pt coming
@@ -4052,7 +4052,7 @@ impl App {
         self.doc.selection
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
-            .map(|o| o.appearance.stroke_style)
+            .map(|o| o.appearance.stroke_style())
             .unwrap_or(self.doc.stroke_style)
     }
 
@@ -4079,7 +4079,7 @@ impl App {
             .doc.selection
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
-            .map(|o| o.appearance.stroke_style)
+            .map(|o| o.appearance.stroke_style())
             .unwrap_or(self.doc.stroke_style);
         f(&mut style);
         self.doc.stroke_style = style;
@@ -4146,7 +4146,7 @@ impl App {
             .doc.selection
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
-            .map(|o| o.appearance.stroke_width)
+            .map(|o| o.appearance.stroke_width())
             .unwrap_or(self.doc.stroke_w);
         let (dash, gap) = stroke_panel::dash_gap(&repr);
         let seed = match field {
@@ -4240,14 +4240,14 @@ impl App {
     /// created object, so those fields mean something with nothing selected.
     fn apply_new_appearance(&mut self, id: ObjectId) {
         let def = amalith_core::Appearance::default();
-        if self.doc.fill != def.fill || self.doc.stroke != def.stroke {
+        if self.doc.fill != def.fill() || self.doc.stroke != def.stroke() {
             let _ = self.doc.editor.execute(Command::SetPaints {
                 objects: vec![id],
                 fill: Some(self.doc.fill),
                 stroke: Some(self.doc.stroke),
             });
         }
-        if (self.doc.stroke_w - def.stroke_width).abs() > f64::EPSILON {
+        if (self.doc.stroke_w - def.stroke_width()).abs() > f64::EPSILON {
             let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                 objects: vec![id],
                 width: self.doc.stroke_w,
@@ -5270,7 +5270,7 @@ impl App {
             return;
         };
         let src_obj = self.doc.editor.document().object(src);
-        let Some(app) = src_obj.map(|o| o.appearance) else {
+        let Some(app) = src_obj.map(|o| o.appearance.clone()) else {
             return;
         };
         // A sampled text object also carries its type styling.
@@ -5281,9 +5281,9 @@ impl App {
             _ => None,
         });
         // Adopt as the tool-palette defaults.
-        self.doc.fill = app.fill;
-        self.doc.stroke = app.stroke;
-        self.doc.stroke_w = app.stroke_width;
+        self.doc.fill = app.fill();
+        self.doc.stroke = app.stroke();
+        self.doc.stroke_w = app.stroke_width();
         if let Some((style, align, para)) = &src_type {
             self.text_defaults = style.clone();
             self.text_align_default = *align;
@@ -5299,12 +5299,12 @@ impl App {
         if !targets.is_empty() {
             let _ = self.doc.editor.execute(Command::SetPaints {
                 objects: targets.clone(),
-                fill: Some(app.fill),
-                stroke: Some(app.stroke),
+                fill: Some(app.fill()),
+                stroke: Some(app.stroke()),
             });
             let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                 objects: targets,
-                width: app.stroke_width,
+                width: app.stroke_width(),
             });
         }
         // Selected text objects inherit the sampled type styling:
@@ -5967,7 +5967,7 @@ impl App {
                         return None;
                     };
                     let layer = self.owning_layer(tid)?;
-                    Some((td.clone(), o.transform, o.appearance, o.name.clone(), layer))
+                    Some((td.clone(), o.transform, o.appearance.clone(), o.name.clone(), layer))
                 })
             else {
                 continue;
@@ -5991,20 +5991,20 @@ impl App {
             // visible-stroke default.
             let _ = self.doc.editor.execute(Command::SetFill {
                 objects: vec![pid],
-                paint: appearance.fill,
+                paint: appearance.fill(),
             });
             let _ = self.doc.editor.execute(Command::SetStroke {
                 objects: vec![pid],
-                paint: appearance.stroke,
+                paint: appearance.stroke(),
             });
-            if appearance.stroke != amalith_core::Paint::None {
+            if appearance.stroke() != amalith_core::Paint::None {
                 let _ = self.doc.editor.execute(Command::SetStrokeWidth {
                     objects: vec![pid],
-                    width: appearance.stroke_width,
+                    width: appearance.stroke_width(),
                 });
                 let _ = self.doc.editor.execute(Command::SetStrokeStyle {
                     objects: vec![pid],
-                    style: appearance.stroke_style,
+                    style: appearance.stroke_style(),
                 });
             }
             let _ = self.doc.editor.execute(Command::DeleteObject { id: tid });
@@ -6285,7 +6285,7 @@ impl App {
         };
         let doc = self.doc.editor.document();
         let Some(ref_obj) = doc.object(r0) else { return };
-        let a0 = ref_obj.appearance;
+        let a0 = ref_obj.appearance.clone();
         let t0 = match &ref_obj.kind {
             amalith_core::ObjectKind::Text(t) => Some(t.style.clone()),
             _ => None,
@@ -6298,14 +6298,14 @@ impl App {
                 }
             };
             match kind {
-                SameKind::FillColor => o.appearance.fill == a0.fill,
-                SameKind::StrokeColor => o.appearance.stroke == a0.stroke,
+                SameKind::FillColor => o.appearance.fill() == a0.fill(),
+                SameKind::StrokeColor => o.appearance.stroke() == a0.stroke(),
                 SameKind::StrokeWeight => {
-                    (o.appearance.stroke_width - a0.stroke_width).abs() < 1e-6
+                    (o.appearance.stroke_width() - a0.stroke_width()).abs() < 1e-6
                 }
                 SameKind::Opacity => (o.appearance.opacity - a0.opacity).abs() < 1e-4,
                 SameKind::FillStroke => {
-                    o.appearance.fill == a0.fill && o.appearance.stroke == a0.stroke
+                    o.appearance.fill() == a0.fill() && o.appearance.stroke() == a0.stroke()
                 }
                 SameKind::FontFamily => same_text_style(&|a, b| a.family == b.family),
                 SameKind::FontSize => {
@@ -6335,7 +6335,7 @@ impl App {
             .selection
             .iter()
             .filter_map(|id| doc.object(*id))
-            .map(|o| (o.appearance.fill, o.appearance.stroke));
+            .map(|o| (o.appearance.fill(), o.appearance.stroke()));
         let Some((f0, s0)) = paints.next() else {
             return (false, false);
         };

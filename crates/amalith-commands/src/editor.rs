@@ -488,7 +488,7 @@ impl Editor {
 
         let steps: u32 = match spacing {
             BlendSpacing::SmoothColor => {
-                amalith_core::blend::smooth_color_steps(start_obj.appearance.fill, end_obj.appearance.fill)
+                amalith_core::blend::smooth_color_steps(start_obj.appearance.fill(), end_obj.appearance.fill())
             }
             BlendSpacing::SpecifiedSteps(n) => n,
             BlendSpacing::SpecifiedDistance(d) if d > 0.0 => {
@@ -509,12 +509,12 @@ impl Editor {
         // here depends on start/end's original relative order.
         let mut append_at = 2usize;
         let mut order = vec![start_id];
-        let start_fill = start_obj.appearance.fill;
-        let end_fill = end_obj.appearance.fill;
-        let start_stroke = start_obj.appearance.stroke;
-        let end_stroke = end_obj.appearance.stroke;
-        let start_width = start_obj.appearance.stroke_width;
-        let end_width = end_obj.appearance.stroke_width;
+        let start_fill = start_obj.appearance.fill();
+        let end_fill = end_obj.appearance.fill();
+        let start_stroke = start_obj.appearance.stroke();
+        let end_stroke = end_obj.appearance.stroke();
+        let start_width = start_obj.appearance.stroke_width();
+        let end_width = end_obj.appearance.stroke_width();
         for i in 1..=steps {
             let t = i as f64 / (steps as f64 + 1.0);
             let center = match &spine_points {
@@ -527,9 +527,9 @@ impl Editor {
             let path = amalith_core::blend::interpolate_step(&a, &b, center_a, center_b, center, t);
             let step_id = ObjectId::new();
             let mut obj = Object::new(step_id, ObjectParent::Group(group_id), ObjectKind::Path(path));
-            obj.appearance.fill = amalith_core::blend::lerp_paint(start_fill, end_fill, t);
-            obj.appearance.stroke = amalith_core::blend::lerp_paint(start_stroke, end_stroke, t);
-            obj.appearance.stroke_width = start_width + (end_width - start_width) * t;
+            obj.appearance.set_fill(amalith_core::blend::lerp_paint(start_fill, end_fill, t));
+            obj.appearance.set_stroke(amalith_core::blend::lerp_paint(start_stroke, end_stroke, t));
+            obj.appearance.set_stroke_width(start_width + (end_width - start_width) * t);
             edits.push(Edit::InsertObject { object: Box::new(obj), index: append_at });
             append_at += 1;
             order.push(step_id);
@@ -751,8 +751,8 @@ impl Editor {
                         local_bounds: bounds,
                     }),
                 );
-                object.appearance.fill = Paint::None;
-                object.appearance.stroke = Paint::None;
+                object.appearance.set_fill(Paint::None);
+                object.appearance.set_stroke(Paint::None);
                 object.transform = transform;
                 object.name = name;
                 let index = self.document.children_of(ObjectParent::Layer(layer)).len();
@@ -795,8 +795,8 @@ impl Editor {
                     data.path_geometry = Some(geometry.clone());
                     let mut converted = source.clone();
                     converted.kind = amalith_core::ObjectKind::Text(data);
-                    converted.appearance.fill = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
-                    converted.appearance.stroke = Paint::None;
+                    converted.appearance.set_fill(Paint::Solid(Color::rgb(0.0, 0.0, 0.0)));
+                    converted.appearance.set_stroke(Paint::None);
                     let index = self.document.children_of(source.parent).iter().position(|id| *id == source.id).unwrap_or(0);
                     return Ok(vec![Edit::RemoveObject { id: source.id }, Edit::InsertObject { object: Box::new(converted), index }]);
                 }
@@ -808,11 +808,8 @@ impl Editor {
                 );
                 // Text follows Illustrator's default — black fill, no stroke —
                 // not the shape tools' visible-stroke default.
-                object.appearance = Appearance {
-                    fill: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
-                    stroke: Paint::None,
-                    ..object.appearance
-                };
+                object.appearance.set_fill(Paint::Solid(Color::rgb(0.0, 0.0, 0.0)));
+                object.appearance.set_stroke(Paint::None);
                 object.transform = transform;
                 object.name = name;
                 let index = self.document.children_of(ObjectParent::Layer(layer)).len();
@@ -1550,9 +1547,9 @@ impl Editor {
                 for id in objects {
                     if let Some(obj) = self.document.object(id) {
                         if let Some(path) = obj.kind.path_data() {
-                            if !path.width_points.is_empty() && obj.appearance.stroke_width > 0.0 {
+                            if !path.width_points.is_empty() && obj.appearance.stroke_width() > 0.0 {
                                 let mut data = path.clone();
-                                let ratio = width / obj.appearance.stroke_width;
+                                let ratio = width / obj.appearance.stroke_width();
                                 for point in &mut data.width_points {
                                     point.left *= ratio;
                                     point.right *= ratio;
@@ -1810,7 +1807,7 @@ impl Editor {
             let path = self.world_path(id).ok_or(CommandError::NotAPath(id))?;
             inputs.push(PathInput {
                 contours: pathfinder::flatten_path(&path),
-                appearance: obj.appearance,
+                appearance: obj.appearance.clone(),
             });
         }
         let parent = parent.unwrap();
@@ -1889,7 +1886,7 @@ impl Editor {
                 id,
                 PathInput {
                     contours: pathfinder::flatten_path(&path),
-                    appearance: obj.appearance,
+                    appearance: obj.appearance.clone(),
                 },
             ));
         }
@@ -1901,7 +1898,7 @@ impl Editor {
         let touched_contours = pathfinder::flatten_path(&touched.geometry);
 
         let (ids,inputs): (Vec<_>,Vec<_>)=inputs.into_iter().unzip();
-        let (consumed,results)=pathfinder::shape_builder_results(&inputs,&touched_contours,&sources,if erase { None } else { appearance.or_else(||inputs.last().map(|i|i.appearance)) });
+        let (consumed,results)=pathfinder::shape_builder_results(&inputs,&touched_contours,&sources,if erase { None } else { appearance.or_else(||inputs.last().map(|i|i.appearance.clone())) });
         let touched_ids: Vec<_>=consumed.into_iter().map(|i|ids[i]).collect();
         if touched_ids.is_empty() { return Err(CommandError::PathfinderEmpty); }
 
@@ -1986,18 +1983,19 @@ impl Editor {
                 ObjectParent::Layer(_) => Affine::IDENTITY,
             };
             let local = PathData::from_bezpath(parent_world.inverse() * outlined.geometry.clone());
-            let mut stroke_app = obj.appearance;
-            stroke_app.fill = obj.appearance.stroke;
-            stroke_app.stroke = Paint::None;
+            let stroke_paint = obj.appearance.stroke();
+            let mut stroke_app = obj.appearance.clone();
+            stroke_app.set_fill(stroke_paint);
+            stroke_app.set_stroke(Paint::None);
 
-            if obj.appearance.fill == Paint::None {
+            if obj.appearance.fill() == Paint::None {
                 edits.push(Edit::SetPathData {
                     id,
                     data: local,
                 });
                 edits.push(Edit::SetFill {
                     id,
-                    paint: stroke_app.fill,
+                    paint: stroke_paint,
                 });
                 edits.push(Edit::SetStroke {
                     id,
@@ -2065,7 +2063,7 @@ impl Editor {
             let index = siblings.iter().position(|&x| x == id).unwrap_or(0);
             let new_id = ObjectId::new();
             let mut new_obj = Object::new(new_id, obj.parent, ObjectKind::Path(local));
-            new_obj.appearance = obj.appearance;
+            new_obj.appearance = obj.appearance.clone();
             new_ids.push(new_id);
             edits.push(Edit::InsertObject {
                 object: Box::new(new_obj),

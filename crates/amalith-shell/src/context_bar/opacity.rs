@@ -33,6 +33,7 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         None => {
             let op = ctx
                 .representative
+                .as_ref()
                 .map(|a| a.opacity)
                 .unwrap_or(ctx.cur_opacity);
             format!("{:.0}%", op * 100.0)

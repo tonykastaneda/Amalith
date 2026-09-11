@@ -333,7 +333,8 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetFill { id, paint } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
-            let old_paint = std::mem::replace(&mut object.appearance.fill, paint);
+            let old_paint = object.appearance.fill();
+            object.appearance.set_fill(paint);
             Ok((
                 Edit::SetFill {
                     id,
@@ -344,7 +345,8 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetStroke { id, paint } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
-            let old_paint = std::mem::replace(&mut object.appearance.stroke, paint);
+            let old_paint = object.appearance.stroke();
+            object.appearance.set_stroke(paint);
             Ok((
                 Edit::SetStroke {
                     id,
@@ -355,7 +357,8 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetStrokeWidth { id, width } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
-            let old_width = std::mem::replace(&mut object.appearance.stroke_width, width);
+            let old_width = object.appearance.stroke_width();
+            object.appearance.set_stroke_width(width);
             Ok((
                 Edit::SetStrokeWidth {
                     id,
@@ -366,7 +369,8 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetStrokeStyle { id, style } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
-            let old_style = std::mem::replace(&mut object.appearance.stroke_style, style);
+            let old_style = object.appearance.stroke_style();
+            object.appearance.set_stroke_style(style);
             Ok((Edit::SetStrokeStyle { id, style: old_style }, None))
         }
         Edit::SetOpacity { id, opacity } => {

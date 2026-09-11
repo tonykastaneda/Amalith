@@ -93,9 +93,9 @@ impl App {
     fn obj_slot_paint(doc: &Document, id: ObjectId, stroke: bool) -> Option<Paint> {
         let o = doc.object(id)?;
         Some(if stroke {
-            o.appearance.stroke
+            o.appearance.stroke()
         } else {
-            o.appearance.fill
+            o.appearance.fill()
         })
     }
 
@@ -104,8 +104,8 @@ impl App {
     fn slot_paint(&self, slot: panels::PaintSlot) -> Paint {
         self.representative()
             .map(|a| match slot {
-                panels::PaintSlot::Fill => a.fill,
-                panels::PaintSlot::Stroke => a.stroke,
+                panels::PaintSlot::Fill => a.fill(),
+                panels::PaintSlot::Stroke => a.stroke(),
             })
             .unwrap_or(match slot {
                 panels::PaintSlot::Fill => self.doc.fill,

@@ -812,7 +812,7 @@ fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_cor
             let bez = crate::convert::bez_path(&pd.geometry);
             let col = obj
                 .appearance
-                .fill
+                .fill()
                 .color()
                 .map(crate::convert::color)
                 .unwrap_or(THUMB_NO_FILL);
@@ -825,7 +825,7 @@ fn thumb_object(scene: &mut Scene, doc: &amalith_core::Document, id: amalith_cor
             }
             let col = obj
                 .appearance
-                .fill
+                .fill()
                 .color()
                 .map(crate::convert::color)
                 .unwrap_or(THUMB_NO_FILL);

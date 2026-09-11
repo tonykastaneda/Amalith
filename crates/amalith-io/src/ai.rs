@@ -27,8 +27,8 @@
 //! CFF) parser, which is out of scope.
 
 use amalith_core::{
-    Affine, Anchor, Appearance, Artboard, ArtboardId, Color, Document, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint, PathData, Point, Rect, Subpath,
+    Affine, Anchor, Appearance, AppearanceItem, Artboard, ArtboardId, Color, Document, LayerId,
+    Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, StrokeStyle, Subpath,
 };
 use lopdf::content::Operation;
 use lopdf::{Dictionary, Document as PdfDocument, Object as PdfObject, ObjectId as PdfId};
@@ -285,10 +285,21 @@ fn interpret(
                     out.push(Recovered {
                         kind: ObjectKind::Path(PathData::from_subpaths(built)),
                         appearance: Appearance {
-                            fill: fills.then_some(gs.fill).flatten().map(Paint::Solid).unwrap_or(Paint::None),
-                            stroke: strokes.then_some(gs.stroke).flatten().map(Paint::Solid).unwrap_or(Paint::None),
-                            stroke_width: gs.line_width,
-                            ..Appearance::default()
+                            items: vec![
+                                AppearanceItem::Fill {
+                                    paint: fills.then_some(gs.fill).flatten().map(Paint::Solid).unwrap_or(Paint::None),
+                                    opacity: 1.0,
+                                    visible: true,
+                                },
+                                AppearanceItem::Stroke {
+                                    paint: strokes.then_some(gs.stroke).flatten().map(Paint::Solid).unwrap_or(Paint::None),
+                                    width: gs.line_width,
+                                    style: StrokeStyle::default(),
+                                    opacity: 1.0,
+                                    visible: true,
+                                },
+                            ],
+                            opacity: 1.0,
                         },
                     });
                 }

@@ -478,7 +478,7 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
     let opaque = (appearance.opacity - 1.0).abs() < 1e-4;
 
     // --- Fill -------------------------------------------------------
-    match appearance.fill {
+    match appearance.fill() {
         Paint::None => {}
         Paint::Solid(c) => {
             // The color's own alpha (e.g. a fill picked at 50% in the
@@ -554,12 +554,12 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
     }
 
     // --- Stroke -------------------------------------------------------
-    if appearance.stroke.is_visible() {
+    if appearance.stroke().is_visible() {
         // As with the fill above, a solid stroke color's own alpha folds
         // in alongside the object's opacity. A gradient stroke's own stop
         // alpha isn't folded in here — deliberately unmasked, see the
         // comment where it's painted below.
-        let stroke_alpha = match appearance.stroke {
+        let stroke_alpha = match appearance.stroke() {
             Paint::Solid(c) => c.a * appearance.opacity,
             _ => appearance.opacity,
         };
@@ -577,23 +577,23 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
             let sy = (c[2] * c[2] + c[3] * c[3]).sqrt();
             (sx * sy).sqrt()
         };
-        ctx.content.set_line_width((appearance.stroke_width * scale) as f32);
-        ctx.content.set_line_cap(match appearance.stroke_style.cap {
+        ctx.content.set_line_width((appearance.stroke_width() * scale) as f32);
+        ctx.content.set_line_cap(match appearance.stroke_style().cap {
             LineCap::Butt => LineCapStyle::ButtCap,
             LineCap::Round => LineCapStyle::RoundCap,
             LineCap::Square => LineCapStyle::ProjectingSquareCap,
         });
-        ctx.content.set_line_join(match appearance.stroke_style.join {
+        ctx.content.set_line_join(match appearance.stroke_style().join {
             LineJoin::Miter => LineJoinStyle::MiterJoin,
             LineJoin::Round => LineJoinStyle::RoundJoin,
             LineJoin::Bevel => LineJoinStyle::BevelJoin,
         });
-        ctx.content.set_miter_limit(appearance.stroke_style.miter_limit as f32);
-        if let Some(pattern) = appearance.stroke_style.dash_pattern() {
+        ctx.content.set_miter_limit(appearance.stroke_style().miter_limit as f32);
+        if let Some(pattern) = appearance.stroke_style().dash_pattern() {
             let dashes: Vec<f32> = pattern.iter().map(|v| (*v * scale) as f32).collect();
-            ctx.content.set_dash_pattern(dashes, (appearance.stroke_style.dash_offset * scale) as f32);
+            ctx.content.set_dash_pattern(dashes, (appearance.stroke_style().dash_offset * scale) as f32);
         }
-        match appearance.stroke {
+        match appearance.stroke() {
             Paint::Solid(c) => ctx.set_stroke_solid(c),
             Paint::Gradient(gid) => {
                 if let Some(g) = doc.gradient(gid) {
@@ -769,9 +769,9 @@ fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextConte
             // non-dashed stroke on an open path; a gradient or dashed
             // one falls back to the ordinary stroke below (disclosed v1
             // gaps — see `amalith_core::width` and `canvas::paint_object`).
-            if !path.width_points.is_empty() && !obj.appearance.stroke_style.dashed {
+            if !path.width_points.is_empty() && !obj.appearance.stroke_style().dashed {
                 if let (Paint::Solid(stroke_color), Some(pts)) = (
-                    obj.appearance.stroke,
+                    obj.appearance.stroke(),
                     path.flattened_points(0.05).into_iter().next(),
                 ) {
                     let closed = path.subpaths().first().is_some_and(|sp| sp.closed);
@@ -779,16 +779,15 @@ fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextConte
                     if let Some(ribbon) = amalith_core::width_outline(
                         &arc,
                         &path.width_points,
-                        obj.appearance.stroke_width * 0.5,
+                        obj.appearance.stroke_width() * 0.5,
                     ) {
-                        let fill_only = Appearance { stroke: Paint::None, ..obj.appearance };
+                        let mut fill_only = obj.appearance.clone();
+                        fill_only.set_stroke(Paint::None);
                         paint_one(ctx, doc, id, &path.geometry, &fill_only, pw, ph);
-                        let ribbon_appearance = Appearance {
-                            fill: Paint::Solid(stroke_color),
-                            stroke: Paint::None,
-                            opacity: obj.appearance.opacity,
-                            ..Appearance::default()
-                        };
+                        let mut ribbon_appearance = Appearance::default();
+                        ribbon_appearance.set_fill(Paint::Solid(stroke_color));
+                        ribbon_appearance.set_stroke(Paint::None);
+                        ribbon_appearance.opacity = obj.appearance.opacity;
                         paint_one(ctx, doc, id, &ribbon, &ribbon_appearance, pw, ph);
                         return;
                     }
@@ -957,9 +956,9 @@ mod tests {
             ObjectParent::Layer(layer_id),
             CoreRect::new(0.0, 0.0, 100.0, 60.0),
         );
-        solid.appearance.fill = Paint::Solid(Color::rgb(0.8, 0.2, 0.1));
-        solid.appearance.stroke = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
-        solid.appearance.stroke_width = 2.0;
+        solid.appearance.set_fill(Paint::Solid(Color::rgb(0.8, 0.2, 0.1)));
+        solid.appearance.set_stroke(Paint::Solid(Color::rgb(0.0, 0.0, 0.0)));
+        solid.appearance.set_stroke_width(2.0);
         ids.push(solid.id);
         doc.insert_object(solid, 0).unwrap();
 
@@ -974,7 +973,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             CoreRect::new(120.0, 0.0, 220.0, 60.0),
         );
-        lin_obj.appearance.fill = Paint::Gradient(lin_id);
+        lin_obj.appearance.set_fill(Paint::Gradient(lin_id));
         ids.push(lin_obj.id);
         doc.insert_object(lin_obj, 0).unwrap();
 
@@ -986,7 +985,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             CoreRect::new(240.0, 0.0, 340.0, 60.0),
         );
-        rad_obj.appearance.fill = Paint::Gradient(rad_id);
+        rad_obj.appearance.set_fill(Paint::Gradient(rad_id));
         ids.push(rad_obj.id);
         doc.insert_object(rad_obj, 0).unwrap();
 
@@ -998,7 +997,7 @@ mod tests {
             ObjectParent::Layer(layer_id),
             CoreRect::new(360.0, 0.0, 460.0, 60.0),
         );
-        free_obj.appearance.fill = Paint::Gradient(free_id);
+        free_obj.appearance.set_fill(Paint::Gradient(free_id));
         ids.push(free_obj.id);
         doc.insert_object(free_obj, 0).unwrap();
 
@@ -1013,7 +1012,7 @@ mod tests {
             }),
         );
         text_obj.transform = CoreAffine::translate(kurbo::Vec2::new(480.0, 0.0));
-        text_obj.appearance.fill = Paint::Solid(Color::rgb(0.1, 0.1, 0.8));
+        text_obj.appearance.set_fill(Paint::Solid(Color::rgb(0.1, 0.1, 0.8)));
         ids.push(text_obj.id);
         doc.insert_object(text_obj, 0).unwrap();
 
@@ -1060,9 +1059,9 @@ mod tests {
                 CorePoint::new(100.0, 0.0),
             ])),
         );
-        path.appearance.fill = Paint::None;
-        path.appearance.stroke = Paint::Solid(Color::rgb(0.0, 0.0, 0.0));
-        path.appearance.stroke_width = 2.0;
+        path.appearance.set_fill(Paint::None);
+        path.appearance.set_stroke(Paint::Solid(Color::rgb(0.0, 0.0, 0.0)));
+        path.appearance.set_stroke_width(2.0);
         let ObjectKind::Path(pd) = &mut path.kind else { unreachable!() };
         pd.width_points = vec![amalith_core::WidthPoint { distance: 50.0, left: 8.0, right: 8.0 }];
         let id = path.id;
@@ -1114,8 +1113,8 @@ mod tests {
             ObjectParent::Layer(layer_id),
             CoreRect::new(0.0, 0.0, 100.0, 60.0),
         );
-        obj.appearance.fill = Paint::Gradient(gid);
-        obj.appearance.stroke = Paint::None;
+        obj.appearance.set_fill(Paint::Gradient(gid));
+        obj.appearance.set_stroke(Paint::None);
         obj.appearance.opacity = 0.5;
         let id = obj.id;
         doc.insert_object(obj, 0).unwrap();

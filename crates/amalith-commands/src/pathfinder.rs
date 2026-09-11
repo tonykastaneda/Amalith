@@ -5,7 +5,7 @@
 //! contours (callers bake world/parent transforms).
 
 use amalith_core::{
-    Appearance, LineCap, LineJoin, Paint, PathData,
+    Appearance, AppearanceItem, LineCap, LineJoin, Paint, PathData, StrokeStyle,
 };
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -168,12 +168,12 @@ fn union_all(items: &[Vec<Vec<[f64; 2]>>]) -> Vec<Vec<[f64; 2]>> {
 fn paths_from_contours(contours: Vec<Vec<[f64; 2]>>, appearance: Appearance) -> Vec<PathResult> {
     contours_to_path(&contours)
         .into_iter()
-        .map(|path| PathResult { path, appearance })
+        .map(|path| PathResult { path, appearance: appearance.clone() })
         .collect()
 }
 
 fn no_stroke(mut a: Appearance) -> Appearance {
-    a.stroke = Paint::None;
+    a.set_stroke(Paint::None);
     a
 }
 
@@ -221,18 +221,18 @@ pub fn shape_builder_regions(inputs: &[PathInput]) -> Vec<ShapeRegion> {
             let remaining=region_overlay(&piece.contours,&input.contours,OverlayRule::Difference);
             if !remaining.is_empty() { next.push(ShapeRegion { contours:remaining,appearance:piece.appearance }); }
             let hit=region_overlay(&piece.contours,&input.contours,OverlayRule::Intersect);
-            if !hit.is_empty() { next.push(ShapeRegion { contours:hit,appearance:input.appearance }); }
+            if !hit.is_empty() { next.push(ShapeRegion { contours:hit,appearance:input.appearance.clone() }); }
             covered=region_overlay(&covered,&piece.contours,OverlayRule::Union);
         }
         let novel=region_overlay(&input.contours,&covered,OverlayRule::Difference);
-        if !novel.is_empty() { next.push(ShapeRegion { contours:novel,appearance:input.appearance }); }
+        if !novel.is_empty() { next.push(ShapeRegion { contours:novel,appearance:input.appearance.clone() }); }
         pieces=next;
     }
     // One face per connected component, with holes kept attached to its outer
     // boundary. Disjoint islands must not be activated by the same hover hit.
     pieces.into_iter().flat_map(|p| {
         let shapes: Vec<Vec<Vec<[f64;2]>>>=p.contours.overlay(&Vec::<Vec<[f64;2]>>::new(),OverlayRule::Subject,FillRule::NonZero);
-        shapes.into_iter().map(move |contours|ShapeRegion { contours,appearance:p.appearance })
+        shapes.into_iter().map(move |contours|ShapeRegion { contours,appearance:p.appearance.clone() })
     }).collect()
 }
 
@@ -259,7 +259,7 @@ pub(crate) fn shape_builder_results(inputs: &[PathInput],cut: &[Vec<[f64;2]>],so
         let remaining=region_overlay(&input.contours,cut,OverlayRule::Difference);
         if !remaining.is_empty() {
             let path=PathData::from_bezpath(crate::curve_restore::restore(&remaining,sources));
-            result.push(PathResult { path,appearance:input.appearance });
+            result.push(PathResult { path,appearance:input.appearance.clone() });
         }
     }
     (consumed,result)
@@ -273,13 +273,13 @@ pub fn apply(op: PathfinderOp, inputs: &[PathInput]) -> Vec<PathResult> {
     match op {
         PathfinderOp::Unite => {
             let all: Vec<_> = inputs.iter().map(|i| i.contours.clone()).collect();
-            paths_from_contours(union_all(&all), inputs.last().unwrap().appearance)
+            paths_from_contours(union_all(&all), inputs.last().unwrap().appearance.clone())
         }
         PathfinderOp::MinusFront => {
             let back = &inputs[0];
             let rest: Vec<_> = inputs[1..].iter().map(|i| i.contours.clone()).collect();
             let cut = union_all(&rest);
-            paths_from_contours(overlay(&back.contours, &cut, OverlayRule::Difference), back.appearance)
+            paths_from_contours(overlay(&back.contours, &cut, OverlayRule::Difference), back.appearance.clone())
         }
         PathfinderOp::MinusBack => {
             let front = inputs.last().unwrap();
@@ -290,7 +290,7 @@ pub fn apply(op: PathfinderOp, inputs: &[PathInput]) -> Vec<PathResult> {
             let cut = union_all(&rest);
             paths_from_contours(
                 overlay(&front.contours, &cut, OverlayRule::Difference),
-                front.appearance,
+                front.appearance.clone(),
             )
         }
         PathfinderOp::Intersect => {
@@ -298,14 +298,14 @@ pub fn apply(op: PathfinderOp, inputs: &[PathInput]) -> Vec<PathResult> {
             for next in &inputs[1..] {
                 acc = overlay(&acc, &next.contours, OverlayRule::Intersect);
             }
-            paths_from_contours(acc, inputs.last().unwrap().appearance)
+            paths_from_contours(acc, inputs.last().unwrap().appearance.clone())
         }
         PathfinderOp::Exclude => {
             let mut acc = inputs[0].contours.clone();
             for next in &inputs[1..] {
                 acc = overlay(&acc, &next.contours, OverlayRule::Xor);
             }
-            paths_from_contours(acc, inputs.last().unwrap().appearance)
+            paths_from_contours(acc, inputs.last().unwrap().appearance.clone())
         }
         PathfinderOp::Divide => divide(inputs),
         PathfinderOp::Trim => trim(inputs, false),
@@ -318,11 +318,11 @@ pub fn apply(op: PathfinderOp, inputs: &[PathInput]) -> Vec<PathResult> {
 /// Split every overlap into its own piece (back → front).
 fn divide(inputs: &[PathInput]) -> Vec<PathResult> {
     if inputs.len() == 1 {
-        return paths_from_contours(inputs[0].contours.clone(), inputs[0].appearance);
+        return paths_from_contours(inputs[0].contours.clone(), inputs[0].appearance.clone());
     }
     // Pieces are (contours, appearance of the topmost covering original).
     let mut pieces: Vec<(Vec<Vec<[f64; 2]>>, Appearance)> =
-        vec![(inputs[0].contours.clone(), inputs[0].appearance)];
+        vec![(inputs[0].contours.clone(), inputs[0].appearance.clone())];
     for next in &inputs[1..] {
         let mut out = Vec::new();
         let mut covered = Vec::new();
@@ -333,13 +333,13 @@ fn divide(inputs: &[PathInput]) -> Vec<PathResult> {
             }
             let hit = overlay(&cont, &next.contours, OverlayRule::Intersect);
             if !hit.is_empty() {
-                out.push((hit.clone(), next.appearance));
+                out.push((hit.clone(), next.appearance.clone()));
                 covered = overlay(&covered, &hit, OverlayRule::Union);
             }
         }
         let novel = overlay(&next.contours, &covered, OverlayRule::Difference);
         if !novel.is_empty() {
-            out.push((novel, next.appearance));
+            out.push((novel, next.appearance.clone()));
         }
         pieces = out;
     }
@@ -359,7 +359,7 @@ fn trim(inputs: &[PathInput], merge_same_fill: bool) -> Vec<PathResult> {
             if let Some(path) = contours_to_path(&vis) {
                 out.push(PathResult {
                     path,
-                    appearance: no_stroke(input.appearance),
+                    appearance: no_stroke(input.appearance.clone()),
                 });
             }
         }
@@ -379,7 +379,7 @@ fn merge_by_fill(pieces: Vec<PathResult>) -> Vec<PathResult> {
         let contours = flatten_path(&p.path.geometry);
         if let Some((_, acc)) = groups
             .iter_mut()
-            .find(|(a, _)| a.fill == p.appearance.fill && a.opacity == p.appearance.opacity)
+            .find(|(a, _)| a.fill() == p.appearance.fill() && a.opacity == p.appearance.opacity)
         {
             *acc = overlay(acc, &contours, OverlayRule::Union);
         } else {
@@ -403,7 +403,7 @@ fn crop(inputs: &[PathInput]) -> Vec<PathResult> {
         if let Some(path) = contours_to_path(&hit) {
             out.push(PathResult {
                 path,
-                appearance: no_stroke(input.appearance),
+                appearance: no_stroke(input.appearance.clone()),
             });
         }
     }
@@ -415,10 +415,11 @@ fn outline(inputs: &[PathInput]) -> Vec<PathResult> {
     divide(inputs)
         .into_iter()
         .map(|mut r| {
-            r.appearance.fill = Paint::None;
-            if r.appearance.stroke == Paint::None {
-                r.appearance.stroke = Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0));
-                r.appearance.stroke_width = r.appearance.stroke_width.max(1.0);
+            r.appearance.set_fill(Paint::None);
+            if r.appearance.stroke() == Paint::None {
+                let width = r.appearance.stroke_width().max(1.0);
+                r.appearance.set_stroke(Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0)));
+                r.appearance.set_stroke_width(width);
             }
             r
         })
@@ -435,7 +436,7 @@ pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<
         .iter()
         .filter_map(|i| {
             let remaining = overlay(&i.contours, cut, OverlayRule::Difference);
-            contours_to_path(&remaining).map(|path| PathResult { path, appearance: i.appearance })
+            contours_to_path(&remaining).map(|path| PathResult { path, appearance: i.appearance.clone() })
         })
         .collect()
 }
@@ -447,7 +448,7 @@ pub(crate) fn intersects(a: &[Vec<[f64; 2]>], b: &[Vec<[f64; 2]>]) -> bool {
 }
 
 pub fn has_visible_stroke(a: &Appearance) -> bool {
-    a.stroke != Paint::None && a.stroke_width > 0.05
+    a.stroke() != Paint::None && a.stroke_width() > 0.05
 }
 
 /// Object ▸ Path ▸ Offset Path: grows (`offset > 0`) or shrinks
@@ -519,22 +520,23 @@ pub fn expand_stroke(path: &BezPath, appearance: &Appearance) -> Option<PathData
     if !has_visible_stroke(appearance) {
         return None;
     }
-    let cap = match appearance.stroke_style.cap {
+    let stroke_style = appearance.stroke_style();
+    let cap = match stroke_style.cap {
         LineCap::Butt => Cap::Butt,
         LineCap::Round => Cap::Round,
         LineCap::Square => Cap::Square,
     };
-    let join = match appearance.stroke_style.join {
+    let join = match stroke_style.join {
         LineJoin::Miter => Join::Miter,
         LineJoin::Round => Join::Round,
         LineJoin::Bevel => Join::Bevel,
     };
-    let mut style = Stroke::new(appearance.stroke_width.max(0.01))
+    let mut style = Stroke::new(appearance.stroke_width().max(0.01))
         .with_caps(cap)
         .with_join(join)
-        .with_miter_limit(appearance.stroke_style.miter_limit);
-    if let Some(dash) = appearance.stroke_style.dash_pattern() {
-        style = style.with_dashes(appearance.stroke_style.dash_offset, dash);
+        .with_miter_limit(stroke_style.miter_limit);
+    if let Some(dash) = stroke_style.dash_pattern() {
+        style = style.with_dashes(stroke_style.dash_offset, dash);
     }
     let outlined = stroke(path.clone(), &style, &StrokeOpts::default(), TOL);
     if outlined.elements().is_empty() {
@@ -554,8 +556,11 @@ mod tests {
         PathInput {
             contours: flatten_path(&PathData::rectangle(r).geometry),
             appearance: Appearance {
-                fill: Paint::Solid(Color::rgb(fill.0, fill.1, fill.2)),
-                stroke: Paint::None,
+                items: vec![AppearanceItem::Fill {
+                    paint: Paint::Solid(Color::rgb(fill.0, fill.1, fill.2)),
+                    opacity: 1.0,
+                    visible: true,
+                }],
                 ..Appearance::default()
             },
         }
@@ -566,7 +571,7 @@ mod tests {
         let a=rect_input(Rect::new(0.,0.,10.,10.),(1.,0.,0.));
         let b=rect_input(Rect::new(20.,0.,30.,10.),(1.,0.,0.));
         let mut contours=a.contours.clone(); contours.extend(b.contours);
-        let pieces=shape_builder_regions(&[PathInput { contours,appearance:a.appearance }]);
+        let pieces=shape_builder_regions(&[PathInput { contours,appearance:a.appearance.clone() }]);
         assert_eq!(pieces.len(),2,"one region per disconnected island");
         let mut outer=flatten_path(&PathData::rectangle(Rect::new(0.,0.,100.,100.)).geometry);
         let mut hole=flatten_path(&PathData::rectangle(Rect::new(20.,20.,80.,80.)).geometry);
@@ -594,7 +599,7 @@ mod tests {
         let bb = out[0].path.geometry.bounding_box();
         assert!((bb.width() - 30.0).abs() < 0.5);
         assert!((bb.height() - 30.0).abs() < 0.5);
-        assert_eq!(out[0].appearance.fill, Paint::Solid(Color::rgb(0.0, 0.0, 1.0)));
+        assert_eq!(out[0].appearance.fill(), Paint::Solid(Color::rgb(0.0, 0.0, 1.0)));
     }
 
     #[test]
@@ -603,7 +608,7 @@ mod tests {
         let front = rect_input(Rect::new(10.0, 10.0, 40.0, 20.0), (0.0, 1.0, 0.0));
         let out = apply(PathfinderOp::MinusFront, &[back, front]);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].appearance.fill, Paint::Solid(Color::rgb(1.0, 0.0, 0.0)));
+        assert_eq!(out[0].appearance.fill(), Paint::Solid(Color::rgb(1.0, 0.0, 0.0)));
     }
 
     #[test]
@@ -621,9 +626,13 @@ mod tests {
     fn expand_stroke_makes_a_filled_outline() {
         let path = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0));
         let app = Appearance {
-            fill: Paint::None,
-            stroke: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
-            stroke_width: 4.0,
+            items: vec![AppearanceItem::Stroke {
+                paint: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
+                width: 4.0,
+                style: StrokeStyle::default(),
+                opacity: 1.0,
+                visible: true,
+            }],
             ..Appearance::default()
         };
         let out = expand_stroke(&path.geometry, &app).unwrap();
@@ -708,10 +717,10 @@ mod tests {
         // `covered` vanishes entirely; `partial` survives, shrunk;
         // `untouched` survives unchanged.
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].appearance.fill, Paint::Solid(Color::rgb(0.0, 1.0, 0.0)));
+        assert_eq!(out[0].appearance.fill(), Paint::Solid(Color::rgb(0.0, 1.0, 0.0)));
         let partial_bb = out[0].path.geometry.bounding_box();
         assert!((partial_bb.width() - 10.0).abs() < 0.5, "width {}", partial_bb.width());
-        assert_eq!(out[1].appearance.fill, Paint::Solid(Color::rgb(0.0, 0.0, 1.0)));
+        assert_eq!(out[1].appearance.fill(), Paint::Solid(Color::rgb(0.0, 0.0, 1.0)));
         let untouched_bb = out[1].path.geometry.bounding_box();
         assert!((untouched_bb.width() - 10.0).abs() < 0.5, "width {}", untouched_bb.width());
     }

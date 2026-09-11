@@ -66,8 +66,8 @@ impl App {
                 let paint = self
                     .representative()
                     .map(|a| match slot {
-                        panels::PaintSlot::Fill => a.fill,
-                        panels::PaintSlot::Stroke => a.stroke,
+                        panels::PaintSlot::Fill => a.fill(),
+                        panels::PaintSlot::Stroke => a.stroke(),
                     })
                     .unwrap_or(match slot {
                         panels::PaintSlot::Fill => self.doc.fill,
@@ -749,7 +749,7 @@ impl App {
                         .doc.selection
                         .first()
                         .and_then(|id| self.doc.editor.document().object(*id))
-                        .map(|o| o.appearance.stroke_width)
+                        .map(|o| o.appearance.stroke_width())
                         .unwrap_or(self.doc.stroke_w);
                     self.stroke_weight_edit = Some((trim_num(w), true));
                 }

@@ -58,7 +58,7 @@ fn swatch_layout(body: Rect) -> SwatchLayout {
 
 pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let l = swatch_layout(body);
-    let rep = ctx.representative;
+    let rep = ctx.representative.as_ref();
     let white = Color::from_rgb8(0xff, 0xff, 0xff);
 
     // Stroke behind, fill in front (Illustrator's overlap).
@@ -67,7 +67,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         text,
         ctx.theme,
         l.stroke,
-        rep.map(|a| a.stroke).unwrap_or(Paint::None),
+        rep.map(|a| a.stroke()).unwrap_or(Paint::None),
         ctx.active_slot == PaintSlot::Stroke,
         ctx.stroke_mixed,
     );
@@ -76,13 +76,13 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         text,
         ctx.theme,
         l.fill,
-        rep.map(|a| a.fill)
+        rep.map(|a| a.fill())
             .unwrap_or(Paint::Solid(CoreColor::rgb(0.87, 0.87, 0.87))),
         ctx.active_slot == PaintSlot::Fill,
         ctx.fill_mixed,
     );
 
-    let cur_w = rep.map(|a| a.stroke_width);
+    let cur_w = rep.map(|a| a.stroke_width());
     for (w, r) in &l.widths {
         let on = cur_w.is_some_and(|c| (c - *w).abs() < 0.01);
         scene.fill(

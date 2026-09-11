@@ -83,7 +83,7 @@ impl App {
             if total <= 0.0 {
                 continue;
             }
-            let base_half = obj.appearance.stroke_width * 0.5;
+            let base_half = obj.appearance.stroke_width() * 0.5;
             let points = amalith_core::preset_points(preset, total, base_half);
             let _ = self.doc.editor.execute(Command::SetWidthPoints { object: id, points });
         }
@@ -111,7 +111,7 @@ impl App {
             id,
             arc,
             m,
-            base_half: obj.appearance.stroke_width * 0.5,
+            base_half: obj.appearance.stroke_width() * 0.5,
             points: pd.width_points.clone(),
         })
     }
