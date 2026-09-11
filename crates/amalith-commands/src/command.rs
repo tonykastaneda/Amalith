@@ -509,6 +509,17 @@ pub enum Command {
         erase: bool,
         appearance: Option<Appearance>,
     },
+    /// The Eraser tool's one stroke: `area` (world space) is the swept
+    /// brush shape. Each of `objects` independently loses whatever part
+    /// of itself overlaps `area` and keeps its own id if anything
+    /// survives; one fully consumed by the stroke is removed outright.
+    /// Unlike `ShapeBuilder`, `objects` don't need a common parent —
+    /// each is handled entirely on its own, so one stroke can erase
+    /// across different layers or groups at once.
+    EraseArea {
+        objects: Vec<ObjectId>,
+        area: PathData,
+    },
     /// Align / distribute `objects` in document space. `key` is the object
     /// that stays put when `to` is [`AlignTo::KeyObject`]. `artboard` is
     /// the frame when `to` is [`AlignTo::Artboard`]. `spacing` is the

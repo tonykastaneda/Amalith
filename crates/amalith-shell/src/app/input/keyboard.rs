@@ -5,6 +5,7 @@
 use winit::event::KeyEvent;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
+use crate::app::eraser_tool;
 use amalith_commands::{Command, CommandOutcome};
 
 use crate::prefs::{self, KeyChord};
@@ -449,6 +450,20 @@ impl App {
                 }
                 self.update_canvas_cursor();
                 // Toggle the hold-Space node peek.
+                self.request_main_redraw();
+            }
+            // Eraser brush size, like most brush tools' own convention —
+            // guarded off `cmd_down` so it never shadows ⌘[ / ⌘] z-order.
+            PhysicalKey::Code(KeyCode::BracketRight)
+                if pressed && !self.cmd_down && self.active_tool == Tool::Eraser =>
+            {
+                self.eraser_size = (self.eraser_size + eraser_tool::ERASER_STEP).min(eraser_tool::ERASER_MAX_SIZE);
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::BracketLeft)
+                if pressed && !self.cmd_down && self.active_tool == Tool::Eraser =>
+            {
+                self.eraser_size = (self.eraser_size - eraser_tool::ERASER_STEP).max(eraser_tool::ERASER_MIN_SIZE);
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {

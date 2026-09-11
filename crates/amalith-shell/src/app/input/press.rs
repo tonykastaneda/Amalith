@@ -879,6 +879,12 @@ impl App {
                 if self.active_tool == Tool::ShapeBuilder && self.shape_builder_press() {
                     return;
                 }
+                // Eraser: always starts a stroke — the brush itself
+                // defines what gets touched, so there's no "missed"
+                // state the way Shape Builder has.
+                if self.active_tool == Tool::Eraser && self.eraser_press() {
+                    return;
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under
@@ -1150,6 +1156,7 @@ impl App {
                                     self.drag = Drag::PenHandle {
                                         anchor: 0,
                                         from: seed.point,
+                                        press: dp,
                                         space_anchor: None,
                                     };
                                     self.request_main_redraw();
@@ -1211,6 +1218,7 @@ impl App {
                     self.drag = Drag::PenHandle {
                         anchor: self.pen.len() - 1,
                         from: p,
+                        press: dp,
                         space_anchor: None,
                     };
                     self.request_main_redraw();

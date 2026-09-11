@@ -522,6 +522,12 @@ impl App {
                 self.drag = Drag::ShapeBuilderDrag { erase, touched };
                 self.request_main_redraw();
             }
+            Drag::EraserStroke { path } => {
+                let mut path = path.clone();
+                self.eraser_move(&mut path);
+                self.drag = Drag::EraserStroke { path };
+                self.request_main_redraw();
+            }
             Drag::Rotate {
                 center,
                 start_angle,
@@ -1131,7 +1137,8 @@ impl App {
                         | Tool::Width
                         | Tool::FreeTransform
                         | Tool::Join
-                        | Tool::ShapeBuilder => return,
+                        | Tool::ShapeBuilder
+                        | Tool::Eraser => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1424,6 +1431,10 @@ impl App {
             Drag::ShapeBuilderDrag { erase, mut touched } => {
                 self.shape_builder_move(&mut touched);
                 self.commit_shape_builder(erase, touched);
+            }
+            Drag::EraserStroke { mut path } => {
+                self.eraser_move(&mut path);
+                self.commit_eraser(path);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

@@ -245,6 +245,78 @@ mod tests {
     }
 
     #[test]
+    fn erase_area_notches_a_partially_covered_object_and_leaves_an_untouched_one_alone() {
+        use amalith_core::PathData;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(b) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(100.0, 100.0, 120.0, 120.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        // A brush swipe over just the left half of `a`; nowhere near `b`.
+        let area = PathData::rectangle(Rect::new(-5.0, -5.0, 10.0, 25.0));
+        editor.execute(Command::EraseArea { objects: vec![a, b], area }).unwrap();
+
+        // `a` is consumed and replaced with the surviving right half.
+        assert!(editor.document().object(a).is_none());
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children.len(), 2, "a's remainder plus b, untouched");
+        let remainder = children.iter().copied().find(|&id| id != b).unwrap();
+        let bb = editor.document().object(remainder).unwrap().kind.path_data().unwrap().local_bounds();
+        assert!((bb.x0 - 10.0).abs() < 0.5, "x0 {}", bb.x0);
+        assert!((bb.x1 - 20.0).abs() < 0.5, "x1 {}", bb.x1);
+
+        // `b` never overlapped the stroke — same id, byte-for-byte.
+        assert_eq!(
+            editor.document().object(b).unwrap().kind.path_data().unwrap().local_bounds(),
+            Rect::new(100.0, 100.0, 120.0, 120.0)
+        );
+
+        editor.undo().unwrap();
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children, &[a, b]);
+    }
+
+    #[test]
+    fn erase_area_removes_an_object_fully_covered_by_the_stroke() {
+        use amalith_core::PathData;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(a) = editor
+            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0)), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let area = PathData::rectangle(Rect::new(-5.0, -5.0, 15.0, 15.0));
+        editor.execute(Command::EraseArea { objects: vec![a], area }).unwrap();
+
+        assert!(editor.document().object(a).is_none());
+        assert!(editor.document().children_of(ObjectParent::Layer(layer)).is_empty());
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[a]);
+    }
+
+    #[test]
     fn join_anchors_cross_object_absorbs_the_other_and_undo_fully_restores_both() {
         use amalith_core::Point;
         let mut editor = new_editor();

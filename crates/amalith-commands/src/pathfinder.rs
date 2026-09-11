@@ -416,10 +416,9 @@ fn outline(inputs: &[PathInput]) -> Vec<PathResult> {
 }
 
 /// Each input's own contours minus `cut`, dropping any that vanish
-/// entirely. Keeps each survivor's own appearance — the Shape Builder
-/// tool uses this to give every object the drag touched back just the
-/// part it didn't sweep over.
-#[cfg(test)]
+/// entirely. Keeps each survivor's own appearance — the Eraser tool
+/// uses this to give every object its stroke touched back just the
+/// part that wasn't swept over.
 pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<PathResult> {
     inputs
         .iter()
@@ -431,7 +430,6 @@ pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<
 }
 
 /// Whether `a` and `b` share any area at all.
-#[cfg(test)]
 pub(crate) fn intersects(a: &[Vec<[f64; 2]>], b: &[Vec<[f64; 2]>]) -> bool {
     !overlay(a, b, OverlayRule::Intersect).is_empty()
 }

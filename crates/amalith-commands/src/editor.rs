@@ -1589,6 +1589,7 @@ impl Editor {
                 erase,
                 appearance,
             } => self.compile_shape_builder(objects, touched, erase, appearance)?,
+            Command::EraseArea { objects, area } => self.compile_erase_area(objects, area)?,
             Command::ExpandStroke { objects } => self.compile_expand_stroke(objects)?,
             Command::OffsetPath { .. } => {
                 unreachable!("Editor::execute intercepts Command::OffsetPath before calling compile")
@@ -1930,6 +1931,44 @@ impl Editor {
                 object: Box::new(object),
                 index: insert_at + i,
             });
+        }
+        Ok(edits)
+    }
+
+    /// See [`Command::EraseArea`]. Each object is handled entirely on
+    /// its own — no shared parent, no minimum count, no merge case —
+    /// since erasing never needs to combine anything, just remove part
+    /// of what's already there. An object the stroke never actually
+    /// overlaps is skipped outright: no edit references it at all.
+    fn compile_erase_area(&self, objects: Vec<ObjectId>, area: PathData) -> Result<Vec<Edit>, CommandError> {
+        let area_contours = pathfinder::flatten_path(&area.geometry);
+        let mut edits = Vec::new();
+        for id in objects {
+            let Some(obj) = self.document.object(id) else { continue };
+            let Some(world) = self.world_path(id) else { continue };
+            let contours = pathfinder::flatten_path(&world);
+            if !pathfinder::intersects(&contours, &area_contours) {
+                continue;
+            }
+            let parent = obj.parent;
+            let parent_world = match parent {
+                ObjectParent::Group(g) => self.document.world_transform(g),
+                ObjectParent::Layer(_) => Affine::IDENTITY,
+            };
+            let siblings = self.document.children_of(parent);
+            let index = siblings.iter().position(|&s| s == id).unwrap();
+            let input = PathInput { contours, appearance: obj.appearance };
+            let remaining = pathfinder::subtract_each(std::slice::from_ref(&input), &area_contours);
+
+            edits.push(Edit::RemoveObject { id });
+            if let Some(result) = remaining.into_iter().next() {
+                let geom = parent_world.inverse() * result.path.geometry.clone();
+                let path = PathData::from_bezpath(geom);
+                let mut object = Object::new(ObjectId::new(), parent, ObjectKind::Path(path));
+                object.appearance = result.appearance;
+                object.transform = Affine::IDENTITY;
+                edits.push(Edit::InsertObject { object: Box::new(object), index });
+            }
         }
         Ok(edits)
     }

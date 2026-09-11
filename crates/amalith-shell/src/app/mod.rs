@@ -20,6 +20,7 @@ use crate::metrics::px as ui_px;
 mod action;
 mod blend_dialog;
 mod command_palette;
+mod eraser_tool;
 mod export;
 mod free_transform;
 mod gradient;
@@ -392,6 +393,13 @@ enum Drag {
         erase: bool,
         touched: Vec<usize>,
     },
+    /// Eraser tool: dragging the round brush over the canvas. `path`
+    /// accumulates every document-space sample visited this gesture (at
+    /// least the press point); the brush's swept shape is only actually
+    /// computed once, on release.
+    EraserStroke {
+        path: Vec<Point>,
+    },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
         tool: Tool,
@@ -399,17 +407,26 @@ enum Drag {
         cur_doc: Point,
     },
     /// Pen tool: dragging a bezier handle out of the anchor just placed.
-    /// `from` is that anchor's point (document space), for the drag-slop
-    /// test and Shift constraint. While `space_anchor` is `Some`, Space is
-    /// held and the drag is instead sliding the anchor itself (handles
-    /// carried rigidly, curvature frozen) — it stores `(anchor point,
-    /// pointer point)` as they were the moment Space was first pressed, so
-    /// each frame recomputes the proposed position from that fixed origin
-    /// (not by accumulating per-frame deltas) the same way `MoveAnchors`
-    /// does, which is what lets Smart Guides snap it without drift.
+    /// `from` is that anchor's point (document space), for the Shift
+    /// constraint (the handle's angle locks relative to where the anchor
+    /// actually ended up, not to where the mouse was first pressed).
+    /// `press` is the raw, unsnapped pointer position at press time — the
+    /// *only* thing the drag-slop test may compare the live pointer
+    /// against, since `from` can already sit well away from the real
+    /// click (Shift's 45° lock, or resuming an existing endpoint within
+    /// its own few-px grab radius), which would otherwise read as "you
+    /// dragged" on a plain click that never moved at all. While
+    /// `space_anchor` is `Some`, Space is held and the drag is instead
+    /// sliding the anchor itself (handles carried rigidly, curvature
+    /// frozen) — it stores `(anchor point, pointer point)` as they were
+    /// the moment Space was first pressed, so each frame recomputes the
+    /// proposed position from that fixed origin (not by accumulating
+    /// per-frame deltas) the same way `MoveAnchors` does, which is what
+    /// lets Smart Guides snap it without drift.
     PenHandle {
         anchor: usize,
         from: Point,
+        press: Point,
         space_anchor: Option<(Point, Point)>,
     },
     /// Dragging inside the colour picker (`in_hue` = the hue strip).
@@ -1030,6 +1047,10 @@ struct App {
     /// selection it was built from stops matching the current one. See
     /// `shape_builder::ShapeBuilderCache`.
     shape_builder: Option<shape_builder::ShapeBuilderCache>,
+    /// Eraser tool brush diameter, screen px (constant on screen
+    /// regardless of zoom, like a real brush cursor) — `[`/`]` resize it
+    /// while the tool is active. Not persisted yet.
+    eraser_size: f64,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -1399,6 +1420,7 @@ impl App {
             layer_dialog: None,
             pending_layer_dialog: None,
             shape_builder: None,
+            eraser_size: 20.0,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -3281,12 +3303,13 @@ impl App {
         let Drag::PenHandle {
             anchor,
             from,
+            press,
             space_anchor,
         } = &self.drag
         else {
             return;
         };
-        let (anchor, from, space_anchor) = (*anchor, *from, *space_anchor);
+        let (anchor, from, press, space_anchor) = (*anchor, *from, *press, *space_anchor);
         let dp = self.doc_point(self.pointer);
 
         // Space held: slide the anchor itself under the cursor, carrying
@@ -3315,6 +3338,7 @@ impl App {
             self.drag = Drag::PenHandle {
                 anchor,
                 from: snapped,
+                press,
                 space_anchor: Some((anchor_origin, pointer_origin)),
             };
             self.request_main_redraw();
@@ -3322,13 +3346,21 @@ impl App {
         }
         // Space just released — drop the marker; `from` already tracks the
         // anchor's (possibly moved) point, so the pull resumes from there.
-        if space_anchor.is_some() {
+        // `press` resets to right here too: the anchor (and the cursor
+        // riding along with it) may have just moved a long way, and
+        // whether a *handle* gets pulled should depend on movement from
+        // this point on, not from the original click before Space.
+        let press = if space_anchor.is_some() {
             self.drag = Drag::PenHandle {
                 anchor,
                 from,
+                press: dp,
                 space_anchor: None,
             };
-        }
+            dp
+        } else {
+            press
+        };
 
         let slop = 3.0 / self.doc.view.zoom;
         let alt = self.alt_down;
@@ -3336,7 +3368,7 @@ impl App {
         let Some(a) = self.pen.get_mut(anchor) else {
             return;
         };
-        if (dp - from).hypot() > slop {
+        if (dp - press).hypot() > slop {
             let h = if shift {
                 constrained(Some(a.point), dp, true)
             } else {

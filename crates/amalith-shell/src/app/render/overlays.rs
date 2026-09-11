@@ -388,6 +388,27 @@ impl App {
         }
     }
 
+    /// A hollow circle tracking the brush's current size at the pointer,
+    /// always shown while the tool is active — plus, mid-drag, a filled
+    /// preview of the stroke swept so far, in the same red used for
+    /// Shape Builder's own erase mode.
+    pub(in crate::app) fn paint_eraser_preview(&mut self) {
+        if self.active_tool != Tool::Eraser {
+            return;
+        }
+        let ink = shape_builder::ERASE_INK;
+        if let Drag::EraserStroke { path } = &self.drag {
+            if let Some(area) = self.eraser_brush_area(path) {
+                let to_screen = self.doc.view.to_screen();
+                let shape = to_screen * convert::bez_path(&area.geometry);
+                self.content.fill(Fill::NonZero, ID, ink.with_alpha(0.35), None, &shape);
+                self.content.stroke(&Stroke::new(1.25), ID, ink, None, &shape);
+            }
+        }
+        let r = self.eraser_size * 0.5;
+        self.content.stroke(&Stroke::new(1.0), ID, ink, None, &vello::kurbo::Circle::new(self.pointer, r));
+    }
+
     /// All guide geometry is clipped to the canvas, never over panels or menus.
     pub(in crate::app) fn paint_smart_guides(&mut self) {
         if !self.settings.smart_guides_enabled || self.pointer_win != self.main_id

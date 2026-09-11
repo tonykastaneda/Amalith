@@ -911,6 +911,7 @@ impl App {
             self.paint_width_points();
             self.paint_join_preview();
             self.paint_shape_builder_preview();
+            self.paint_eraser_preview();
             self.paint_offset_preview();
             self.paint_warp_preview();
             self.paint_free_transform_flyout();

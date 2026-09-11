@@ -70,6 +70,7 @@ pub enum Icon {
     FreeTransform,
     Join,
     ShapeBuilder,
+    Eraser,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -86,7 +87,8 @@ fn brand_svg(icon: Icon) -> &'static str {
         // Hand-drawn in `draw`; never reach the brand-SVG path.
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
-        | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder => "",
+        | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
+        | Icon::Eraser => "",
     }
 }
 
@@ -158,6 +160,10 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::ShapeBuilder {
         draw_shape_builder_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Eraser {
+        draw_eraser_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -396,6 +402,39 @@ fn draw_shape_builder_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     for x in [9.0, 15.0] {
         scene.stroke(&stroke, transform, color, None, &Circle::new((x, 12.0), 6.4));
     }
+}
+
+/// A tilted eraser block, its lower-left tip shaded to read as the used
+/// corner — the Eraser tool.
+fn draw_eraser_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let scale = box_.width().min(box_.height()) / 24.0;
+    let c = box_.center();
+    let transform = Affine::translate((c.x - 12.0 * scale, c.y - 12.0 * scale)) * Affine::scale(scale);
+    let stroke = Stroke::new(1.6);
+
+    let mut body = BezPath::new();
+    body.move_to((6.5, 17.5));
+    body.line_to((3.8, 14.8));
+    body.curve_to((3.1, 14.1), (3.1, 13.0), (3.8, 12.3));
+    body.line_to((13.7, 2.4));
+    body.curve_to((14.4, 1.7), (15.5, 1.7), (16.2, 2.4));
+    body.line_to((21.6, 7.8));
+    body.curve_to((22.3, 8.5), (22.3, 9.6), (21.6, 10.3));
+    body.line_to((11.7, 20.2));
+    body.curve_to((11.0, 20.9), (9.9, 20.9), (9.2, 20.2));
+    body.close_path();
+    scene.stroke(&stroke, transform, color, None, &body);
+
+    let mut tip = BezPath::new();
+    tip.move_to((6.5, 17.5));
+    tip.line_to((3.8, 14.8));
+    tip.curve_to((3.1, 14.1), (3.1, 13.0), (3.8, 12.3));
+    tip.line_to((9.2, 6.9));
+    tip.line_to((15.6, 13.3));
+    tip.line_to((11.7, 20.2));
+    tip.curve_to((11.0, 20.9), (9.9, 20.9), (9.2, 20.2));
+    tip.close_path();
+    scene.fill(Fill::NonZero, transform, color, None, &tip);
 }
 
 /// A quarter-ellipse sweeping from the bottom-left up to the top-right —
