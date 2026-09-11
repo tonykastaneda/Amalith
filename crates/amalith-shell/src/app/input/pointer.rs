@@ -1444,9 +1444,15 @@ impl App {
                     .to_screen()
                     .inverse()
                     .transform_rect_bbox(r_screen);
-                let hits = match self.isolation_root() {
-                    Some(root) => select::within_in(self.doc.editor.document(), root, r_doc),
-                    None => select::within(self.doc.editor.document(), r_doc),
+                // A click must not run bounds-based marquee selection:
+                // even a zero-area box can overlap a diagonal path's bounds.
+                let hits = if (self.pointer - start).hypot() > 3.0 {
+                    match self.isolation_root() {
+                        Some(root) => select::within_in(self.doc.editor.document(), root, r_doc),
+                        None => select::within(self.doc.editor.document(), r_doc),
+                    }
+                } else {
+                    Vec::new()
                 };
                 if self.shift_down {
                     for id in hits {
@@ -1521,6 +1527,7 @@ impl App {
             }
             Drag::AnchorMarquee { start } => {
                 let moved = (self.pointer - start).hypot() > 3.0;
+                eprintln!("[AM_DEBUG] start={start:?} pointer={:?} moved={moved} shift={}", self.pointer, self.shift_down);
                 if moved {
                     // A real drag: rubber-band every node inside the box,
                     // across all paths — Illustrator's white-arrow marquee

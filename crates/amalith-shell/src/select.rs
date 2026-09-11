@@ -38,14 +38,17 @@ pub fn bounds(doc: &Document, id: ObjectId) -> Option<Rect> {
 }
 
 /// Frontmost layer-child whose bounds contain `point` and overlap
-/// `visible`. Layer direct children only — a `Group` is selected as a unit
-/// (its bounding box stands in for it, same as ever — clicking a gap
-/// between its children still hits the group). A plain path or compound
-/// path additionally has to have `point` inside its *real* outline, not
-/// just its circumscribing box — a circle's own bounding box has empty
-/// corners that read as "inside" under a pure box test, which used to let
-/// a click there wrongly hit that circle instead of whatever (or nothing)
-/// is actually drawn there.
+/// `visible`. Layer direct children only. A plain path or compound path
+/// has to have `point` inside its *real* outline, not just its
+/// circumscribing box — a circle's own bounding box has empty corners
+/// that read as "inside" under a pure box test, which used to let a
+/// click there wrongly hit that circle instead of whatever (or nothing)
+/// is actually drawn there. A `Group` is selected as a unit, but only
+/// when the click actually lands on one of its *descendants'* real
+/// content (recursing through nested groups) — its own bounding box
+/// alone isn't enough: a sparse group (a radial "starburst" of thin
+/// spokes, say) has enormous empty space inside its own AABB, and a
+/// click on visibly empty canvas there must deselect, not grab the group.
 pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Option<ObjectId> {
     for layer in doc.layers().iter().rev() {
         if !layer.visible {
@@ -60,46 +63,73 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
             if !overlaps(b, visible) {
                 continue;
             }
-            if matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
-                // A click hits a path if it's inside a real fill, OR near
-                // the visible stroke line — same as Illustrator, where a
-                // filled shape's outline is just as clickable as its
-                // interior. The outline test isn't just for unfilled
-                // shapes: a geometrically degenerate path (near-zero
-                // area — e.g. a perfectly straight line, open or closed)
-                // has no real "inside" for the fill/winding test to ever
-                // find true, filled or not, so it would otherwise be
-                // permanently unclickable despite rendering a visible
-                // line. Paths also skip the `b.contains(point)` box
-                // pre-filter every other object kind uses below — a
-                // straight line's bounding box is zero-width along one
-                // axis (e.g. `x0 == x1`), which would reject all but a
-                // click landing on that exact float coordinate.
-                let filled = obj.appearance.fill != amalith_core::Paint::None
-                    && point_in_fill(doc, id, point);
-                // The outline fallback only applies when there's an
-                // actual visible stroke to click — gating it on a fixed
-                // minimum tolerance instead (regardless of whether the
-                // object even has a stroke) put an invisible ~2-unit
-                // "sticky" halo around every filled shape's edge, wide
-                // enough that a click meant for one of several closely
-                // packed shapes could register against its unstroked
-                // neighbor's outline instead of missing cleanly.
-                let has_stroke = obj.appearance.stroke != amalith_core::Paint::None
-                    && obj.appearance.stroke_width > 0.0;
-                if !filled
-                    && (!has_stroke
-                        || !near_contour(doc, id, point, obj.appearance.stroke_width * 0.5))
-                {
-                    continue;
-                }
-            } else if !b.contains(point) {
+            let hit = match &obj.kind {
+                ObjectKind::Path(_) | ObjectKind::CompoundPath(_) => path_hit(doc, id, &obj.appearance, point),
+                ObjectKind::Group(_) => group_hit(doc, id, point),
+                _ => b.contains(point),
+            };
+            if !hit {
                 continue;
             }
+            eprintln!(
+                "[TSA_DEBUG] point={point:?} -> {id:?} kind={:?} bounds={b:?} fill={:?} stroke={:?} stroke_width={}",
+                std::mem::discriminant(&obj.kind), obj.appearance.fill, obj.appearance.stroke, obj.appearance.stroke_width
+            );
             return Some(id);
         }
     }
     None
+}
+
+/// Whether `point` hits a path/compound path's own real content: inside
+/// a real fill, or near the visible stroke line — same as Illustrator,
+/// where a filled shape's outline is just as clickable as its interior.
+/// The outline test isn't just for unfilled shapes: a geometrically
+/// degenerate path (near-zero area — e.g. a perfectly straight line,
+/// open or closed) has no real "inside" for the fill/winding test to
+/// ever find true, filled or not, so it would otherwise be permanently
+/// unclickable despite rendering a visible line. Skips the caller's
+/// `bounds(..).contains(point)` box pre-filter entirely — a straight
+/// line's bounding box is zero-width along one axis (e.g. `x0 == x1`),
+/// which would reject all but a click landing on that exact float
+/// coordinate.
+fn path_hit(doc: &Document, id: ObjectId, appearance: &amalith_core::Appearance, point: Point) -> bool {
+    let filled = appearance.fill != amalith_core::Paint::None && point_in_fill(doc, id, point);
+    if filled {
+        return true;
+    }
+    // The outline fallback only applies when there's an actual visible
+    // stroke to click — gating it on a fixed minimum tolerance instead
+    // (regardless of whether the object even has a stroke) put an
+    // invisible ~2-unit "sticky" halo around every filled shape's edge,
+    // wide enough that a click meant for one of several closely packed
+    // shapes could register against its unstroked neighbor's outline
+    // instead of missing cleanly.
+    let has_stroke = appearance.stroke != amalith_core::Paint::None && appearance.stroke_width > 0.0;
+    has_stroke && near_contour(doc, id, point, appearance.stroke_width * 0.5)
+}
+
+/// Whether `point` (doc space) lands on real content somewhere inside
+/// group `id`, recursing through nested groups — see
+/// [`topmost_selectable_at`]'s doc comment for why a group's bounding
+/// box alone can't answer this. Text/Image/Symbol children fall back to
+/// their own bounding box (not hollow shapes in practice).
+fn group_hit(doc: &Document, id: ObjectId, point: Point) -> bool {
+    doc.children_of(ObjectParent::Group(id)).iter().any(|&child| {
+        let Some(obj) = doc.object(child) else { return false };
+        if !obj.visible {
+            return false;
+        }
+        let Some(b) = bounds(doc, child) else { return false };
+        if !b.contains(point) {
+            return false;
+        }
+        match &obj.kind {
+            ObjectKind::Path(_) | ObjectKind::CompoundPath(_) => path_hit(doc, child, &obj.appearance, point),
+            ObjectKind::Group(_) => group_hit(doc, child, point),
+            _ => true,
+        }
+    })
 }
 
 /// Real point-in-fill test for a path / compound path's own outline
@@ -661,5 +691,42 @@ mod smart_guide_bounds_tests {
         let visible = Rect::new(-1000., -1000., 1000., 1000.);
         let hit = topmost_selectable_at(&doc, Point::new(50., 50.), visible);
         assert_eq!(hit, Some(id), "an open path's fill still covers its interior");
+    }
+
+    /// A sparse group (e.g. a radial "starburst" of thin spokes) has a
+    /// bounding box that's mostly empty space — clicking in that empty
+    /// space, well inside the box but nowhere near any actual spoke, must
+    /// deselect rather than grab the group, matching a click on visibly
+    /// empty canvas anywhere else.
+    #[test]
+    fn topmost_selectable_at_does_not_treat_a_sparse_groups_whole_bbox_as_clickable() {
+        let mut doc = Document::new("starburst");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let group = ObjectId::new();
+        doc.insert_object(
+            Object::new(group, ObjectParent::Layer(layer), ObjectKind::Group(GroupData::default())),
+            0,
+        )
+        .unwrap();
+        // Two thin spokes near the left and right edges of the group's
+        // bounding box, leaving its whole center empty.
+        let left = ObjectId::new();
+        let mut left_obj = Object::new(left, ObjectParent::Group(group), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(0., 0., 4., 100.))));
+        left_obj.appearance.stroke = Paint::None;
+        doc.insert_object(left_obj, 0).unwrap();
+        let right = ObjectId::new();
+        let mut right_obj = Object::new(right, ObjectParent::Group(group), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(196., 0., 200., 100.))));
+        right_obj.appearance.stroke = Paint::None;
+        doc.insert_object(right_obj, 1).unwrap();
+        let visible = Rect::new(-1000., -1000., 1000., 1000.);
+
+        // Dead center of the group's overall bounding box — empty canvas.
+        let hit = topmost_selectable_at(&doc, Point::new(100., 50.), visible);
+        assert_eq!(hit, None, "clicking the empty middle of a sparse group's bbox must not select the group");
+
+        // On one of the actual spokes: still hits the group.
+        let hit_spoke = topmost_selectable_at(&doc, Point::new(2., 50.), visible);
+        assert_eq!(hit_spoke, Some(group), "clicking an actual spoke still selects the group");
     }
 }

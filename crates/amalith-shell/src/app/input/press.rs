@@ -1378,6 +1378,7 @@ impl App {
                         Some(root) => select::topmost_in(self.doc.editor.document(), root, dp, hit_r),
                         None => select::topmost_selectable_at(self.doc.editor.document(), dp, visible),
                     };
+                    eprintln!("[DS_DEBUG] dp={dp:?} shown.len()={} candidate={candidate:?}", shown.len());
                     if let Some(id) = candidate {
                         // A press on an object's body/fill (not a node):
                         // select it, revealing its nodes, and arm a move
@@ -1579,22 +1580,16 @@ impl App {
                     // single click just deselects / starts a marquee.
                     self.pop_isolation();
                 } else {
-                    // Empty space: a press inside the selection box drags
-                    // the selection; otherwise it's a marquee.
-                    let inside_box = !self.shift_down
-                        && select::union_bounds(doc, &self.doc.selection)
-                            .is_some_and(|b| b.contains(dp));
-                    if inside_box {
-                        self.drag = start_move(dp, None);
-                    } else {
-                        if !self.shift_down {
-                            self.doc.selection.clear();
-                            self.sync_align_mode();
-                        }
-                        self.drag = Drag::Marquee {
-                            start: self.pointer,
-                        };
+                    // A miss stays a miss, even inside the selection's
+                    // combined bounds (for example between radial spokes).
+                    if !self.shift_down {
+                        self.doc.selection.clear();
+                        self.doc.anchor_sel.clear();
+                        self.sync_align_mode();
                     }
+                    self.drag = Drag::Marquee {
+                        start: self.pointer,
+                    };
                 }
                 self.request_main_redraw();
             }
