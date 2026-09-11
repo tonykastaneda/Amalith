@@ -25,7 +25,8 @@ fn metric_cell() -> f64 { crate::metrics::with(|m| m.panels_tools_cell) }
 fn metric_top() -> f64 { crate::metrics::with(|m| m.panels_tools_top) }
 /// Index of the Shape slot among [`slots`].
 const SHAPE_SLOT: usize = 5;
-/// Index of the Rotate/Reflect and Scale/Shear flyout-group slots.
+/// Index of the Type, Rotate/Reflect, and Scale/Shear flyout-group slots.
+pub const TYPE_GROUP_SLOT: usize = 3;
 pub const ROTATE_GROUP_SLOT: usize = 6;
 pub const SCALE_GROUP_SLOT: usize = 7;
 
@@ -45,12 +46,12 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
 /// Eyedropper ▸ Blend ▸ Artboard ▸ Hand ▸ Zoom), with the tools that have
 /// no Illustrator-toolbar counterpart (Width, Arc, Spiral, Free Transform,
 /// Join, Shape Builder, Eraser) tacked on at the end rather than left out.
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool) -> [Tool; 21] {
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool) -> [Tool; 21] {
     [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
-        Tool::Text,
+        type_group,
         Tool::Line,
         shape,
         rotate_group,
@@ -111,6 +112,7 @@ pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup) -> Rect {
     let i = match group {
         crate::tool::ToolGroup::RotateReflect => ROTATE_GROUP_SLOT,
         crate::tool::ToolGroup::ScaleShear => SCALE_GROUP_SLOT,
+        crate::tool::ToolGroup::Type => TYPE_GROUP_SLOT,
     };
     cell(body, i, cols(body))
 }
@@ -315,7 +317,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
         .into_iter()
         .enumerate()
     {
@@ -326,6 +328,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             crate::tool::ToolGroup::RotateReflect.contains(ctx.active_tool)
         } else if i == SCALE_GROUP_SLOT {
             crate::tool::ToolGroup::ScaleShear.contains(ctx.active_tool)
+        } else if i == TYPE_GROUP_SLOT {
+            crate::tool::ToolGroup::Type.contains(ctx.active_tool)
         } else {
             tool == ctx.active_tool
         };
@@ -341,7 +345,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             ctx.theme.text_dim
         };
         icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (ui_px(22.0), ui_px(22.0))), color);
-        if matches!(i, SHAPE_SLOT | ROTATE_GROUP_SLOT | SCALE_GROUP_SLOT) {
+        if matches!(i, SHAPE_SLOT | ROTATE_GROUP_SLOT | SCALE_GROUP_SLOT | TYPE_GROUP_SLOT) {
             // Bottom-right triangle: this slot has a flyout.
             let mut t = BezPath::new();
             t.move_to((r.x1 - ui_px(6.0), r.y1 - ui_px(2.0)));
@@ -389,7 +393,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::SetPaint(Paint::None);
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
         .into_iter()
         .enumerate()
     {
@@ -398,6 +402,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
                 SHAPE_SLOT => Action::ShapeSlot,
                 ROTATE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::RotateReflect),
                 SCALE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::ScaleShear),
+                TYPE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::Type),
                 _ => Action::SetTool(tool),
             };
         }
@@ -430,7 +435,7 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         return Some("Fill".into());
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool)
+    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
         .into_iter()
         .enumerate()
     {

@@ -71,6 +71,11 @@ pub enum Icon {
     Join,
     ShapeBuilder,
     Eraser,
+    VerticalText,
+    AreaType,
+    PathType,
+    VerticalAreaType,
+    VerticalPathType,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -88,7 +93,8 @@ fn brand_svg(icon: Icon) -> &'static str {
         Icon::Text | Icon::Line | Icon::Hand | Icon::Zoom | Icon::Eyedropper | Icon::Gradient
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
         | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
-        | Icon::Eraser => "",
+        | Icon::Eraser | Icon::VerticalText | Icon::AreaType | Icon::PathType
+        | Icon::VerticalAreaType | Icon::VerticalPathType => "",
     }
 }
 
@@ -164,6 +170,26 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Eraser {
         draw_eraser_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::VerticalText {
+        draw_vertical_type_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::AreaType {
+        draw_area_type_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::PathType {
+        draw_path_type_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::VerticalAreaType {
+        draw_vertical_area_type_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::VerticalPathType {
+        draw_vertical_path_type_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -645,6 +671,129 @@ fn draw_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
             y + h - inset,
         ),
     );
+}
+
+/// The top-to-bottom arrow every Vertical-* type tool icon shares,
+/// occupying the box's left third — Illustrator's own convention for
+/// marking a tool as the vertical sibling of a horizontal one.
+fn draw_down_arrow(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x = box_.x0;
+    let y = box_.y0;
+    let inset = w * 0.16;
+    let shaft_x = x + w * 0.16;
+    let shaft_top = y + inset;
+    let shaft_bottom = y + h - inset - w * 0.08;
+    scene.stroke(
+        &Stroke::new((w * 0.09).max(1.2)),
+        ID,
+        color,
+        None,
+        &Line::new((shaft_x, shaft_top), (shaft_x, shaft_bottom)),
+    );
+    let ah = w * 0.11;
+    let mut arrow = BezPath::new();
+    arrow.move_to((shaft_x - ah, shaft_bottom - ah * 0.3));
+    arrow.line_to((shaft_x + ah, shaft_bottom - ah * 0.3));
+    arrow.line_to((shaft_x, shaft_bottom + ah * 0.9));
+    arrow.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &arrow);
+}
+
+/// The box's right two-thirds — where a Vertical-* icon draws its base
+/// (horizontal) glyph, beside [`draw_down_arrow`] in the left third.
+fn right_two_thirds(box_: Rect) -> Rect {
+    Rect::new(box_.x0 + box_.width() * 0.4, box_.y0, box_.x1, box_.y1)
+}
+
+/// A downward arrow beside a `T` — Illustrator's own Vertical Type Tool
+/// mark: the type glyph, shifted into the box's right two-thirds, plus a
+/// top-to-bottom arrow occupying the left third.
+fn draw_vertical_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    draw_down_arrow(scene, box_, color);
+    let r = right_two_thirds(box_);
+    let w = box_.width();
+    let h = r.height();
+    let x = r.x0;
+    let y = r.y0;
+    let inset = w * 0.16;
+    let bar = (h * 0.14).max(1.5);
+    let stem = (w * 0.13).max(1.5);
+    let cx = r.center().x;
+    scene.fill(Fill::NonZero, ID, color, None, &Rect::new(x, y + inset, r.x1 - inset, y + inset + bar));
+    scene.fill(Fill::NonZero, ID, color, None, &Rect::new(cx - stem / 2.0, y + inset, cx + stem / 2.0, y + h - inset));
+    scene.fill(
+        Fill::NonZero,
+        ID,
+        color,
+        None,
+        &Rect::new(cx - stem * 1.4, y + h - inset - bar * 0.85, cx + stem * 1.4, y + h - inset),
+    );
+}
+
+/// A `T` inside a trapezoid — Illustrator's Area Type Tool mark (text
+/// bound to a shape's area).
+fn draw_area_type_glyph_in(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x = box_.x0;
+    let y = box_.y0;
+    let inset = w * 0.14;
+    let bot_inset = w * 0.26;
+    let mut trapezoid = BezPath::new();
+    trapezoid.move_to((x + inset, y + inset));
+    trapezoid.line_to((x + w - inset, y + inset));
+    trapezoid.line_to((x + w - bot_inset, y + h - inset));
+    trapezoid.line_to((x + bot_inset, y + h - inset));
+    trapezoid.close_path();
+    scene.stroke(&Stroke::new((w * 0.07).max(1.1)), ID, color, None, &trapezoid);
+    let cx = box_.center().x;
+    let bar_y = y + h * 0.42;
+    let bar_half = w * 0.14;
+    let sw = (w * 0.08).max(1.1);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((cx - bar_half, bar_y), (cx + bar_half, bar_y)));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((cx, bar_y), (cx, y + h * 0.66)));
+}
+
+fn draw_area_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    draw_area_type_glyph_in(scene, box_, color);
+}
+
+fn draw_vertical_area_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    draw_down_arrow(scene, box_, color);
+    draw_area_type_glyph_in(scene, right_two_thirds(box_), color);
+}
+
+/// A shallow curve with a few dots riding it — Illustrator's Type on a
+/// Path Tool mark (characters following a curve rather than a straight
+/// baseline).
+fn draw_path_type_glyph_in(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let x = box_.x0;
+    let y = box_.y0;
+    let mut curve = BezPath::new();
+    curve.move_to((x + w * 0.14, y + h * 0.72));
+    curve.curve_to(
+        (x + w * 0.30, y + h * 0.16),
+        (x + w * 0.70, y + h * 0.16),
+        (x + w * 0.86, y + h * 0.72),
+    );
+    scene.stroke(&Stroke::new((w * 0.08).max(1.1)), ID, color, None, &curve);
+    let dot_r = (w * 0.045).max(1.0);
+    for &(fx, fy) in &[(0.30, 0.46), (0.5, 0.30), (0.70, 0.46)] {
+        scene.fill(Fill::NonZero, ID, color, None, &Circle::new((x + w * fx, y + h * fy), dot_r));
+    }
+}
+
+fn draw_path_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    draw_path_type_glyph_in(scene, box_, color);
+}
+
+fn draw_vertical_path_type_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    draw_down_arrow(scene, box_, color);
+    draw_path_type_glyph_in(scene, right_two_thirds(box_), color);
 }
 
 /// A magnifying-glass cursor centred at `center`, with a `+` (`plus`) or

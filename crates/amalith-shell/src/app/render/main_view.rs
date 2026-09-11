@@ -65,6 +65,7 @@ pub(in crate::app) fn paint_main(
     shape_flyout: Option<Rect>,
     last_rotate_tool: Tool,
     last_scale_tool: Tool,
+    last_type_tool: Tool,
     tool_flyout: Option<(Rect, crate::tool::ToolGroup)>,
     blend_spine_hover: Option<Vec<Point>>,
     stroke_popover: bool,
@@ -582,6 +583,7 @@ pub(in crate::app) fn paint_main(
         shape_tool,
         rotate_group_tool: last_rotate_tool,
         scale_group_tool: last_scale_tool,
+        type_group_tool: last_type_tool,
         expanded,
         renaming,
         selected_layer,
@@ -789,13 +791,14 @@ pub(in crate::app) fn paint_main(
         }
     }
 
-    // Labeled tool-group flyout (Rotate/Reflect, Scale/Shear) — same style.
+    // Labeled tool-group flyout (Rotate/Reflect, Scale/Shear, Type) — same style.
     if let Some((anchor, group)) = tool_flyout {
         let tools = group.tools();
         paint_flyout_bg(scene, theme, anchor, tools.len());
         let current = match group {
             crate::tool::ToolGroup::RotateReflect => last_rotate_tool,
             crate::tool::ToolGroup::ScaleShear => last_scale_tool,
+            crate::tool::ToolGroup::Type => last_type_tool,
         };
         for (i, t) in tools.iter().enumerate() {
             paint_flyout_row(scene, text, theme, pointer, tool_flyout_row(anchor, i), *t, current);

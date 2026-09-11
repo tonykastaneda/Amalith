@@ -114,6 +114,7 @@ pub struct Ctx<'a> {
     /// whichever tool in that group was last used.
     pub rotate_group_tool: Tool,
     pub scale_group_tool: Tool,
+    pub type_group_tool: Tool,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
     /// The row being inline-renamed, and its current edit buffer.

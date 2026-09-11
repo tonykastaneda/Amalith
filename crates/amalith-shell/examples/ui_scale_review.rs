@@ -41,6 +41,7 @@ fn main() {
             shape_tool: amalith_shell::tool::Tool::Rectangle,
             rotate_group_tool: amalith_shell::tool::Tool::Rotate,
             scale_group_tool: amalith_shell::tool::Tool::Scale,
+            type_group_tool: amalith_shell::tool::Tool::Text,
             expanded: &expanded,
             renaming: None,
             selected_layer: None,

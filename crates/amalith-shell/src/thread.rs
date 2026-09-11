@@ -58,6 +58,9 @@ pub fn frame_overset(doc: &Document, tcx: &mut TextContext, id: ObjectId) -> boo
         style: td.style.clone(),
         align: td.align,
         paragraph: td.paragraph,
+        // Threading (overflow linking) doesn't apply to vertical text — v1
+        // scope — so a threading probe is always horizontal.
+        vertical: false,
         local_bounds: amalith_core::Rect::ZERO,
         thread_next: None,
         thread_prev: None,
@@ -137,6 +140,7 @@ pub fn slices(
             style: head_td.style.clone(),
             align: head_td.align,
             paragraph: head_td.paragraph,
+            vertical: false,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,

@@ -500,7 +500,7 @@ pub fn paint(
                 scene.fill(Fill::NonZero, Affine::IDENTITY, fill, None, &r);
                 scene.stroke(&stroke, Affine::IDENTITY, theme.accent, None, &r);
             }
-            Tool::Text => {
+            Tool::Text | Tool::VerticalText | Tool::AreaType | Tool::VerticalAreaType => {
                 // Area-text box: dashed outline, no fill.
                 scene.stroke(
                     &Stroke::new(1.0).with_dashes(0.0, [4.0, 3.0]),
@@ -887,10 +887,40 @@ pub fn paint(
 
         // Baseline guide under every visible line of a selected text
         // object (Illustrator draws these while the frame is selected).
+        // Vertical text has no single horizontal baseline the same way —
+        // `td_layout` builds an unwrapped *horizontal* layout regardless
+        // of orientation, so running this unmodified against vertical
+        // content drew one guide line the full width of the whole
+        // unwrapped string (visually: a long stray horizontal line). A
+        // vertical text object's baseline is a *vertical* line down each
+        // column's center instead — see the loop below.
         for &id in selection {
             let Some(obj) = doc.object(id) else { continue };
             let ObjectKind::Text(td) = &obj.kind else { continue };
             if matches!(td.kind, TextKind::Path(_)) {
+                continue;
+            }
+            if td.vertical {
+                if td.content.is_empty() {
+                    continue;
+                }
+                let m = vt * convert::affine(doc.world_transform(id));
+                let guide = theme.accent.with_alpha(0.55);
+                let frame_h = match td.kind {
+                    TextKind::Area { height, .. } => height,
+                    TextKind::Point | TextKind::Path(_) => None,
+                };
+                let v = crate::vertical_text::layout(
+                    text,
+                    &td.content,
+                    &td.style,
+                    frame_h,
+                );
+                for (x, bottom_y) in v.column_guides() {
+                    let top = m * Point::new(x, 0.0);
+                    let bottom = m * Point::new(x, bottom_y);
+                    scene.stroke(&Stroke::new(0.75), Affine::IDENTITY, guide, None, &Line::new(top, bottom));
+                }
                 continue;
             }
             // A threaded downstream frame shows its slice of the story.
@@ -1720,7 +1750,11 @@ fn paint_object(
                         Some((amalith_core::ArcLengthPath::new(&points, pd.subpaths().first()?.closed), amalith_core::Affine::IDENTITY))
                     }).or_else(|| crate::pathtext::resolve(doc, id, pt));
                     if let Some((arc, rel_xf)) = resolved {
-                        crate::pathtext::paint_path_text(scene, text, td, pt, &arc, rel_xf, m, color);
+                        if td.vertical {
+                            crate::vertical_text::paint_path_text_vertical(scene, text, td, pt, &arc, rel_xf, m, color);
+                        } else {
+                            crate::pathtext::paint_path_text(scene, text, td, pt, &arc, rel_xf, m, color);
+                        }
                     }
                     if translucent {
                         scene.pop_layer();

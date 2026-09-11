@@ -255,7 +255,7 @@ impl App {
             )),
             // Type tool rubber-band → the area-text box being dragged out.
             Drag::DrawText { start_doc, cur_doc } => Some((
-                Tool::Text,
+                if self.active_tool == Tool::VerticalText { Tool::VerticalText } else { Tool::Text },
                 convert::rect(shape_rect(
                     *start_doc,
                     *cur_doc,
@@ -563,6 +563,7 @@ impl App {
                 self.shape_flyout,
                 self.last_rotate_tool,
                 self.last_scale_tool,
+                self.last_type_tool,
                 self.tool_flyout,
                 blend_spine_hover,
                 self.stroke_popover,
@@ -659,6 +660,7 @@ impl App {
                             shape_tool: self.last_shape_tool,
                             rotate_group_tool: self.last_rotate_tool,
                             scale_group_tool: self.last_scale_tool,
+                            type_group_tool: self.last_type_tool,
                             expanded: &self.doc.expanded_groups,
                             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                             selected_layer: self.doc.selected_layer,
@@ -725,6 +727,7 @@ impl App {
                                 shape_tool: self.last_shape_tool,
                                 rotate_group_tool: self.last_rotate_tool,
                                 scale_group_tool: self.last_scale_tool,
+                                type_group_tool: self.last_type_tool,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
@@ -801,6 +804,7 @@ impl App {
                                 shape_tool: self.last_shape_tool,
                                 rotate_group_tool: self.last_rotate_tool,
                                 scale_group_tool: self.last_scale_tool,
+                                type_group_tool: self.last_type_tool,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,

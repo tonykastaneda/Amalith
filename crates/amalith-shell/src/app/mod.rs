@@ -1130,6 +1130,7 @@ struct App {
     /// — whichever tool in that group was last used.
     last_rotate_tool: Tool,
     last_scale_tool: Tool,
+    last_type_tool: Tool,
     /// The Free Transform tool's on-canvas flyout: which sub-mode is
     /// active, and whether Constrain is on. Both persist across tool
     /// switches, like `last_shape_tool`.
@@ -1451,6 +1452,7 @@ impl App {
             shape_flyout: None,
             last_rotate_tool: Tool::Rotate,
             last_scale_tool: Tool::Scale,
+            last_type_tool: Tool::Text,
             free_transform_mode: free_transform::FreeTransformMode::Transform,
             free_transform_constrain: false,
             last_transform: None,
@@ -4912,8 +4914,9 @@ impl App {
     }
 
     fn set_tool(&mut self, t: Tool) {
-        // Leaving the Type tool commits whatever's being typed.
-        if t != Tool::Text && self.text_edit.is_some() {
+        // Leaving the Type tool (either orientation) commits whatever's
+        // being typed.
+        if !matches!(t, Tool::Text | Tool::VerticalText) && self.text_edit.is_some() {
             self.commit_text_edit();
         }
         if t != Tool::Pen {
@@ -4945,6 +4948,9 @@ impl App {
         }
         if ToolGroup::ScaleShear.contains(t) {
             self.last_scale_tool = t;
+        }
+        if ToolGroup::Type.contains(t) {
+            self.last_type_tool = t;
         }
         if !matches!(t, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale) {
             // A transform tool's custom reference point is per-session.
@@ -5316,7 +5322,10 @@ impl App {
         let amalith_core::ObjectKind::Text(t) = &obj.kind else {
             return None;
         };
-        if !matches!(t.kind, amalith_core::TextKind::Area { .. }) || t.thread_next.is_some() {
+        // Threading assumes horizontal wrapping (`thread.rs` reflows via
+        // `td_layout`, which has no vertical-writing concept) — a vertical
+        // area box just never grows an out-port at all.
+        if !matches!(t.kind, amalith_core::TextKind::Area { .. }) || t.thread_next.is_some() || t.vertical {
             return None;
         }
         let q = select::selection_quad(self.doc.editor.document(), &[id])?;
@@ -5581,8 +5590,11 @@ impl App {
     }
 
     /// Create a text object of `kind` anchored at `origin` (document space)
-    /// and open it for editing.
-    fn create_text(&mut self, kind: amalith_core::TextKind, origin: Point) {
+    /// and open it for editing. `vertical` is Illustrator's Vertical Type
+    /// Tool — top-to-bottom, right-to-left columns instead of left-to-right
+    /// lines (see `vertical_text.rs`); meaningless for `TextKind::Path`,
+    /// which the caller never sets it for.
+    fn create_text(&mut self, kind: amalith_core::TextKind, origin: Point, vertical: bool) {
         let layer = self.ensure_layer();
         // Seed with placeholder text, selected on open (see `enter_text_edit`),
         // so the first keystroke replaces it — and so a click-away leaves a
@@ -5598,6 +5610,7 @@ impl App {
             style: self.text_defaults.clone(),
             align: self.text_align_default,
             paragraph: self.para_defaults,
+            vertical,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
@@ -5638,7 +5651,10 @@ impl App {
     /// Convert the clicked curve to a text frame in place. The source's
     /// transform, parent, and stacking position survive; text starts at
     /// the clicked distance and closed paths continue through the seam.
-    fn create_path_text(&mut self, path_id: ObjectId, click_doc: Point) {
+    /// `vertical` is the Vertical Type on a Path Tool — characters flow
+    /// along the curve with their own top-to-bottom reading axis
+    /// following the tangent, instead of left-to-right.
+    fn create_path_text(&mut self, path_id: ObjectId, click_doc: Point, vertical: bool) {
         let (points, closed, path_world) = {
             let doc = self.doc.editor.document();
             let Some(amalith_core::ObjectKind::Path(pd)) = doc.object(path_id).map(|o| &o.kind)
@@ -5682,11 +5698,16 @@ impl App {
             style: self.text_defaults.clone(),
             align: self.text_align_default,
             paragraph: self.para_defaults,
+            vertical,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
         };
-        data.local_bounds = pathtext::text_bounds(&mut self.text, &data, &pt, &arc, amalith_core::Affine::IDENTITY);
+        data.local_bounds = if vertical {
+            textedit::measure_text_data(&data, &mut self.text)
+        } else {
+            pathtext::text_bounds(&mut self.text, &data, &pt, &arc, amalith_core::Affine::IDENTITY)
+        };
         let cmd = Command::CreateText {
             layer,
             data,
@@ -5714,6 +5735,8 @@ impl App {
             style: self.text_defaults.clone(),
             align: self.text_align_default,
             paragraph: self.para_defaults,
+            // A threaded frame is always horizontal — see `thread.rs`.
+            vertical: false,
             local_bounds: amalith_core::Rect::ZERO,
             thread_next: None,
             thread_prev: None,
@@ -5893,6 +5916,7 @@ impl App {
             td.style,
             td.align,
             td.paragraph,
+            td.vertical,
             &td.content,
             &mut self.text,
         );
@@ -5914,7 +5938,7 @@ impl App {
             None => te.select_all(&mut self.text),
         }
         self.text_edit = Some(te);
-        self.active_tool = Tool::Text;
+        self.active_tool = if td.vertical { Tool::VerticalText } else { Tool::Text };
         self.text_blink = Instant::now();
         if let Some(w) = self.main_window() {
             w.set_ime_allowed(true);
@@ -6421,6 +6445,7 @@ impl App {
             shape_tool: self.last_shape_tool,
             rotate_group_tool: self.last_rotate_tool,
             scale_group_tool: self.last_scale_tool,
+            type_group_tool: self.last_type_tool,
             expanded: &self.doc.expanded_groups,
             renaming: None,
             selected_layer: self.doc.selected_layer,
@@ -6481,6 +6506,7 @@ impl App {
             shape_tool: self.last_shape_tool,
             rotate_group_tool: self.last_rotate_tool,
             scale_group_tool: self.last_scale_tool,
+            type_group_tool: self.last_type_tool,
             expanded: &self.doc.expanded_groups,
             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
             selected_layer: self.doc.selected_layer,
@@ -6992,6 +7018,9 @@ impl App {
                     let target = select::topmost_path_near(self.doc.editor.document(), self.doc_point(self.pointer), self.visible_doc_rect(), 4.0 / self.doc.view.zoom);
                     if self.text_edit.is_none() && target.is_some() { CanvasCursor::PathType } else { CanvasCursor::IBeam }
                 },
+                // No type-on-a-path for the Vertical Type Tool — always
+                // the plain caret cursor, never `PathType`.
+                Tool::VerticalText => CanvasCursor::IBeam,
                 Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
                 Tool::Hand => CanvasCursor::Grab,
                 Tool::Zoom => {
@@ -8211,6 +8240,12 @@ fn shape_rect(a: Point, b: Point, square: bool, from_center: bool) -> amalith_co
 
 /// Smallest an area-text box may be dragged in document px.
 const TEXTBOX_MIN: f64 = 8.0;
+
+/// Default box size a plain click (no drag) with the Area Type / Vertical
+/// Area Type tool creates — Illustrator's own Area Type Tool does the
+/// same rather than dropping a degenerate zero-size frame.
+const AREA_TYPE_DEFAULT_W: f64 = 200.0;
+const AREA_TYPE_DEFAULT_H: f64 = 100.0;
 
 /// The new frame rect for a text-box handle drag: `handle` moves the
 /// edge(s) it touches by the pointer delta `(dp - start_doc)`; opposite

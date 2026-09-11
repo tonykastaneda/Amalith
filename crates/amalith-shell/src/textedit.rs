@@ -21,11 +21,12 @@ use skrifa::{
     outline::{DrawSettings, OutlinePen},
     GlyphId, MetadataProvider,
 };
-use vello::kurbo::{Affine, Rect, Stroke};
+use vello::kurbo::{Affine, Point, Rect, Stroke};
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
 
 use crate::text::{TextContext, TextLayoutKey};
+use crate::vertical_text::{self, VerticalLayout};
 
 /// A caret size hint for `cursor_geometry`, in editor px.
 const CARET_W: f32 = 1.5;
@@ -55,9 +56,22 @@ pub struct TextEdit {
     /// True from the first keystroke — a never-touched object is discarded
     /// on commit.
     pub touched: bool,
+    /// Illustrator's Vertical Type Tool — top-to-bottom, right-to-left
+    /// columns of upright glyphs, computed and hit-tested entirely outside
+    /// `parley::PlainEditor` (which has no vertical-writing concept at
+    /// all — see `vertical_text.rs`). `editor` still owns the actual text
+    /// buffer and logical-order caret/selection (insert, delete, select
+    /// all, word/char movement) even when this is `true`; only point-based
+    /// hit-testing and the Up/Down/Left/Right key mapping are swapped.
+    vertical: bool,
+    /// Kept in sync with `editor`'s text/style after every edit — the
+    /// source of truth for rendering, hit-testing, and caret/selection
+    /// rects when `vertical` is set.
+    v_layout: VerticalLayout,
 }
 
 impl TextEdit {
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         object: amalith_core::ObjectId,
@@ -66,17 +80,24 @@ impl TextEdit {
         style: TextStyle,
         align: TextAlign,
         paragraph: Paragraph,
+        vertical: bool,
         seed: &str,
         tcx: &mut TextContext,
     ) -> Self {
         let mut editor = PlainEditor::<Brush>::new(style.size as f32);
         editor.set_text(seed);
-        if let TextKind::Area { width, .. } = kind {
-            editor.set_width(Some(width as f32));
-        } else {
-            editor.set_width(None);
+        // Vertical text is never wrapped at the parley level — its own
+        // column-height wrapping (`vertical_text::layout`) replaces
+        // parley's width-based wrapping entirely.
+        if !vertical {
+            if let TextKind::Area { width, .. } = kind {
+                editor.set_width(Some(width as f32));
+            } else {
+                editor.set_width(None);
+            }
         }
         editor.set_alignment(alignment(align));
+        let v_layout = vertical_text::layout(tcx, seed, &style, wrap_h_for(kind));
         let mut this = Self {
             object,
             origin,
@@ -89,10 +110,21 @@ impl TextEdit {
             thread_next: None,
             thread_prev: None,
             touched: !seed.is_empty(),
+            vertical,
+            v_layout,
         };
         this.apply_style(&style, tcx);
         this.set_paragraph(paragraph);
         this
+    }
+
+    /// Recomputes `v_layout` from the editor's current text/style — call
+    /// after anything that changes either. A no-op for horizontal text.
+    fn refresh_v_layout(&mut self, tcx: &mut TextContext) {
+        if self.vertical {
+            let content = self.text();
+            self.v_layout = vertical_text::layout(tcx, &content, &self.style, wrap_h_for(self.kind));
+        }
     }
 
     /// Carry the source frame's thread links so [`Self::to_text_data`]
@@ -185,9 +217,14 @@ impl TextEdit {
     /// export.
     pub fn set_paragraph(&mut self, p: Paragraph) {
         self.paragraph = p;
-        if let TextKind::Area { width, .. } = self.kind {
-            let inner = (width - p.indent_start - p.indent_end).max(1.0);
-            self.editor.set_width(Some(inner as f32));
+        // Vertical text is never wrapped at the parley level (see `new`) —
+        // indent-narrowing the parley wrap width would be a no-op there
+        // anyway, but skip it for clarity.
+        if !self.vertical {
+            if let TextKind::Area { width, .. } = self.kind {
+                let inner = (width - p.indent_start - p.indent_end).max(1.0);
+                self.editor.set_width(Some(inner as f32));
+            }
         }
     }
 
@@ -197,7 +234,9 @@ impl TextEdit {
             let h = *height;
             self.kind = TextKind::Area { width, height: h };
         }
-        self.editor.set_width(Some(width as f32));
+        if !self.vertical {
+            self.editor.set_width(Some(width as f32));
+        }
     }
 
     pub fn set_scale(&mut self, scale: f32) {
@@ -215,6 +254,12 @@ impl TextEdit {
     /// The current selection rectangles, in editor space (origin at the
     /// text block's top-left).
     pub fn selection_rects(&self) -> Vec<Rect> {
+        if self.vertical {
+            let sel = self.editor.raw_selection();
+            let (a, b) = (sel.anchor().index(), sel.focus().index());
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            return self.v_layout.selection_rects(lo..hi);
+        }
         self.editor
             .selection_geometry()
             .into_iter()
@@ -224,6 +269,9 @@ impl TextEdit {
 
     /// The caret rectangle, in editor space, if the cursor is shown.
     pub fn caret_rect(&self) -> Option<Rect> {
+        if self.vertical {
+            return Some(self.v_layout.caret_rect(self.editor.raw_selection().focus().index()));
+        }
         self.editor
             .cursor_geometry(CARET_W)
             .map(|b| Rect::new(b.x0, b.y0, b.x1, b.y1))
@@ -247,9 +295,81 @@ impl TextEdit {
         tcx: &mut TextContext,
     ) -> KeyResult {
         use winit::keyboard::{Key, NamedKey};
+        let sel = mods.shift;
+        // Vertical text swaps the visual meaning of the arrow keys before
+        // anything else runs: Up/Down move within the current column
+        // (parley's own Left/Right — moving one character forward/back in
+        // logical order is layout-direction-agnostic), while Left/Right
+        // jump to the same row in the neighboring column — something
+        // parley has no concept of at all, computed from `v_layout`
+        // instead. Everything else (typing, Backspace/Delete, Enter,
+        // Escape, ⌘A, ...) is identical to horizontal text and falls
+        // through to the unchanged match below.
+        if self.vertical {
+            if let Key::Named(named) = key {
+                match named {
+                    NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown
+                        if mods.alt =>
+                    {
+                        return KeyResult::Ignored;
+                    }
+                    NamedKey::ArrowUp => {
+                        let (fc, lc) = tcx.parts();
+                        let mut drv = self.editor.driver(fc, lc);
+                        if mods.meta {
+                            if sel { drv.select_to_text_start(); } else { drv.move_to_text_start(); }
+                        } else if sel {
+                            drv.select_left();
+                        } else {
+                            drv.move_left();
+                        }
+                        return KeyResult::Handled;
+                    }
+                    NamedKey::ArrowDown => {
+                        let (fc, lc) = tcx.parts();
+                        let mut drv = self.editor.driver(fc, lc);
+                        if mods.meta {
+                            if sel { drv.select_to_text_end(); } else { drv.move_to_text_end(); }
+                        } else if sel {
+                            drv.select_right();
+                        } else {
+                            drv.move_right();
+                        }
+                        return KeyResult::Handled;
+                    }
+                    NamedKey::ArrowLeft | NamedKey::ArrowRight => {
+                        let focus = self.editor.raw_selection().focus().index();
+                        let (col, row) = self.v_layout.column_row_of(focus);
+                        // Column 0 sits at local x=0 (rightmost); higher
+                        // indices sit further left. So Left = a higher
+                        // column index, Right = a lower one.
+                        let target = if matches!(named, NamedKey::ArrowLeft) {
+                            col + 1
+                        } else {
+                            col.saturating_sub(1)
+                        };
+                        let byte = self.v_layout.byte_at(target, row);
+                        let (fc, lc) = tcx.parts();
+                        let mut drv = self.editor.driver(fc, lc);
+                        if sel { drv.extend_selection_to_byte(byte); } else { drv.move_to_byte(byte); }
+                        return KeyResult::Handled;
+                    }
+                    NamedKey::Home | NamedKey::End => {
+                        let focus = self.editor.raw_selection().focus().index();
+                        let (col, _) = self.v_layout.column_row_of(focus);
+                        let bounds = self.v_layout.column_bounds(col);
+                        let byte = if matches!(named, NamedKey::Home) { bounds.start } else { bounds.end };
+                        let (fc, lc) = tcx.parts();
+                        let mut drv = self.editor.driver(fc, lc);
+                        if sel { drv.extend_selection_to_byte(byte); } else { drv.move_to_byte(byte); }
+                        return KeyResult::Handled;
+                    }
+                    _ => {}
+                }
+            }
+        }
         let (fc, lc) = tcx.parts();
         let mut drv = self.editor.driver(fc, lc);
-        let sel = mods.shift;
         match key {
             Key::Named(NamedKey::Escape) => return KeyResult::Commit,
             Key::Named(NamedKey::Enter) if mods.meta => return KeyResult::Commit,
@@ -353,6 +473,8 @@ impl TextEdit {
                 }
             }
         }
+        drop(drv);
+        self.refresh_v_layout(tcx);
         KeyResult::Handled
     }
 
@@ -360,6 +482,7 @@ impl TextEdit {
         let (fc, lc) = tcx.parts();
         self.editor.driver(fc, lc).insert_or_replace_selection(s);
         self.touched = true;
+        self.refresh_v_layout(tcx);
     }
 
     pub fn select_all(&mut self, tcx: &mut TextContext) {
@@ -399,6 +522,21 @@ impl TextEdit {
     /// `p` is in editor space (already offset by the text block origin and
     /// un-zoomed). `clicks` = 1 caret, 2 word, 3+ the whole text.
     pub fn pointer_down(&mut self, p: (f32, f32), clicks: u32, tcx: &mut TextContext) {
+        if self.vertical {
+            // Parley's own point-based hit-testing assumes its (unused
+            // for vertical) horizontal layout — resolve against the real
+            // column layout instead, then just move the underlying
+            // editor's logical caret to that byte offset.
+            let byte = self.v_layout.hit_test(Point::new(p.0 as f64, p.1 as f64));
+            let (fc, lc) = tcx.parts();
+            let mut drv = self.editor.driver(fc, lc);
+            if clicks >= 3 {
+                drv.select_all();
+            } else {
+                drv.move_to_byte(byte);
+            }
+            return;
+        }
         let (fc, lc) = tcx.parts();
         let mut drv = self.editor.driver(fc, lc);
         match clicks {
@@ -409,6 +547,12 @@ impl TextEdit {
     }
 
     pub fn pointer_drag(&mut self, p: (f32, f32), tcx: &mut TextContext) {
+        if self.vertical {
+            let byte = self.v_layout.hit_test(Point::new(p.0 as f64, p.1 as f64));
+            let (fc, lc) = tcx.parts();
+            self.editor.driver(fc, lc).extend_selection_to_byte(byte);
+            return;
+        }
         let (fc, lc) = tcx.parts();
         self.editor
             .driver(fc, lc)
@@ -574,6 +718,10 @@ impl TextEdit {
         // = up, so subtracted — local space is y-down), applied before
         // the object's own world transform like everything else.
         let xf = xf * Affine::translate((0.0, -self.style.baseline_shift));
+        if self.vertical {
+            self.render_vertical(scene, tcx, xf, color, caret_on, theme_blue);
+            return;
+        }
         // Refresh the editor's layout up front. Driver ops (typing,
         // select-all, arrow keys) mark it dirty but don't rebuild, so
         // `selection_geometry` / `cursor_geometry` would otherwise read a
@@ -665,32 +813,99 @@ impl TextEdit {
         }
     }
 
+    /// [`Self::render`]'s vertical-text counterpart — drawn entirely from
+    /// `v_layout` rather than `editor.layout(..)`, which has no useful
+    /// vertical positions to offer (see the module doc comment).
+    fn render_vertical(
+        &mut self,
+        scene: &mut Scene,
+        tcx: &mut TextContext,
+        xf: Affine,
+        color: Color,
+        caret_on: bool,
+        theme_blue: Color,
+    ) {
+        self.refresh_v_layout(tcx);
+        let box_clip = match self.kind {
+            TextKind::Area { width, height: Some(h) } => {
+                scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(-width, 0.0, 0.0, h));
+                true
+            }
+            _ => false,
+        };
+        for r in self.selection_rects() {
+            scene.fill(Fill::NonZero, xf, theme_blue.multiply_alpha(0.35), None, &r);
+        }
+        self.v_layout.draw(scene, xf, color);
+        if caret_on && !self.is_composing() {
+            if let Some(c) = self.caret_rect() {
+                scene.fill(Fill::NonZero, xf, color, None, &c);
+            }
+        }
+        if box_clip {
+            scene.pop_layer();
+        }
+        if let TextKind::Area { width, height } = self.kind {
+            let box_h = height.unwrap_or_else(|| self.v_layout.height()).max(1.0);
+            scene.stroke(&Stroke::new(1.0), xf, theme_blue, None, &Rect::new(-width, 0.0, 0.0, box_h));
+            if let Some(fixed) = height {
+                if self.v_layout.height() > fixed {
+                    // Overflow past the box's LEFT edge (columns march
+                    // leftward) — the vertical analogue of the horizontal
+                    // overset tab past the bottom edge.
+                    let m = Rect::new(-width - 6.0, 0.0, -width, 6.0);
+                    scene.fill(Fill::NonZero, xf, TEXT_OVERSET_INK, None, &m);
+                }
+            }
+        }
+    }
+
     /// Recompute bounds from the current layout and produce the committed
     /// [`TextData`].
     pub fn to_text_data(&mut self, tcx: &mut TextContext) -> TextData {
         let content = self.text();
-        let (fc, lc) = tcx.parts();
-        let layout = self.editor.layout(fc, lc);
-        let w = layout.width() as f64;
-        let h = layout.height() as f64;
-        let bounds = match self.kind {
-            // Path text's real bounds (the curved footprint) need the
-            // followed path's geometry, which `TextEdit` doesn't have.
-            // This straight-line approximation stands in for now — it's
-            // only used for the selection outline / bounding-box handles,
-            // never for painting (see `pathtext::paint_path_text`, which
-            // ignores `local_bounds` entirely).
-            TextKind::Point | TextKind::Path(_) => {
-                // Same anchor offset `paint_text_data` / `measure_text_data`
-                // apply, so the committed object's bounds wrap its glyphs.
-                let dx = point_align_dx(self.align, layout.width());
-                amalith_core::Rect::new(dx, 0.0, dx + w, h)
+        let bounds = if self.vertical {
+            self.refresh_v_layout(tcx);
+            match self.kind {
+                // A vertical area box keeps its drawn size (top-right
+                // anchored, extending left to `-width`), same as a
+                // horizontal box keeps its own drawn width/height —
+                // content that overflows it isn't reflected here.
+                TextKind::Area { width, height } => amalith_core::Rect::new(
+                    -width,
+                    0.0,
+                    0.0,
+                    height.unwrap_or_else(|| self.v_layout.height()),
+                ),
+                TextKind::Point | TextKind::Path(_) => {
+                    let b = self.v_layout.bounds();
+                    amalith_core::Rect::new(b.x0, b.y0, b.x1, b.y1)
+                }
             }
-            TextKind::Area { width, height } => {
-                // A fixed-height box keeps its drawn size regardless of how
-                // much text it holds; an auto box (height None) grows to
-                // the content.
-                amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h))
+        } else {
+            let (fc, lc) = tcx.parts();
+            let layout = self.editor.layout(fc, lc);
+            let w = layout.width() as f64;
+            let h = layout.height() as f64;
+            match self.kind {
+                // Path text's real bounds (the curved footprint) need the
+                // followed path's geometry, which `TextEdit` doesn't have.
+                // This straight-line approximation stands in for now — it's
+                // only used for the selection outline / bounding-box handles,
+                // never for painting (see `pathtext::paint_path_text`, which
+                // ignores `local_bounds` entirely).
+                TextKind::Point | TextKind::Path(_) => {
+                    // Same anchor offset `paint_text_data` / `measure_text_data`
+                    // apply, so the committed object's bounds wrap its glyphs.
+                    let dx = point_align_dx(self.align, layout.width());
+                    amalith_core::Rect::new(dx, 0.0, dx + w, h)
+                }
+                TextKind::Area { width, height } => {
+                    // A fixed-height box keeps its drawn size regardless of how
+                    // much text it holds; an auto box (height None) grows to
+                    // the content.
+                    amalith_core::Rect::new(0.0, 0.0, width, height.unwrap_or(h))
+                }
             }
         };
         TextData {
@@ -700,6 +915,7 @@ impl TextEdit {
             style: self.style.clone(),
             align: self.align,
             paragraph: self.paragraph,
+            vertical: self.vertical,
             local_bounds: bounds,
             thread_next: self.thread_next,
             thread_prev: self.thread_prev,
@@ -761,6 +977,16 @@ fn alignment(a: TextAlign) -> Alignment {
         | TextAlign::JustifyCenter
         | TextAlign::JustifyRight
         | TextAlign::JustifyAll => Alignment::Justify,
+    }
+}
+
+/// The height budget `vertical_text::layout` should wrap columns to:
+/// an area box's own (always-fixed, for vertical text — see
+/// `vertical_text.rs`'s doc comment) height, or unbounded for point text.
+fn wrap_h_for(kind: TextKind) -> Option<f64> {
+    match kind {
+        TextKind::Area { height, .. } => height,
+        TextKind::Point | TextKind::Path(_) => None,
     }
 }
 
@@ -833,6 +1059,21 @@ pub fn paint_text_data(
     if td.content.is_empty() {
         return;
     }
+    if td.vertical {
+        let v = vertical_text::layout(tcx, &td.content, &td.style, wrap_h_for(td.kind));
+        let clip = match td.kind {
+            TextKind::Area { width, height: Some(h) } if v.height() > h + 0.5 => {
+                scene.push_clip_layer(Fill::NonZero, xf, &Rect::new(-width, 0.0, 0.0, h));
+                true
+            }
+            _ => false,
+        };
+        v.draw(scene, xf, color);
+        if clip {
+            scene.pop_layer();
+        }
+        return;
+    }
     let layout = td_layout(tcx, td);
     // `TextKind::Path` never reaches here — canvas.rs routes it to
     // `pathtext::paint_path_text` instead, which needs the followed
@@ -870,6 +1111,19 @@ pub fn measure_text_data(td: &TextData, tcx: &mut TextContext) -> amalith_core::
             );
             return crate::pathtext::text_bounds(tcx, td, &pt, &arc, cg::Affine::IDENTITY);
         }
+    }
+    if td.vertical {
+        let wrap_h = wrap_h_for(td.kind);
+        let v = vertical_text::layout(tcx, &td.content, &td.style, wrap_h);
+        return match td.kind {
+            TextKind::Area { width, height } => {
+                amalith_core::Rect::new(-width, 0.0, 0.0, height.unwrap_or_else(|| v.height()))
+            }
+            TextKind::Point | TextKind::Path(_) => {
+                let b = v.bounds();
+                amalith_core::Rect::new(b.x0, b.y0, b.x1.max(b.x0 + 1.0), b.y1.max(b.y0 + 1.0))
+            }
+        };
     }
     let layout = td_layout(tcx, td);
     let w = layout.width() as f64;
@@ -931,6 +1185,7 @@ mod tests {
             TextStyle::default(),
             TextAlign::Start,
             Paragraph::default(),
+            false,
             "Lorem ipsum",
             &mut tcx,
         );
@@ -940,6 +1195,54 @@ mod tests {
         assert_eq!(edit.align(), TextAlign::End);
         assert_eq!(edit.to_text_data(&mut tcx).align, TextAlign::End);
         assert!(edit.editor.try_layout().is_some());
+    }
+
+    #[test]
+    fn vertical_up_down_move_within_a_column_left_right_jump_columns() {
+        let mut tcx = TextContext::new();
+        let mut edit = TextEdit::new(
+            amalith_core::ObjectId::new(),
+            amalith_core::Point::ORIGIN,
+            TextKind::Point,
+            TextStyle::default(),
+            TextAlign::Start,
+            Paragraph::default(),
+            true,
+            "AB\nCD",
+            &mut tcx,
+        );
+        // Start of the text (byte 0, 'A' in column 0).
+        {
+            let (fc, lc) = tcx.parts();
+            edit.editor.driver(fc, lc).move_to_byte(0);
+        }
+        let mods = Mods::default();
+        // Down moves within the column: 'A' (0) -> 'B' (1).
+        edit.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown), mods, None, &mut tcx);
+        assert_eq!(edit.editor.raw_selection().focus().index(), 1);
+        // Left jumps to the same row in the next (further-left) column:
+        // 'B' (column 0, row 1) -> 'D' (column 1, row 1, byte 4).
+        edit.key(&winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft), mods, None, &mut tcx);
+        assert_eq!(edit.editor.raw_selection().focus().index(), 4);
+    }
+
+    #[test]
+    fn vertical_to_text_data_round_trips_the_flag_and_content() {
+        let mut tcx = TextContext::new();
+        let mut edit = TextEdit::new(
+            amalith_core::ObjectId::new(),
+            amalith_core::Point::ORIGIN,
+            TextKind::Point,
+            TextStyle::default(),
+            TextAlign::Start,
+            Paragraph::default(),
+            true,
+            "Hi",
+            &mut tcx,
+        );
+        let data = edit.to_text_data(&mut tcx);
+        assert!(data.vertical);
+        assert_eq!(data.content, "Hi");
     }
 }
 

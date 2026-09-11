@@ -911,6 +911,7 @@ impl App {
                 let t = match group {
                     ToolGroup::RotateReflect => self.last_rotate_tool,
                     ToolGroup::ScaleShear => self.last_scale_tool,
+                    ToolGroup::Type => self.last_type_tool,
                 };
                 self.set_tool(t);
             }
@@ -1139,7 +1140,12 @@ impl App {
                         | Tool::FreeTransform
                         | Tool::Join
                         | Tool::ShapeBuilder
-                        | Tool::Eraser => return,
+                        | Tool::Eraser
+                        | Tool::VerticalText
+                        | Tool::AreaType
+                        | Tool::PathType
+                        | Tool::VerticalAreaType
+                        | Tool::VerticalPathType => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1150,21 +1156,37 @@ impl App {
             }
             Drag::TextSelect | Drag::NewdocSelect { .. } => {}
             Drag::DrawText { start_doc, cur_doc } => {
+                let vertical = matches!(self.active_tool, Tool::VerticalText | Tool::VerticalAreaType);
+                let forced_area = matches!(self.active_tool, Tool::AreaType | Tool::VerticalAreaType);
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
-                if r.width() > 4.0 && r.height() > 4.0 {
+                if forced_area || (r.width() > 4.0 && r.height() > 4.0) {
                     // A real drag → area / paragraph type. The dragged
                     // rectangle is the text box: fixed width and height,
                     // text wraps inside it and overflows past the bottom.
+                    // Area Type / Vertical Area Type always create a box,
+                    // even from a plain click — a default-size one, same
+                    // as Illustrator's own Area Type Tool.
+                    let (w, h) = if r.width() > 4.0 && r.height() > 4.0 {
+                        (r.width(), r.height())
+                    } else {
+                        (AREA_TYPE_DEFAULT_W, AREA_TYPE_DEFAULT_H)
+                    };
+                    // A vertical box anchors at its top-RIGHT corner —
+                    // column 0 starts there and further columns extend
+                    // left, mirroring how a horizontal box anchors
+                    // top-left and lines extend right/down.
+                    let origin = if vertical { Point::new(r.x0 + w, r.y0) } else { Point::new(r.x0, r.y0) };
                     self.create_text(
                         amalith_core::TextKind::Area {
-                            width: r.width(),
-                            height: Some(r.height()),
+                            width: w,
+                            height: Some(h),
                         },
-                        Point::new(r.x0, r.y0),
+                        origin,
+                        vertical,
                     );
                 } else {
                     // A click → point type.
-                    self.create_text(amalith_core::TextKind::Point, start_doc);
+                    self.create_text(amalith_core::TextKind::Point, start_doc, vertical);
                 }
             }
             Drag::ThreadNewBox {

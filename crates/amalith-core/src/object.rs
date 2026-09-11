@@ -1158,6 +1158,12 @@ pub struct TextData {
     pub align: TextAlign,
     #[serde(default)]
     pub paragraph: Paragraph,
+    /// Top-to-bottom, right-to-left column flow instead of the normal
+    /// left-to-right line flow — Illustrator's Vertical Type Tool. Glyphs
+    /// stay upright; only their stacking direction changes. Meaningless
+    /// for `TextKind::Path`, which stays horizontal-only.
+    #[serde(default)]
+    pub vertical: bool,
     pub local_bounds: Rect,
     /// Text threading (linked area-text frames). The story's text lives on
     /// the head frame (`thread_prev == None`); each downstream frame keeps
@@ -1184,6 +1190,7 @@ impl Default for TextData {
             style: TextStyle::default(),
             align: TextAlign::Start,
             paragraph: Paragraph::default(),
+            vertical: false,
             local_bounds: Rect::ZERO,
             thread_next: None,
             thread_prev: None,

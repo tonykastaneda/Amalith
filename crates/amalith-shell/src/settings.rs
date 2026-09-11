@@ -234,6 +234,11 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Join => "Join",
         Tool::ShapeBuilder => "ShapeBuilder",
         Tool::Eraser => "Eraser",
+        Tool::VerticalText => "VerticalText",
+        Tool::AreaType => "AreaType",
+        Tool::PathType => "PathType",
+        Tool::VerticalAreaType => "VerticalAreaType",
+        Tool::VerticalPathType => "VerticalPathType",
     }
 }
 

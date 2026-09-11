@@ -1050,7 +1050,7 @@ impl App {
                                 && matches!(
                                     self.doc.editor.document().object(*id).map(|o| &o.kind),
                                     Some(amalith_core::ObjectKind::Text(t))
-                                        if matches!(t.kind, amalith_core::TextKind::Area { .. })
+                                        if matches!(t.kind, amalith_core::TextKind::Area { .. }) && !t.vertical
                                 )
                         });
                     if let Some(to) = hit {
@@ -1072,8 +1072,26 @@ impl App {
                     self.doc.current_artboard = Some(id);
                 }
 
-                // Type tool.
-                if self.active_tool == Tool::Text {
+                // Type tool family: the plain Type/Vertical Type tools
+                // infer point vs. area vs. path from the gesture, same as
+                // Illustrator's own Type Tool; Area Type / Vertical Area
+                // Type always create a box; Path Type / Vertical Path Type
+                // only ever respond to clicking an existing path's outline.
+                // Every variant can still resume editing an existing text
+                // object it lands on.
+                if matches!(
+                    self.active_tool,
+                    Tool::Text
+                        | Tool::VerticalText
+                        | Tool::AreaType
+                        | Tool::VerticalAreaType
+                        | Tool::PathType
+                        | Tool::VerticalPathType
+                ) {
+                    let vertical = matches!(
+                        self.active_tool,
+                        Tool::VerticalText | Tool::VerticalAreaType | Tool::VerticalPathType
+                    );
                     if self.text_edit.is_some() {
                         // A press inside the open editor places the caret /
                         // starts a selection drag. A triple-click selects
@@ -1113,13 +1131,38 @@ impl App {
                             return;
                         }
                     }
-                    // Click on a plain path's outline (not already text):
-                    // start type-on-a-path instead of a fresh text box.
+                    // Path Type / Vertical Path Type only ever respond to a
+                    // path click — a miss elsewhere is a no-op, not a
+                    // fresh point/area box.
+                    if matches!(self.active_tool, Tool::PathType | Tool::VerticalPathType) {
+                        let tol = 4.0 / self.doc.view.zoom;
+                        if let Some(path_id) =
+                            select::topmost_path_near(self.doc.editor.document(), dp, visible, tol)
+                        {
+                            self.create_path_text(path_id, dp, vertical);
+                            self.drag = Drag::TextSelect;
+                        }
+                        return;
+                    }
+                    // Area Type / Vertical Area Type always create a box —
+                    // a plain click (no real drag) gets a default size,
+                    // same footprint `Command::CreateText`'s own minimum
+                    // uses elsewhere.
+                    if matches!(self.active_tool, Tool::AreaType | Tool::VerticalAreaType) {
+                        self.drag = Drag::DrawText {
+                            start_doc: dp,
+                            cur_doc: dp,
+                        };
+                        return;
+                    }
+                    // Plain Text / Vertical Text: a click on a bare path's
+                    // outline (not already text) starts type-on-a-path
+                    // instead of a fresh text box.
                     let tol = 4.0 / self.doc.view.zoom;
                     if let Some(path_id) =
                         select::topmost_path_near(self.doc.editor.document(), dp, visible, tol)
                     {
-                        self.create_path_text(path_id, dp);
+                        self.create_path_text(path_id, dp, vertical);
                         self.drag = Drag::TextSelect;
                         return;
                     }

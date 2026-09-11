@@ -171,8 +171,10 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::FreeTransform => KeyChord::plain(KeyE),
         Tool::ShapeBuilder => KeyChord::with_shift(KeyM),
         Tool::Eraser => KeyChord::with_shift(KeyE),
+        Tool::VerticalText => KeyChord::with_shift(KeyT),
         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral
-        | Tool::Join => {
+        | Tool::Join | Tool::AreaType | Tool::PathType | Tool::VerticalAreaType
+        | Tool::VerticalPathType => {
             return None
         }
     })

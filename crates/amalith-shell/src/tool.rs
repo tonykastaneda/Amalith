@@ -31,10 +31,15 @@ pub enum Tool {
     Join,
     ShapeBuilder,
     Eraser,
+    VerticalText,
+    AreaType,
+    PathType,
+    VerticalAreaType,
+    VerticalPathType,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 27] = [
+    pub const ALL: [Tool; 32] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -62,6 +67,11 @@ impl Tool {
         Tool::Join,
         Tool::ShapeBuilder,
         Tool::Eraser,
+        Tool::VerticalText,
+        Tool::AreaType,
+        Tool::PathType,
+        Tool::VerticalAreaType,
+        Tool::VerticalPathType,
     ];
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
@@ -110,6 +120,11 @@ impl Tool {
             Tool::Join => "Join",
             Tool::ShapeBuilder => "Shape Builder",
             Tool::Eraser => "Eraser",
+            Tool::VerticalText => "Vertical Type",
+            Tool::AreaType => "Area Type",
+            Tool::PathType => "Type on a Path",
+            Tool::VerticalAreaType => "Vertical Area Type",
+            Tool::VerticalPathType => "Vertical Type on a Path",
         }
     }
 
@@ -136,6 +151,9 @@ impl Tool {
             Tool::FreeTransform => "E",
             Tool::ShapeBuilder => "⇧M",
             Tool::Eraser => "⇧E",
+            // Matching Illustrator's own Type flyout: only the plain Type
+            // Tool has a default shortcut: the other five (Area/Path ×
+            // horizontal/vertical) are flyout-only.
             _ => "",
         }
     }
@@ -169,6 +187,11 @@ impl Tool {
             Tool::Join => Icon::Join,
             Tool::ShapeBuilder => Icon::ShapeBuilder,
             Tool::Eraser => Icon::Eraser,
+            Tool::VerticalText => Icon::VerticalText,
+            Tool::AreaType => Icon::AreaType,
+            Tool::PathType => Icon::PathType,
+            Tool::VerticalAreaType => Icon::VerticalAreaType,
+            Tool::VerticalPathType => Icon::VerticalPathType,
         }
     }
 }
@@ -181,15 +204,25 @@ impl Tool {
 pub enum ToolGroup {
     RotateReflect,
     ScaleShear,
+    Type,
 }
 
 impl ToolGroup {
-    pub const ALL: [ToolGroup; 2] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear];
+    pub const ALL: [ToolGroup; 3] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear, ToolGroup::Type];
 
     pub fn tools(self) -> &'static [Tool] {
         match self {
             ToolGroup::RotateReflect => &[Tool::Rotate, Tool::Reflect],
             ToolGroup::ScaleShear => &[Tool::Scale, Tool::Shear],
+            // Matches Illustrator's own Type flyout order.
+            ToolGroup::Type => &[
+                Tool::Text,
+                Tool::AreaType,
+                Tool::PathType,
+                Tool::VerticalText,
+                Tool::VerticalAreaType,
+                Tool::VerticalPathType,
+            ],
         }
     }
 
@@ -241,7 +274,12 @@ mod tests {
                 | Tool::FreeTransform
                 | Tool::Join
                 | Tool::ShapeBuilder
-                | Tool::Eraser => true,
+                | Tool::Eraser
+                | Tool::VerticalText
+                | Tool::AreaType
+                | Tool::PathType
+                | Tool::VerticalAreaType
+                | Tool::VerticalPathType => true,
             }
         }
         for t in Tool::ALL {
@@ -259,7 +297,7 @@ mod tests {
     fn tool_group_all_covers_every_variant_exactly_once() {
         fn covered(g: ToolGroup) -> bool {
             match g {
-                ToolGroup::RotateReflect | ToolGroup::ScaleShear => true,
+                ToolGroup::RotateReflect | ToolGroup::ScaleShear | ToolGroup::Type => true,
             }
         }
         for g in ToolGroup::ALL {
