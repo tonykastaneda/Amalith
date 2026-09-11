@@ -39,6 +39,7 @@ impl App {
             || self.ctx_menu.is_some()
             || self.smart_guide_hit.is_some()
             || self.sg_hovered_path.is_some()
+            || self.active_tool == Tool::Eraser
             || (matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
                 && !self.doc.selection.is_empty()
                 && matches!(self.drag, Drag::None))

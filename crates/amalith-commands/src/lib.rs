@@ -30,6 +30,7 @@ mod command;
 mod curvefit;
 mod curve_restore;
 mod edit;
+mod eraser;
 mod editor;
 mod error;
 mod history;
@@ -288,6 +289,39 @@ mod tests {
         editor.undo().unwrap();
         let children = editor.document().children_of(ObjectParent::Layer(layer));
         assert_eq!(children, &[a, b]);
+    }
+
+    #[test]
+    fn eraser_splits_multiple_paths_and_restores_selection_sources_on_undo() {
+        use amalith_core::{PathData, Point};
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer {
+            name: "Cut paths".into(), index: None,
+        }).unwrap() else { panic!() };
+        let mut ids = Vec::new();
+        for y in [0.0, 20.0, 100.0] {
+            let CommandOutcome::Object(id) = editor.execute(Command::CreatePath {
+                layer, path: PathData::polyline(&[Point::new(0.0, y), Point::new(100.0, y)]), name: None,
+            }).unwrap() else { panic!() };
+            ids.push(id);
+        }
+        editor.execute(Command::EraseArea {
+            objects: ids[..2].to_vec(),
+            area: PathData::rectangle(Rect::new(40.0, -10.0, 60.0, 110.0)),
+        }).unwrap();
+        let children = editor.document().children_of(ObjectParent::Layer(layer));
+        assert_eq!(children.len(), 5);
+        assert_eq!(children[4], ids[2], "unselected crossing path must stay untouched");
+        for &id in &children[..4] {
+            let path = editor.document().object(id).unwrap().kind.path_data().unwrap();
+            assert_eq!(path.subpaths().len(), 1);
+            assert!(!path.subpaths()[0].closed);
+            assert_eq!(path.subpaths()[0].anchors.len(), 2);
+        }
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), ids);
+        editor.redo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)).len(), 5);
     }
 
     #[test]

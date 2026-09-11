@@ -77,8 +77,20 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect) -> Opt
                 // click landing on that exact float coordinate.
                 let filled = obj.appearance.fill != amalith_core::Paint::None
                     && point_in_fill(doc, id, point);
-                let tol = (obj.appearance.stroke_width * 0.5).max(2.0);
-                if !filled && !near_contour(doc, id, point, tol) {
+                // The outline fallback only applies when there's an
+                // actual visible stroke to click — gating it on a fixed
+                // minimum tolerance instead (regardless of whether the
+                // object even has a stroke) put an invisible ~2-unit
+                // "sticky" halo around every filled shape's edge, wide
+                // enough that a click meant for one of several closely
+                // packed shapes could register against its unstroked
+                // neighbor's outline instead of missing cleanly.
+                let has_stroke = obj.appearance.stroke != amalith_core::Paint::None
+                    && obj.appearance.stroke_width > 0.0;
+                if !filled
+                    && (!has_stroke
+                        || !near_contour(doc, id, point, obj.appearance.stroke_width * 0.5))
+                {
                     continue;
                 }
             } else if !b.contains(point) {
@@ -473,6 +485,37 @@ mod smart_guide_bounds_tests {
         )
         .unwrap();
         assert!(bounds_within(&doc, id, Rect::new(-100., -100., 100., 100.), &[]).is_empty());
+    }
+
+    /// A click just past an unstroked filled shape's edge must miss it
+    /// cleanly, not fall through to an unrelated neighbor's outline. The
+    /// stroke-outline fallback used to apply a fixed minimum tolerance
+    /// (>= 2 document units) regardless of whether the shape had any
+    /// stroke at all, putting an invisible "sticky" halo around every
+    /// filled shape's edge — wide enough that a click meant for one of
+    /// several closely packed shapes (adjacent filled rectangles with a
+    /// narrow gap, no strokes) could register against a neighbor instead
+    /// of missing.
+    #[test]
+    fn topmost_selectable_at_does_not_add_a_phantom_halo_to_an_unstroked_filled_shape() {
+        let mut doc = Document::new("adjacent");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let left = ObjectId::new();
+        let right = ObjectId::new();
+        let mut left_obj = Object::new(left, ObjectParent::Layer(layer), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(0., 0., 100., 100.))));
+        left_obj.appearance.stroke = Paint::None;
+        doc.insert_object(left_obj, 0).unwrap();
+        let mut right_obj = Object::new(right, ObjectParent::Layer(layer), ObjectKind::Path(PathData::rectangle(amalith_core::geom::Rect::new(101., 0., 201., 100.))));
+        right_obj.appearance.stroke = Paint::None;
+        doc.insert_object(right_obj, 1).unwrap();
+        let visible = Rect::new(-1000., -1000., 1000., 1000.);
+
+        // In the 1-unit gap, closer to `left`'s edge than `right`'s —
+        // neither shape's real fill covers this point, and neither has a
+        // stroke to click, so this must miss entirely.
+        let hit = topmost_selectable_at(&doc, Point::new(100.3, 50.), visible);
+        assert_eq!(hit, None, "a click in the gap between two unstroked shapes must not snap to either one");
     }
 
     /// A circle's bounding box is a square that reaches well past its

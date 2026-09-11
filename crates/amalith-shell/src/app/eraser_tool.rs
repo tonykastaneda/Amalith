@@ -18,21 +18,22 @@ impl App {
     /// Objects the eraser is allowed to touch right now.
     fn eraser_targets(&self) -> Vec<ObjectId> {
         let doc = self.doc.editor.document();
-        let eligible = |id: ObjectId| -> bool {
-            doc.object(id).is_some_and(|o| {
-                o.visible
-                    && !o.locked
-                    && matches!(o.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_))
-            })
-        };
-        if !self.doc.selection.is_empty() {
-            return self.doc.selection.iter().copied().filter(|&id| eligible(id)).collect();
-        }
-        select::visible_top_level_bounds(doc, self.visible_doc_rect(), &[])
-            .into_iter()
-            .map(|(id, _)| id)
-            .filter(|&id| eligible(id))
-            .collect()
+        doc.objects().filter(|obj| {
+            if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) { return false; }
+            let mut id = obj.id;
+            let mut in_selection = self.doc.selection.is_empty();
+            loop {
+                let Some(o) = doc.object(id) else { return false };
+                if !o.visible || o.locked { return false; }
+                in_selection |= self.doc.selection.contains(&id);
+                match o.parent {
+                    amalith_core::ObjectParent::Group(parent) => id = parent,
+                    amalith_core::ObjectParent::Layer(layer) => {
+                        return in_selection && doc.layer(layer).is_some_and(|l| l.visible && !l.locked);
+                    }
+                }
+            }
+        }).map(|o| o.id).collect()
     }
 
     /// Press: always starts a stroke — there's no "missed" state the way
@@ -83,11 +84,25 @@ impl App {
     pub(in crate::app) fn commit_eraser(&mut self, path: Vec<Point>) {
         let Some(area) = self.eraser_brush_area(&path) else { return };
         let objects = self.eraser_targets();
-        if objects.is_empty() {
-            return;
-        }
+        if objects.is_empty() { return; }
+        let selected = !self.doc.selection.is_empty();
+        let before: std::collections::HashSet<_> = self.doc.editor.document().objects().map(|o| o.id).collect();
         if self.doc.editor.execute(Command::EraseArea { objects, area }).is_ok() {
             self.prune_selection();
+            if selected {
+                let new_ids: Vec<_> = self.doc.editor.document().objects()
+                    .filter(|o| {
+                        if before.contains(&o.id) { return false; }
+                        let mut parent = o.parent;
+                        while let amalith_core::ObjectParent::Group(id) = parent {
+                            if self.doc.selection.contains(&id) { return false; }
+                            let Some(group) = self.doc.editor.document().object(id) else { break };
+                            parent = group.parent;
+                        }
+                        true
+                    }).map(|o| o.id).collect();
+                self.doc.selection.extend(new_ids);
+            }
         }
         self.request_main_redraw();
     }

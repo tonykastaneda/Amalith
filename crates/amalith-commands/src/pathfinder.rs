@@ -236,6 +236,16 @@ pub fn shape_builder_regions(inputs: &[PathInput]) -> Vec<ShapeRegion> {
     }).collect()
 }
 
+pub(crate) fn erase_closed(path: &BezPath, area: &BezPath, cut: &[Vec<[f64; 2]>]) -> Option<Vec<BezPath>> {
+    let contours = flatten_path(path);
+    if region_overlay(&contours, cut, OverlayRule::Intersect).is_empty() { return None; }
+    let remaining = region_overlay(&contours, cut, OverlayRule::Difference);
+    let shapes: Vec<Vec<Vec<[f64; 2]>>> = remaining.overlay(
+        &Vec::<Vec<[f64; 2]>>::new(), OverlayRule::Subject, FillRule::NonZero,
+    );
+    Some(shapes.into_iter().map(|shape| crate::curve_restore::restore(&shape, &[path.clone(), area.clone()])).collect())
+}
+
 pub(crate) fn shape_builder_results(inputs: &[PathInput],cut: &[Vec<[f64;2]>],sources: &[BezPath],appearance: Option<Appearance>) -> (Vec<usize>,Vec<PathResult>) {
     let mut consumed=Vec::new();
     let mut result=Vec::new();
@@ -419,6 +429,7 @@ fn outline(inputs: &[PathInput]) -> Vec<PathResult> {
 /// entirely. Keeps each survivor's own appearance — the Eraser tool
 /// uses this to give every object its stroke touched back just the
 /// part that wasn't swept over.
+#[cfg(test)]
 pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<PathResult> {
     inputs
         .iter()
@@ -430,6 +441,7 @@ pub(crate) fn subtract_each(inputs: &[PathInput], cut: &[Vec<[f64; 2]>]) -> Vec<
 }
 
 /// Whether `a` and `b` share any area at all.
+#[cfg(test)]
 pub(crate) fn intersects(a: &[Vec<[f64; 2]>], b: &[Vec<[f64; 2]>]) -> bool {
     !overlay(a, b, OverlayRule::Intersect).is_empty()
 }

@@ -369,7 +369,7 @@ impl App {
         // anchor selection keeps this view (and suppresses the Selection
         // tool's bounding box) even after a ⌘-marquee releases ⌘.
         let direct =
-            self.effective_tool() == Tool::DirectSelect || !self.doc.anchor_sel.is_empty();
+            matches!(self.effective_tool(), Tool::DirectSelect | Tool::Eraser) || !self.doc.anchor_sel.is_empty();
         // The Pen tool also shows a selected path's nodes (Illustrator:
         // switch V -> P with an object selected and its anchors appear).
         // The Rotate / Reflect / Shear tools do the same — you're

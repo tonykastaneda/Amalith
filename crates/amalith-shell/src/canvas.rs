@@ -8,7 +8,10 @@ use amalith_core::{
     StrokeStyle, TextKind,
 };
 use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
-use vello::peniko::{BlendMode, Blob, Color, Fill, ImageAlphaType, ImageData, ImageFormat};
+use vello::peniko::{
+    BlendMode, Blob, Color, Extend, Fill, ImageAlphaType, ImageBrush, ImageData, ImageFormat,
+    ImageQuality, ImageSampler,
+};
 use vello::Scene;
 
 use crate::handles::{self, Handle};
@@ -1338,34 +1341,50 @@ fn paint_grid(scene: &mut Scene, viewport: Rect, vt: Affine, zoom: f64, spacing_
     }
 }
 
+/// Illustrator's checkerboard, drawn as one repeating-image-brush fill
+/// instead of one polygon per 8×8 square: a full-window viewport at
+/// typical Retina resolution is tens of thousands of those squares,
+/// rebuilt and re-tessellated from scratch every single frame (there is
+/// no scene caching between frames) — cheap-looking but the single
+/// biggest per-frame cost in the app, which is what actually tanked FPS
+/// to single digits whenever Transparency Grid was toggled on. A 2×2
+/// source texture, GPU-tiled via `Extend::Repeat`, costs one quad fill
+/// and a handful of texture samples regardless of viewport size.
 fn paint_transparency_grid(scene: &mut Scene, r: Rect, origin: Point) {
     const TILE: f64 = 8.0;
-    scene.fill(Fill::NonZero, Affine::IDENTITY, Color::from_rgb8(0xff, 0xff, 0xff), None, &r);
-    let col0 = ((r.x0 - origin.x) / TILE).floor() as i64;
-    let col1 = ((r.x1 - origin.x) / TILE).ceil() as i64;
-    let row0 = ((r.y0 - origin.y) / TILE).floor() as i64;
-    let row1 = ((r.y1 - origin.y) / TILE).ceil() as i64;
-    let mut dark = BezPath::new();
-    for gy in row0..row1 {
-        for gx in col0..col1 {
-            if (gx + gy) % 2 == 0 {
-                continue;
-            }
-            let x0 = (origin.x + gx as f64 * TILE).max(r.x0);
-            let y0 = (origin.y + gy as f64 * TILE).max(r.y0);
-            let x1 = (origin.x + (gx + 1) as f64 * TILE).min(r.x1);
-            let y1 = (origin.y + (gy + 1) as f64 * TILE).min(r.y1);
-            if x1 <= x0 || y1 <= y0 {
-                continue;
-            }
-            dark.move_to((x0, y0));
-            dark.line_to((x1, y0));
-            dark.line_to((x1, y1));
-            dark.line_to((x0, y1));
-            dark.close_path();
-        }
-    }
-    scene.fill(Fill::NonZero, Affine::IDENTITY, TRANSPARENCY_CHECKER_DARK, None, &dark);
+    let light = [0xff, 0xff, 0xff, 0xff];
+    let dark = [
+        TRANSPARENCY_CHECKER_DARK.components[0].mul_add(255.0, 0.0) as u8,
+        TRANSPARENCY_CHECKER_DARK.components[1].mul_add(255.0, 0.0) as u8,
+        TRANSPARENCY_CHECKER_DARK.components[2].mul_add(255.0, 0.0) as u8,
+        0xff,
+    ];
+    let mut pixels = Vec::with_capacity(16);
+    pixels.extend_from_slice(&light);
+    pixels.extend_from_slice(&dark);
+    pixels.extend_from_slice(&dark);
+    pixels.extend_from_slice(&light);
+    let image = ImageData {
+        data: Blob::from(pixels),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: 2,
+        height: 2,
+    };
+    let brush = ImageBrush {
+        image,
+        sampler: ImageSampler {
+            x_extend: Extend::Repeat,
+            y_extend: Extend::Repeat,
+            // Nearest-neighbor: bilinear (the default) would blend
+            // across the checker's hard edges into a blurry gray band
+            // at every tile seam instead of a crisp square.
+            quality: ImageQuality::Low,
+            alpha: 1.0,
+        },
+    };
+    let brush_transform = Affine::translate((origin.x, origin.y)) * Affine::scale(TILE);
+    scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, Some(brush_transform), &r);
 }
 
 fn paint_freeform_fill(

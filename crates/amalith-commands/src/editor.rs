@@ -1941,33 +1941,24 @@ impl Editor {
     /// of what's already there. An object the stroke never actually
     /// overlaps is skipped outright: no edit references it at all.
     fn compile_erase_area(&self, objects: Vec<ObjectId>, area: PathData) -> Result<Vec<Edit>, CommandError> {
-        let area_contours = pathfinder::flatten_path(&area.geometry);
         let mut edits = Vec::new();
-        for id in objects {
+        let wanted: HashSet<_> = objects.into_iter().collect();
+        // Work from front to back so insertions do not shift later targets.
+        let mut ordered: Vec<_> = wanted.iter().copied().collect();
+        ordered.sort_by_key(|id| std::cmp::Reverse(self.document.object(*id)
+            .and_then(|o| self.document.children_of(o.parent).iter().position(|s| s == id)).unwrap_or(0)));
+        for id in ordered.into_iter().filter(|id| wanted.contains(id)) {
             let Some(obj) = self.document.object(id) else { continue };
             let Some(world) = self.world_path(id) else { continue };
-            let contours = pathfinder::flatten_path(&world);
-            if !pathfinder::intersects(&contours, &area_contours) {
-                continue;
-            }
-            let parent = obj.parent;
-            let parent_world = match parent {
-                ObjectParent::Group(g) => self.document.world_transform(g),
-                ObjectParent::Layer(_) => Affine::IDENTITY,
-            };
-            let siblings = self.document.children_of(parent);
-            let index = siblings.iter().position(|&s| s == id).unwrap();
-            let input = PathInput { contours, appearance: obj.appearance };
-            let remaining = pathfinder::subtract_each(std::slice::from_ref(&input), &area_contours);
-
+            let Some(remaining) = crate::eraser::erase(&world, &area.geometry) else { continue };
+            let index = self.document.children_of(obj.parent).iter().position(|&s| s == id).unwrap();
+            let inverse = self.document.world_transform(id).inverse();
             edits.push(Edit::RemoveObject { id });
-            if let Some(result) = remaining.into_iter().next() {
-                let geom = parent_world.inverse() * result.path.geometry.clone();
-                let path = PathData::from_bezpath(geom);
-                let mut object = Object::new(ObjectId::new(), parent, ObjectKind::Path(path));
-                object.appearance = result.appearance;
-                object.transform = Affine::IDENTITY;
-                edits.push(Edit::InsertObject { object: Box::new(object), index });
+            for (offset, geometry) in remaining.into_iter().enumerate() {
+                let mut object = obj.clone();
+                object.id = ObjectId::new();
+                object.kind = ObjectKind::Path(PathData::from_bezpath(inverse * geometry));
+                edits.push(Edit::InsertObject { object: Box::new(object), index: index + offset });
             }
         }
         Ok(edits)
