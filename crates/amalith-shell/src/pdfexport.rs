@@ -475,19 +475,55 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
     if appearance.opacity <= 0.0 {
         return;
     }
-    let opaque = (appearance.opacity - 1.0).abs() < 1e-4;
+    // Paint every visible appearance item in stack order (the order
+    // `items` is stored in is paint order — see `Appearance::items`'s
+    // doc comment) — Illustrator's Appearance panel lets an object carry
+    // any number of fills and strokes, not just one of each.
+    for item in &appearance.items {
+        if !item.visible() {
+            continue;
+        }
+        // A live Offset Path effect on this one item replaces its base
+        // geometry with the offset contour — same primitive as the
+        // destructive Object ▸ Path ▸ Offset Path command, applied to one
+        // paint instead of producing a new object. See canvas.rs's
+        // identical handling in `paint_object`'s `paint_path` closure.
+        let offset_bez = item
+            .offset()
+            .and_then(|fx| amalith_commands::offset_path(bez, fx.amount, fx.join, fx.miter_limit))
+            .map(|pd| pd.geometry);
+        let ibez = offset_bez.as_ref().unwrap_or(bez);
+        match item {
+            amalith_core::AppearanceItem::Fill { paint, opacity, .. } => {
+                paint_fill_item(ctx, doc, ibez, xf, unit_to_page, *paint, appearance.opacity * opacity, page_w, page_h);
+            }
+            amalith_core::AppearanceItem::Stroke { paint, width, style, opacity, .. } => {
+                if paint.is_visible() {
+                    paint_stroke_item(ctx, doc, ibez, xf, unit_to_page, *paint, *width, style, appearance.opacity * opacity);
+                }
+            }
+        }
+    }
+}
 
-    // --- Fill -------------------------------------------------------
-    match appearance.fill() {
+/// One appearance stack Fill item — `item_opacity` already folds the
+/// object-level opacity together with this item's own (a PDF `gs` call
+/// *replaces* the graphics state's alpha rather than multiplying into
+/// whatever's already active, so the two must be combined before being
+/// set, the same reasoning the freeform backstop below already uses).
+#[allow(clippy::too_many_arguments)]
+fn paint_fill_item(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffine, unit_to_page: CoreAffine, paint: Paint, item_opacity: f32, page_w: f32, page_h: f32) {
+    let opaque = (item_opacity - 1.0).abs() < 1e-4;
+    match paint {
         Paint::None => {}
         Paint::Solid(c) => {
             // The color's own alpha (e.g. a fill picked at 50% in the
-            // color picker) is independent of `appearance.opacity` (the
-            // object-level Transparency-panel slider) — SVG export keeps
-            // these separate too (`fill-opacity` vs `opacity`); PDF's
-            // graphics state only has one constant alpha to paint with,
-            // so the two multiply together into it here.
-            let a = c.a * appearance.opacity;
+            // color picker) is independent of the opacity above — SVG
+            // export keeps these separate too (`fill-opacity` vs
+            // `opacity`); PDF's graphics state only has one constant
+            // alpha to paint with, so the two multiply together into it
+            // here.
+            let a = c.a * item_opacity;
             ctx.content.save_state();
             if a < 0.999 {
                 let gs_id = ctx.bump();
@@ -506,7 +542,7 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
                 ctx.content.save_state();
                 if !opaque {
                     let gs_id = ctx.bump();
-                    ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(appearance.opacity).finish();
+                    ctx.pdf.ext_graphics(gs_id).non_stroking_alpha(item_opacity).finish();
                     let name = ctx.fresh_name("Gs");
                     ctx.ext_gs.push((name.clone(), gs_id));
                     ctx.content.set_parameters(Name(name.as_bytes()));
@@ -517,11 +553,11 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
                         // A PDF `gs` call *replaces* the graphics state's
                         // alpha rather than multiplying into whatever's
                         // already active, so the outer `ca` set just above
-                        // for `appearance.opacity` would otherwise be
-                        // silently lost here rather than combined with it —
-                        // fold both into the one value this `gs` actually
-                        // sets instead of relying on nesting to compose them.
-                        let backstop_alpha = backstop.a * appearance.opacity;
+                        // for `item_opacity` would otherwise be silently
+                        // lost here rather than combined with it — fold
+                        // both into the one value this `gs` actually sets
+                        // instead of relying on nesting to compose them.
+                        let backstop_alpha = backstop.a * item_opacity;
                         ctx.content.save_state();
                         if backstop_alpha < 0.999 {
                             let gs_id = ctx.bump();
@@ -552,69 +588,72 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
             }
         }
     }
+}
 
-    // --- Stroke -------------------------------------------------------
-    if appearance.stroke().is_visible() {
-        // As with the fill above, a solid stroke color's own alpha folds
-        // in alongside the object's opacity. A gradient stroke's own stop
-        // alpha isn't folded in here — deliberately unmasked, see the
-        // comment where it's painted below.
-        let stroke_alpha = match appearance.stroke() {
-            Paint::Solid(c) => c.a * appearance.opacity,
-            _ => appearance.opacity,
-        };
-        ctx.content.save_state();
-        if stroke_alpha < 0.999 {
-            let gs_id = ctx.bump();
-            ctx.pdf.ext_graphics(gs_id).stroking_alpha(stroke_alpha).finish();
-            let name = ctx.fresh_name("Gs");
-            ctx.ext_gs.push((name.clone(), gs_id));
-            ctx.content.set_parameters(Name(name.as_bytes()));
-        }
-        let scale = {
-            let c = xf.as_coeffs();
-            let sx = (c[0] * c[0] + c[1] * c[1]).sqrt();
-            let sy = (c[2] * c[2] + c[3] * c[3]).sqrt();
-            (sx * sy).sqrt()
-        };
-        ctx.content.set_line_width((appearance.stroke_width() * scale) as f32);
-        ctx.content.set_line_cap(match appearance.stroke_style().cap {
-            LineCap::Butt => LineCapStyle::ButtCap,
-            LineCap::Round => LineCapStyle::RoundCap,
-            LineCap::Square => LineCapStyle::ProjectingSquareCap,
-        });
-        ctx.content.set_line_join(match appearance.stroke_style().join {
-            LineJoin::Miter => LineJoinStyle::MiterJoin,
-            LineJoin::Round => LineJoinStyle::RoundJoin,
-            LineJoin::Bevel => LineJoinStyle::BevelJoin,
-        });
-        ctx.content.set_miter_limit(appearance.stroke_style().miter_limit as f32);
-        if let Some(pattern) = appearance.stroke_style().dash_pattern() {
-            let dashes: Vec<f32> = pattern.iter().map(|v| (*v * scale) as f32).collect();
-            ctx.content.set_dash_pattern(dashes, (appearance.stroke_style().dash_offset * scale) as f32);
-        }
-        match appearance.stroke() {
-            Paint::Solid(c) => ctx.set_stroke_solid(c),
-            Paint::Gradient(gid) => {
-                if let Some(g) = doc.gradient(gid) {
-                    // A stroke's own alpha-fade (a semi-transparent stop) is
-                    // deliberately not soft-masked here the way a fill's is:
-                    // stroking traces a thin, self-contained ribbon rather
-                    // than filling an arbitrarily large region, so a flat
-                    // (unmasked) colour-only pattern reproduces it closely
-                    // enough not to be worth a second geometry pass.
-                    let (coords, pattern_xf) = gradient_coords_and_matrix(g, unit_to_page);
-                    let (name, _) = shading_pattern(ctx, g, &coords, pattern_xf, false);
-                    ctx.content.set_stroke_color_space(ColorSpaceOperand::Pattern);
-                    ctx.content.set_stroke_pattern([], Name(name.as_bytes()));
-                }
-            }
-            Paint::None => {}
-        }
-        ctx.emit_geometry(bez, xf);
-        ctx.content.stroke();
-        ctx.content.restore_state();
+/// One appearance stack Stroke item — `item_opacity` already folds the
+/// object-level opacity together with this item's own (see
+/// [`paint_fill_item`]'s doc comment). Caller checks `paint.is_visible()`.
+#[allow(clippy::too_many_arguments)]
+fn paint_stroke_item(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffine, unit_to_page: CoreAffine, paint: Paint, width: f64, style: &amalith_core::StrokeStyle, item_opacity: f32) {
+    // As with the fill, a solid stroke color's own alpha folds in
+    // alongside the opacity above. A gradient stroke's own stop alpha
+    // isn't folded in here — deliberately unmasked, see the comment
+    // where it's painted below.
+    let stroke_alpha = match paint {
+        Paint::Solid(c) => c.a * item_opacity,
+        _ => item_opacity,
+    };
+    ctx.content.save_state();
+    if stroke_alpha < 0.999 {
+        let gs_id = ctx.bump();
+        ctx.pdf.ext_graphics(gs_id).stroking_alpha(stroke_alpha).finish();
+        let name = ctx.fresh_name("Gs");
+        ctx.ext_gs.push((name.clone(), gs_id));
+        ctx.content.set_parameters(Name(name.as_bytes()));
     }
+    let scale = {
+        let c = xf.as_coeffs();
+        let sx = (c[0] * c[0] + c[1] * c[1]).sqrt();
+        let sy = (c[2] * c[2] + c[3] * c[3]).sqrt();
+        (sx * sy).sqrt()
+    };
+    ctx.content.set_line_width((width * scale) as f32);
+    ctx.content.set_line_cap(match style.cap {
+        LineCap::Butt => LineCapStyle::ButtCap,
+        LineCap::Round => LineCapStyle::RoundCap,
+        LineCap::Square => LineCapStyle::ProjectingSquareCap,
+    });
+    ctx.content.set_line_join(match style.join {
+        LineJoin::Miter => LineJoinStyle::MiterJoin,
+        LineJoin::Round => LineJoinStyle::RoundJoin,
+        LineJoin::Bevel => LineJoinStyle::BevelJoin,
+    });
+    ctx.content.set_miter_limit(style.miter_limit as f32);
+    if let Some(pattern) = style.dash_pattern() {
+        let dashes: Vec<f32> = pattern.iter().map(|v| (*v * scale) as f32).collect();
+        ctx.content.set_dash_pattern(dashes, (style.dash_offset * scale) as f32);
+    }
+    match paint {
+        Paint::Solid(c) => ctx.set_stroke_solid(c),
+        Paint::Gradient(gid) => {
+            if let Some(g) = doc.gradient(gid) {
+                // A stroke's own alpha-fade (a semi-transparent stop) is
+                // deliberately not soft-masked here the way a fill's is:
+                // stroking traces a thin, self-contained ribbon rather
+                // than filling an arbitrarily large region, so a flat
+                // (unmasked) colour-only pattern reproduces it closely
+                // enough not to be worth a second geometry pass.
+                let (coords, pattern_xf) = gradient_coords_and_matrix(g, unit_to_page);
+                let (name, _) = shading_pattern(ctx, g, &coords, pattern_xf, false);
+                ctx.content.set_stroke_color_space(ColorSpaceOperand::Pattern);
+                ctx.content.set_stroke_pattern([], Name(name.as_bytes()));
+            }
+        }
+        Paint::None => {}
+    }
+    ctx.emit_geometry(bez, xf);
+    ctx.content.stroke();
+    ctx.content.restore_state();
 }
 
 /// A synthetic 2-stop gradient standing in for one freeform point's own

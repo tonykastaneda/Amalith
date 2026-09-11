@@ -162,6 +162,12 @@ pub enum AppearanceItem {
         opacity: f32,
         #[serde(default = "default_true")]
         visible: bool,
+        /// A live Offset Path effect on this item alone — Illustrator's
+        /// Effect ▸ Path ▸ Offset Path applied to one Appearance-panel
+        /// row, distinct from Object ▸ Path ▸ Offset Path (which inserts
+        /// a whole new sibling object instead).
+        #[serde(default)]
+        offset: Option<OffsetEffect>,
     },
     Stroke {
         paint: Paint,
@@ -172,7 +178,25 @@ pub enum AppearanceItem {
         opacity: f32,
         #[serde(default = "default_true")]
         visible: bool,
+        #[serde(default)]
+        offset: Option<OffsetEffect>,
     },
+}
+
+/// A live, non-destructive Offset Path effect on one Appearance-panel
+/// item (see [`AppearanceItem`]'s `offset` field) — negative `amount`
+/// insets, positive outsets. Recomputed from the object's own current
+/// geometry (or, for text, its glyph outline) every time this item
+/// paints, via `amalith_commands::pathfinder::offset_path` — the same
+/// primitive behind the destructive Object ▸ Path ▸ Offset Path command,
+/// just applied live to one paint instead of producing a new object.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OffsetEffect {
+    pub amount: f64,
+    #[serde(default)]
+    pub join: LineJoin,
+    #[serde(default = "default_miter_limit")]
+    pub miter_limit: f64,
 }
 
 fn default_true() -> bool {
@@ -203,6 +227,18 @@ impl AppearanceItem {
     pub fn visible(&self) -> bool {
         match *self {
             AppearanceItem::Fill { visible, .. } | AppearanceItem::Stroke { visible, .. } => visible,
+        }
+    }
+
+    pub fn offset(&self) -> Option<OffsetEffect> {
+        match *self {
+            AppearanceItem::Fill { offset, .. } | AppearanceItem::Stroke { offset, .. } => offset,
+        }
+    }
+
+    pub fn set_offset(&mut self, new_offset: Option<OffsetEffect>) {
+        match self {
+            AppearanceItem::Fill { offset, .. } | AppearanceItem::Stroke { offset, .. } => *offset = new_offset,
         }
     }
 }
@@ -276,7 +312,7 @@ impl Appearance {
     pub fn set_fill(&mut self, paint: Paint) {
         match self.items.iter_mut().rev().find(|i| i.is_fill()) {
             Some(AppearanceItem::Fill { paint: p, .. }) => *p = paint,
-            _ => self.items.push(AppearanceItem::Fill { paint, opacity: 1.0, visible: true }),
+            _ => self.items.push(AppearanceItem::Fill { paint, opacity: 1.0, visible: true, offset: None }),
         }
     }
 
@@ -289,6 +325,7 @@ impl Appearance {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
+                offset: None,
             }),
         }
     }
@@ -302,6 +339,7 @@ impl Appearance {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
+                offset: None,
             }),
         }
     }
@@ -315,6 +353,7 @@ impl Appearance {
                 style,
                 opacity: 1.0,
                 visible: true,
+                offset: None,
             }),
         }
     }
@@ -332,6 +371,7 @@ impl Default for Appearance {
                     paint: Paint::Solid(Color::rgb(0.87, 0.87, 0.87)),
                     opacity: 1.0,
                     visible: true,
+                    offset: None,
                 },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.18, 0.18, 0.18)),
@@ -339,6 +379,7 @@ impl Default for Appearance {
                     style: StrokeStyle::default(),
                     opacity: 1.0,
                     visible: true,
+                    offset: None,
                 },
             ],
             opacity: default_opacity(),
@@ -381,13 +422,14 @@ impl From<AppearanceOnDisk> for Appearance {
     fn from(old: AppearanceOnDisk) -> Self {
         let items = old.items.unwrap_or_else(|| {
             vec![
-                AppearanceItem::Fill { paint: old.fill, opacity: 1.0, visible: true },
+                AppearanceItem::Fill { paint: old.fill, opacity: 1.0, visible: true, offset: None },
                 AppearanceItem::Stroke {
                     paint: old.stroke,
                     width: old.stroke_width,
                     style: old.stroke_style,
                     opacity: 1.0,
                     visible: true,
+                    offset: None,
                 },
             ]
         });
@@ -417,8 +459,8 @@ mod tests {
     fn fill_and_stroke_read_the_topmost_matching_item() {
         let mut a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, offset: None },
             ],
             opacity: 1.0,
         };
@@ -462,15 +504,16 @@ mod tests {
     fn new_shape_with_items_round_trips_a_multi_item_stack() {
         let a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
                     width: 2.0,
                     style: StrokeStyle::default(),
                     opacity: 0.6,
                     visible: true,
+                    offset: Some(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 }),
                 },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false, offset: None },
             ],
             opacity: 0.8,
         };
@@ -478,6 +521,28 @@ mod tests {
         assert!(value.get("fill").is_none(), "new saves don't write the legacy flat fields");
         let back: Appearance = serde_json::from_value(value).unwrap();
         assert_eq!(back, a);
+    }
+
+    #[test]
+    fn offset_accessors_read_and_write_either_variant() {
+        let fx = OffsetEffect { amount: -3.0, join: LineJoin::Bevel, miter_limit: 4.0 };
+        let mut fill = AppearanceItem::Fill { paint: Paint::None, opacity: 1.0, visible: true, offset: None };
+        let mut stroke = AppearanceItem::Stroke {
+            paint: Paint::None,
+            width: 1.0,
+            style: StrokeStyle::default(),
+            opacity: 1.0,
+            visible: true,
+            offset: None,
+        };
+        assert_eq!(fill.offset(), None);
+        assert_eq!(stroke.offset(), None);
+        fill.set_offset(Some(fx));
+        stroke.set_offset(Some(fx));
+        assert_eq!(fill.offset(), Some(fx));
+        assert_eq!(stroke.offset(), Some(fx));
+        fill.set_offset(None);
+        assert_eq!(fill.offset(), None, "set_offset(None) clears a previously-set effect");
     }
 
     #[test]

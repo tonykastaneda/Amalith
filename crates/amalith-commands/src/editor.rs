@@ -1522,6 +1522,12 @@ impl Editor {
                 )?);
                 edits
             }
+            Command::SetAppearanceItems { object, items } => {
+                self.document
+                    .object(object)
+                    .ok_or(CommandError::ObjectNotFound(object))?;
+                vec![Edit::SetAppearanceItems { id: object, items }]
+            }
             Command::SetFill { objects, paint } => objects
                 .into_iter()
                 .map(|id| Edit::SetFill { id, paint })

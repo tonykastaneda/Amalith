@@ -17,9 +17,9 @@
 use crate::command::LayerOptions;
 use crate::error::CommandError;
 use amalith_core::{
-    Affine, Artboard, ArtboardId, Asset, AssetId, AssetSource, Color, Document, DocumentError,
-    Gradient, GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId, ObjectKind,
-    ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
+    Affine, AppearanceItem, Artboard, ArtboardId, Asset, AssetId, AssetSource, Color, Document,
+    DocumentError, Gradient, GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId,
+    ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +106,14 @@ pub(crate) enum Edit {
     SetStrokeStyle {
         id: ObjectId,
         style: StrokeStyle,
+    },
+    /// Whole-list replace of an object's appearance stack — add/remove/
+    /// duplicate/reorder an item, or edit one in place, all go through
+    /// this same primitive (mirrors `SetChildOrder`'s whole-Vec-replace
+    /// shape, and `EditGradient`'s "one command per edit commit").
+    SetAppearanceItems {
+        id: ObjectId,
+        items: Vec<AppearanceItem>,
     },
     SetOpacity {
         id: ObjectId,
@@ -372,6 +380,11 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let old_style = object.appearance.stroke_style();
             object.appearance.set_stroke_style(style);
             Ok((Edit::SetStrokeStyle { id, style: old_style }, None))
+        }
+        Edit::SetAppearanceItems { id, items } => {
+            let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
+            let old_items = std::mem::replace(&mut object.appearance.items, items);
+            Ok((Edit::SetAppearanceItems { id, items: old_items }, None))
         }
         Edit::SetOpacity { id, opacity } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;

@@ -40,6 +40,8 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         // Overlapping shapes with their shared region emphasized below.
         PanelKind::Pathfinder => "M2 2H11V11H2Z M7 7H16V16H7Z",
         PanelKind::Swatches => "M2 2H7V7H2Z M11 2H16V7H11Z M2 11H7V16H2Z M11 11H16V16H11Z",
+        // Two overlapping attribute chips — a stacked fill and stroke.
+        PanelKind::Appearance => "M3 3H11V11H3Z M7 7H15V15H7Z",
         // Pen nib and its central slit.
         PanelKind::Tools => "M9 2L15 11L11 15H7L3 11Z M9 2V9 M7 15H11V17H7Z M8 10H10V12H8Z",
         // Bounding box with corner handles.

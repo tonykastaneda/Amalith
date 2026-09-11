@@ -32,6 +32,32 @@ impl App {
         }
         self.close_offset_dialog(OffsetClose::Cancel);
         self.offset_dialog = Some(offsetdlg::OffsetDialog::open(originals));
+        self.spawn_offset_window(event_loop);
+    }
+
+    /// Same dialog, retargeted at one Appearance-panel item's live
+    /// non-destructive effect (see [`offsetdlg::Target::AppearanceItem`])
+    /// instead of the current selection — a no-op if the panel's target
+    /// object or item has gone away since the row was clicked.
+    pub(in crate::app) fn spawn_offset_dialog_for_appearance_item(&mut self, event_loop: &ActiveEventLoop, idx: usize) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(item) = self
+            .doc
+            .editor
+            .document()
+            .object(object)
+            .and_then(|o| o.appearance.items.get(idx).copied())
+        else {
+            return;
+        };
+        self.close_offset_dialog(OffsetClose::Cancel);
+        self.offset_dialog = Some(offsetdlg::OffsetDialog::open_for_item(object, idx, item.offset()));
+        self.spawn_offset_window(event_loop);
+    }
+
+    /// The floating-window plumbing shared by both spawn entry points —
+    /// identical regardless of `self.offset_dialog`'s target.
+    fn spawn_offset_window(&mut self, event_loop: &ActiveEventLoop) {
         self.text_blink = Instant::now();
 
         let pid = Self::offset_panel_id();
@@ -108,13 +134,26 @@ impl App {
     pub(in crate::app) fn close_offset_dialog(&mut self, action: OffsetClose) {
         let Some(dlg) = self.offset_dialog.take() else { return };
         if let OffsetClose::Ok = action {
-            if let Ok(new_ids) = self.doc.editor.offset_path(
-                &dlg.objects(),
-                dlg.resolved_offset(),
-                dlg.join,
-                dlg.resolved_miter_limit(),
-            ) {
-                self.doc.selection = new_ids;
+            match dlg.target {
+                offsetdlg::Target::Objects => {
+                    if let Ok(new_ids) = self.doc.editor.offset_path(
+                        &dlg.objects(),
+                        dlg.resolved_offset(),
+                        dlg.join,
+                        dlg.resolved_miter_limit(),
+                    ) {
+                        self.doc.selection = new_ids;
+                    }
+                }
+                offsetdlg::Target::AppearanceItem { object, index } => {
+                    if let Some(obj) = self.doc.editor.document().object(object) {
+                        let mut items = obj.appearance.items.clone();
+                        if let Some(item) = items.get_mut(index) {
+                            item.set_offset(Some(dlg.resolved_effect()));
+                            let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+                        }
+                    }
+                }
             }
         }
         let pid = Self::offset_panel_id();

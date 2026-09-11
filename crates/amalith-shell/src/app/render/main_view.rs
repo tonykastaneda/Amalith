@@ -31,6 +31,9 @@ pub(in crate::app) fn paint_main(
     representative: Option<amalith_core::Appearance>,
     fill_mixed: bool,
     stroke_mixed: bool,
+    appearance_items: Vec<amalith_core::AppearanceItem>,
+    appearance_selected: Option<usize>,
+    appearance_drop: Option<usize>,
     cur_fill: amalith_core::Paint,
     cur_stroke: amalith_core::Paint,
     pointer: Point,
@@ -625,6 +628,9 @@ pub(in crate::app) fn paint_main(
         area_type_dialog: None,
         gradient: gradient.clone(),
         gradient_edit,
+        appearance_items,
+        appearance_selected,
+        appearance_drop,
     };
     // Captured while walking the docked masters below, painted last (on
     // top of everything) once we know the open row's real screen rect.

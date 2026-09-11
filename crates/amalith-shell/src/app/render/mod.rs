@@ -91,6 +91,21 @@ impl App {
                 .unwrap_or_default(),
         };
 
+        // The Offset Path dialog, retargeted at one Appearance-panel
+        // item and previewing live — that item's committed `offset`
+        // isn't touched until OK, so this overrides just it for this
+        // frame's canvas paint (see `canvas.rs`'s `paint_path` closure).
+        // Independent of `self.drag`, so it's threaded into every arm
+        // below rather than living in the match itself.
+        let appearance_offset_preview: Option<(ObjectId, usize, amalith_core::OffsetEffect)> = self
+            .offset_dialog
+            .as_ref()
+            .filter(|d| d.preview)
+            .and_then(|d| match d.target {
+                offsetdlg::Target::AppearanceItem { object, index } => Some((object, index, d.resolved_effect())),
+                offsetdlg::Target::Objects => None,
+            });
+
         let preview = match &self.drag {
             Drag::MoveObjects {
                 start_doc,
@@ -112,6 +127,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             Drag::Warp { preview, warping: false, .. }
             | Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
@@ -125,6 +141,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             // Alt-drag with one of these dedicated transform tools shows
             // a live ghost of the would-be copy (`dup_xf`) instead of
@@ -151,6 +168,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             Drag::ResizeTextBox { .. } => Some(DragPreview {
                 ids: &[],
@@ -163,6 +181,7 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             Drag::MoveAnchors {
                 start_doc,
@@ -186,6 +205,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             Drag::MoveHandle {
                 object,
@@ -209,6 +229,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             Drag::PathTextBracket { object, edit } => {
                 let live = pathtext::resolve(self.doc.editor.document(), *object, &edit.original)
@@ -224,6 +245,7 @@ impl App {
                     text_boxes: &[],
                     path_text: live.map(|pt| (*object, pt)),
                     width_points: None,
+                    appearance_offset: appearance_offset_preview,
                 })
             }
             Drag::WidthPoint { object, points, .. } => Some(DragPreview {
@@ -237,8 +259,9 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: Some((*object, points.as_slice())),
+                appearance_offset: appearance_offset_preview,
             }),
-            _ if !resize_previews.is_empty() => Some(DragPreview {
+            _ if !resize_previews.is_empty() || appearance_offset_preview.is_some() => Some(DragPreview {
                 ids: &[],
                 delta: Vec2::ZERO,
                 dup: false,
@@ -249,6 +272,7 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
+                appearance_offset: appearance_offset_preview,
             }),
             _ => None,
         };
@@ -444,6 +468,7 @@ impl App {
         self.content.reset();
         let representative = self.representative();
         let (fill_mixed, stroke_mixed) = self.selection_paint_mixed();
+        let appearance_items = self.appearance_items();
         let active_artboard = self.current_artboard();
         // App-bar status: a file error wins, else the current file name.
         let status_text: Option<String> = self.doc.io_error.clone().or_else(|| {
@@ -560,6 +585,9 @@ impl App {
                 representative.clone(),
                 fill_mixed,
                 stroke_mixed,
+                appearance_items.clone(),
+                self.appearance_selected,
+                self.appearance_drop,
                 self.doc.fill,
                 self.doc.stroke,
                 self.pointer,
@@ -733,6 +761,9 @@ impl App {
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                            appearance_items: self.appearance_items(),
+                            appearance_selected: self.appearance_selected,
+                            appearance_drop: self.appearance_drop,
                         };
                         if frame.body.height() > 0.0 {
                             self.content.push_clip_layer(Fill::NonZero, ID, &frame.body);
@@ -808,6 +839,9 @@ impl App {
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                                appearance_items: self.appearance_items(),
+                                appearance_selected: self.appearance_selected,
+                                appearance_drop: self.appearance_drop,
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                             panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -885,6 +919,9 @@ impl App {
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+                                appearance_items: self.appearance_items(),
+                                appearance_selected: self.appearance_selected,
+                                appearance_drop: self.appearance_drop,
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &body);
                             panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);

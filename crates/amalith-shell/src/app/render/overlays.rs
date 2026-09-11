@@ -617,6 +617,16 @@ impl App {
         if offset.abs() < 1e-6 {
             return;
         }
+        if let offsetdlg::Target::AppearanceItem { .. } = dlg.target {
+            // A retargeted appearance-item edit already renders its live
+            // effect in place every frame via `canvas.rs`'s own per-item
+            // Offset Path handling (the item's `offset` isn't touched
+            // until OK, but the dialog's in-progress values feed the
+            // same canvas paint through `DragPreview` — see
+            // `render::mod`'s `appearance_offset_preview`), so this
+            // object-path-only overlay has nothing to add here.
+            return;
+        }
         let doc = self.doc.editor.document();
         let vt = self.doc.view.to_screen();
         let accent = self.theme.accent;

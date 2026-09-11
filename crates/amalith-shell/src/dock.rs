@@ -39,6 +39,7 @@ pub enum PanelKind {
     Links,
     Artboards,
     Swatches,
+    Appearance,
     Character,
     Paragraph,
     Color,
@@ -68,12 +69,13 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 27] = [
+    pub const ALL: [PanelKind; 28] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
         PanelKind::Artboards,
         PanelKind::Swatches,
+        PanelKind::Appearance,
         PanelKind::Character,
         PanelKind::Paragraph,
         PanelKind::Color,
@@ -110,6 +112,7 @@ impl PanelKind {
             PanelKind::Links => "links",
             PanelKind::Artboards => "artboards",
             PanelKind::Swatches => "swatches",
+            PanelKind::Appearance => "appearance",
             PanelKind::Character => "character",
             PanelKind::Paragraph => "paragraph",
             PanelKind::Color => "color",
@@ -146,6 +149,7 @@ impl PanelKind {
             "links" => PanelKind::Links,
             "artboards" => PanelKind::Artboards,
             "swatches" => PanelKind::Swatches,
+            "appearance" => PanelKind::Appearance,
             "character" => PanelKind::Character,
             "paragraph" => PanelKind::Paragraph,
             "color" => PanelKind::Color,
@@ -180,6 +184,7 @@ impl PanelKind {
             PanelKind::Links => "Links",
             PanelKind::Artboards => "Artboards",
             PanelKind::Swatches => "Swatches",
+            PanelKind::Appearance => "Appearance",
             PanelKind::Character => "Character",
             PanelKind::Paragraph => "Paragraph",
             PanelKind::Color => "Color",
@@ -848,6 +853,7 @@ mod tests {
                 | PanelKind::Links
                 | PanelKind::Artboards
                 | PanelKind::Swatches
+                | PanelKind::Appearance
                 | PanelKind::Character
                 | PanelKind::Paragraph
                 | PanelKind::Color
@@ -873,7 +879,7 @@ mod tests {
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 27);
+        assert_eq!(PanelKind::ALL.len(), 28);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }

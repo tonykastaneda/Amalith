@@ -8,6 +8,7 @@
 
 use crate::metrics::px as ui_px;
 
+pub mod appearance;
 mod artboards;
 pub mod character;
 pub mod color;
@@ -202,6 +203,17 @@ pub struct Ctx<'a> {
     pub gradient: Option<(amalith_core::Gradient, usize)>,
     /// Live buffer while a Gradient-panel numeric field is being typed.
     pub gradient_edit: Option<(gradient::GradField, &'a str)>,
+    /// Appearance panel: the target object's own fill/stroke stack —
+    /// empty (panel shows nothing to edit) unless exactly one object is
+    /// selected. Stored in paint order (bottom-to-top, see
+    /// `Appearance::items`'s doc comment); the panel displays it reversed.
+    pub appearance_items: Vec<amalith_core::AppearanceItem>,
+    /// Appearance panel: which row (index into `appearance_items`) is
+    /// selected.
+    pub appearance_selected: Option<usize>,
+    /// Appearance panel: live drag-reorder indicator — the *display* row
+    /// index (top-to-bottom on screen) the dragged row would land at.
+    pub appearance_drop: Option<usize>,
 }
 
 /// The primitive tool a `shapedlg.*` panel id stands for.
@@ -432,6 +444,33 @@ pub enum Action {
     /// Footer "Update Link": re-stamp a Linked asset from disk and
     /// invalidate its decoded cache.
     UpdateLinkAsset(AssetId),
+    // --- Appearance panel ---
+    /// A row was clicked — just selects it.
+    AppearanceSelect(usize),
+    /// A row's eye toggle — that item's own visibility, independent of
+    /// the object's own `Object.visible`.
+    AppearanceToggleVisible(usize),
+    /// Footer "Add New Fill" / "Add New Stroke".
+    AppearanceAddFill,
+    AppearanceAddStroke,
+    /// Footer "Duplicate Item" / "Delete Item" — act on the selected row.
+    AppearanceDuplicate,
+    AppearanceDelete,
+    /// A row's swatch: single click selects like the rest of the row,
+    /// double click opens the colour picker retargeted at this one stack
+    /// item (as opposed to `OpenPicker`'s topmost-Fill/topmost-Stroke
+    /// slot) — see `App::appearance_picker_target`.
+    OpenAppearanceItemPicker(usize),
+    /// The row's "fx" affordance (no effect yet) or its nested "Offset
+    /// Path" row (effect already present) — opens the Offset Path dialog
+    /// retargeted at this one stack item, seeded from its current effect
+    /// if it has one. Reuses the same dialog as Object ▸ Path ▸ Offset
+    /// Path, per the user's explicit direction to keep Illustrator's own
+    /// dialog-reuse muscle memory rather than inventing an inline editor.
+    OpenOffsetEffectDialog(usize),
+    /// The nested row's own delete affordance — clears that item's
+    /// `offset` back to `None` directly, no dialog needed.
+    AppearanceRemoveOffset(usize),
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
@@ -493,6 +532,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         PanelKind::Links => links::paint(scene, text, body, ctx),
         PanelKind::Artboards => artboards::paint(scene, text, body, ctx),
         PanelKind::Swatches => swatches::paint(scene, text, body, ctx),
+        PanelKind::Appearance => appearance::paint(scene, text, body, ctx),
         PanelKind::Character => character::paint(scene, text, body, ctx),
         PanelKind::Color => color::paint(scene, text, body, ctx),
         PanelKind::Gradient => gradient::paint(scene, text, body, ctx),
@@ -561,6 +601,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         PanelKind::Links => links::hit(body, local, ctx),
         PanelKind::Artboards => artboards::hit(body, local, ctx),
         PanelKind::Swatches => swatches::hit(body, local, ctx),
+        PanelKind::Appearance => appearance::hit(body, local, ctx),
         PanelKind::Character => character::hit(body, local, ctx),
         PanelKind::Color => color::hit(body, local, ctx),
         PanelKind::Gradient => gradient::hit(body, local, ctx),
@@ -645,6 +686,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Layers => layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Links => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
+        PanelKind::Appearance => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Color => color::metric_natural_h(),
         PanelKind::Gradient => gradient::metric_natural_h(),
         PanelKind::Transform => transform::natural_height(),
@@ -758,6 +800,7 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         PanelKind::Pathfinder => pathfinder::tip(body, local, ctx).map(str::to_string),
         PanelKind::Align => align::tip(body, local, ctx).map(str::to_string),
         PanelKind::Paragraph => paragraph::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Appearance => appearance::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }

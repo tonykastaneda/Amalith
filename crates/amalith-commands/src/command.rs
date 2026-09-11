@@ -6,7 +6,7 @@
 //! change. This is the Rust translation of Inkscape's `DocumentUndo`
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
-    Affine, Appearance, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
+    Affine, Appearance, AppearanceItem, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
     GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
     StrokeStyle, TextData, Unit, Vec2,
 };
@@ -401,6 +401,15 @@ pub enum Command {
         group: ObjectId,
         spacing: amalith_core::BlendSpacing,
         spine: Option<ObjectId>,
+    },
+    /// Replaces one object's whole appearance stack — the Appearance
+    /// panel's add/remove/duplicate/reorder/per-item-edit, all funneled
+    /// through this single command (one commit per drop, add, delete, or
+    /// edit). Single-object, unlike the batched `SetFill`/`SetStroke`
+    /// below: a stack's shape is inherently per-object.
+    SetAppearanceItems {
+        object: ObjectId,
+        items: Vec<AppearanceItem>,
     },
     /// Sets every listed object's fill paint, one undo group.
     SetFill {

@@ -59,9 +59,13 @@ impl App {
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
             // Single click just picks the slot; double click opens the
             // colour picker (Illustrator behaviour).
-            panels::Action::OpenPicker(slot) if !double => self.active_slot = slot,
+            panels::Action::OpenPicker(slot) if !double => {
+                self.active_slot = slot;
+                self.appearance_picker_target = None;
+            }
             panels::Action::OpenPicker(slot) => {
                 self.active_slot = slot;
+                self.appearance_picker_target = None;
                 let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
                 let paint = self
                     .representative()
@@ -79,6 +83,54 @@ impl App {
                 );
                 self.picker = Some(picker::Picker::from_color(slot, origin, paint.color()));
             }
+            panels::Action::AppearanceSelect(idx) => {
+                self.appearance_selected = Some(idx);
+                self.request_main_redraw();
+            }
+            panels::Action::AppearanceToggleVisible(idx) => self.appearance_toggle_visible(idx),
+            panels::Action::AppearanceAddFill => self.appearance_add_fill(),
+            panels::Action::AppearanceAddStroke => self.appearance_add_stroke(),
+            panels::Action::AppearanceDuplicate => self.appearance_duplicate_selected(),
+            panels::Action::AppearanceDelete => self.appearance_delete_selected(),
+            panels::Action::OpenAppearanceItemPicker(idx) if !double => {
+                self.appearance_selected = Some(idx);
+                self.request_main_redraw();
+            }
+            panels::Action::OpenAppearanceItemPicker(idx) => {
+                self.appearance_selected = Some(idx);
+                let Some(object) = self.appearance_target() else {
+                    return;
+                };
+                let Some(item) = self
+                    .doc
+                    .editor
+                    .document()
+                    .object(object)
+                    .and_then(|o| o.appearance.items.get(idx).copied())
+                else {
+                    return;
+                };
+                let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+                let origin = Point::new(
+                    ((w - picker::metric_w()) * 0.5).max(4.0),
+                    ((h - picker::metric_h()) * 0.5).max(4.0),
+                );
+                // `slot` here is cosmetic only — `appearance_picker_target`
+                // takes priority on every read/write while it's set (see
+                // `active_paint`/`apply_solid_rgb`/`apply_picker_color`).
+                let slot = if item.is_stroke() { panels::PaintSlot::Stroke } else { panels::PaintSlot::Fill };
+                self.picker = Some(picker::Picker::from_color(slot, origin, item.paint().color()));
+                self.appearance_picker_target = Some((object, idx));
+            }
+            panels::Action::OpenOffsetEffectDialog(idx) => {
+                self.appearance_selected = Some(idx);
+                // No `event_loop` here (menu/panel-click path) — same
+                // deferred-spawn pattern as Export / Object ▸ Path ▸
+                // Offset Path; picked up next `about_to_wait`.
+                self.pending_offset_effect_dialog = Some(idx);
+                self.request_main_redraw();
+            }
+            panels::Action::AppearanceRemoveOffset(idx) => self.appearance_remove_offset(idx),
             panels::Action::PickerSv(s, v) => {
                 if let Some(pk) = &mut self.picker {
                     pk.s = s;

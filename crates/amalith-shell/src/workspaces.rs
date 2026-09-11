@@ -34,8 +34,13 @@ pub fn essentials_classic() -> Layout {
     dock.dock_master(right, Side::Right, 0);
     // Links gets its own column rather than crowding into the Layers/
     // Artboards group — narrow enough to sit permanently in Stack mode's
-    // icon-only rendering (below `layout::COMPACT_BREAKPOINT`).
-    let links = dock.spawn_master(vec![vec![PanelId(PanelKind::Links)]], [0.0, 40.0, 48.0, 200.0]);
+    // icon-only rendering (below `layout::COMPACT_BREAKPOINT`). Appearance
+    // rides along as a second group in that same column, collapsed to its
+    // own icon row directly under Links in Stack mode.
+    let links = dock.spawn_master(
+        vec![vec![PanelId(PanelKind::Links)], vec![PanelId(PanelKind::Appearance)]],
+        [0.0, 40.0, 48.0, 200.0],
+    );
     if let Some(m) = dock.master_mut(links) {
         m.layout = MasterLayout::Stack;
     }

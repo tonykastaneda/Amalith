@@ -216,6 +216,16 @@ enum Drag {
         press: Point,
         moved: bool,
     },
+    /// Dragging an Appearance-panel row to reorder the target object's
+    /// stack — the flat-list analogue of `LayerDrag` (no nesting/"into a
+    /// container" band; just an insertion index). `body` is the panel's
+    /// scrolled body rect (screen px); the drag only "takes" once the
+    /// pointer leaves a small slop circle around `press`.
+    AppearanceDrag {
+        body: Rect,
+        press: Point,
+        moved: bool,
+    },
     /// Panning the canvas; `last` is the previous cursor position.
     Pan { last: Point },
     /// Illustrator scrubby zoom (Space+⌘ drag): zoom anchored at
@@ -1069,6 +1079,10 @@ struct App {
     pending_export: bool,
     /// Same reason as `pending_export`, for the Offset Path dialog.
     pending_offset_dialog: bool,
+    /// Same reason as `pending_export`, for the Offset Path dialog
+    /// retargeted at one Appearance-panel item's live effect — the item's
+    /// real stack index; the object comes from `appearance_target()`.
+    pending_offset_effect_dialog: Option<usize>,
     /// Same reason as `pending_export`, for the Layer Options dialog —
     /// which layer to open it for.
     pending_layer_dialog: Option<amalith_core::LayerId>,
@@ -1179,6 +1193,15 @@ struct App {
     clipboard: Option<arboard::Clipboard>,
     /// Open colour picker, if any.
     picker: Option<picker::Picker>,
+    /// Set while the open picker is editing one specific Appearance
+    /// panel stack item (object + index) rather than the ordinary
+    /// topmost-Fill/topmost-Stroke `PaintSlot`. Checked first by
+    /// `active_paint`/`apply_solid_rgb`/`apply_picker_color`; cleared
+    /// whenever the picker closes or opens via the normal path.
+    appearance_picker_target: Option<(amalith_core::ObjectId, usize)>,
+    /// Appearance panel: which row (index into the target object's
+    /// `appearance.items`) is selected.
+    appearance_selected: Option<usize>,
     /// Color panel slider space (RGB / HSB / CMYK).
     color_mode: panels::ColorSpace,
     /// A loaded ICC destination profile for real (Little CMS) RGB<->CMYK
@@ -1355,6 +1378,12 @@ struct App {
     /// [`Drag::LayerDrag`] is past the slop threshold. The first two drive
     /// the `Reparent` command on release; the last two draw the indicator.
     layer_drop: Option<(amalith_core::ObjectParent, usize, i64, bool)>,
+    /// Live Appearance-panel drag-reorder target: the *display* row
+    /// index (0..=len, top-to-bottom on screen) the dragged row would
+    /// land at — `Some` only while a [`Drag::AppearanceDrag`] is past
+    /// the slop threshold. Recomputed fresh every pointer-move rather
+    /// than trusted stale, same as `layer_drop`.
+    appearance_drop: Option<usize>,
     /// Cached static ruler layer — rebuilt only when the view, canvas
     /// region, ruler origin, or display unit changes.
     ruler_cache: Option<(f64, f64, f64, Rect, f64, f64, amalith_core::Unit, Scene)>,
@@ -1436,6 +1465,7 @@ impl App {
             blend_dialog: None,
             offset_dialog: None,
             pending_offset_dialog: false,
+            pending_offset_effect_dialog: None,
             layer_dialog: None,
             pending_layer_dialog: None,
             area_type_dialog: None,
@@ -1484,6 +1514,9 @@ impl App {
             stroke_popover: false,
             clipboard: None,
             picker: None,
+            appearance_picker_target: None,
+            appearance_selected: None,
+            appearance_drop: None,
             color_mode: panels::ColorSpace::Rgb,
             cmyk_profile: None,
             stack_flyout: None,
@@ -1790,6 +1823,7 @@ impl App {
         self.last_pen = None;
         self.marquee = None;
         self.picker = None;
+        self.appearance_picker_target = None;
         self.pending_shape_dialog = None;
         self.close_shape_dialog(false);
         self.pending_export = false;
@@ -1998,16 +2032,46 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Apply the colour picker's current colour to its slot.
+    /// Apply the colour picker's current colour to its slot — or, while
+    /// `appearance_picker_target` is set, to that one specific Appearance
+    /// panel stack item instead (see its own doc comment).
     fn apply_picker_color(&mut self) {
         let Some(pk) = self.picker else {
             return;
         };
-        self.set_paint(pk.slot, amalith_core::Paint::Solid(pk.color()));
+        if let Some((object, index)) = self.appearance_picker_target {
+            self.set_appearance_item_paint(object, index, amalith_core::Paint::Solid(pk.color()));
+        } else {
+            self.set_paint(pk.slot, amalith_core::Paint::Solid(pk.color()));
+        }
         self.push_recent(pk.color());
     }
 
+    /// Replaces one Appearance panel stack item's paint in place — the
+    /// picker/swatch-drag counterpart to `edit_appearance_items`'s
+    /// add/remove/reorder.
+    fn set_appearance_item_paint(&mut self, object: amalith_core::ObjectId, index: usize, paint: amalith_core::Paint) {
+        let Some(obj) = self.doc.editor.document().object(object) else {
+            return;
+        };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get_mut(index) else {
+            return;
+        };
+        match item {
+            amalith_core::AppearanceItem::Fill { paint: p, .. }
+            | amalith_core::AppearanceItem::Stroke { paint: p, .. } => *p = paint,
+        }
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
     fn active_paint(&self) -> amalith_core::Paint {
+        if let Some((object, index)) = self.appearance_picker_target {
+            if let Some(item) = self.doc.editor.document().object(object).and_then(|o| o.appearance.items.get(index)) {
+                return item.paint();
+            }
+        }
         match self.active_slot {
             panels::PaintSlot::Fill => self
                 .representative()
@@ -2028,6 +2092,10 @@ impl App {
 
     fn apply_solid_rgb(&mut self, r: f32, g: f32, b: f32) {
         let c = amalith_core::Color::rgb(r, g, b);
+        if let Some((object, index)) = self.appearance_picker_target {
+            self.set_appearance_item_paint(object, index, amalith_core::Paint::Solid(c));
+            return;
+        }
         self.set_paint(self.active_slot, amalith_core::Paint::Solid(c));
     }
 
@@ -2087,6 +2155,7 @@ impl App {
         self.picker_gradient_stop = None;
         self.picker_gradient_point = None;
         self.picker = None;
+        self.appearance_picker_target = None;
         self.dock.remove(PanelId(PanelKind::Picker));
         let dead: Vec<WindowId> = self
             .hosts
@@ -3138,6 +3207,145 @@ impl App {
             .first()
             .and_then(|id| self.doc.editor.document().object(*id))
             .map(|o| o.appearance.clone())
+    }
+
+    /// The single selected object the Appearance panel edits — `None`
+    /// (panel shows nothing to edit) unless exactly one object is
+    /// selected. Editing a stack is inherently single-object
+    /// (`Command::SetAppearanceItems` targets one id); editing several
+    /// objects' differently-shaped stacks at once is out of scope for V1.
+    fn appearance_target(&self) -> Option<amalith_core::ObjectId> {
+        match self.doc.selection.as_slice() {
+            [id] => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn appearance_items(&self) -> Vec<amalith_core::AppearanceItem> {
+        self.appearance_target()
+            .and_then(|id| self.doc.editor.document().object(id))
+            .map(|o| o.appearance.items.clone())
+            .unwrap_or_default()
+    }
+
+    /// Appearance panel footer: pushes a new Fill on top of the target's
+    /// stack, duplicating the current topmost fill's paint (or the
+    /// toolbar's current fill if it has none yet) — never a hard-coded
+    /// default disconnected from what's already showing, so "add another
+    /// fill" builds on the color you just picked instead of Illustrator's
+    /// own jarring unrelated-color-appears behavior.
+    fn appearance_add_fill(&mut self) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let paint = obj
+            .appearance
+            .items
+            .iter()
+            .rev()
+            .find(|i| i.is_fill())
+            .map(|i| i.paint())
+            .unwrap_or(self.doc.fill);
+        let mut items = obj.appearance.items.clone();
+        items.push(amalith_core::AppearanceItem::Fill { paint, opacity: 1.0, visible: true, offset: None });
+        self.appearance_selected = Some(items.len() - 1);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    /// Same as [`Self::appearance_add_fill`] for a Stroke item — width
+    /// and style also duplicate the current topmost stroke's, or the
+    /// toolbar's current stroke weight with the default style.
+    fn appearance_add_stroke(&mut self) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let existing = obj.appearance.items.iter().rev().find_map(|i| match i {
+            amalith_core::AppearanceItem::Stroke { paint, width, style, .. } => Some((*paint, *width, *style)),
+            amalith_core::AppearanceItem::Fill { .. } => None,
+        });
+        let (paint, width, style) = existing.unwrap_or((
+            self.doc.stroke,
+            self.doc.stroke_w,
+            self.doc.stroke_style,
+        ));
+        let mut items = obj.appearance.items.clone();
+        items.push(amalith_core::AppearanceItem::Stroke { paint, width, style, opacity: 1.0, visible: true, offset: None });
+        self.appearance_selected = Some(items.len() - 1);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    fn appearance_duplicate_selected(&mut self) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(idx) = self.appearance_selected else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        if idx >= items.len() {
+            return;
+        }
+        items.insert(idx + 1, items[idx]);
+        self.appearance_selected = Some(idx + 1);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    fn appearance_delete_selected(&mut self) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(idx) = self.appearance_selected else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        if idx >= items.len() {
+            return;
+        }
+        items.remove(idx);
+        self.appearance_selected = if items.is_empty() { None } else { Some(idx.min(items.len() - 1)) };
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    fn appearance_toggle_visible(&mut self, idx: usize) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get_mut(idx) else { return };
+        match item {
+            amalith_core::AppearanceItem::Fill { visible, .. }
+            | amalith_core::AppearanceItem::Stroke { visible, .. } => *visible = !*visible,
+        }
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    /// The nested effect row's own trash icon — clears that item's
+    /// `offset` straight back to `None`, no dialog needed.
+    fn appearance_remove_offset(&mut self, idx: usize) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get_mut(idx) else { return };
+        item.set_offset(None);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    /// Commits an Appearance-panel drag: moves the selected row to
+    /// `target_real_index` (from `panels::appearance::drop_target`,
+    /// already in stored-order terms), adjusting for the shift a
+    /// remove-then-insert causes — the same reorder arithmetic as any
+    /// plain list-drag.
+    fn appearance_reorder(&mut self, target_real_index: usize) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(from) = self.appearance_selected else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        if from >= items.len() {
+            return;
+        }
+        let item = items.remove(from);
+        let to = if target_real_index > from { target_real_index - 1 } else { target_real_index }.min(items.len());
+        items.insert(to, item);
+        self.appearance_selected = Some(to);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
     }
 
     /// The single selected object's asset, when it's a Linked image — for
@@ -6633,6 +6841,9 @@ impl App {
             area_type_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+            appearance_items: Vec::new(),
+            appearance_selected: None,
+            appearance_drop: None,
         }
     }
 
@@ -6695,6 +6906,9 @@ impl App {
             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
+            appearance_items: self.appearance_items(),
+            appearance_selected: self.appearance_selected,
+            appearance_drop: self.appearance_drop,
         }
     }
 
@@ -6868,6 +7082,7 @@ impl App {
         self.stack_flyout = None;
         if pid.0 == PanelKind::Picker {
             self.picker = None;
+            self.appearance_picker_target = None;
         }
         if panels::shape_dialog_tool(pid).is_some() {
             self.shape_dialog = None;
@@ -7798,6 +8013,9 @@ impl ApplicationHandler for App {
         if std::mem::take(&mut self.pending_offset_dialog) {
             self.spawn_offset_dialog(event_loop);
         }
+        if let Some(idx) = self.pending_offset_effect_dialog.take() {
+            self.spawn_offset_dialog_for_appearance_item(event_loop, idx);
+        }
         if let Some(id) = self.pending_layer_dialog.take() {
             self.spawn_layer_dialog(event_loop, id);
         }
@@ -8587,8 +8805,9 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 /// The panels the Panels menu lists, alphabetical like Illustrator. A
 /// deliberate subset of `PanelKind::ALL` — excludes the color picker and
 /// every float-only dialog panel, which never belong in this menu.
-const WINDOW_PANELS: [PanelKind; 12] = [
+const WINDOW_PANELS: [PanelKind; 13] = [
     PanelKind::Align,
+    PanelKind::Appearance,
     PanelKind::Artboards,
     PanelKind::Character,
     PanelKind::Color,

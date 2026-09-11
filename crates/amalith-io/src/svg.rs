@@ -107,33 +107,42 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String, defs: &mut D
         }
         ObjectKind::Path(path) => {
             let d = path.geometry.to_svg();
-            match freeform_fill(&object.appearance, document) {
-                Some(g) => {
-                    emit_freeform_path(&d, &transform_attr, &object.appearance, g, document, defs, out);
+            if is_simple_appearance(&object.appearance) {
+                match freeform_fill(&object.appearance, document) {
+                    Some(g) => {
+                        emit_freeform_path(&d, &transform_attr, &object.appearance, g, document, defs, out);
+                    }
+                    None => {
+                        let paint_attrs = paint_attrs(&object.appearance, document, defs);
+                        out.push_str(&format!("<path d=\"{d}\"{transform_attr}{paint_attrs} />"));
+                    }
                 }
-                None => {
-                    let paint_attrs = paint_attrs(&object.appearance, document, defs);
-                    out.push_str(&format!("<path d=\"{d}\"{transform_attr}{paint_attrs} />"));
-                }
+            } else {
+                emit_appearance_items(&object.appearance, std::slice::from_ref(&d), &transform_attr, document, defs, out);
             }
         }
         ObjectKind::CompoundPath(compound) => {
-            match freeform_fill(&object.appearance, document) {
-                Some(g) => {
-                    out.push_str(&format!("<g{transform_attr}>"));
-                    for subpath in &compound.subpaths {
-                        emit_freeform_path(&subpath.to_svg(), "", &object.appearance, g, document, defs, out);
+            if is_simple_appearance(&object.appearance) {
+                match freeform_fill(&object.appearance, document) {
+                    Some(g) => {
+                        out.push_str(&format!("<g{transform_attr}>"));
+                        for subpath in &compound.subpaths {
+                            emit_freeform_path(&subpath.to_svg(), "", &object.appearance, g, document, defs, out);
+                        }
+                        out.push_str("</g>");
                     }
-                    out.push_str("</g>");
-                }
-                None => {
-                    let paint_attrs = paint_attrs(&object.appearance, document, defs);
-                    out.push_str(&format!("<g{transform_attr}>"));
-                    for subpath in &compound.subpaths {
-                        out.push_str(&format!("<path d=\"{}\"{paint_attrs} />", subpath.to_svg()));
+                    None => {
+                        let paint_attrs = paint_attrs(&object.appearance, document, defs);
+                        out.push_str(&format!("<g{transform_attr}>"));
+                        for subpath in &compound.subpaths {
+                            out.push_str(&format!("<path d=\"{}\"{paint_attrs} />", subpath.to_svg()));
+                        }
+                        out.push_str("</g>");
                     }
-                    out.push_str("</g>");
                 }
+            } else {
+                let subpaths: Vec<String> = compound.subpaths.iter().map(|sp| sp.to_svg()).collect();
+                emit_appearance_items(&object.appearance, &subpaths, &transform_attr, document, defs, out);
             }
         }
         // Stub kinds with no real content to export yet (see module docs).
@@ -379,6 +388,159 @@ fn paint_attr(name: &str, paint: Paint, document: &Document, defs: &mut Defs) ->
     }
 }
 
+/// Whether `appearance`'s stack is simple enough to export as the one
+/// `<path>`/`<g>` [`paint_attrs`]/[`emit_freeform_path`] already know how
+/// to build — at most one visible fill and one visible stroke. Plain SVG
+/// has no way to express more than that on a single shape (the same
+/// reason Illustrator's own SVG export can't preserve a real
+/// multi-fill/multi-stroke Appearance either — it flattens or drops the
+/// extra items); [`emit_appearance_items`] is the fallback for anything
+/// more complex, which re-imports as separate sibling objects rather
+/// than one shape with a stack, a disclosed interchange-format limit.
+fn is_simple_appearance(appearance: &Appearance) -> bool {
+    appearance.items.iter().filter(|i| i.visible() && i.is_fill()).count() <= 1
+        && appearance.items.iter().filter(|i| i.visible() && i.is_stroke()).count() <= 1
+}
+
+/// Exports a genuinely multi-item appearance stack (more than one visible
+/// fill or stroke) as one sibling SVG element per item, in paint order
+/// (see `Appearance::items`'s doc comment) — the closest plain SVG can
+/// get to Illustrator's own Appearance panel. `subpaths` is one `d`
+/// string for a plain Path, or one per subpath for a CompoundPath (each
+/// item repeats across every subpath, matching the simple-case
+/// `<g>`-of-subpaths convention below). The object's own opacity wraps
+/// the whole stack in one outer `<g>`; each item's own opacity lands on
+/// its own element, same nesting as the live canvas and PDF export.
+fn emit_appearance_items(appearance: &Appearance, subpaths: &[String], transform_attr: &str, document: &Document, defs: &mut Defs, out: &mut String) {
+    let obj_opacity_attr = item_opacity_attr(appearance.opacity);
+    let wrap_object = !obj_opacity_attr.is_empty();
+    if wrap_object {
+        out.push_str(&format!("<g{obj_opacity_attr}>"));
+    }
+    for item in &appearance.items {
+        if !item.visible() {
+            continue;
+        }
+        match item {
+            AppearanceItem::Fill { paint, opacity, .. } => {
+                let opacity_attr = item_opacity_attr(*opacity);
+                let freeform = match paint {
+                    Paint::Gradient(gid) => document.gradient(*gid).filter(|g| g.kind == GradientKind::Freeform),
+                    _ => None,
+                };
+                match freeform {
+                    Some(g) if subpaths.len() == 1 => {
+                        emit_freeform_fill(&subpaths[0], transform_attr, &opacity_attr, g, defs, out);
+                    }
+                    Some(g) => {
+                        out.push_str(&format!("<g{transform_attr}>"));
+                        for d in subpaths {
+                            emit_freeform_fill(d, "", &opacity_attr, g, defs, out);
+                        }
+                        out.push_str("</g>");
+                    }
+                    None => {
+                        let mut attrs = paint_attr("fill", *paint, document, defs);
+                        attrs.push_str(&opacity_attr);
+                        emit_item_shape(out, transform_attr, subpaths, &attrs);
+                    }
+                }
+            }
+            AppearanceItem::Stroke { paint, width, style, opacity, .. } => {
+                if !paint.is_visible() {
+                    continue;
+                }
+                let mut attrs = String::from(" fill=\"none\"");
+                attrs.push_str(&paint_attr("stroke", *paint, document, defs));
+                attrs.push_str(&format!(" stroke-width=\"{width}\""));
+                attrs.push_str(match style.cap {
+                    LineCap::Butt => " stroke-linecap=\"butt\"",
+                    LineCap::Round => " stroke-linecap=\"round\"",
+                    LineCap::Square => " stroke-linecap=\"square\"",
+                });
+                attrs.push_str(match style.join {
+                    LineJoin::Miter => " stroke-linejoin=\"miter\"",
+                    LineJoin::Round => " stroke-linejoin=\"round\"",
+                    LineJoin::Bevel => " stroke-linejoin=\"bevel\"",
+                });
+                if style.join == LineJoin::Miter {
+                    attrs.push_str(&format!(" stroke-miterlimit=\"{}\"", style.miter_limit));
+                }
+                if let Some(pattern) = style.dash_pattern() {
+                    let dash = pattern.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",");
+                    attrs.push_str(&format!(" stroke-dasharray=\"{dash}\""));
+                    if style.dash_offset != 0.0 {
+                        attrs.push_str(&format!(" stroke-dashoffset=\"{}\"", style.dash_offset));
+                    }
+                }
+                attrs.push_str(&item_opacity_attr(*opacity));
+                emit_item_shape(out, transform_attr, subpaths, &attrs);
+            }
+        }
+    }
+    if wrap_object {
+        out.push_str("</g>");
+    }
+}
+
+fn item_opacity_attr(opacity: f32) -> String {
+    if opacity != 1.0 {
+        format!(" opacity=\"{}\"", opacity.clamp(0.0, 1.0))
+    } else {
+        String::new()
+    }
+}
+
+/// One item's shape: a single `<path>` (transform on the element itself)
+/// for a plain Path, or a `<g{transform_attr}>` wrapping one `<path>` per
+/// subpath for a CompoundPath — mirrors the simple-case convention above.
+fn emit_item_shape(out: &mut String, transform_attr: &str, subpaths: &[String], attrs: &str) {
+    if subpaths.len() == 1 {
+        out.push_str(&format!("<path d=\"{}\"{transform_attr}{attrs} />", subpaths[0]));
+    } else {
+        out.push_str(&format!("<g{transform_attr}>"));
+        for d in subpaths {
+            out.push_str(&format!("<path d=\"{d}\"{attrs} />"));
+        }
+        out.push_str("</g>");
+    }
+}
+
+/// [`emit_freeform_path`]'s fill-only counterpart for the multi-item
+/// fallback — strokes are always separate items there, so there's no
+/// "stroke only, drawn last" tail to append (compare `emit_freeform_path`
+/// above, which still owns that for the simple case).
+fn emit_freeform_fill(d: &str, extra_g_attrs: &str, opacity_attr: &str, gradient: &amalith_core::Gradient, defs: &mut Defs, out: &mut String) {
+    out.push_str(&format!("<g{extra_g_attrs}{opacity_attr}>"));
+    if !gradient.points.is_empty() {
+        let backstop = average_point_color(&gradient.points);
+        out.push_str(&format!(
+            "<path d=\"{d}\" fill=\"{}\" fill-opacity=\"{}\"/>",
+            hex_color(backstop),
+            backstop.a.clamp(0.0, 1.0)
+        ));
+        for (i, p) in gradient.points.iter().enumerate() {
+            let svg_id = freeform_point_svg_id(gradient.id, i);
+            if defs.seen.insert(svg_id.clone()) {
+                let c = p.effective_color();
+                let outer = (p.spread * 2.2).max(0.02);
+                let (cx, cy) = (p.pos[0], p.pos[1]);
+                let solid = hex_color(c);
+                defs.xml.push_str(&format!(
+                    "<radialGradient id=\"{svg_id}\" gradientUnits=\"objectBoundingBox\" \
+                     cx=\"{cx}\" cy=\"{cy}\" r=\"{outer}\" fx=\"{cx}\" fy=\"{cy}\">\
+                     <stop offset=\"0\" stop-color=\"{solid}\" stop-opacity=\"{}\"/>\
+                     <stop offset=\"1\" stop-color=\"{solid}\" stop-opacity=\"0\"/>\
+                     </radialGradient>",
+                    c.a.clamp(0.0, 1.0),
+                ));
+            }
+            out.push_str(&format!("<path d=\"{d}\" fill=\"url(#{svg_id})\"/>"));
+        }
+    }
+    out.push_str("</g>");
+}
+
 fn hex_color(color: Color) -> String {
     format!(
         "#{:02x}{:02x}{:02x}",
@@ -543,8 +705,8 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     );
     Appearance {
         items: vec![
-            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true },
-            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true },
+            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true, offset: None },
+            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true, offset: None },
         ],
         opacity: obj_opacity,
     }
@@ -1036,6 +1198,92 @@ mod tests {
         assert!((fill.r - 0.2).abs() < 0.01, "fill was {fill:?}");
         assert!((fill.g - 0.4).abs() < 0.01, "fill was {fill:?}");
         assert!((fill.b - 0.6).abs() < 0.01, "fill was {fill:?}");
+    }
+
+    #[test]
+    fn a_multi_fill_stack_exports_one_path_per_item_in_paint_order() {
+        use amalith_core::AppearanceItem;
+        let mut document = Document::new("Test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        // Two fills: red underneath, green on top.
+        object.appearance = Appearance {
+            items: vec![
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+            ],
+            opacity: 1.0,
+        };
+        let id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[id]).unwrap();
+        assert_eq!(svg.matches("<path").count(), 2, "one <path> per fill item; svg was: {svg}");
+        let red_at = svg.find("fill=\"#ff0000\"").expect("red fill present");
+        let green_at = svg.find("fill=\"#00ff00\"").expect("green fill present");
+        assert!(red_at < green_at, "red (bottom of the stack) must be emitted first so green paints on top; svg was: {svg}");
+    }
+
+    #[test]
+    fn a_multi_item_stack_still_reimports_its_visible_paint_even_though_it_splits_into_siblings() {
+        use amalith_core::AppearanceItem;
+        // Plain SVG can't express "one shape, two fills" — the documented
+        // fallback splits it into sibling elements, which re-import as
+        // separate objects. That's a disclosed limitation, but the colors
+        // themselves must still come through undistorted.
+        let mut document = Document::new("Test");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        document.insert_layer(layer, 0);
+        let mut object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        object.appearance = Appearance {
+            items: vec![
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Stroke {
+                    paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)),
+                    width: 3.0,
+                    style: amalith_core::StrokeStyle::default(),
+                    opacity: 1.0,
+                    visible: true,
+                    offset: None,
+                },
+                AppearanceItem::Stroke {
+                    paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
+                    width: 6.0,
+                    style: amalith_core::StrokeStyle::default(),
+                    opacity: 1.0,
+                    visible: true,
+                    offset: None,
+                },
+            ],
+            opacity: 1.0,
+        };
+        let id = object.id;
+        document.insert_object(object, 0).unwrap();
+
+        let svg = export_svg(&document, &[id]).unwrap();
+        let imported = import_svg(&svg).unwrap();
+        assert_eq!(imported.roots.len(), 3, "one imported object per sibling element");
+        let mut colors: Vec<_> = imported
+            .objects
+            .values()
+            .flat_map(|o| [o.appearance.fill(), o.appearance.stroke()])
+            .filter(|p| p.is_visible())
+            .filter_map(|p| p.color())
+            .collect();
+        colors.sort_by(|a, b| (a.r, a.g, a.b).partial_cmp(&(b.r, b.g, b.b)).unwrap());
+        colors.dedup();
+        assert_eq!(colors.len(), 3, "all three paints round-tripped, just onto separate objects");
     }
 
     #[test]

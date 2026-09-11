@@ -290,6 +290,7 @@ fn interpret(
                                     paint: fills.then_some(gs.fill).flatten().map(Paint::Solid).unwrap_or(Paint::None),
                                     opacity: 1.0,
                                     visible: true,
+                                    offset: None,
                                 },
                                 AppearanceItem::Stroke {
                                     paint: strokes.then_some(gs.stroke).flatten().map(Paint::Solid).unwrap_or(Paint::None),
@@ -297,6 +298,7 @@ fn interpret(
                                     style: StrokeStyle::default(),
                                     opacity: 1.0,
                                     visible: true,
+                                    offset: None,
                                 },
                             ],
                             opacity: 1.0,

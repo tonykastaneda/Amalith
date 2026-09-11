@@ -2749,6 +2749,61 @@ mod tests {
     }
 
     #[test]
+    fn set_appearance_items_replaces_the_whole_stack_and_undoes() {
+        use amalith_core::AppearanceItem;
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(id) = editor
+            .execute(Command::CreateRect { layer, rect: Rect::new(0.0, 0.0, 10.0, 10.0), name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let original = editor.document().object(id).unwrap().appearance.items.clone();
+        assert_eq!(original.len(), 2, "sanity: the default stack is one fill, one stroke");
+
+        // Add a second fill on top of the stack.
+        let mut items = original.clone();
+        items.push(AppearanceItem::Fill {
+            paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
+            opacity: 0.5,
+            visible: true,
+            offset: None,
+        });
+        editor
+            .execute(Command::SetAppearanceItems { object: id, items: items.clone() })
+            .unwrap();
+        assert_eq!(editor.document().object(id).unwrap().appearance.items, items);
+        assert_eq!(
+            editor.document().object(id).unwrap().appearance.fill(),
+            Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
+            "fill() reads the topmost fill item"
+        );
+
+        // Reorder: move the new fill to the bottom of the stack instead.
+        let mut reordered = items.clone();
+        reordered.rotate_right(1);
+        editor
+            .execute(Command::SetAppearanceItems { object: id, items: reordered.clone() })
+            .unwrap();
+        assert_eq!(editor.document().object(id).unwrap().appearance.items, reordered);
+
+        editor.undo().unwrap(); // undo reorder
+        assert_eq!(editor.document().object(id).unwrap().appearance.items, items);
+        editor.undo().unwrap(); // undo add
+        assert_eq!(editor.document().object(id).unwrap().appearance.items, original);
+
+        editor.redo().unwrap();
+        editor.redo().unwrap();
+        assert_eq!(editor.document().object(id).unwrap().appearance.items, reordered);
+    }
+
+    #[test]
     fn set_stroke_width_and_opacity_apply_to_every_object_and_undo_redo() {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor

@@ -325,6 +325,18 @@ impl App {
                 .map(|d| (d.parent, d.index, d.row, d.into));
                 self.request_main_redraw();
             }
+            Drag::AppearanceDrag { body, press, moved } => {
+                let (body, press, was_moved) = (*body, *press, *moved);
+                let far = (self.pointer - press).hypot() > 4.0;
+                if !was_moved && !far {
+                    return;
+                }
+                self.drag = Drag::AppearanceDrag { body, press, moved: true };
+                let count = self.appearance_items().len();
+                self.appearance_drop = crate::panels::appearance::drop_target(body, self.pointer, count)
+                    .map(|(row, _)| row);
+                self.request_main_redraw();
+            }
             Drag::DrawShape {
                 tool, start_doc, ..
             } => {
@@ -997,6 +1009,16 @@ impl App {
                     }
                 }
                 self.layer_drop = None;
+                self.request_main_redraw();
+            }
+            Drag::AppearanceDrag { body, moved, .. } => {
+                if moved {
+                    let count = self.appearance_items().len();
+                    if let Some((_, real_index)) = crate::panels::appearance::drop_target(body, self.pointer, count) {
+                        self.appearance_reorder(real_index);
+                    }
+                }
+                self.appearance_drop = None;
                 self.request_main_redraw();
             }
             Drag::MoveObjects {

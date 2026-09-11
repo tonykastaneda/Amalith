@@ -54,7 +54,7 @@ impl App {
                     let anchor = panels::tools::group_slot_rect(frame.body, group);
                     self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
-                    let spawn = double && matches!(action, panels::Action::OpenPicker(_));
+                    let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
                     let grad_drag = gradient_drag_for(&action, double);
                     self.apply_panel_action(action, double);
                     if spawn {
@@ -157,8 +157,11 @@ impl App {
                     let anchor = panels::tools::group_slot_rect(pbody, group);
                     self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
-                    let spawn = double && matches!(action, panels::Action::OpenPicker(_));
+                    let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
                     let arm_drag = !double && pid == PanelId(PanelKind::Layers) && matches!(action, panels::Action::Select(_));
+                    let arm_appearance_drag = !double
+                        && pid == PanelId(PanelKind::Appearance)
+                        && matches!(action, panels::Action::AppearanceSelect(_));
                     let grad_drag = gradient_drag_for(&action, double);
                     self.apply_panel_action(action, double);
                     if spawn {
@@ -166,6 +169,13 @@ impl App {
                     }
                     if arm_drag {
                         self.drag = Drag::LayerDrag {
+                            body: pbody,
+                            press: self.pointer,
+                            moved: false,
+                        };
+                    }
+                    if arm_appearance_drag {
+                        self.drag = Drag::AppearanceDrag {
                             body: pbody,
                             press: self.pointer,
                             moved: false,
@@ -691,7 +701,7 @@ impl App {
                         context_bar::hit(opt_bar_rect(w), self.pointer, &cx)
                     };
                     if !matches!(action, panels::Action::None) {
-                        let spawn = double && matches!(action, panels::Action::OpenPicker(_));
+                        let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
                         self.apply_panel_action(action, double);
                         if spawn {
                             self.spawn_picker_window(event_loop);

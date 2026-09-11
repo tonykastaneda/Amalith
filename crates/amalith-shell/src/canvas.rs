@@ -105,6 +105,12 @@ pub struct DragPreview<'a> {
     /// one path object, overriding its committed `width_points` in the
     /// ribbon this frame renders.
     pub width_points: Option<(ObjectId, &'a [amalith_core::WidthPoint])>,
+    /// The Offset Path dialog, retargeted at one Appearance-panel item
+    /// (`offsetdlg::Target::AppearanceItem`) and previewing live: this
+    /// item's `offset` isn't committed to the document until OK, so
+    /// while the dialog is open with Preview checked, this overrides
+    /// just that one item's effect for this frame's paint.
+    pub appearance_offset: Option<(ObjectId, usize, amalith_core::OffsetEffect)>,
 }
 
 /// One area-text box being resized by a Selection-tool handle drag, or
@@ -1559,9 +1565,7 @@ fn paint_object(
         None => vt * off * convert::affine(obj.transform),
     };
     let fill = obj.appearance.fill().color().map(convert::color);
-    let stroke = obj.appearance.stroke().color().map(convert::color);
     let sw = obj.appearance.stroke_width();
-    let style = obj.appearance.stroke_style();
     // Object-level opacity (Illustrator's Transparency panel / the
     // options-bar Opacity field) — a layer alpha over everything this
     // object paints, not a per-paint color multiply, so an overlapping
@@ -1598,27 +1602,22 @@ fn paint_object(
         Some((convert::peniko_gradient(g), bbox * convert::radial_squish(g)))
     };
     // A freeform *fill* is a composite of per-point layers (paint_freeform_
-    // fill below), not a single peniko::Gradient — resolve_grad's
-    // placeholder is only used when that's not possible (no local bounds)
-    // or on a stroke (Illustrator restricts freeform to fills; a freeform
-    // stroke keeps the single-gradient placeholder rather than needing a
-    // stroke-shaped clip for the layered composite).
-    let fill_freeform = match obj.appearance.fill() {
+    // fill below), not a single peniko::Gradient — Illustrator restricts
+    // freeform to fills, so a freeform-painted stroke item falls through
+    // to the single-gradient placeholder below instead.
+    let freeform_fill_of = |paint: amalith_core::Paint| match paint {
         amalith_core::Paint::Gradient(gid) => doc
             .gradient(gid)
             .filter(|g| g.kind == amalith_core::GradientKind::Freeform),
         _ => None,
     };
-    let fill_grad = if fill_freeform.is_some() {
-        None
-    } else {
-        resolve_grad(obj.appearance.fill())
-    };
-    let stroke_grad = resolve_grad(obj.appearance.stroke());
     // A variable-width stroke (Width tool) renders as a filled ribbon —
     // caps/joins/dashes are baked into that outline's own geometry rather
     // than a vello `Stroke`, so a dashed variable-width stroke falls back
     // to its ordinary uniform-width dashing for now (a disclosed v1 gap).
+    // The ribbon itself is one path-level shape (the Width tool edits the
+    // path, not any one appearance item), shared by every stroke item
+    // that isn't dashed.
     let paint_path = |scene: &mut Scene, bp: &vello::kurbo::BezPath, width_ribbon: Option<&vello::kurbo::BezPath>| {
         // Outline (wireframe) view: hairline contour only, no fill/stroke.
         if outline {
@@ -1635,32 +1634,84 @@ fn paint_object(
             .elements()
             .iter()
             .any(|e| matches!(e, vello::kurbo::PathEl::ClosePath));
-        // An open path still fills — the fill closes the contour
-        // implicitly (Illustrator / SVG), while the stroke stays open.
-        if let (Some(g), Some(bbox)) = (fill_freeform, bbox_xf) {
-            paint_freeform_fill(scene, m, bbox, g, bp);
-        } else if let Some((g, xf)) = &fill_grad {
-            scene.fill(Fill::NonZero, m, g, Some(*xf), bp);
-        } else if let Some(c) = fill {
-            scene.fill(Fill::NonZero, m, c, None, bp);
-        }
-        let ribbon = width_ribbon.filter(|_| !style.dashed);
-        if let Some(ribbon) = ribbon {
-            // `ribbon` is object-local space, like `bp` above — the CTM
-            // `m` transforms it, so the brush transform is just `*xf`
-            // (unlike `stroke_path` below, which bakes to world space
-            // first and so must fold `m` into the brush by hand).
-            if let Some((g, xf)) = &stroke_grad {
-                scene.fill(Fill::NonZero, m, g, Some(*xf), ribbon);
-            } else if let Some(c) = stroke {
-                scene.fill(Fill::NonZero, m, c, None, ribbon);
+        // Paint every visible appearance item in stack order (the order
+        // `items` is stored in is paint order — see `Appearance::items`'
+        // doc comment) — Illustrator's Appearance panel lets an object
+        // carry any number of fills and strokes, not just one of each.
+        // An open path's fill still closes the contour implicitly
+        // (Illustrator / SVG), while a stroke stays open.
+        for (item_idx, item) in obj.appearance.items.iter().enumerate() {
+            if !item.visible() {
+                continue;
             }
-        } else if let Some((g, xf)) = &stroke_grad {
-            // Strokes bake to world space here (transform = IDENTITY), so
-            // the brush transform must be composed with `m` too.
-            stroke_path(scene, m, g.into(), Some(m * *xf), bp, sw, &style, closed, zoom);
-        } else if let Some(c) = stroke {
-            stroke_path(scene, m, c.into(), None, bp, sw, &style, closed, zoom);
+            // Each item's own opacity (distinct from the object-level
+            // opacity layer above) — same "a layer, not a color multiply"
+            // reasoning, one level deeper, per item.
+            let item_opacity = item.opacity().clamp(0.0, 1.0);
+            let item_layer = item_opacity < 0.999;
+            if item_layer {
+                scene.push_layer(Fill::NonZero, BlendMode::default(), item_opacity, Affine::IDENTITY, &viewport);
+            }
+            // A live, non-destructive Offset Path effect on this one item
+            // (Illustrator's Effect ▸ Path ▸ Offset Path nested under an
+            // Appearance-panel row) — recomputed from this item's own base
+            // geometry every frame via the same polygon-offset primitive
+            // that backs the destructive Object ▸ Path ▸ Offset Path
+            // command, just applied to one paint instead of a new object.
+            // A retargeted Offset Path dialog previewing live overrides
+            // this one item's effect for this frame — the item's own
+            // committed `offset` isn't touched until OK.
+            let live_offset = drag
+                .and_then(|d| d.appearance_offset)
+                .filter(|&(oid, oidx, _)| oid == id && oidx == item_idx)
+                .map(|(_, _, fx)| fx);
+            let offset_bp = live_offset.or(item.offset()).and_then(|fx| {
+                let core_bp = convert::bez_path_to_core(bp);
+                amalith_commands::offset_path(&core_bp, fx.amount, fx.join, fx.miter_limit)
+                    .map(|pd| convert::bez_path(&pd.geometry))
+            });
+            let ibp: &BezPath = offset_bp.as_ref().unwrap_or(bp);
+            let iclosed = offset_bp.is_some()
+                || closed;
+            match item {
+                amalith_core::AppearanceItem::Fill { paint, .. } => {
+                    if let (Some(g), Some(bbox)) = (freeform_fill_of(*paint), bbox_xf) {
+                        paint_freeform_fill(scene, m, bbox, g, ibp);
+                    } else if let Some((ref g, xf)) = resolve_grad(*paint) {
+                        scene.fill(Fill::NonZero, m, g, Some(xf), ibp);
+                    } else if let Some(c) = paint.color().map(convert::color) {
+                        scene.fill(Fill::NonZero, m, c, None, ibp);
+                    }
+                }
+                amalith_core::AppearanceItem::Stroke { paint, width, style, .. } => {
+                    // An Offset Path effect replaces this stroke's base
+                    // geometry with the offset contour, so the width-point
+                    // ribbon (tied to the original path) no longer applies.
+                    let ribbon = width_ribbon.filter(|_| !style.dashed && offset_bp.is_none());
+                    if let Some(ribbon) = ribbon {
+                        // `ribbon` is object-local space, like `bp` above —
+                        // the CTM `m` transforms it, so the brush transform
+                        // is just `xf` (unlike `stroke_path` below, which
+                        // bakes to world space first and so must fold `m`
+                        // into the brush by hand).
+                        if let Some((ref g, xf)) = resolve_grad(*paint) {
+                            scene.fill(Fill::NonZero, m, g, Some(xf), ribbon);
+                        } else if let Some(c) = paint.color().map(convert::color) {
+                            scene.fill(Fill::NonZero, m, c, None, ribbon);
+                        }
+                    } else if let Some((ref g, xf)) = resolve_grad(*paint) {
+                        // Strokes bake to world space here (transform =
+                        // IDENTITY), so the brush transform must be
+                        // composed with `m` too.
+                        stroke_path(scene, m, g.into(), Some(m * xf), ibp, *width, style, iclosed, zoom);
+                    } else if let Some(c) = paint.color().map(convert::color) {
+                        stroke_path(scene, m, c.into(), None, ibp, *width, style, iclosed, zoom);
+                    }
+                }
+            }
+            if item_layer {
+                scene.pop_layer();
+            }
         }
     };
 
@@ -1829,7 +1880,7 @@ fn paint_object(
                         preview.cross_align = a;
                     }
                     let pm = m * Affine::translate(tb.origin_delta);
-                    crate::textedit::paint_text_data(scene, text, &preview, pm, color);
+                    crate::textedit::paint_text_data(scene, text, &preview, pm, &obj.appearance);
                 } else if td.is_threaded() {
                     // Threaded frame: show the story's overflow starting at
                     // this frame's byte offset, clipped to its box.
@@ -1843,11 +1894,11 @@ fn paint_object(
                             let start = sl.start.min(story.len());
                             let mut frame = td.clone();
                             frame.content = story[start..].to_string();
-                            crate::textedit::paint_text_data(scene, text, &frame, m, color);
+                            crate::textedit::paint_text_data(scene, text, &frame, m, &obj.appearance);
                         }
                     }
                 } else {
-                    crate::textedit::paint_text_data(scene, text, td, m, color);
+                    crate::textedit::paint_text_data(scene, text, td, m, &obj.appearance);
                 }
             }
         }

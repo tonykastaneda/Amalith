@@ -79,6 +79,9 @@ fn main() {
             area_type_dialog: None,
             gradient: None,
             gradient_edit: None,
+            appearance_items: Vec::new(),
+            appearance_selected: None,
+            appearance_drop: None,
         };
         use amalith_shell::dock::PanelKind;
         for (i, kind) in [
@@ -94,6 +97,7 @@ fn main() {
             PanelKind::Links,
             PanelKind::Artboards,
             PanelKind::Swatches,
+            PanelKind::Appearance,
         ]
         .into_iter()
         .enumerate()

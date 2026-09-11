@@ -10,7 +10,7 @@
 use std::borrow::Cow;
 
 use amalith_core::geom as cg;
-use amalith_core::{Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle};
+use amalith_core::{Appearance, AppearanceItem, Paragraph, TextAlign, TextData, TextKind, TextPosition, TextStyle};
 use parley::layout::PositionedLayoutItem;
 use parley::style::{
     FontFamily, FontFamilyName, FontFeatures, FontStyle, FontWeight, LineHeight, StyleProperty,
@@ -21,7 +21,7 @@ use skrifa::{
     outline::{DrawSettings, OutlinePen},
     GlyphId, MetadataProvider,
 };
-use vello::kurbo::{Affine, Point, Rect, Stroke};
+use vello::kurbo::{Affine, Cap, Join, Point, Rect, Stroke};
 use vello::peniko::{Brush, Color, Fill};
 use vello::{Glyph, Scene};
 
@@ -1115,12 +1115,59 @@ pub fn td_layout<'a>(tcx: &'a mut TextContext, td: &TextData) -> &'a Layout<Brus
 }
 
 /// Lay out a committed [`TextData`] and draw it with transform `xf`.
+/// The color one appearance item's `Fill`/`Stroke` paint paints text
+/// with — `None` for `Paint::None` (nothing to draw); a gradient falls
+/// back to solid black rather than disappearing (text never supported
+/// gradient fills, matching the single-fill behavior this replaces).
+fn text_ink(paint: amalith_core::Paint, opacity: f32) -> Option<Color> {
+    let base = match paint {
+        amalith_core::Paint::None => return None,
+        amalith_core::Paint::Solid(c) => crate::convert::color(c),
+        amalith_core::Paint::Gradient(_) => Color::from_rgb8(0, 0, 0),
+    };
+    Some(base.multiply_alpha(opacity.clamp(0.0, 1.0)))
+}
+
+/// A vello `Stroke` for one Stroke item's width/style — always centered
+/// (`StrokeAlign::Inside`/`Outside` aren't implemented for text yet: a
+/// true offset outline needs the same boolean-geometry pass
+/// `amalith_commands::pathfinder::offset_path` gives regular paths,
+/// which text doesn't hook up to here — v1 always centers, matching how
+/// `PathTextAlign` already has no width-axis analogue for path text
+/// either).
+fn text_stroke_spec(width: f64, style: &amalith_core::StrokeStyle) -> Stroke {
+    let mut s = Stroke::new(width)
+        .with_caps(match style.cap {
+            amalith_core::LineCap::Butt => Cap::Butt,
+            amalith_core::LineCap::Round => Cap::Round,
+            amalith_core::LineCap::Square => Cap::Square,
+        })
+        .with_join(match style.join {
+            amalith_core::LineJoin::Miter => Join::Miter,
+            amalith_core::LineJoin::Round => Join::Round,
+            amalith_core::LineJoin::Bevel => Join::Bevel,
+        })
+        .with_miter_limit(style.miter_limit.max(1.0));
+    if let Some(pattern) = style.dash_pattern() {
+        s = s.with_dashes(style.dash_offset, pattern);
+    }
+    s
+}
+
+/// Lay out a committed [`TextData`] and draw its whole appearance stack
+/// — every visible Fill (its own glyph-run pass, since parley has no
+/// multi-fill concept) and every visible Stroke (centered on the glyph
+/// outlines — see [`text_stroke_spec`]), in paint order (see
+/// `Appearance::items`'s doc comment). Vertical text only paints its
+/// Fill items for now — outlining a *column* layout for a true stroke
+/// isn't implemented (a disclosed gap, not a regression: vertical text
+/// never had a stroke before this either).
 pub fn paint_text_data(
     scene: &mut Scene,
     tcx: &mut TextContext,
     td: &TextData,
     xf: Affine,
-    color: Color,
+    appearance: &Appearance,
 ) {
     if td.content.is_empty() {
         return;
@@ -1146,12 +1193,31 @@ pub fn paint_text_data(
             TextKind::Area { width, .. } => (v.area_cross_shift(td.cross_align, width), 0.0),
             TextKind::Point | TextKind::Path(_) => (0.0, vertical_text::point_align_dy(td.align, v.height())),
         };
-        v.draw(scene, xf * Affine::translate((dx, dy)), color);
+        let cxf = xf * Affine::translate((dx, dy));
+        for item in &appearance.items {
+            if !item.visible() {
+                continue;
+            }
+            if let AppearanceItem::Fill { paint, opacity, .. } = item {
+                if let Some(c) = text_ink(*paint, *opacity) {
+                    v.draw(scene, cxf, c);
+                }
+            }
+        }
         if clip {
             scene.pop_layer();
         }
         return;
     }
+    // Computed before `td_layout` borrows `tcx` for `layout`'s lifetime —
+    // `outline_text_data` needs its own mutable borrow to shape the same
+    // content a second time (a real, if wasteful, second shaping pass;
+    // only paid for when a Stroke item, or any live Offset Path effect,
+    // actually needs a glyph-outline base to work from).
+    let needs_outline = appearance.items.iter().any(|i| {
+        i.visible() && ((i.is_stroke() && i.paint().is_visible()) || i.offset().is_some())
+    });
+    let outline = needs_outline.then(|| crate::convert::bez_path(&outline_text_data(td, tcx)));
     let layout = td_layout(tcx, td);
     // `TextKind::Path` never reaches here — canvas.rs routes it to
     // `pathtext::paint_path_text` instead, which needs the followed
@@ -1173,7 +1239,39 @@ pub fn paint_text_data(
         }
         _ => false,
     };
-    draw_glyph_runs(scene, layout, xf, color);
+    for item in &appearance.items {
+        if !item.visible() {
+            continue;
+        }
+        // A live Offset Path effect on this item insets/outsets the whole
+        // glyph outline (every run/line, holes and all) before this item
+        // paints — the same "two fills, one offset negative" technique
+        // Illustrator's own Appearance panel uses for a crisp inset
+        // border, generalized to any Fill or Stroke row, not just text.
+        // See canvas.rs's identical per-item handling in `paint_object`.
+        let offset_bp = item.offset().and_then(|fx| {
+            let base = outline.as_ref()?;
+            let core_bp = crate::convert::bez_path_to_core(base);
+            amalith_commands::offset_path(&core_bp, fx.amount, fx.join, fx.miter_limit)
+                .map(|pd| crate::convert::bez_path(&pd.geometry))
+        });
+        match item {
+            AppearanceItem::Fill { paint, opacity, .. } => {
+                let Some(c) = text_ink(*paint, *opacity) else { continue };
+                if let Some(offset_bp) = &offset_bp {
+                    scene.fill(Fill::NonZero, xf, c, None, offset_bp);
+                } else {
+                    draw_glyph_runs(scene, layout, xf, c);
+                }
+            }
+            AppearanceItem::Stroke { paint, width, style, opacity, .. } => {
+                let Some(c) = text_ink(*paint, *opacity) else { continue };
+                let base = offset_bp.as_ref().or(outline.as_ref());
+                let Some(base) = base else { continue };
+                scene.stroke(&text_stroke_spec(*width, style), xf, c, None, base);
+            }
+        }
+    }
     if clip {
         scene.pop_layer();
     }
@@ -1249,6 +1347,43 @@ pub fn hard_wrapped_content(td: &TextData, tcx: &mut TextContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_ink_is_none_for_paint_none_and_alpha_scaled_for_solid() {
+        assert_eq!(text_ink(amalith_core::Paint::None, 1.0), None, "no paint, nothing to draw");
+        let solid = amalith_core::Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0));
+        let full = text_ink(solid, 1.0).unwrap();
+        assert_eq!(full.components[3], 1.0);
+        let half = text_ink(solid, 0.5).unwrap();
+        assert!((half.components[3] - 0.5).abs() < 1e-6, "opacity multiplies the paint's own alpha");
+    }
+
+    #[test]
+    fn text_ink_falls_back_to_black_for_an_unsupported_gradient_fill() {
+        // Text never supported gradient fills; this must keep showing
+        // something (matching the pre-stack single-fill fallback)
+        // instead of silently vanishing now that it's one stack item
+        // among possibly several.
+        let gid = amalith_core::GradientId::new();
+        let ink = text_ink(amalith_core::Paint::Gradient(gid), 1.0).unwrap();
+        assert_eq!((ink.components[0], ink.components[1], ink.components[2]), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn text_stroke_spec_carries_the_style_into_a_vello_stroke() {
+        let style = amalith_core::StrokeStyle {
+            cap: amalith_core::LineCap::Round,
+            join: amalith_core::LineJoin::Bevel,
+            miter_limit: 4.0,
+            dashed: true,
+            dash: [6.0, 3.0, 0.0, 0.0, 0.0, 0.0],
+            ..amalith_core::StrokeStyle::default()
+        };
+        let s = text_stroke_spec(2.5, &style);
+        assert_eq!(s.width, 2.5);
+        assert_eq!(s.miter_limit, 4.0);
+        assert_eq!(s.dash_pattern.as_ref(), [6.0, 3.0]);
+    }
 
     #[test]
     fn live_alignment_is_reflected_without_a_keystroke() {

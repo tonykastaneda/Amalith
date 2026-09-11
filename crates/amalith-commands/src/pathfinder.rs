@@ -560,6 +560,7 @@ mod tests {
                     paint: Paint::Solid(Color::rgb(fill.0, fill.1, fill.2)),
                     opacity: 1.0,
                     visible: true,
+                    offset: None,
                 }],
                 ..Appearance::default()
             },
@@ -632,6 +633,7 @@ mod tests {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
+                offset: None,
             }],
             ..Appearance::default()
         };
