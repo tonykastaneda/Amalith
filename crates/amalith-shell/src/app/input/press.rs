@@ -48,10 +48,10 @@ impl App {
                     panels::hit(pid, frame.body, self.pointer, &ctx)
                 };
                 if action == panels::Action::ShapeSlot {
-                    let anchor = panels::tools::shape_slot_rect(frame.body);
+                    let anchor = panels::tools::shape_slot_rect(frame.body, self.settings.hide_wip_tools);
                     self.shape_press = Some((Instant::now(), anchor));
                 } else if let panels::Action::ToolFlyout(group) = action {
-                    let anchor = panels::tools::group_slot_rect(frame.body, group);
+                    let anchor = panels::tools::group_slot_rect(frame.body, group, self.settings.hide_wip_tools);
                     self.tool_flyout_press = Some((Instant::now(), anchor, group));
                 } else {
                     let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
@@ -182,10 +182,10 @@ impl App {
             panels::hit(pid, body, self.pointer, &ctx)
         };
         if action == panels::Action::ShapeSlot {
-            let anchor = panels::tools::shape_slot_rect(body);
+            let anchor = panels::tools::shape_slot_rect(body, self.settings.hide_wip_tools);
             self.shape_press = Some((Instant::now(), anchor));
         } else if let panels::Action::ToolFlyout(group) = action {
-            let anchor = panels::tools::group_slot_rect(body, group);
+            let anchor = panels::tools::group_slot_rect(body, group, self.settings.hide_wip_tools);
             self.tool_flyout_press = Some((Instant::now(), anchor, group));
         } else {
             let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
@@ -321,6 +321,7 @@ impl App {
                     self.apply_theme_accent();
                     self.apply_ui_scale();
                     self.apply_handle_size();
+                    panels::tools::set_hide_wip(self.settings.hide_wip_tools);
                     settings::save(&self.settings);
                     crate::scripts::save(&self.scripts);
                     crate::keymap::save(&self.keymaps);
@@ -429,6 +430,16 @@ impl App {
                 prefs::Hit::ToggleCullOutline => {
                     if let Some(p) = &mut self.prefs {
                         p.working.show_cull_outline = !p.working.show_cull_outline;
+                    }
+                }
+                prefs::Hit::ToggleHideWip => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.hide_wip_menu_items = !p.working.hide_wip_menu_items;
+                    }
+                }
+                prefs::Hit::ToggleHideWipTools => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.hide_wip_tools = !p.working.hide_wip_tools;
                     }
                 }
                 prefs::Hit::SetCullInset(v) => {

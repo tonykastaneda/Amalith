@@ -627,6 +627,23 @@ enum MenuAction {
     BlendReverseSpine,
     /// Object ▸ Blend ▸ Reverse Front to Back.
     BlendReverseStacking,
+    /// Object ▸ Group (⌘G).
+    GroupSelection,
+    /// Object ▸ Ungroup (⌘⇧G).
+    UngroupSelection,
+    /// Object ▸ Align ▸ * and Object ▸ Distribute ▸ * — the same
+    /// `AlignKind` the Align panel's own buttons already dispatch
+    /// through `panels::Action::Align`, just reached from the menu bar
+    /// instead of a panel click.
+    AlignObjects(amalith_commands::AlignKind),
+    /// Effect ▸ Pathfinder ▸ * — the same `PathfinderOp` the Pathfinder
+    /// panel's own buttons already dispatch through
+    /// `panels::Action::Pathfinder`.
+    PathfinderOp(amalith_commands::PathfinderOp),
+    /// Edit ▸ Paste in Front (⌘F) — same as the keyboard shortcut.
+    PasteInFront,
+    /// Edit ▸ Paste in Back (⌘B) — same as the keyboard shortcut.
+    PasteInBack,
     /// Type ▸ Convert to Area / Point Type (toggles by selection state).
     ConvertTextKind,
     /// Type ▸ Area Type Options… — needs an `ActiveEventLoop` to spawn its
@@ -1540,7 +1557,11 @@ impl App {
             layer_query: String::new(),
             layer_search_focused: false,
             main_resizable: true,
-            settings: settings::load(),
+            settings: {
+                let s = settings::load();
+                panels::tools::set_hide_wip(s.hide_wip_tools);
+                s
+            },
             scripts: crate::scripts::load(),
             keymaps: crate::keymap::load(),
             prefs: None,
@@ -1719,6 +1740,7 @@ impl App {
             self.settings.snap_to_grid,
             self.settings.snap_to_pixel,
             self.settings.snap_to_point,
+            self.settings.hide_wip_menu_items,
         );
         m.sync_window(&self.dock);
         self.native_menu = Some(m);
@@ -4491,6 +4513,12 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            MenuAction::GroupSelection => self.group_selection(),
+            MenuAction::UngroupSelection => self.ungroup_selection(),
+            MenuAction::AlignObjects(kind) => self.apply_panel_action(panels::Action::Align(kind), false),
+            MenuAction::PathfinderOp(op) => self.apply_panel_action(panels::Action::Pathfinder(op), false),
+            MenuAction::PasteInFront => self.paste_clipboard(PastePlace::InFront),
+            MenuAction::PasteInBack => self.paste_clipboard(PastePlace::Behind),
             MenuAction::HelpDocs => crate::about::open_url("https://amalith.app/docs"),
             MenuAction::ConvertTextKind => {
                 if let Some(&id) = self.doc.selection.first() {
@@ -7134,6 +7162,7 @@ impl App {
             rotate_group_tool: self.last_rotate_tool,
             scale_group_tool: self.last_scale_tool,
             type_group_tool: self.last_type_tool,
+            hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
             renaming: None,
             selected_layer: self.doc.selected_layer,
@@ -7205,6 +7234,7 @@ impl App {
             rotate_group_tool: self.last_rotate_tool,
             scale_group_tool: self.last_scale_tool,
             type_group_tool: self.last_type_tool,
+            hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
             selected_layer: self.doc.selected_layer,
@@ -8111,7 +8141,7 @@ impl App {
         let theme = self.theme.clone();
         let bespoke = self.is_float_only(master);
         let h = if m.is_tools() {
-            layout::metric_header_h() + panels::tools::natural_height(width)
+            layout::metric_header_h() + panels::tools::natural_height(width, self.settings.hide_wip_tools)
         } else {
             layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p), bespoke)
         };
@@ -8572,6 +8602,7 @@ impl ApplicationHandler for App {
                 self.settings.snap_to_grid,
                 self.settings.snap_to_pixel,
                 self.settings.snap_to_point,
+                self.settings.hide_wip_menu_items,
             );
             m.sync_window(&self.dock);
             self.native_menu = Some(m);

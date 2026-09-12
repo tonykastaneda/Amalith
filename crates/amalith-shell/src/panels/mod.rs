@@ -116,6 +116,10 @@ pub struct Ctx<'a> {
     pub rotate_group_tool: Tool,
     pub scale_group_tool: Tool,
     pub type_group_tool: Tool,
+    /// Preferences ▸ Debug ▸ Hide WIP Tools — hides the Tools panel's
+    /// placeholder slots for real Illustrator tools Amalith doesn't
+    /// implement yet, instead of showing them greyed out.
+    pub hide_wip_tools: bool,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
     /// The row being inline-renamed, and its current edit buffer.
@@ -734,7 +738,7 @@ pub fn rail_floor(id: PanelId, width: f64) -> f64 {
 pub fn min_body_height(id: PanelId, width: f64) -> f64 {
     match id.0 {
         PanelKind::Character => character::natural_height(),
-        PanelKind::Tools => tools::natural_height(width),
+        PanelKind::Tools => tools::natural_height(width, tools::hide_wip()),
         PanelKind::Layers => layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Links => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
@@ -771,7 +775,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
 fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
     Some(match id.0 {
         PanelKind::Character => character::natural_height(),
-        PanelKind::Tools => tools::natural_height(width),
+        PanelKind::Tools => tools::natural_height(width, tools::hide_wip()),
         PanelKind::Color => color::metric_natural_h(),
         PanelKind::Gradient => gradient::metric_natural_h(),
         PanelKind::Transform => transform::natural_height(),

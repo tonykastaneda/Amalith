@@ -76,6 +76,20 @@ pub enum Icon {
     PathType,
     VerticalAreaType,
     VerticalPathType,
+    // Illustrator tools Amalith doesn't implement yet — used only by the
+    // Tools panel's greyed-out "(WIP)" placeholder slots.
+    MagicWand,
+    Lasso,
+    CurvaturePen,
+    Paintbrush,
+    Pencil,
+    Mesh,
+    Measure,
+    SymbolSprayer,
+    Slice,
+    Shaper,
+    PerspectiveGrid,
+    ColumnGraph,
 }
 
 fn brand_svg(icon: Icon) -> &'static str {
@@ -94,7 +108,10 @@ fn brand_svg(icon: Icon) -> &'static str {
         | Icon::Rotate | Icon::Reflect | Icon::Shear | Icon::Scale | Icon::Blend | Icon::Width
         | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
         | Icon::Eraser | Icon::VerticalText | Icon::AreaType | Icon::PathType
-        | Icon::VerticalAreaType | Icon::VerticalPathType => "",
+        | Icon::VerticalAreaType | Icon::VerticalPathType
+        | Icon::MagicWand | Icon::Lasso | Icon::CurvaturePen | Icon::Paintbrush
+        | Icon::Pencil | Icon::Mesh | Icon::Measure | Icon::SymbolSprayer
+        | Icon::Slice | Icon::Shaper | Icon::PerspectiveGrid | Icon::ColumnGraph => "",
     }
 }
 
@@ -190,6 +207,54 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::VerticalPathType {
         draw_vertical_path_type_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::MagicWand {
+        draw_magic_wand_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Lasso {
+        draw_lasso_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::CurvaturePen {
+        draw_curvature_pen_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Paintbrush {
+        draw_paintbrush_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Pencil {
+        draw_pencil_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Mesh {
+        draw_mesh_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Measure {
+        draw_measure_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::SymbolSprayer {
+        draw_symbol_sprayer_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Slice {
+        draw_slice_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Shaper {
+        draw_shaper_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::PerspectiveGrid {
+        draw_perspective_grid_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::ColumnGraph {
+        draw_column_graph_glyph(scene, box_, color);
         return;
     }
     paint_brand(scene, brand_svg(icon), box_, color, icon == Icon::DirectSelect);
@@ -613,6 +678,299 @@ fn draw_zoom_glyph(scene: &mut Scene, box_: Rect, color: Color) {
         color,
         None,
         &Line::new(handle_a, handle_b),
+    );
+}
+
+/// A sparkling wand — the Magic Wand tool.
+fn draw_magic_wand_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let sw = (w * 0.09).max(1.6);
+    let a = Point::new(box_.x0 + w * 0.24, box_.y1 - h * 0.24);
+    let b = Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.20);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a, b));
+    // A four-point sparkle at the tip, plus two smaller ones trailing off.
+    let star = |scene: &mut Scene, c: Point, r: f64| {
+        let mut p = BezPath::new();
+        p.move_to((c.x, c.y - r));
+        p.line_to((c.x + r * 0.28, c.y - r * 0.28));
+        p.line_to((c.x + r, c.y));
+        p.line_to((c.x + r * 0.28, c.y + r * 0.28));
+        p.line_to((c.x, c.y + r));
+        p.line_to((c.x - r * 0.28, c.y + r * 0.28));
+        p.line_to((c.x - r, c.y));
+        p.line_to((c.x - r * 0.28, c.y - r * 0.28));
+        p.close_path();
+        scene.fill(Fill::NonZero, ID, color, None, &p);
+    };
+    star(scene, b, w * 0.16);
+    star(scene, Point::new(b.x - w * 0.02, b.y + h * 0.30), w * 0.07);
+    star(scene, Point::new(b.x + w * 0.24, b.y + h * 0.10), w * 0.055);
+}
+
+/// A closed rope loop with a trailing tail — the Lasso tool.
+fn draw_lasso_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let c = Point::new(box_.center().x - w * 0.06, box_.y0 + h * 0.42);
+    let (rx, ry) = (w * 0.30, h * 0.26);
+    let sw = (w * 0.08).max(1.4);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Ellipse::new(c, (rx, ry), 0.0));
+    let mut tail = BezPath::new();
+    tail.move_to((c.x + rx * 0.55, c.y + ry * 0.75));
+    tail.curve_to(
+        (c.x + rx * 0.9, box_.y1 - h * 0.28),
+        (box_.x1 - w * 0.22, box_.y1 - h * 0.30),
+        (box_.x1 - w * 0.18, box_.y1 - h * 0.16),
+    );
+    scene.stroke(&Stroke::new(sw), ID, color, None, &tail);
+}
+
+/// A curved path between two anchor points, like Pen but bowed — the
+/// Curvature Pen tool.
+fn draw_curvature_pen_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let a = Point::new(box_.x0 + w * 0.20, box_.y1 - h * 0.22);
+    let b = Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.22);
+    let mid = Point::new(box_.x0 + w * 0.30, box_.y0 + h * 0.30);
+    let mut p = BezPath::new();
+    p.move_to(a);
+    p.quad_to(mid, b);
+    scene.stroke(&Stroke::new((w * 0.08).max(1.4)), ID, color, None, &p);
+    let r = w * 0.07;
+    scene.stroke(&Stroke::new((w * 0.05).max(1.0)), ID, color, None, &Circle::new(a, r));
+    scene.stroke(&Stroke::new((w * 0.05).max(1.0)), ID, color, None, &Circle::new(b, r));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(a, r * 0.45));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(b, r * 0.45));
+}
+
+/// A bristled brush tip on an angled handle — the Paintbrush tool.
+fn draw_paintbrush_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let handle_top = Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.16);
+    let ferrule = Point::new(box_.center().x + w * 0.06, box_.center().y - h * 0.02);
+    scene.stroke(&Stroke::new((w * 0.11).max(1.8)), ID, color, None, &Line::new(handle_top, ferrule));
+    // Splayed bristle tip fanning down to the left.
+    let tip = Point::new(box_.x0 + w * 0.22, box_.y1 - h * 0.20);
+    let mut bristles = BezPath::new();
+    bristles.move_to(ferrule + Point::new(-w * 0.07, h * 0.02).to_vec2());
+    bristles.line_to(Point::new(tip.x - w * 0.05, tip.y - h * 0.03));
+    bristles.line_to(tip);
+    bristles.line_to(Point::new(tip.x + w * 0.05, tip.y + h * 0.02));
+    bristles.line_to(ferrule + Point::new(w * 0.05, -h * 0.03).to_vec2());
+    bristles.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &bristles);
+}
+
+/// A tilted pencil, point down-left — the Pencil tool.
+fn draw_pencil_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let top = Point::new(box_.x1 - w * 0.22, box_.y0 + h * 0.18);
+    let shoulder = Point::new(box_.x0 + w * 0.34, box_.y1 - h * 0.32);
+    let tip = Point::new(box_.x0 + w * 0.18, box_.y1 - h * 0.18);
+    let perp = {
+        let d = shoulder - top;
+        let len = d.hypot().max(0.001);
+        Vec2::new(-d.y, d.x) / len
+    };
+    let hw = w * 0.075;
+    let mut body = BezPath::new();
+    body.move_to(top + perp * hw);
+    body.line_to(top - perp * hw);
+    body.line_to(shoulder - perp * hw);
+    body.line_to(tip);
+    body.line_to(shoulder + perp * hw);
+    body.close_path();
+    scene.stroke(&Stroke::new((w * 0.055).max(1.0)), ID, color, None, &body);
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(tip, w * 0.03));
+}
+
+/// A warped 3×3 grid of curved lines with node dots — the Mesh tool.
+fn draw_mesh_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let r = Rect::new(box_.x0 + w * 0.18, box_.y0 + h * 0.18, box_.x1 - w * 0.18, box_.y1 - h * 0.18);
+    let sw = (w * 0.045).max(0.9);
+    let bow = w * 0.06;
+    for i in 0..=2 {
+        let t = i as f64 / 2.0;
+        let y = r.y0 + t * r.height();
+        let mid_y = y + (0.5 - t).abs() * -bow + bow * 0.5;
+        let mut p = BezPath::new();
+        p.move_to((r.x0, y));
+        p.quad_to((r.center().x, mid_y), (r.x1, y));
+        scene.stroke(&Stroke::new(sw), ID, color, None, &p);
+    }
+    for i in 0..=2 {
+        let t = i as f64 / 2.0;
+        let x = r.x0 + t * r.width();
+        let mid_x = x + (0.5 - t).abs() * -bow + bow * 0.5;
+        let mut p = BezPath::new();
+        p.move_to((x, r.y0));
+        p.quad_to((mid_x, r.center().y), (x, r.y1));
+        scene.stroke(&Stroke::new(sw), ID, color, None, &p);
+    }
+    for xi in 0..=2 {
+        for yi in 0..=2 {
+            let x = r.x0 + xi as f64 / 2.0 * r.width();
+            let y = r.y0 + yi as f64 / 2.0 * r.height();
+            scene.fill(Fill::NonZero, ID, color, None, &Circle::new((x, y), w * 0.025));
+        }
+    }
+}
+
+/// A ruler segment with tick marks and end nodes — the Measure tool.
+fn draw_measure_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let a = Point::new(box_.x0 + w * 0.20, box_.y1 - h * 0.22);
+    let b = Point::new(box_.x1 - w * 0.20, box_.y0 + h * 0.22);
+    let sw = (w * 0.06).max(1.2);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a, b));
+    let dir = (b - a) / (b - a).hypot();
+    let perp = Vec2::new(-dir.y, dir.x);
+    for i in 1..4 {
+        let t = i as f64 / 4.0;
+        let p = a + (b - a) * t;
+        let tick = w * 0.06;
+        scene.stroke(&Stroke::new(sw * 0.8), ID, color, None, &Line::new(p - perp * tick, p + perp * tick));
+    }
+    let r = w * 0.045;
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(a, r));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(b, r));
+}
+
+/// A spray can with drifting particles — the Symbol Sprayer tool.
+fn draw_symbol_sprayer_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let can = Rect::new(box_.x0 + w * 0.22, box_.center().y - h * 0.04, box_.x0 + w * 0.50, box_.y1 - h * 0.18);
+    scene.stroke(&Stroke::new((w * 0.07).max(1.2)), ID, color, None, &can);
+    let cap = Rect::new(can.x0 + w * 0.03, can.y0 - h * 0.10, can.x1 - w * 0.03, can.y0);
+    scene.fill(Fill::NonZero, ID, color, None, &cap);
+    let nozzle = Rect::new(cap.center().x - w * 0.015, cap.y0 - h * 0.06, cap.center().x + w * 0.015, cap.y0);
+    scene.fill(Fill::NonZero, ID, color, None, &nozzle);
+    // Spray particles fanning up and to the right of the nozzle.
+    let origin = Point::new(nozzle.x1, nozzle.y0);
+    for (dx, dy, r) in [
+        (0.14, -0.10, 0.028),
+        (0.22, -0.02, 0.020),
+        (0.20, -0.20, 0.020),
+        (0.30, -0.14, 0.016),
+    ] {
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            color,
+            None,
+            &Circle::new((origin.x + w * dx, origin.y + h * dy), w * r),
+        );
+    }
+}
+
+/// A dashed cut line with a triangular blade — the Slice tool.
+fn draw_slice_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let a = Point::new(box_.x0 + w * 0.18, box_.y1 - h * 0.22);
+    let b = Point::new(box_.x1 - w * 0.30, box_.y0 + h * 0.24);
+    let sw = (w * 0.05).max(1.0);
+    let dir = (b - a) / (b - a).hypot();
+    let (dash, hole) = (w * 0.09, w * 0.06);
+    let total = (b - a).hypot();
+    let mut t = 0.0;
+    while t < total {
+        let t1 = (t + dash).min(total);
+        scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(a + dir * t, a + dir * t1));
+        t = t1 + hole;
+    }
+    // Blade at the leading end.
+    let perp = Vec2::new(-dir.y, dir.x);
+    let bl = w * 0.14;
+    let mut blade = BezPath::new();
+    blade.move_to(b + dir * bl);
+    blade.line_to(b - perp * bl * 0.5);
+    blade.line_to(b + perp * bl * 0.5);
+    blade.close_path();
+    scene.fill(Fill::NonZero, ID, color, None, &blade);
+}
+
+/// A rounded blob traced by a short pencil stroke — the Shaper tool.
+fn draw_shaper_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let r = Rect::new(box_.x0 + w * 0.20, box_.y0 + h * 0.26, box_.x1 - w * 0.34, box_.y1 - h * 0.20);
+    let radius = w.min(h) * 0.10;
+    scene.stroke(
+        &Stroke::new((w * 0.08).max(1.4)),
+        ID,
+        color,
+        None,
+        &vello::kurbo::RoundedRect::from_rect(r, radius),
+    );
+    // A short diagonal "drawing" stroke poking past the top-right corner.
+    let a = Point::new(r.x1 - w * 0.02, r.y0 + h * 0.06);
+    let b = Point::new(box_.x1 - w * 0.10, box_.y0 + h * 0.12);
+    scene.stroke(&Stroke::new((w * 0.06).max(1.1)), ID, color, None, &Line::new(a, b));
+}
+
+/// A grid converging toward a vanishing point — the Perspective Grid tool.
+fn draw_perspective_grid_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let sw = (w * 0.045).max(0.9);
+    let horizon_y = box_.y0 + h * 0.30;
+    let base_y = box_.y1 - h * 0.16;
+    let vp = Point::new(box_.center().x, horizon_y);
+    scene.stroke(
+        &Stroke::new(sw),
+        ID,
+        color,
+        None,
+        &Line::new((box_.x0 + w * 0.10, horizon_y), (box_.x1 - w * 0.10, horizon_y)),
+    );
+    // Converging rays from the base up to the vanishing point.
+    for t in [-0.36, -0.14, 0.14, 0.36] {
+        let base = Point::new(box_.center().x + w * t, base_y);
+        scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(base, vp));
+    }
+    // Horizontal cross-lines, closer together near the horizon.
+    for t in [0.35, 0.62, 1.0] {
+        let y = horizon_y + (base_y - horizon_y) * t;
+        let half_w = w * 0.06 + (w * 0.30) * t;
+        scene.stroke(
+            &Stroke::new(sw),
+            ID,
+            color,
+            None,
+            &Line::new((box_.center().x - half_w, y), (box_.center().x + half_w, y)),
+        );
+    }
+}
+
+/// Ascending vertical bars on a baseline — the Column Graph tool.
+fn draw_column_graph_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let base_y = box_.y1 - h * 0.18;
+    let bar_w = w * 0.14;
+    let gap = w * 0.06;
+    let heights = [0.28, 0.46, 0.64];
+    let x0 = box_.x0 + w * 0.20;
+    for (i, hh) in heights.into_iter().enumerate() {
+        let x = x0 + i as f64 * (bar_w + gap);
+        let r = Rect::new(x, base_y - h * hh, x + bar_w, base_y);
+        scene.fill(Fill::NonZero, ID, color, None, &r);
+    }
+    scene.stroke(
+        &Stroke::new((w * 0.045).max(1.0)),
+        ID,
+        color,
+        None,
+        &Line::new((box_.x0 + w * 0.14, base_y), (box_.x1 - w * 0.14, base_y)),
     );
 }
 

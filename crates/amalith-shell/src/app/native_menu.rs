@@ -52,6 +52,7 @@ impl NativeMenu {
         snap_to_grid: bool,
         snap_to_pixel: bool,
         snap_to_point: bool,
+        hide_wip: bool,
     ) -> Self {
         use muda::{
             accelerator::{Accelerator, Code, Modifiers},
@@ -68,6 +69,15 @@ impl NativeMenu {
         let sup_shift = Some(prim | Modifiers::SHIFT);
         let sup_alt = Some(prim | Modifiers::ALT);
         let mk = |label: &str, mods, code| MenuItem::new(label, true, Some(Accelerator::new(mods, code)));
+        // A placeholder for a real Illustrator menu item Amalith can't do
+        // yet — permanently disabled (so there's nothing to click, and
+        // nothing to `reg()`), labeled so the menu still shows the whole
+        // shape of the feature set. `hide_wip` (Preferences ▸ Debug ▸ Hide
+        // WIP Menu Items) drops these from the tree entirely instead of
+        // just greying them out — see the `if !hide_wip { v.push(...) }`
+        // pattern used throughout this function for every submenu that
+        // mixes real and WIP items.
+        let wip = |label: &str| MenuItem::new(format!("{label} (WIP)"), false, None);
 
         // The `MenuId → MenuAction` map, built as each item is created
         // instead of separately re-typed afterward — see
@@ -393,44 +403,144 @@ impl NativeMenu {
             Submenu::with_items("Scripts", true, &refs).expect("scripts menu")
         };
 
-        let export_menu = Submenu::with_items("Export", true, &[&export_screens_i])
-            .expect("export menu");
+        let export_as_wip = wip("Export As…");
+        let save_for_web_wip = wip("Save for Web (Legacy)…");
+        let mut export_items: Vec<&dyn muda::IsMenuItem> = vec![&export_screens_i];
+        if !hide_wip {
+            export_items.push(&export_as_wip);
+            export_items.push(&save_for_web_wip);
+        }
+        let export_menu = Submenu::with_items("Export", true, &export_items).expect("export menu");
         let color_mode_menu = Submenu::with_items("Document Color Mode", true, &[&cmyk_i, &rgb_i])
             .expect("color mode menu");
-        let file = Submenu::with_items(
-            "File",
-            true,
-            &[
-                &new_i, &open_i, &sep(), &close_i, &close_all_i, &sep(), &save_i, &save_as_i,
-                &revert_i, &sep(), &import_i, &place_i, &export_menu, &sep(), &color_mode_menu,
-                &sep(), &scripts_menu,
-            ],
-        )
-        .expect("file menu");
-        let edit = Submenu::with_items(
-            "Edit",
-            true,
-            &[
-                &undo_i, &redo_i, &sep(), &cut_i, &copy_i, &paste_i, &dup_i,
-                &sep(), &forward_i, &front_i, &backward_i, &back_i,
-            ],
-        )
-        .expect("edit menu");
-        let same_menu = Submenu::with_items(
-            "Same",
-            true,
-            &[
-                &same_fillstroke_i,
-                &same_fill_i,
-                &same_opacity_i,
-                &same_stroke_i,
-                &same_weight_i,
-                &sep(),
-                &same_font_i,
-                &same_size_i,
-            ],
-        )
-        .expect("same menu");
+        let new_from_template_wip = wip("New from Template…");
+        let package_wip = wip("Package…");
+        let document_setup_wip = wip("Document Setup…");
+        let file_info_wip = wip("File Info…");
+        let print_wip = wip("Print…");
+        let file_sep1 = sep();
+        let file_sep2 = sep();
+        let file_sep3 = sep();
+        let file_sep4 = sep();
+        let file_sep5 = sep();
+        let file_sep6 = sep();
+        let mut file_items: Vec<&dyn muda::IsMenuItem> = vec![&new_i];
+        if !hide_wip {
+            file_items.push(&new_from_template_wip);
+        }
+        file_items.push(&open_i);
+        file_items.push(&file_sep1);
+        file_items.push(&close_i);
+        file_items.push(&close_all_i);
+        file_items.push(&file_sep2);
+        file_items.push(&save_i);
+        file_items.push(&save_as_i);
+        file_items.push(&revert_i);
+        file_items.push(&file_sep3);
+        file_items.push(&import_i);
+        file_items.push(&place_i);
+        file_items.push(&export_menu);
+        if !hide_wip {
+            file_items.push(&package_wip);
+            file_items.push(&file_sep4);
+            file_items.push(&document_setup_wip);
+        }
+        file_items.push(&color_mode_menu);
+        if !hide_wip {
+            file_items.push(&file_info_wip);
+            file_items.push(&file_sep5);
+            file_items.push(&print_wip);
+        }
+        file_items.push(&file_sep6);
+        file_items.push(&scripts_menu);
+        let file = Submenu::with_items("File", true, &file_items).expect("file menu");
+        // Stacking order (Bring/Send) lives under Object ▸ Arrange in real
+        // Illustrator, not Edit — see `arrange_menu`, below.
+        // Edit ▸ Paste in Front/Back — real backend (`paste_clipboard`,
+        // same as the ⌘F/⌘B shortcuts already run).
+        let paste_front_i = reg(&mut items, mk("Paste in Front", sup, Code::KeyF), MenuAction::PasteInFront);
+        let paste_back_i = reg(&mut items, mk("Paste in Back", sup, Code::KeyB), MenuAction::PasteInBack);
+        let paste_in_place_wip = wip("Paste in Place");
+        let paste_all_artboards_wip = wip("Paste on All Artboards");
+        let paste_without_format_wip = wip("Paste without Formatting");
+        let find_replace_wip = wip("Find and Replace…");
+        let spelling_wip = wip("Spelling");
+        let edit_colors_wip = wip("Edit Colors");
+        let color_settings_wip = wip("Color Settings…");
+        let keyboard_shortcuts_wip = wip("Keyboard Shortcuts…");
+        let edit_sep1 = sep();
+        let edit_sep2 = sep();
+        let mut edit_items: Vec<&dyn muda::IsMenuItem> = vec![
+            &undo_i, &redo_i, &edit_sep1, &cut_i, &copy_i, &paste_i, &paste_front_i, &paste_back_i,
+        ];
+        if !hide_wip {
+            edit_items.push(&paste_in_place_wip);
+            edit_items.push(&paste_all_artboards_wip);
+            edit_items.push(&paste_without_format_wip);
+        }
+        edit_items.push(&dup_i);
+        if !hide_wip {
+            edit_items.push(&edit_sep2);
+            edit_items.push(&find_replace_wip);
+            edit_items.push(&spelling_wip);
+            edit_items.push(&edit_colors_wip);
+            edit_items.push(&color_settings_wip);
+            edit_items.push(&keyboard_shortcuts_wip);
+        }
+        let edit = Submenu::with_items("Edit", true, &edit_items).expect("edit menu");
+        let same_shapes_text_wip = wip("Shapes & Text");
+        let same_appearance_wip = wip("Appearance");
+        let same_appearance_attr_wip = wip("Appearance Attribute");
+        let same_blending_mode_wip = wip("Blending Mode");
+        let same_graphic_style_wip = wip("Graphic Style");
+        let same_shape_wip = wip("Shape");
+        let same_symbol_wip = wip("Symbol Instance");
+        let same_link_block_wip = wip("Link Block Series");
+        let same_text_wip = wip("Text");
+        let same_font_family_style_wip = wip("Font Family & Style");
+        let same_font_family_style_size_wip = wip("Font Family, Style & Size");
+        let same_text_fill_wip = wip("Text Fill Color");
+        let same_text_stroke_wip = wip("Text Stroke Color");
+        let same_text_fill_stroke_wip = wip("Text Fill & Stroke Color");
+        let same_sep1 = sep();
+        let same_sep2 = sep();
+        let same_sep3 = sep();
+        let mut same_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            same_items.push(&same_shapes_text_wip);
+            same_items.push(&same_appearance_wip);
+            same_items.push(&same_appearance_attr_wip);
+            same_items.push(&same_blending_mode_wip);
+        }
+        same_items.push(&same_fillstroke_i);
+        same_items.push(&same_fill_i);
+        same_items.push(&same_opacity_i);
+        same_items.push(&same_stroke_i);
+        same_items.push(&same_weight_i);
+        if !hide_wip {
+            same_items.push(&same_graphic_style_wip);
+            same_items.push(&same_shape_wip);
+            same_items.push(&same_symbol_wip);
+            same_items.push(&same_link_block_wip);
+        }
+        same_items.push(&same_sep1);
+        if !hide_wip {
+            same_items.push(&same_text_wip);
+        }
+        same_items.push(&same_font_i);
+        if !hide_wip {
+            same_items.push(&same_font_family_style_wip);
+            same_items.push(&same_sep2);
+            same_items.push(&same_font_family_style_size_wip);
+        }
+        same_items.push(&same_size_i);
+        if !hide_wip {
+            same_items.push(&same_sep3);
+            same_items.push(&same_text_fill_wip);
+            same_items.push(&same_text_stroke_wip);
+            same_items.push(&same_text_fill_stroke_wip);
+        }
+        let same_menu = Submenu::with_items("Same", true, &same_items).expect("same menu");
         let clip_menu = Submenu::with_items("Clipping Mask", true, &[&clip_make_i, &clip_release_i])
             .expect("clip menu");
         let blend_menu = Submenu::with_items(
@@ -450,32 +560,252 @@ impl NativeMenu {
             ],
         )
         .expect("blend menu");
-        let path_menu = Submenu::with_items("Path", true, &[&offset_path_i]).expect("path menu");
-        let lock_menu = Submenu::with_items("Lock", true, &[&lock_selection_i]).expect("lock menu");
-        let object_menu = Submenu::with_items(
-            "Object",
+        // Object ▸ Transform — only "Transform Again" is real; the rest
+        // need dedicated object-menu dialogs that don't exist yet (their
+        // tool-driven equivalents — Rotate/Reflect/Scale tools — do).
+        let xform_move_wip = wip("Move…");
+        let xform_rotate_wip = wip("Rotate…");
+        let xform_reflect_wip = wip("Reflect…");
+        let xform_scale_wip = wip("Scale…");
+        let xform_shear_wip = wip("Shear…");
+        let xform_each_wip = wip("Transform Each…");
+        let xform_reset_bbox_wip = wip("Reset Bounding Box");
+        let tf_sep1 = sep();
+        let tf_sep2 = sep();
+        let tf_sep3 = sep();
+        let mut transform_items: Vec<&dyn muda::IsMenuItem> = vec![&transform_again_i];
+        if !hide_wip {
+            transform_items.push(&tf_sep1);
+            transform_items.push(&xform_move_wip);
+            transform_items.push(&xform_rotate_wip);
+            transform_items.push(&xform_reflect_wip);
+            transform_items.push(&xform_scale_wip);
+            transform_items.push(&xform_shear_wip);
+            transform_items.push(&tf_sep2);
+            transform_items.push(&xform_each_wip);
+            transform_items.push(&tf_sep3);
+            transform_items.push(&xform_reset_bbox_wip);
+        }
+        let transform_menu = Submenu::with_items("Transform", true, &transform_items).expect("transform menu");
+
+        // Object ▸ Arrange — real Illustrator's home for stacking order
+        // (moved out of Edit, see above).
+        let send_current_layer_wip = wip("Send to Current Layer");
+        let arrange_sep1 = sep();
+        let mut arrange_items: Vec<&dyn muda::IsMenuItem> = vec![&front_i, &forward_i, &backward_i, &back_i];
+        if !hide_wip {
+            arrange_items.push(&arrange_sep1);
+            arrange_items.push(&send_current_layer_wip);
+        }
+        let arrange_menu = Submenu::with_items("Arrange", true, &arrange_items).expect("arrange menu");
+
+        // Object ▸ Align / Distribute — real backend already exists
+        // (`Command::Align`, the same `AlignKind` the Align panel's own
+        // buttons dispatch), just needed a menu slot.
+        let align_hleft_i = reg(&mut items, MenuItem::new("Horizontal Align Left", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::HLeft));
+        let align_hcenter_i = reg(&mut items, MenuItem::new("Horizontal Align Center", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::HCenter));
+        let align_hright_i = reg(&mut items, MenuItem::new("Horizontal Align Right", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::HRight));
+        let align_vtop_i = reg(&mut items, MenuItem::new("Vertical Align Top", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::VTop));
+        let align_vcenter_i = reg(&mut items, MenuItem::new("Vertical Align Center", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::VCenter));
+        let align_vbottom_i = reg(&mut items, MenuItem::new("Vertical Align Bottom", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::VBottom));
+        let align_menu = Submenu::with_items(
+            "Align",
             true,
-            &[
-                &transform_again_i, &sep(), &path_menu, &blend_menu, &clip_menu, &sep(), &lock_menu,
-                &unlock_all_i,
-            ],
+            &[&align_hleft_i, &align_hcenter_i, &align_hright_i, &align_vtop_i, &align_vcenter_i, &align_vbottom_i],
         )
-        .expect("object menu");
-        let select_menu = Submenu::with_items(
-            "Select",
+        .expect("align menu");
+        let dist_vtop_i = reg(&mut items, MenuItem::new("Vertical Distribute Top", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistVTop));
+        let dist_vcenter_i = reg(&mut items, MenuItem::new("Vertical Distribute Center", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistVCenter));
+        let dist_vbottom_i = reg(&mut items, MenuItem::new("Vertical Distribute Bottom", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistVBottom));
+        let dist_hleft_i = reg(&mut items, MenuItem::new("Horizontal Distribute Left", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistHLeft));
+        let dist_hcenter_i = reg(&mut items, MenuItem::new("Horizontal Distribute Center", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistHCenter));
+        let dist_hright_i = reg(&mut items, MenuItem::new("Horizontal Distribute Right", true, None), MenuAction::AlignObjects(amalith_commands::AlignKind::DistHRight));
+        let distribute_menu = Submenu::with_items(
+            "Distribute",
             true,
-            &[
-                &all_i,
-                &sel_artboard_i,
-                &deselect_i,
-                &sep(),
-                &next_above_i,
-                &next_below_i,
-                &sep(),
-                &same_menu,
-            ],
+            &[&dist_vtop_i, &dist_vcenter_i, &dist_vbottom_i, &dist_hleft_i, &dist_hcenter_i, &dist_hright_i],
         )
-        .expect("select menu");
+        .expect("distribute menu");
+
+        // Object ▸ Group / Ungroup — real backend (`Command::Group`,
+        // `Editor::ungroup`), same as the ⌘G / ⌘⇧G shortcuts already run.
+        let group_i = reg(&mut items, mk("Group", sup, Code::KeyG), MenuAction::GroupSelection);
+        let ungroup_i = reg(&mut items, mk("Ungroup", sup_shift, Code::KeyG), MenuAction::UngroupSelection);
+        let ungroup_all_wip = wip("Ungroup All");
+
+        let lock_all_above_wip = wip("All Artwork Above");
+        let lock_other_layers_wip = wip("Other Layers");
+        let lock_menu = Submenu::with_items(
+            "Lock",
+            true,
+            &[&lock_selection_i, &lock_all_above_wip, &lock_other_layers_wip],
+        )
+        .expect("lock menu");
+        // Hide's three entries (Selection/All Artwork Above/Other Layers)
+        // have no backend yet at all — collapse to one placeholder rather
+        // than a submenu that would be empty whenever WIP items are hidden.
+        let hide_wip_item = wip("Hide");
+        let show_all_wip = wip("Show All");
+
+        let expand_wip = wip("Expand…");
+        let expand_appearance_wip = wip("Expand Appearance");
+        let crop_image_wip = wip("Crop Image");
+        let rasterize_wip = wip("Rasterize…");
+        let gradient_mesh_wip = wip("Create Gradient Mesh…");
+        let object_mosaic_wip = wip("Create Object Mosaic…");
+        let trim_marks_wip = wip("Create Trim Marks");
+        let flatten_transparency_wip = wip("Flatten Transparency…");
+        let pixel_perfect_wip = wip("Make Pixel Perfect");
+        let generative_wip = wip("Generative");
+        let slice_wip = wip("Slice");
+
+        // Object ▸ Path — Offset Path is real; the rest need their own
+        // dedicated implementations (anchor/segment editing beyond what
+        // Direct Selection already does).
+        let path_join_wip = wip("Join");
+        let path_average_wip = wip("Average…");
+        let path_outline_stroke_wip = wip("Outline Stroke");
+        let path_reverse_wip = wip("Reverse Path Direction");
+        let path_simplify_wip = wip("Simplify…");
+        let path_smooth_wip = wip("Smooth…");
+        let path_add_anchors_wip = wip("Add Anchor Points");
+        let path_remove_anchors_wip = wip("Remove Anchor Points");
+        let path_divide_below_wip = wip("Divide Objects Below");
+        let path_split_grid_wip = wip("Split Into Grid…");
+        let path_clean_up_wip = wip("Clean Up…");
+        let path_sep1 = sep();
+        let path_sep2 = sep();
+        let mut path_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            path_items.push(&path_join_wip);
+            path_items.push(&path_average_wip);
+            path_items.push(&path_sep1);
+        }
+        path_items.push(&offset_path_i);
+        if !hide_wip {
+            path_items.push(&path_outline_stroke_wip);
+            path_items.push(&path_reverse_wip);
+            path_items.push(&path_sep2);
+            path_items.push(&path_simplify_wip);
+            path_items.push(&path_smooth_wip);
+            path_items.push(&path_add_anchors_wip);
+            path_items.push(&path_remove_anchors_wip);
+            path_items.push(&path_divide_below_wip);
+            path_items.push(&path_split_grid_wip);
+            path_items.push(&path_clean_up_wip);
+        }
+        let path_menu = Submenu::with_items("Path", true, &path_items).expect("path menu");
+
+        let shape_wip = wip("Shape");
+        let pattern_wip = wip("Pattern");
+        let intertwine_wip = wip("Intertwine");
+        let repeat_wip = wip("Repeat");
+        let objects_on_path_wip = wip("Objects on Path");
+        let envelope_distort_wip = wip("Envelope Distort");
+        let perspective_wip = wip("Perspective");
+        let live_paint_wip = wip("Live Paint");
+        let mockup_wip = wip("Mockup");
+        let image_trace_wip = wip("Image Trace");
+        let text_wrap_wip = wip("Text Wrap");
+        let compound_path_wip = wip("Compound Path");
+        let artboards_wip = wip("Artboards");
+        let graph_wip = wip("Graph");
+        let collect_export_wip = wip("Collect For Export");
+
+        let obj_sep1 = sep(); // after Distribute, before Group
+        let obj_sep2 = sep(); // after Show All, before Expand...
+        let obj_sep3 = sep(); // after Flatten Transparency, before Make Pixel Perfect
+        let obj_sep4 = sep(); // after Make Pixel Perfect, before Generative
+        let obj_sep5 = sep(); // after Generative, before Slice
+        let obj_sep6 = sep(); // after Slice, before Path
+        let obj_sep7 = sep(); // after Text Wrap, before Clipping Mask
+        let obj_sep8 = sep(); // after Graph, before Collect For Export
+
+        let mut object_items: Vec<&dyn muda::IsMenuItem> = vec![
+            &transform_menu, &arrange_menu, &align_menu, &distribute_menu, &obj_sep1,
+            &group_i, &ungroup_i,
+        ];
+        if !hide_wip {
+            object_items.push(&ungroup_all_wip);
+        }
+        object_items.push(&lock_menu);
+        object_items.push(&unlock_all_i);
+        if !hide_wip {
+            object_items.push(&hide_wip_item);
+            object_items.push(&show_all_wip);
+            object_items.push(&obj_sep2);
+            object_items.push(&expand_wip);
+            object_items.push(&expand_appearance_wip);
+            object_items.push(&crop_image_wip);
+            object_items.push(&rasterize_wip);
+            object_items.push(&gradient_mesh_wip);
+            object_items.push(&object_mosaic_wip);
+            object_items.push(&trim_marks_wip);
+            object_items.push(&flatten_transparency_wip);
+            object_items.push(&obj_sep3);
+            object_items.push(&pixel_perfect_wip);
+            object_items.push(&obj_sep4);
+            object_items.push(&generative_wip);
+            object_items.push(&obj_sep5);
+            object_items.push(&slice_wip);
+            object_items.push(&obj_sep6);
+        }
+        object_items.push(&path_menu);
+        if !hide_wip {
+            object_items.push(&shape_wip);
+            object_items.push(&pattern_wip);
+            object_items.push(&intertwine_wip);
+            object_items.push(&repeat_wip);
+            object_items.push(&objects_on_path_wip);
+        }
+        object_items.push(&blend_menu);
+        if !hide_wip {
+            object_items.push(&envelope_distort_wip);
+            object_items.push(&perspective_wip);
+            object_items.push(&live_paint_wip);
+            object_items.push(&mockup_wip);
+            object_items.push(&image_trace_wip);
+            object_items.push(&text_wrap_wip);
+            object_items.push(&obj_sep7);
+        }
+        object_items.push(&clip_menu);
+        if !hide_wip {
+            object_items.push(&compound_path_wip);
+            object_items.push(&artboards_wip);
+            object_items.push(&graph_wip);
+            object_items.push(&obj_sep8);
+            object_items.push(&collect_export_wip);
+        }
+        let object_menu = Submenu::with_items("Object", true, &object_items).expect("object menu");
+        let reselect_wip = wip("Reselect");
+        let inverse_wip = wip("Inverse");
+        let select_object_wip = wip("Object");
+        let start_global_edit_wip = wip("Start Global Edit");
+        let save_selection_wip = wip("Save Selection…");
+        let edit_selection_wip = wip("Edit Selection…");
+        let update_selection_wip = wip("Update Selection");
+        let sel_sep1 = sep();
+        let sel_sep2 = sep();
+        let sel_sep3 = sep();
+        let mut select_items: Vec<&dyn muda::IsMenuItem> = vec![&all_i, &sel_artboard_i, &deselect_i];
+        if !hide_wip {
+            select_items.push(&reselect_wip);
+            select_items.push(&inverse_wip);
+        }
+        select_items.push(&sel_sep1);
+        select_items.push(&next_above_i);
+        select_items.push(&next_below_i);
+        select_items.push(&sel_sep2);
+        select_items.push(&same_menu);
+        if !hide_wip {
+            select_items.push(&select_object_wip);
+            select_items.push(&start_global_edit_wip);
+            select_items.push(&sel_sep3);
+            select_items.push(&save_selection_wip);
+            select_items.push(&edit_selection_wip);
+            select_items.push(&update_selection_wip);
+        }
+        let select_menu = Submenu::with_items("Select", true, &select_items).expect("select menu");
         // Type menu — the convert item's label + enabled state track the
         // selection (see `NativeMenu::sync_type`).
         let convert_text_i = reg(
@@ -488,7 +818,70 @@ impl NativeMenu {
             MenuItem::new("Area Type Options…", true, None),
             MenuAction::AreaTypeOptions,
         );
-        let type_menu = Submenu::with_items("Type", true, &[&convert_text_i, &area_type_options_i]).expect("type menu");
+        let type_font_wip = wip("Font");
+        let type_recent_fonts_wip = wip("Recent Fonts");
+        let type_size_wip = wip("Size");
+        let type_glyphs_wip = wip("Glyphs");
+        let type_on_path_wip = wip("Type on a Path");
+        let type_threaded_text_wip = wip("Threaded Text");
+        let type_fit_headline_wip = wip("Fit Headline");
+        let type_resolve_fonts_wip = wip("Resolve Missing Fonts…");
+        let type_find_replace_font_wip = wip("Find/Replace Font…");
+        let type_change_case_wip = wip("Change Case");
+        let type_smart_punct_wip = wip("Smart Punctuation…");
+        let type_create_outlines_wip = wip("Create Outlines");
+        let type_optical_margin_wip = wip("Optical Margin Alignment");
+        let type_retype_wip = wip("Retype");
+        let type_bullets_wip = wip("Bullets and Numbering");
+        let type_insert_special_wip = wip("Insert Special Character");
+        let type_insert_whitespace_wip = wip("Insert Whitespace Character");
+        let type_insert_break_wip = wip("Insert Break Character");
+        let type_placeholder_text_wip = wip("Fill with Placeholder Text");
+        let type_show_hidden_wip = wip("Show Hidden Characters");
+        let type_orientation_wip = wip("Type Orientation");
+        let type_legacy_wip = wip("Legacy Text");
+        let t_sep1 = sep();
+        let t_sep2 = sep();
+        let t_sep3 = sep();
+        let t_sep4 = sep();
+        let t_sep5 = sep();
+        let t_sep6 = sep();
+        let mut type_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            type_items.push(&type_font_wip);
+            type_items.push(&type_recent_fonts_wip);
+            type_items.push(&type_size_wip);
+            type_items.push(&t_sep1);
+            type_items.push(&type_glyphs_wip);
+            type_items.push(&t_sep2);
+        }
+        type_items.push(&convert_text_i);
+        type_items.push(&area_type_options_i);
+        if !hide_wip {
+            type_items.push(&type_on_path_wip);
+            type_items.push(&type_threaded_text_wip);
+            type_items.push(&t_sep3);
+            type_items.push(&type_fit_headline_wip);
+            type_items.push(&type_resolve_fonts_wip);
+            type_items.push(&type_find_replace_font_wip);
+            type_items.push(&type_change_case_wip);
+            type_items.push(&type_smart_punct_wip);
+            type_items.push(&type_create_outlines_wip);
+            type_items.push(&type_optical_margin_wip);
+            type_items.push(&type_retype_wip);
+            type_items.push(&t_sep4);
+            type_items.push(&type_bullets_wip);
+            type_items.push(&t_sep5);
+            type_items.push(&type_insert_special_wip);
+            type_items.push(&type_insert_whitespace_wip);
+            type_items.push(&type_insert_break_wip);
+            type_items.push(&type_placeholder_text_wip);
+            type_items.push(&t_sep6);
+            type_items.push(&type_show_hidden_wip);
+            type_items.push(&type_orientation_wip);
+            type_items.push(&type_legacy_wip);
+        }
+        let type_menu = Submenu::with_items("Type", true, &type_items).expect("type menu");
         // Effect menu — Illustrator's own live-effect menu (distinct from
         // Object ▸ Path ▸ Offset Path above, which is the destructive
         // one): adds a live effect to the currently selected Appearance-
@@ -545,36 +938,209 @@ impl NativeMenu {
             ],
         )
         .expect("distort & transform menu");
-        let effect_menu = Submenu::with_items("Effect", true, &[&effect_offset_i, &sep(), &distort_transform_menu])
-            .expect("effect menu");
-        let view = Submenu::with_items(
-            "View",
-            true,
-            &[
-                &zoom_in_i,
-                &zoom_out_i,
-                &sep(),
-                &fit_artboard_i,
-                &fit_all_i,
-                &sep(),
-                &outline_i,
-                &transparency_grid_i,
-                &sep(),
-                &smart_guides_i,
-                &sep(),
-                &show_grid_i,
-                &sep(),
-                &snap_to_grid_i,
-                &snap_to_pixel_i,
-                &sep(),
-                &snap_to_point_i,
-                &sep(),
-                &guides_show_i,
-                &guides_lock_i,
-                &clear_guides_i,
-            ],
-        )
-        .expect("view menu");
+        // Effect ▸ Path — real Illustrator nests Offset Path here (not
+        // top-level); Outline Object/Stroke need their own implementation.
+        let effect_outline_object_wip = wip("Outline Object");
+        let effect_outline_stroke_wip = wip("Outline Stroke");
+        let mut effect_path_items: Vec<&dyn muda::IsMenuItem> = vec![&effect_offset_i];
+        if !hide_wip {
+            effect_path_items.push(&effect_outline_object_wip);
+            effect_path_items.push(&effect_outline_stroke_wip);
+        }
+        let effect_path_menu = Submenu::with_items("Path", true, &effect_path_items).expect("effect path menu");
+
+        // Effect ▸ Pathfinder — real backend (`Command::Pathfinder`, the
+        // same `PathfinderOp` the Pathfinder panel's own buttons dispatch).
+        let pf_add_i = reg(&mut items, MenuItem::new("Add", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Unite));
+        let pf_intersect_i = reg(&mut items, MenuItem::new("Intersect", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Intersect));
+        let pf_exclude_i = reg(&mut items, MenuItem::new("Exclude", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Exclude));
+        let pf_subtract_i = reg(&mut items, MenuItem::new("Subtract", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::MinusFront));
+        let pf_minus_back_i = reg(&mut items, MenuItem::new("Minus Back", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::MinusBack));
+        let pf_divide_i = reg(&mut items, MenuItem::new("Divide", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Divide));
+        let pf_trim_i = reg(&mut items, MenuItem::new("Trim", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Trim));
+        let pf_merge_i = reg(&mut items, MenuItem::new("Merge", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Merge));
+        let pf_crop_i = reg(&mut items, MenuItem::new("Crop", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Crop));
+        let pf_outline_i = reg(&mut items, MenuItem::new("Outline", true, None), MenuAction::PathfinderOp(amalith_commands::PathfinderOp::Outline));
+        let pf_hard_mix_wip = wip("Hard Mix");
+        let pf_soft_mix_wip = wip("Soft Mix…");
+        let pf_trap_wip = wip("Trap…");
+        let mut pathfinder_items: Vec<&dyn muda::IsMenuItem> = vec![
+            &pf_add_i, &pf_intersect_i, &pf_exclude_i, &pf_subtract_i, &pf_minus_back_i,
+            &pf_divide_i, &pf_trim_i, &pf_merge_i, &pf_crop_i, &pf_outline_i,
+        ];
+        if !hide_wip {
+            pathfinder_items.push(&pf_hard_mix_wip);
+            pathfinder_items.push(&pf_soft_mix_wip);
+            pathfinder_items.push(&pf_trap_wip);
+        }
+        let pathfinder_menu = Submenu::with_items("Pathfinder", true, &pathfinder_items).expect("pathfinder menu");
+
+        // Everything else in Illustrator's real Effect menu that Amalith's
+        // vector pipeline has no backend for yet — collapsed to one WIP
+        // placeholder per named category rather than itemizing subtrees
+        // with zero functional value (3D and Materials, Convert to Shape,
+        // Stylize, and the whole "Photoshop Effects" raster-filter section
+        // each have many named children in real Illustrator).
+        let effect_3d_wip = wip("3D and Materials");
+        let effect_convert_shape_wip = wip("Convert to Shape");
+        let effect_crop_marks_wip = wip("Crop Marks");
+        let effect_rasterize_wip = wip("Rasterize…");
+        let effect_stylize_wip = wip("Stylize");
+        let effect_svg_filters_wip = wip("SVG Filters");
+        let effect_warp_wip = wip("Warp");
+        let effect_doc_raster_settings_wip = wip("Document Raster Effects Settings…");
+        let ps_effects_header_wip = MenuItem::new("Photoshop Effects", false, None);
+        let ps_gallery_wip = wip("Effect Gallery…");
+        let ps_artistic_wip = wip("Artistic");
+        let ps_blur_wip = wip("Blur");
+        let ps_brush_strokes_wip = wip("Brush Strokes");
+        let ps_distort_wip = wip("Distort");
+        let ps_pixelate_wip = wip("Pixelate");
+        let ps_sketch_wip = wip("Sketch");
+        let ps_stylize_wip = wip("Stylize");
+        let ps_texture_wip = wip("Texture");
+        let ps_video_wip = wip("Video");
+
+        let effect_sep1 = sep(); // after Document Raster Effects Settings
+        let effect_sep2 = sep(); // after Warp, before Photoshop Effects
+        let mut effect_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            effect_items.push(&effect_doc_raster_settings_wip);
+            effect_items.push(&effect_sep1);
+            effect_items.push(&effect_3d_wip);
+            effect_items.push(&effect_convert_shape_wip);
+            effect_items.push(&effect_crop_marks_wip);
+        }
+        effect_items.push(&distort_transform_menu);
+        effect_items.push(&effect_path_menu);
+        effect_items.push(&pathfinder_menu);
+        if !hide_wip {
+            effect_items.push(&effect_rasterize_wip);
+            effect_items.push(&effect_stylize_wip);
+            effect_items.push(&effect_svg_filters_wip);
+            effect_items.push(&effect_warp_wip);
+            effect_items.push(&effect_sep2);
+            effect_items.push(&ps_effects_header_wip);
+            effect_items.push(&ps_gallery_wip);
+            effect_items.push(&ps_artistic_wip);
+            effect_items.push(&ps_blur_wip);
+            effect_items.push(&ps_brush_strokes_wip);
+            effect_items.push(&ps_distort_wip);
+            effect_items.push(&ps_pixelate_wip);
+            effect_items.push(&ps_sketch_wip);
+            effect_items.push(&ps_stylize_wip);
+            effect_items.push(&ps_texture_wip);
+            effect_items.push(&ps_video_wip);
+        }
+        let effect_menu = Submenu::with_items("Effect", true, &effect_items).expect("effect menu");
+        let overprint_preview_wip = wip("Overprint Preview");
+        let pixel_preview_wip = wip("Pixel Preview");
+        let trim_view_wip = wip("Trim View");
+        let presentation_mode_wip = wip("Presentation Mode");
+        let screen_mode_wip = wip("Screen Mode");
+        let proof_setup_wip = wip("Proof Setup");
+        let proof_colors_wip = wip("Proof Colors");
+        let rotate_view_wip = wip("Rotate View");
+        let show_slices_wip = wip("Show Slices");
+        let lock_slices_wip = wip("Lock Slices");
+        let hide_bbox_wip = wip("Hide Bounding Box");
+        let actual_size_wip = wip("Actual Size");
+        let live_paint_gaps_wip = wip("Show Live Paint Gaps");
+        let hide_gradient_annotator_wip = wip("Hide Gradient Annotator");
+        let hide_corner_widget_wip = wip("Hide Corner Widget");
+        let hide_edges_wip = wip("Hide Edges");
+        let perspective_grid_wip = wip("Perspective Grid");
+        let hide_artboards_wip = wip("Hide Artboards");
+        let show_print_tiling_wip = wip("Show Print Tiling");
+        let rulers_wip = wip("Rulers");
+        let hide_text_threads_wip = wip("Hide Text Threads");
+        let snap_to_glyph_wip = wip("Snap to Glyph");
+        let new_view_wip = wip("New View…");
+        let edit_views_wip = wip("Edit Views…");
+        let v_sep1 = sep();
+        let v_sep2 = sep();
+        let v_sep3 = sep();
+        let v_sep4 = sep();
+        let v_sep5 = sep();
+        let v_sep6 = sep();
+        let v_sep7 = sep();
+        let v_sep8 = sep();
+        let v_sep_u1 = sep();
+        let v_sep_u2 = sep();
+        let v_sep_u3 = sep();
+        let v_sep_u4 = sep();
+        let v_sep_u5 = sep();
+        let v_sep_u6 = sep();
+        let v_sep_u7 = sep();
+        let mut view_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            view_items.push(&overprint_preview_wip);
+            view_items.push(&pixel_preview_wip);
+            view_items.push(&trim_view_wip);
+            view_items.push(&v_sep1);
+            view_items.push(&presentation_mode_wip);
+            view_items.push(&v_sep2);
+            view_items.push(&screen_mode_wip);
+            view_items.push(&v_sep3);
+            view_items.push(&proof_setup_wip);
+            view_items.push(&proof_colors_wip);
+            view_items.push(&v_sep4);
+        }
+        view_items.push(&zoom_in_i);
+        view_items.push(&zoom_out_i);
+        view_items.push(&v_sep_u1);
+        view_items.push(&fit_artboard_i);
+        view_items.push(&fit_all_i);
+        if !hide_wip {
+            view_items.push(&v_sep5);
+            view_items.push(&rotate_view_wip);
+        }
+        view_items.push(&v_sep_u2);
+        view_items.push(&outline_i);
+        view_items.push(&transparency_grid_i);
+        if !hide_wip {
+            view_items.push(&show_slices_wip);
+            view_items.push(&lock_slices_wip);
+            view_items.push(&hide_bbox_wip);
+            view_items.push(&actual_size_wip);
+            view_items.push(&live_paint_gaps_wip);
+            view_items.push(&hide_gradient_annotator_wip);
+            view_items.push(&hide_corner_widget_wip);
+            view_items.push(&hide_edges_wip);
+        }
+        view_items.push(&v_sep_u3);
+        view_items.push(&smart_guides_i);
+        if !hide_wip {
+            view_items.push(&snap_to_glyph_wip);
+        }
+        view_items.push(&v_sep_u4);
+        if !hide_wip {
+            view_items.push(&perspective_grid_wip);
+            view_items.push(&v_sep6);
+        }
+        view_items.push(&show_grid_i);
+        view_items.push(&v_sep_u5);
+        view_items.push(&snap_to_grid_i);
+        view_items.push(&snap_to_pixel_i);
+        view_items.push(&v_sep_u6);
+        view_items.push(&snap_to_point_i);
+        if !hide_wip {
+            view_items.push(&v_sep7);
+            view_items.push(&hide_artboards_wip);
+            view_items.push(&show_print_tiling_wip);
+            view_items.push(&rulers_wip);
+            view_items.push(&hide_text_threads_wip);
+        }
+        view_items.push(&v_sep_u7);
+        view_items.push(&guides_show_i);
+        view_items.push(&guides_lock_i);
+        view_items.push(&clear_guides_i);
+        if !hide_wip {
+            view_items.push(&v_sep8);
+            view_items.push(&new_view_wip);
+            view_items.push(&edit_views_wip);
+        }
+        let view = Submenu::with_items("View", true, &view_items).expect("view menu");
 
         // Windows ▸ Workspace: one checked item per saved workspace (the
         // built-in "Essentials Classic" first), then Reset / New / Manage.
@@ -624,9 +1190,49 @@ impl NativeMenu {
                 (*kind, mi)
             })
             .collect();
+        let new_window_wip = wip("New Window");
+        let window_arrange_wip = wip("Arrange");
+        let find_extensions_wip = wip("Find Extensions on Exchange…");
+        let app_frame_wip = wip("Application Frame");
+        let app_bar_wip = wip("Application Bar");
+        let contextual_task_bar_wip = wip("Contextual Task Bar");
+        let control_wip = wip("Control");
+        let help_bar_wip = wip("Help Bar");
+        let toolbars_wip = wip("Toolbars");
+        let brush_libraries_wip = wip("Brush Libraries");
+        let graphic_style_libraries_wip = wip("Graphic Style Libraries");
+        let swatch_libraries_wip = wip("Swatch Libraries");
+        let symbol_libraries_wip = wip("Symbol Libraries");
+        let win_sep1 = sep();
+        let win_sep2 = sep();
+        let win_sep3 = sep();
         let windows_sep = sep();
-        let mut window_refs: Vec<&dyn muda::IsMenuItem> = vec![&workspace_menu, &windows_sep];
+        let mut window_refs: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        if !hide_wip {
+            window_refs.push(&new_window_wip);
+            window_refs.push(&win_sep1);
+            window_refs.push(&window_arrange_wip);
+            window_refs.push(&find_extensions_wip);
+        }
+        window_refs.push(&workspace_menu);
+        if !hide_wip {
+            window_refs.push(&win_sep2);
+            window_refs.push(&app_frame_wip);
+            window_refs.push(&app_bar_wip);
+            window_refs.push(&contextual_task_bar_wip);
+            window_refs.push(&control_wip);
+            window_refs.push(&help_bar_wip);
+            window_refs.push(&toolbars_wip);
+        }
+        window_refs.push(&windows_sep);
         window_refs.extend(window_checks.iter().map(|(_, i)| i as &dyn muda::IsMenuItem));
+        if !hide_wip {
+            window_refs.push(&win_sep3);
+            window_refs.push(&brush_libraries_wip);
+            window_refs.push(&graphic_style_libraries_wip);
+            window_refs.push(&swatch_libraries_wip);
+            window_refs.push(&symbol_libraries_wip);
+        }
         // "Window" (singular) is a name AppKit reserves for its own window
         // menu; "Windows" (plural) sidesteps that collision.
         let panels_menu = Submenu::with_items("Windows", true, &window_refs).expect("windows menu");
@@ -634,15 +1240,32 @@ impl NativeMenu {
         // A menu literally titled "Help" gets AppKit's search field for
         // free on macOS; on Windows it's just the one link.
         let help_docs_i = reg(&mut items, MenuItem::new("Amalith Help", true, None), MenuAction::HelpDocs);
-        let help_menu = Submenu::with_items("Help", true, &[&help_docs_i]).expect("help menu");
+        let tutorials_wip = wip("Tutorials…");
+        let whats_new_wip = wip("What's New…");
+        let support_community_wip = wip("Support Community");
+        let submit_bug_wip = wip("Submit Bug/Feature Request…");
+        let system_info_wip = wip("System Info…");
+        let help_sep1 = sep();
+        let help_sep2 = sep();
+        let mut help_items: Vec<&dyn muda::IsMenuItem> = vec![&help_docs_i];
+        if !hide_wip {
+            help_items.push(&tutorials_wip);
+            help_items.push(&whats_new_wip);
+            help_items.push(&help_sep1);
+            help_items.push(&support_community_wip);
+            help_items.push(&submit_bug_wip);
+            help_items.push(&help_sep2);
+            help_items.push(&system_info_wip);
+        }
+        let help_menu = Submenu::with_items("Help", true, &help_items).expect("help menu");
 
         let menu = Menu::new();
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
         menu.append(&object_menu).expect("append object menu");
-        menu.append(&select_menu).expect("append select menu");
         menu.append(&type_menu).expect("append type menu");
+        menu.append(&select_menu).expect("append select menu");
         menu.append(&effect_menu).expect("append effect menu");
         menu.append(&view).expect("append view menu");
         menu.append(&panels_menu).expect("append panels menu");

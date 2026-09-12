@@ -212,6 +212,34 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Object ▸ Group (⌘G) — wrap 2+ selected objects in a new group.
+    /// Same logic the ⌘G keyboard shortcut already runs
+    /// (`app/input/keyboard.rs`); pulled out here so the menu item and the
+    /// shortcut share one implementation.
+    pub(in crate::app) fn group_selection(&mut self) {
+        if self.doc.selection.len() <= 1 {
+            return;
+        }
+        if let Ok(CommandOutcome::Object(g)) = self.doc.editor.execute(Command::Group {
+            ids: self.doc.selection.clone(),
+            name: None,
+        }) {
+            self.doc.selection = vec![g];
+        }
+        self.request_main_redraw();
+    }
+
+    /// Object ▸ Ungroup (⌘⇧G) — dissolve every selected group. Same logic
+    /// the ⌘⇧G keyboard shortcut already runs (`app/input/keyboard.rs`).
+    pub(in crate::app) fn ungroup_selection(&mut self) {
+        if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
+            if !freed.is_empty() {
+                self.doc.selection = freed;
+            }
+        }
+        self.request_main_redraw();
+    }
+
     /// Object ▸ Lock ▸ Selection (⌘2) — locks every selected object; a
     /// locked object can't stay selected (matches the Layers panel's own
     /// lock toggle), so they drop out of the selection too.

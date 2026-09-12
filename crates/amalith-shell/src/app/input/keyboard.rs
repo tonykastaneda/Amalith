@@ -608,25 +608,8 @@ impl App {
                     // Illustrator itself, which gives Duplicate no default
                     // shortcut of its own).
                     KeyCode::KeyD => self.transform_again(),
-                    KeyCode::KeyG if self.shift_down => {
-                        if let Ok(freed) = self.doc.editor.ungroup(&self.doc.selection) {
-                            if !freed.is_empty() {
-                                self.doc.selection = freed;
-                            }
-                        }
-                        self.request_main_redraw();
-                    }
-                    KeyCode::KeyG if self.doc.selection.len() > 1 => {
-                        if let Ok(CommandOutcome::Object(g)) =
-                            self.doc.editor.execute(Command::Group {
-                                ids: self.doc.selection.clone(),
-                                name: None,
-                            })
-                        {
-                            self.doc.selection = vec![g];
-                        }
-                        self.request_main_redraw();
-                    }
+                    KeyCode::KeyG if self.shift_down => self.ungroup_selection(),
+                    KeyCode::KeyG if self.doc.selection.len() > 1 => self.group_selection(),
                     // ⌘7 make clipping mask, ⌘⌥7 release.
                     KeyCode::Digit7 if self.alt_down => self.clip_release(),
                     KeyCode::Digit7 => self.clip_make(),

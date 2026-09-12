@@ -80,6 +80,8 @@ fn parse(text: &str) -> Settings {
                     s.cull_inset = n.clamp(0.0, 1000.0);
                 }
             }
+            "hide_wip_menu_items" => s.hide_wip_menu_items = v == "true",
+            "hide_wip_tools" => s.hide_wip_tools = v == "true",
             "accent" => {
                 if let Some(rgb) = parse_hex(v) {
                     s.accent = rgb;
@@ -160,7 +162,7 @@ pub fn save(s: &Settings) {
 fn serialize(s: &Settings) -> String {
     let mut body = format!(
         "ui_scale = {}\nnudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\naccent = {:02x}{:02x}{:02x}\n\
-         show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhandle_size = {}\n\
+         show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhide_wip_menu_items = {}\nhide_wip_tools = {}\nhandle_size = {}\n\
          smart_guides_enabled = {}\nsg_alignment_guides = {}\nsg_anchor_path_labels = {}\n\
          sg_object_highlighting = {}\nsg_measurement_labels = {}\nsg_construction_guides = {}\n\
          sg_transform_tools = {}\nsg_spacing_guides = {}\nsg_tolerance = {}\nsg_angles = {}\n\
@@ -175,6 +177,8 @@ fn serialize(s: &Settings) -> String {
         s.show_fps,
         s.show_cull_outline,
         s.cull_inset,
+        s.hide_wip_menu_items,
+        s.hide_wip_tools,
         s.handle_size.id_str(),
         s.smart_guides_enabled,
         s.sg_alignment_guides,
@@ -315,6 +319,8 @@ mod scale_tests {
             show_fps: false,
             show_cull_outline: true,
             cull_inset: 42.5,
+            hide_wip_menu_items: true,
+            hide_wip_tools: true,
             handle_size: crate::handle_scale::HandleSize::Large,
             smart_guides_enabled: false,
             sg_alignment_guides: false,
@@ -345,6 +351,8 @@ mod scale_tests {
             show_fps,
             show_cull_outline,
             cull_inset,
+            hide_wip_menu_items,
+            hide_wip_tools,
             handle_size,
             smart_guides_enabled,
             sg_alignment_guides,
@@ -372,6 +380,8 @@ mod scale_tests {
         assert_eq!(show_fps, original.show_fps, "show_fps did not round-trip");
         assert_eq!(show_cull_outline, original.show_cull_outline, "show_cull_outline did not round-trip");
         assert_eq!(cull_inset, original.cull_inset, "cull_inset did not round-trip");
+        assert_eq!(hide_wip_menu_items, original.hide_wip_menu_items, "hide_wip_menu_items did not round-trip");
+        assert_eq!(hide_wip_tools, original.hide_wip_tools, "hide_wip_tools did not round-trip");
         assert_eq!(handle_size, original.handle_size, "handle_size did not round-trip");
         assert_eq!(smart_guides_enabled, original.smart_guides_enabled, "smart_guides_enabled did not round-trip");
         assert_eq!(sg_alignment_guides, original.sg_alignment_guides, "sg_alignment_guides did not round-trip");

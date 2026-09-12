@@ -17,19 +17,33 @@ use crate::tool::Tool;
 
 use super::{Action, Ctx, PaintSlot, ID, MIXED_SWATCH_BG};
 
+std::thread_local! {
+    /// Mirrors `Settings::hide_wip_tools` for the layout helpers below
+    /// (`natural_height`, `shape_slot_rect`, `group_slot_rect` via
+    /// `panels::mod.rs`'s generic `min_body_height`/`fixed_content_height`),
+    /// which have no `Ctx`/`Settings` of their own to read it from — same
+    /// snapshot-on-the-UI-thread idea as `crate::metrics::with`. Kept in
+    /// sync by `set_hide_wip`, called at startup and whenever Preferences
+    /// are committed.
+    static HIDE_WIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Update the layout snapshot above. Call whenever `Settings::hide_wip_tools`
+/// may have changed (app init, Preferences ▸ OK).
+pub fn set_hide_wip(v: bool) {
+    HIDE_WIP.with(|c| c.set(v));
+}
+
+pub(crate) fn hide_wip() -> bool {
+    HIDE_WIP.with(|c| c.get())
+}
+
 const SLASH_RED: Color = Color::from_rgb8(0xff, 0x18, 0x18);
 
 /// One tool button, square.
 fn metric_cell() -> f64 { crate::metrics::with(|m| m.panels_tools_cell) }
 /// Gap above the grid.
 fn metric_top() -> f64 { crate::metrics::with(|m| m.panels_tools_top) }
-/// Index of the Shape slot among [`slots`].
-const SHAPE_SLOT: usize = 5;
-/// Index of the Type, Rotate/Reflect, and Scale/Shear flyout-group slots.
-pub const TYPE_GROUP_SLOT: usize = 3;
-pub const ROTATE_GROUP_SLOT: usize = 6;
-pub const SCALE_GROUP_SLOT: usize = 7;
-
 /// The primitive tools the Shape slot collects, in flyout order.
 pub const SHAPE_TOOLS: [Tool; 5] = [
     Tool::Rectangle,
@@ -39,37 +53,73 @@ pub const SHAPE_TOOLS: [Tool; 5] = [
     Tool::Star,
 ];
 
-/// The visible slots; the Shape slot shows `shape`'s icon, and the two
-/// flyout-group slots show whichever tool in that group was last used.
-/// Ordered to roughly track Illustrator's own toolbar (Selection ▸ Direct
-/// Selection ▸ Pen ▸ Type ▸ Line ▸ Shapes ▸ Rotate ▸ Scale ▸ Gradient ▸
-/// Eyedropper ▸ Blend ▸ Artboard ▸ Hand ▸ Zoom), with the tools that have
-/// no Illustrator-toolbar counterpart (Width, Arc, Spiral, Free Transform,
-/// Join, Shape Builder, Eraser) tacked on at the end rather than left out.
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool) -> [Tool; 21] {
-    [
-        Tool::Select,
-        Tool::DirectSelect,
-        Tool::Pen,
-        type_group,
-        Tool::Line,
-        shape,
-        rotate_group,
-        scale_group,
-        Tool::Gradient,
-        Tool::Eyedropper,
-        Tool::Blend,
-        Tool::Artboard,
-        Tool::Hand,
-        Tool::Zoom,
-        Tool::Width,
-        Tool::Arc,
-        Tool::Spiral,
-        Tool::FreeTransform,
-        Tool::Join,
-        Tool::ShapeBuilder,
-        Tool::Eraser,
-    ]
+/// One toolbar slot's identity. Most are a single real, clickable tool;
+/// three are flyout-group slots that show whichever tool in that group
+/// was last used (Shape, Rotate/Reflect, Scale/Shear, Type). `Wip` is a
+/// disabled placeholder for a real Illustrator tool Amalith doesn't
+/// implement yet: its icon renders dimmed and unclickable, and its name
+/// (with "(WIP)" appended) shows as a hover tooltip - the toolbar
+/// equivalent of app/native_menu.rs's wip() helper for menu items.
+#[derive(Clone, Copy)]
+enum Slot {
+    Tool(Tool),
+    Shape(Tool),
+    Flyout(crate::tool::ToolGroup, Tool),
+    Wip(&'static str, icons::Icon),
+}
+
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool) -> Vec<Slot> {
+    use crate::tool::ToolGroup;
+    use icons::Icon;
+    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::DirectSelect)];
+    if !hide_wip {
+        v.push(Slot::Wip("Magic Wand", Icon::MagicWand));
+        v.push(Slot::Wip("Lasso", Icon::Lasso));
+    }
+    v.push(Slot::Tool(Tool::Pen));
+    if !hide_wip {
+        v.push(Slot::Wip("Curvature Pen", Icon::CurvaturePen));
+    }
+    v.push(Slot::Flyout(ToolGroup::Type, type_group));
+    v.push(Slot::Tool(Tool::Line));
+    v.push(Slot::Shape(shape));
+    if !hide_wip {
+        v.push(Slot::Wip("Paintbrush", Icon::Paintbrush));
+        v.push(Slot::Wip("Pencil", Icon::Pencil));
+    }
+    v.push(Slot::Flyout(ToolGroup::RotateReflect, rotate_group));
+    v.push(Slot::Flyout(ToolGroup::ScaleShear, scale_group));
+    v.push(Slot::Tool(Tool::Gradient));
+    if !hide_wip {
+        v.push(Slot::Wip("Mesh", Icon::Mesh));
+    }
+    v.push(Slot::Tool(Tool::Eyedropper));
+    if !hide_wip {
+        v.push(Slot::Wip("Measure", Icon::Measure));
+    }
+    v.push(Slot::Tool(Tool::Blend));
+    if !hide_wip {
+        v.push(Slot::Wip("Symbol Sprayer", Icon::SymbolSprayer));
+    }
+    v.push(Slot::Tool(Tool::Artboard));
+    if !hide_wip {
+        v.push(Slot::Wip("Slice", Icon::Slice));
+    }
+    v.push(Slot::Tool(Tool::Hand));
+    v.push(Slot::Tool(Tool::Zoom));
+    v.push(Slot::Tool(Tool::Width));
+    v.push(Slot::Tool(Tool::Arc));
+    v.push(Slot::Tool(Tool::Spiral));
+    v.push(Slot::Tool(Tool::FreeTransform));
+    v.push(Slot::Tool(Tool::Join));
+    v.push(Slot::Tool(Tool::ShapeBuilder));
+    v.push(Slot::Tool(Tool::Eraser));
+    if !hide_wip {
+        v.push(Slot::Wip("Shaper", Icon::Shaper));
+        v.push(Slot::Wip("Perspective Grid", Icon::PerspectiveGrid));
+        v.push(Slot::Wip("Column Graph", Icon::ColumnGraph));
+    }
+    v
 }
 
 fn cols(body: Rect) -> usize {
@@ -82,9 +132,10 @@ fn cols(body: Rect) -> usize {
 
 /// Shortest body that still shows every tool plus the fill / stroke chips,
 /// for the splitter-drag minimum. Depends on width via the column reflow.
-pub fn natural_height(width: f64) -> f64 {
+pub fn natural_height(width: f64, hide_wip: bool) -> f64 {
     let cols = if width >= 2.0 * metric_cell() + ui_px(6.0) { 2 } else { 1 };
-    let rows = 21usize.div_ceil(cols) as f64;
+    let n = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip).len();
+    let rows = n.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     metric_top() + rows * metric_cell() + ui_px(12.0) + metric_proxy_h()
 }
@@ -103,17 +154,19 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
 }
 
 /// Screen rect of the Shape slot — the flyout anchors to it.
-pub fn shape_slot_rect(body: Rect) -> Rect {
-    cell(body, SHAPE_SLOT, cols(body))
+pub fn shape_slot_rect(body: Rect, hide_wip: bool) -> Rect {
+    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let i = s.iter().position(|s| matches!(s, Slot::Shape(_))).unwrap_or(0);
+    cell(body, i, cols(body))
 }
 
 /// Screen rect of a flyout-group slot — its labeled flyout anchors here.
-pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup) -> Rect {
-    let i = match group {
-        crate::tool::ToolGroup::RotateReflect => ROTATE_GROUP_SLOT,
-        crate::tool::ToolGroup::ScaleShear => SCALE_GROUP_SLOT,
-        crate::tool::ToolGroup::Type => TYPE_GROUP_SLOT,
-    };
+pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup, hide_wip: bool) -> Rect {
+    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let i = s
+        .iter()
+        .position(|s| matches!(s, Slot::Flyout(g, _) if *g == group))
+        .unwrap_or(0);
     cell(body, i, cols(body))
 }
 
@@ -317,43 +370,52 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
-        .into_iter()
-        .enumerate()
-    {
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    for (i, slot) in all.into_iter().enumerate() {
         let r = cell(body, i, cols);
-        let active = if i == SHAPE_SLOT {
-            ctx.active_tool.is_shape()
-        } else if i == ROTATE_GROUP_SLOT {
-            crate::tool::ToolGroup::RotateReflect.contains(ctx.active_tool)
-        } else if i == SCALE_GROUP_SLOT {
-            crate::tool::ToolGroup::ScaleShear.contains(ctx.active_tool)
-        } else if i == TYPE_GROUP_SLOT {
-            crate::tool::ToolGroup::Type.contains(ctx.active_tool)
-        } else {
-            tool == ctx.active_tool
+
+        let Slot::Wip(_, wip_icon) = slot else {
+            let tool = match slot {
+                Slot::Tool(t) | Slot::Shape(t) | Slot::Flyout(_, t) => t,
+                Slot::Wip(..) => unreachable!(),
+            };
+            let active = match slot {
+                Slot::Shape(_) => ctx.active_tool.is_shape(),
+                Slot::Flyout(g, _) => g.contains(ctx.active_tool),
+                _ => tool == ctx.active_tool,
+            };
+            if active {
+                scene.fill(Fill::NonZero, ID, ctx.theme.accent, None, &r);
+            } else if r.contains(ctx.pointer) {
+                scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.14), None, &r);
+            }
+            // Dark glyph over the gold accent so it stays legible.
+            let color = if active {
+                ctx.theme.on_accent
+            } else {
+                ctx.theme.text_dim
+            };
+            icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (ui_px(22.0), ui_px(22.0))), color);
+            if matches!(slot, Slot::Shape(_) | Slot::Flyout(..)) {
+                // Bottom-right triangle: this slot has a flyout.
+                let mut t = BezPath::new();
+                t.move_to((r.x1 - ui_px(6.0), r.y1 - ui_px(2.0)));
+                t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(2.0)));
+                t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(6.0)));
+                t.close_path();
+                scene.fill(Fill::NonZero, ID, color, None, &t);
+            }
+            continue;
         };
-        if active {
-            scene.fill(Fill::NonZero, ID, ctx.theme.accent, None, &r);
-        } else if r.contains(ctx.pointer) {
-            scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.14), None, &r);
-        }
-        // Dark glyph over the gold accent so it stays legible.
-        let color = if active {
-            ctx.theme.on_accent
-        } else {
-            ctx.theme.text_dim
-        };
-        icons::draw(scene, tool.icon(), Rect::from_center_size(r.center(), (ui_px(22.0), ui_px(22.0))), color);
-        if matches!(i, SHAPE_SLOT | ROTATE_GROUP_SLOT | SCALE_GROUP_SLOT | TYPE_GROUP_SLOT) {
-            // Bottom-right triangle: this slot has a flyout.
-            let mut t = BezPath::new();
-            t.move_to((r.x1 - ui_px(6.0), r.y1 - ui_px(2.0)));
-            t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(2.0)));
-            t.line_to((r.x1 - ui_px(2.0), r.y1 - ui_px(6.0)));
-            t.close_path();
-            scene.fill(Fill::NonZero, ID, color, None, &t);
-        }
+        // WIP placeholder: the real tool's icon, dimmed and unclickable —
+        // never highlights on hover/active; its name only ever surfaces
+        // via `tip()`.
+        icons::draw(
+            scene,
+            wip_icon,
+            Rect::from_center_size(r.center(), (ui_px(22.0), ui_px(22.0))),
+            ctx.theme.text_dim.with_alpha(0.35),
+        );
     }
 
     // Fill / Stroke colour proxy.
@@ -393,17 +455,14 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::SetPaint(Paint::None);
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
-        .into_iter()
-        .enumerate()
-    {
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
-            return match i {
-                SHAPE_SLOT => Action::ShapeSlot,
-                ROTATE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::RotateReflect),
-                SCALE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::ScaleShear),
-                TYPE_GROUP_SLOT => Action::ToolFlyout(crate::tool::ToolGroup::Type),
-                _ => Action::SetTool(tool),
+            return match slot {
+                Slot::Wip(..) => Action::None,
+                Slot::Shape(_) => Action::ShapeSlot,
+                Slot::Flyout(g, _) => Action::ToolFlyout(g),
+                Slot::Tool(t) => Action::SetTool(t),
             };
         }
     }
@@ -435,16 +494,19 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         return Some("Fill".into());
     }
     let cols = cols(body);
-    for (i, tool) in slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool)
-        .into_iter()
-        .enumerate()
-    {
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
-            let key = tool.key();
-            return Some(if key.is_empty() {
-                tool.label().to_string()
-            } else {
-                format!("{} ({key})", tool.label())
+            return Some(match slot {
+                Slot::Wip(name, _) => format!("{name} (WIP)"),
+                Slot::Tool(t) | Slot::Shape(t) | Slot::Flyout(_, t) => {
+                    let key = t.key();
+                    if key.is_empty() {
+                        t.label().to_string()
+                    } else {
+                        format!("{} ({key})", t.label())
+                    }
+                }
             });
         }
     }

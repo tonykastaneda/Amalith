@@ -139,6 +139,7 @@ pub(in crate::app) fn paint_main(
     // one's flyout is painted by `render/mod.rs`'s own `Role::Floating`
     // branch instead.
     stack_flyout: Option<(u64, usize, usize)>,
+    hide_wip_tools: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -593,6 +594,7 @@ pub(in crate::app) fn paint_main(
         rotate_group_tool: last_rotate_tool,
         scale_group_tool: last_scale_tool,
         type_group_tool: last_type_tool,
+        hide_wip_tools,
         expanded,
         renaming,
         selected_layer,

@@ -281,6 +281,14 @@ pub struct Settings {
     /// Debug: inset (logical px) from the viewport where off-screen
     /// objects stop being drawn / decoded. Larger = cull further out.
     pub cull_inset: f64,
+    /// Debug: hide every native-menu "(WIP)" placeholder item (a feature
+    /// with no backing implementation yet) instead of showing it greyed
+    /// out — see `app/native_menu.rs`'s `wip()` helper.
+    pub hide_wip_menu_items: bool,
+    /// Debug: hide every Tools-panel "(WIP)" placeholder slot (a real
+    /// Illustrator tool Amalith doesn't implement yet) instead of showing
+    /// it greyed out — see `panels/tools.rs`'s `SlotKind::Wip`.
+    pub hide_wip_tools: bool,
     /// Selection handle / grab-radius size — Illustrator's own separate
     /// "Selection & Anchor Display" preference. Independent of
     /// `ui_scale`; see [`crate::handle_scale`].
@@ -347,6 +355,8 @@ impl Default for Settings {
             show_fps: true,
             show_cull_outline: false,
             cull_inset: crate::canvas::CULL_INSET,
+            hide_wip_menu_items: false,
+            hide_wip_tools: false,
             handle_size: crate::handle_scale::HandleSize::default(),
             smart_guides_enabled: true,
             sg_alignment_guides: true,
@@ -405,6 +415,8 @@ pub struct Prefs {
     check_cull: Rect,
     cull_up: Rect,
     cull_down: Rect,
+    check_hide_wip: Rect,
+    check_hide_wip_tools: Rect,
     /// Smart Guides page: the 7 sub-feature checkboxes, in declaration
     /// order (see `SG_CHECK_LABELS`).
     sg_checks: Vec<Rect>,
@@ -451,6 +463,8 @@ pub enum Hit {
     ToggleFps,
     ToggleCullOutline,
     SetCullInset(f64),
+    ToggleHideWip,
+    ToggleHideWipTools,
     SetAccent([u8; 3]),
     SetUiScale(f64),
     SetHandleSize(crate::handle_scale::HandleSize),
@@ -519,6 +533,8 @@ impl Prefs {
             check_cull: Rect::ZERO,
             cull_up: Rect::ZERO,
             cull_down: Rect::ZERO,
+            check_hide_wip: Rect::ZERO,
+            check_hide_wip_tools: Rect::ZERO,
             sg_checks: Vec::new(),
             sg_tolerance_up: Rect::ZERO,
             sg_tolerance_down: Rect::ZERO,
@@ -613,6 +629,12 @@ impl Prefs {
         }
         if self.check_cull.contains(p) {
             return Hit::ToggleCullOutline;
+        }
+        if self.check_hide_wip.contains(p) {
+            return Hit::ToggleHideWip;
+        }
+        if self.check_hide_wip_tools.contains(p) {
+            return Hit::ToggleHideWipTools;
         }
         if self.cull_up.contains(p) {
             return Hit::SetCullInset((self.working.cull_inset + 8.0).min(1000.0));
@@ -745,6 +767,8 @@ impl Prefs {
         self.check_cull = Rect::ZERO;
         self.cull_up = Rect::ZERO;
         self.cull_down = Rect::ZERO;
+        self.check_hide_wip = Rect::ZERO;
+        self.check_hide_wip_tools = Rect::ZERO;
         self.sg_checks.clear();
         self.sg_tolerance_up = Rect::ZERO;
         self.sg_tolerance_down = Rect::ZERO;
@@ -1264,6 +1288,48 @@ impl Prefs {
             theme.text_dim,
             px,
             cy + ui_px(36.0),
+        );
+        cy += ui_px(56.0);
+
+        self.check_hide_wip = checkbox(
+            scene,
+            tcx,
+            theme,
+            px,
+            cy,
+            "Hide WIP Menu Items",
+            self.working.hide_wip_menu_items,
+        );
+        cy += ui_px(30.0);
+
+        tcx.draw(
+            scene,
+            "Hides every native-menu item marked (WIP) instead of showing it greyed out.",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + ui_px(4.0),
+        );
+        cy += ui_px(30.0);
+
+        self.check_hide_wip_tools = checkbox(
+            scene,
+            tcx,
+            theme,
+            px,
+            cy,
+            "Hide WIP Tools",
+            self.working.hide_wip_tools,
+        );
+        cy += ui_px(30.0);
+
+        tcx.draw(
+            scene,
+            "Hides every Tools-panel slot marked (WIP) instead of showing it greyed out.",
+            11.0,
+            theme.text_dim,
+            px,
+            cy + ui_px(4.0),
         );
     }
 }

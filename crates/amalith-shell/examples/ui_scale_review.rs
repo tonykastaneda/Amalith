@@ -42,6 +42,7 @@ fn main() {
             rotate_group_tool: amalith_shell::tool::Tool::Rotate,
             scale_group_tool: amalith_shell::tool::Tool::Scale,
             type_group_tool: amalith_shell::tool::Tool::Text,
+            hide_wip_tools: false,
             expanded: &expanded,
             renaming: None,
             selected_layer: None,

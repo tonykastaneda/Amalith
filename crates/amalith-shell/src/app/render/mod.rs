@@ -693,6 +693,7 @@ impl App {
                 grad_edit.as_ref().map(|(f, s)| (*f, s.as_str())),
                 grad_annot.clone(),
                 self.stack_flyout,
+                self.settings.hide_wip_tools,
             ),
             Role::Floating(fid) => {
                 let exists = self.dock.master(fid).is_some();
@@ -744,6 +745,7 @@ impl App {
                             rotate_group_tool: self.last_rotate_tool,
                             scale_group_tool: self.last_scale_tool,
                             type_group_tool: self.last_type_tool,
+                            hide_wip_tools: self.settings.hide_wip_tools,
                             expanded: &self.doc.expanded_groups,
                             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                             selected_layer: self.doc.selected_layer,
@@ -821,6 +823,7 @@ impl App {
                                 rotate_group_tool: self.last_rotate_tool,
                                 scale_group_tool: self.last_scale_tool,
                                 type_group_tool: self.last_type_tool,
+                                hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
@@ -908,6 +911,7 @@ impl App {
                                 rotate_group_tool: self.last_rotate_tool,
                                 scale_group_tool: self.last_scale_tool,
                                 type_group_tool: self.last_type_tool,
+                                hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
