@@ -141,50 +141,7 @@ impl App {
                     return true;
                 };
                 let pbody = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid)).0;
-                let layer_drop = if pid == PanelId(PanelKind::Layers) {
-                    self.layer_drop.map(|(_, _, row, into)| (row, into))
-                } else {
-                    None
-                };
-                let action = {
-                    let ctx = self.panel_press_ctx(layer_drop);
-                    panels::hit(pid, pbody, self.pointer, &ctx)
-                };
-                if action == panels::Action::ShapeSlot {
-                    let anchor = panels::tools::shape_slot_rect(pbody);
-                    self.shape_press = Some((Instant::now(), anchor));
-                } else if let panels::Action::ToolFlyout(group) = action {
-                    let anchor = panels::tools::group_slot_rect(pbody, group);
-                    self.tool_flyout_press = Some((Instant::now(), anchor, group));
-                } else {
-                    let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
-                    let arm_drag = !double && pid == PanelId(PanelKind::Layers) && matches!(action, panels::Action::Select(_));
-                    let arm_appearance_drag = !double
-                        && pid == PanelId(PanelKind::Appearance)
-                        && matches!(action, panels::Action::AppearanceSelect(_));
-                    let grad_drag = gradient_drag_for(&action, double);
-                    self.apply_panel_action(action, double);
-                    if spawn {
-                        self.spawn_picker_window(event_loop);
-                    }
-                    if arm_drag {
-                        self.drag = Drag::LayerDrag {
-                            body: pbody,
-                            press: self.pointer,
-                            moved: false,
-                        };
-                    }
-                    if arm_appearance_drag {
-                        self.drag = Drag::AppearanceDrag {
-                            body: pbody,
-                            press: self.pointer,
-                            moved: false,
-                        };
-                    }
-                    if let Some(d) = grad_drag {
-                        self.drag = d;
-                    }
-                }
+                self.dispatch_panel_press(event_loop, pid, pbody, double);
                 return true;
             }
             if g.resize_handle.height() > 0.0 && g.resize_handle.contains(self.pointer) {
@@ -204,6 +161,61 @@ impl App {
             }
         }
         false
+    }
+
+    /// Routes a press that landed inside `pid`'s own already-painted body
+    /// (`body` — the exact rect `panels::paint` was just called with) to
+    /// that panel's `hit()`/`apply_panel_action`. Shared by a docked/
+    /// floating Tabs-mode panel's content pane (above) and a Stack-mode
+    /// flyout's body (`on_press`, below) — both paint the same panel the
+    /// same way and must hit-test it identically, so a fix to one path
+    /// (drag-arming, the picker double-click, …) can't silently miss the
+    /// other.
+    fn dispatch_panel_press(&mut self, event_loop: &ActiveEventLoop, pid: PanelId, body: Rect, double: bool) {
+        let layer_drop = if pid == PanelId(PanelKind::Layers) {
+            self.layer_drop.map(|(_, _, row, into)| (row, into))
+        } else {
+            None
+        };
+        let action = {
+            let ctx = self.panel_press_ctx(layer_drop);
+            panels::hit(pid, body, self.pointer, &ctx)
+        };
+        if action == panels::Action::ShapeSlot {
+            let anchor = panels::tools::shape_slot_rect(body);
+            self.shape_press = Some((Instant::now(), anchor));
+        } else if let panels::Action::ToolFlyout(group) = action {
+            let anchor = panels::tools::group_slot_rect(body, group);
+            self.tool_flyout_press = Some((Instant::now(), anchor, group));
+        } else {
+            let spawn = double && matches!(action, panels::Action::OpenPicker(_) | panels::Action::OpenAppearanceItemPicker(_));
+            let arm_drag = !double && pid == PanelId(PanelKind::Layers) && matches!(action, panels::Action::Select(_));
+            let arm_appearance_drag = !double
+                && pid == PanelId(PanelKind::Appearance)
+                && matches!(action, panels::Action::AppearanceSelect(_));
+            let grad_drag = gradient_drag_for(&action, double);
+            self.apply_panel_action(action, double);
+            if spawn {
+                self.spawn_picker_window(event_loop);
+            }
+            if arm_drag {
+                self.drag = Drag::LayerDrag {
+                    body,
+                    press: self.pointer,
+                    moved: false,
+                };
+            }
+            if arm_appearance_drag {
+                self.drag = Drag::AppearanceDrag {
+                    body,
+                    press: self.pointer,
+                    moved: false,
+                };
+            }
+            if let Some(d) = grad_drag {
+                self.drag = d;
+            }
+        }
     }
 
     pub(in crate::app) fn on_press(
@@ -252,6 +264,9 @@ impl App {
         }
         if self.opacity_edit.is_some() && !self.opacity_field_at_pointer() {
             self.commit_opacity_edit();
+        }
+        if self.appearance_width_edit.is_some() && !self.appearance_width_field_at_pointer() {
+            self.commit_appearance_width_edit();
         }
         if self.artboard_edit.is_some() && !self.over_artboard_segment() {
             self.commit_artboard_edit();
@@ -474,10 +489,18 @@ impl App {
         // An open Stack-mode flyout closes only via its own × or by
         // re-clicking the row that opened it (that toggle lives in
         // `handle_master_press`/`toggle_stack_flyout`) — clicking
-        // elsewhere, including the canvas, leaves it open.
-        if let Some((bounds, close)) = self.stack_flyout_hit_rects(id) {
+        // elsewhere, including the canvas, leaves it open. A click
+        // *inside* its body is fully live — routed through the same
+        // `dispatch_panel_press` a docked/floating panel's own content
+        // pane uses — not just swallowed, since the flyout paints the
+        // real panel, not a static preview.
+        if let Some((bounds, close, body, pid)) = self.stack_flyout_hit_rects(id) {
             if close.contains(self.pointer) {
                 self.dismiss_flyout();
+                return;
+            }
+            if body.contains(self.pointer) {
+                self.dispatch_panel_press(event_loop, pid, body, double);
                 return;
             }
             if bounds.contains(self.pointer) {
@@ -1025,7 +1048,12 @@ impl App {
                 // cancels back to a clean slate instead of erroring.
                 if self.active_tool == Tool::Blend {
                     let visible = self.visible_doc_rect();
-                    let hit = select::topmost_selectable_at(self.doc.editor.document(), dp, visible);
+                    let hit = select::topmost_selectable_at(
+                        self.doc.editor.document(),
+                        dp,
+                        visible,
+                        select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
+                    );
                     match (self.blend_first, hit) {
                         (None, Some(id)) => {
                             self.blend_first = Some(id);
@@ -1057,7 +1085,12 @@ impl App {
                 // clicked, or a new one rubber-banded.
                 if let Some(from) = self.text_load {
                     let visible = self.visible_doc_rect();
-                    let hit = select::topmost_selectable_at(self.doc.editor.document(), dp, visible)
+                    let hit = select::topmost_selectable_at(
+                        self.doc.editor.document(),
+                        dp,
+                        visible,
+                        select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
+                    )
                         .filter(|id| {
                             *id != from
                                 && matches!(
@@ -1131,6 +1164,7 @@ impl App {
                         self.doc.editor.document(),
                         dp,
                         visible,
+                        select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
                     ) {
                         if let Some(amalith_core::ObjectKind::Text(_)) =
                             self.doc.editor.document().object(hit).map(|o| &o.kind)
@@ -1434,7 +1468,7 @@ impl App {
                     let visible = self.visible_doc_rect();
                     let candidate = match self.isolation_root() {
                         Some(root) => select::topmost_in(self.doc.editor.document(), root, dp, hit_r),
-                        None => select::topmost_selectable_at(self.doc.editor.document(), dp, visible),
+                        None => select::topmost_selectable_at(self.doc.editor.document(), dp, visible, hit_r),
                     };
                     if let Some(id) = candidate {
                         // A press on an object's body/fill (not a node):
@@ -1592,7 +1626,7 @@ impl App {
                     Some(root) => {
                         select::topmost_in(doc, root, dp, 4.0 / self.doc.view.zoom)
                     }
-                    None => select::topmost_selectable_at(doc, dp, visible),
+                    None => select::topmost_selectable_at(doc, dp, visible, 4.0 / self.doc.view.zoom),
                 };
                 if let Some(id) = hit {
                     let kind = doc.object(id).map(|o| &o.kind);

@@ -16,15 +16,22 @@ use crate::theme::Theme;
 
 /// What OK commits to. `Objects` is Object ▸ Path ▸ Offset Path —
 /// destructive, inserts new sibling objects (`App::close_offset_dialog`).
-/// `AppearanceItem` is the same dialog retargeted at one Appearance-panel
-/// row's live, non-destructive Offset Path effect — OK just sets that
-/// item's `offset` field, no new object. Reusing one dialog for both
-/// keeps Illustrator's own "Offset Path" dialog muscle memory intact
-/// even though the two commands underneath it behave quite differently.
+/// `AppearanceItem` is the same dialog retargeted at one entry in an
+/// Appearance-panel item's own effect stack — OK pushes or replaces that
+/// one `Effect::Offset` entry, no new object. `effect_index` is `None`
+/// while adding a new effect (the footer's fx menu; OK appends) or
+/// `Some(i)` while editing an existing one (a nested row; OK replaces
+/// entry `i`). Reusing one dialog for both keeps Illustrator's own
+/// "Offset Path" dialog muscle memory intact even though the two
+/// commands underneath it behave quite differently.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Target {
     Objects,
-    AppearanceItem { object: ObjectId, index: usize },
+    AppearanceItem {
+        object: ObjectId,
+        item_index: usize,
+        effect_index: Option<usize>,
+    },
 }
 
 pub fn metric_w() -> f64 { crate::metrics::with(|m| m.offsetdlg_w) }
@@ -68,11 +75,13 @@ impl OffsetDialog {
         }
     }
 
-    /// Retargets the same dialog at one Appearance-panel item's live
-    /// effect instead of the destructive object-path command — seeded
-    /// from `current` when editing an effect that already exists, or
-    /// the same defaults as `open` when adding a new one.
-    pub fn open_for_item(object: ObjectId, index: usize, current: Option<OffsetEffect>) -> Self {
+    /// Retargets the same dialog at one entry in an Appearance-panel
+    /// item's effect stack instead of the destructive object-path
+    /// command — seeded from `current` when editing an effect that
+    /// already exists (`effect_index: Some(i)`), or the same defaults as
+    /// `open` when adding a new one (`effect_index: None`, `current`
+    /// should be `None` too).
+    pub fn open_for_item(object: ObjectId, item_index: usize, effect_index: Option<usize>, current: Option<OffsetEffect>) -> Self {
         let (offset, join, miter_limit) = match current {
             Some(fx) => (trim_num(fx.amount), fx.join, trim_num(fx.miter_limit)),
             None => ("10".to_string(), LineJoin::Miter, "4".to_string()),
@@ -84,7 +93,7 @@ impl OffsetDialog {
             miter_limit,
             focus: Field::Offset,
             preview: true,
-            target: Target::AppearanceItem { object, index },
+            target: Target::AppearanceItem { object, item_index, effect_index },
         }
     }
 
@@ -311,11 +320,11 @@ mod tests {
     fn open_for_item_with_no_current_effect_seeds_the_same_defaults_as_open() {
         let object = ObjectId::new();
         let plain = OffsetDialog::open(Vec::new());
-        let fresh = OffsetDialog::open_for_item(object, 0, None);
+        let fresh = OffsetDialog::open_for_item(object, 0, None, None);
         assert_eq!(fresh.offset, plain.offset);
         assert_eq!(fresh.join, plain.join);
         assert_eq!(fresh.miter_limit, plain.miter_limit);
-        assert_eq!(fresh.target, Target::AppearanceItem { object, index: 0 });
+        assert_eq!(fresh.target, Target::AppearanceItem { object, item_index: 0, effect_index: None });
         assert!(fresh.originals.is_empty(), "no source object to preview via the destructive-path overlay");
     }
 
@@ -323,11 +332,11 @@ mod tests {
     fn open_for_item_with_a_current_effect_seeds_its_values_and_resolved_effect_round_trips() {
         let object = ObjectId::new();
         let fx = OffsetEffect { amount: -6.5, join: LineJoin::Round, miter_limit: 7.0 };
-        let dlg = OffsetDialog::open_for_item(object, 2, Some(fx));
+        let dlg = OffsetDialog::open_for_item(object, 2, Some(0), Some(fx));
         assert_eq!(dlg.resolved_offset(), -6.5);
         assert_eq!(dlg.join, LineJoin::Round);
         assert_eq!(dlg.resolved_miter_limit(), 7.0);
         assert_eq!(dlg.resolved_effect(), fx);
-        assert_eq!(dlg.target, Target::AppearanceItem { object, index: 2 });
+        assert_eq!(dlg.target, Target::AppearanceItem { object, item_index: 2, effect_index: Some(0) });
     }
 }

@@ -32,37 +32,55 @@ impl App {
         }
         self.close_offset_dialog(OffsetClose::Cancel);
         self.offset_dialog = Some(offsetdlg::OffsetDialog::open(originals));
-        self.spawn_offset_window(event_loop);
+        self.spawn_offset_window(event_loop, offsetdlg::metric_w(), offsetdlg::body_height());
     }
 
-    /// Same dialog, retargeted at one Appearance-panel item's live
-    /// non-destructive effect (see [`offsetdlg::Target::AppearanceItem`])
+    /// Same dialog, retargeted at one entry in an Appearance-panel item's
+    /// own effect stack (see [`offsetdlg::Target::AppearanceItem`])
     /// instead of the current selection — a no-op if the panel's target
     /// object or item has gone away since the row was clicked.
-    pub(in crate::app) fn spawn_offset_dialog_for_appearance_item(&mut self, event_loop: &ActiveEventLoop, idx: usize) {
+    /// `effect_index` is `None` when adding a new effect (the fx menu) or
+    /// `Some(i)` when editing an existing one (a nested row); either way
+    /// the dialog is seeded from that entry's current value if it has one.
+    pub(in crate::app) fn spawn_offset_dialog_for_appearance_item(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        item_index: usize,
+        effect_index: Option<usize>,
+    ) {
         let Some(object) = self.appearance_target() else { return };
         let Some(item) = self
             .doc
             .editor
             .document()
             .object(object)
-            .and_then(|o| o.appearance.items.get(idx).copied())
+            .and_then(|o| o.appearance.items.get(item_index).cloned())
         else {
             return;
         };
+        let current = effect_index.and_then(|i| item.effects().get(i)).and_then(|e| match e {
+            amalith_core::Effect::Offset(fx) => Some(*fx),
+            // Only Offset Path has a dialog wired up so far — the other
+            // Distort & Transform effects route through `effectdlg`'s own
+            // generic dialog instead (see `Action::OpenEffectDialog`'s own
+            // dispatch), never through this Offset-Path-specific spawn.
+            _ => None,
+        });
         self.close_offset_dialog(OffsetClose::Cancel);
-        self.offset_dialog = Some(offsetdlg::OffsetDialog::open_for_item(object, idx, item.offset()));
-        self.spawn_offset_window(event_loop);
+        self.offset_dialog = Some(offsetdlg::OffsetDialog::open_for_item(object, item_index, effect_index, current));
+        self.spawn_offset_window(event_loop, offsetdlg::metric_w(), offsetdlg::body_height());
     }
 
-    /// The floating-window plumbing shared by both spawn entry points —
-    /// identical regardless of `self.offset_dialog`'s target.
-    fn spawn_offset_window(&mut self, event_loop: &ActiveEventLoop) {
+    /// The floating-window plumbing shared by both `offsetdlg` spawn entry
+    /// points and `effect_dialog`'s own (the two dialog families sharing
+    /// this one panel slot) — identical regardless of which dialog is
+    /// actually being shown, except the body height, which the caller
+    /// already knows how to compute for its own dialog.
+    pub(in crate::app) fn spawn_offset_window(&mut self, event_loop: &ActiveEventLoop, fw: f64, body_h: f64) {
         self.text_blink = Instant::now();
 
         let pid = Self::offset_panel_id();
-        let fw = offsetdlg::metric_w();
-        let fh = offsetdlg::body_height() + self.theme.tab_strip_h;
+        let fh = body_h + self.theme.tab_strip_h;
         let (mw, mh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let o = self.main_inner_origin();
         let pos = Point::new(
@@ -132,6 +150,11 @@ impl App {
     /// Illustrator; `Cancel`, and simply closing the window, do nothing to
     /// the document at all, since Preview never touched it either.
     pub(in crate::app) fn close_offset_dialog(&mut self, action: OffsetClose) {
+        // The two dialog families share this one panel slot — closing
+        // either one (even as a no-op "there wasn't one open" Cancel)
+        // clears both, so opening a fresh dialog of either kind can never
+        // leave the other one's state dangling behind it.
+        self.effect_dialog = None;
         let Some(dlg) = self.offset_dialog.take() else { return };
         if let OffsetClose::Ok = action {
             match dlg.target {
@@ -145,11 +168,16 @@ impl App {
                         self.doc.selection = new_ids;
                     }
                 }
-                offsetdlg::Target::AppearanceItem { object, index } => {
+                offsetdlg::Target::AppearanceItem { object, item_index, effect_index } => {
                     if let Some(obj) = self.doc.editor.document().object(object) {
                         let mut items = obj.appearance.items.clone();
-                        if let Some(item) = items.get_mut(index) {
-                            item.set_offset(Some(dlg.resolved_effect()));
+                        if let Some(item) = items.get_mut(item_index) {
+                            let effects = item.effects_mut();
+                            let effect = amalith_core::Effect::Offset(dlg.resolved_effect());
+                            match effect_index.filter(|&i| i < effects.len()) {
+                                Some(i) => effects[i] = effect,
+                                None => effects.push(effect),
+                            }
                             let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
                         }
                     }

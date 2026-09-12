@@ -36,6 +36,14 @@ pub const ZOOM_MAX: f64 = 256.0;
 /// white artboard.
 const OUTLINE_INK: Color = Color::from_rgb8(0x20, 0x20, 0x20);
 
+/// The single shared colour/weight for tracing an object's own precise
+/// contour — both Smart Guides' Object Highlighting hover
+/// (`app/render/overlays.rs::paint_smart_guides`) and the per-object
+/// selection outline below use this exact same style, so an object
+/// reads identically whether you're hovering it or have it selected.
+pub const OBJECT_CONTOUR_BLUE: Color = Color::from_rgb8(0x3d, 0x82, 0xff);
+pub const OBJECT_CONTOUR_WEIGHT: f64 = 2.0;
+
 impl Default for CanvasView {
     fn default() -> Self {
         Self {
@@ -105,12 +113,15 @@ pub struct DragPreview<'a> {
     /// one path object, overriding its committed `width_points` in the
     /// ribbon this frame renders.
     pub width_points: Option<(ObjectId, &'a [amalith_core::WidthPoint])>,
-    /// The Offset Path dialog, retargeted at one Appearance-panel item
-    /// (`offsetdlg::Target::AppearanceItem`) and previewing live: this
-    /// item's `offset` isn't committed to the document until OK, so
-    /// while the dialog is open with Preview checked, this overrides
-    /// just that one item's effect for this frame's paint.
-    pub appearance_offset: Option<(ObjectId, usize, amalith_core::OffsetEffect)>,
+    /// A dialog editing one entry in an Appearance item's effect stack
+    /// (`offsetdlg::Target::AppearanceItem`) and previewing live: that
+    /// entry isn't committed to the document until OK, so while the
+    /// dialog is open with Preview checked, this overrides just it —
+    /// `(object, item_index, effect_index, in-progress effect)`.
+    /// `effect_index` past the item's real `effects().len()` (see
+    /// `app/render/mod.rs`'s `usize::MAX` sentinel) means "append", for
+    /// previewing an effect being *added* rather than edited.
+    pub appearance_effect: Option<(ObjectId, usize, usize, amalith_core::Effect)>,
 }
 
 /// One area-text box being resized by a Selection-tool handle drag, or
@@ -820,26 +831,41 @@ pub fn paint(
                 }
             }
 
+            // Every selected path/compound path gets its own precise
+            // contour traced, in the same colour/weight Object
+            // Highlighting's hover uses (`OBJECT_CONTOUR_BLUE`) — a
+            // selected object should read identically to a hovered one,
+            // not switch to a different blue. Unconditional (not just a
+            // multi-selection): this also covers what the bounding-box
+            // handles alone can't — the union box only traces the outer
+            // edge, so (in a multi-selection especially) two overlapping
+            // selected shapes would otherwise show no hint of where the
+            // back one's edge actually runs under the front one
+            // (Illustrator always traces every selected object's own
+            // contour).
+            for &id in selection {
+                let Some(obj) = doc.object(id) else { continue };
+                if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
+                    continue;
+                }
+                if let Some(bez) = select::base_contour(doc, id) {
+                    scene.stroke(
+                        &Stroke::new(OBJECT_CONTOUR_WEIGHT),
+                        Affine::IDENTITY,
+                        OBJECT_CONTOUR_BLUE,
+                        None,
+                        &(vt * extra * bez),
+                    );
+                }
+            }
+
             // In a multi-selection the union box doesn't show where each
             // text frame is — outline every selected area-text frame in
-            // its own right so its bounds are always visible.
+            // its own right so its bounds are always visible, and draw
+            // the thread-order connector between consecutive linked
+            // frames.
             if selection.len() >= 2 {
                 let baby = Color::from_rgb8(0x8f, 0xc2, 0xf5);
-                // Same idea as the text-frame outlines just below, for
-                // ordinary shapes: the union box only traces the outer
-                // edge, so two overlapping selected shapes would
-                // otherwise show no hint of where the back one's edge
-                // actually runs under the front one (Illustrator always
-                // traces every selected object's own contour).
-                for &id in selection {
-                    let Some(obj) = doc.object(id) else { continue };
-                    if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
-                        continue;
-                    }
-                    if let Some(bez) = select::object_contour(doc, id) {
-                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, baby, None, &(vt * extra * bez));
-                    }
-                }
                 for &id in selection {
                     let Some(ObjectKind::Text(t)) = doc.object(id).map(|o| &o.kind) else {
                         continue;
@@ -1523,6 +1549,38 @@ fn paint_freeform_fill(
     scene.pop_layer();
 }
 
+/// Applies every effect in `effects`, in stack order, chaining each
+/// step's output into the next step's input — `effects[0]` starts from
+/// `base`. Shared by every renderer that paints an Appearance item's
+/// live effect stack (this file, `pdfexport.rs`, `textedit.rs`), all of
+/// which otherwise only ever pass a one- or zero-entry slice today.
+/// Returns `None` only when the stack is empty or every step failed to
+/// produce geometry (degenerate input); callers fall back to `base`
+/// itself in that case.
+///
+/// `Offset` is the only variant today, so this is a one-arm match — a
+/// future effect kind (Zig Zag, Roughen, …) adds one more arm here and
+/// nowhere else; the fold itself never needs to change.
+pub(crate) fn apply_effect_chain(base: &amalith_core::geom::BezPath, effects: &[amalith_core::Effect]) -> Option<amalith_core::geom::BezPath> {
+    let mut geo: Option<amalith_core::geom::BezPath> = None;
+    for effect in effects {
+        let input = geo.as_ref().unwrap_or(base);
+        let next = match effect {
+            amalith_core::Effect::Offset(fx) => amalith_commands::offset_path(input, fx.amount, fx.join, fx.miter_limit).map(|pd| pd.geometry),
+            amalith_core::Effect::ZigZag(fx) => amalith_commands::zig_zag(input, fx.size, fx.ridges_per_segment, fx.smooth).map(|pd| pd.geometry),
+            amalith_core::Effect::PuckerBloat(fx) => amalith_commands::pucker_bloat(input, fx.amount).map(|pd| pd.geometry),
+            amalith_core::Effect::Roughen(fx) => amalith_commands::roughen(input, fx.size, fx.detail, fx.smooth, fx.seed).map(|pd| pd.geometry),
+            amalith_core::Effect::Transform(fx) => amalith_commands::transform_effect(input, fx).map(|pd| pd.geometry),
+            amalith_core::Effect::Tweak(fx) => amalith_commands::tweak(input, fx.horizontal, fx.vertical, fx.modify_anchors, fx.modify_in, fx.modify_out, fx.seed).map(|pd| pd.geometry),
+            amalith_core::Effect::Twist(fx) => amalith_commands::twist(input, fx.angle).map(|pd| pd.geometry),
+        };
+        if let Some(next) = next {
+            geo = Some(next);
+        }
+    }
+    geo
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_object(
     scene: &mut Scene,
@@ -1652,24 +1710,29 @@ fn paint_object(
             if item_layer {
                 scene.push_layer(Fill::NonZero, BlendMode::default(), item_opacity, Affine::IDENTITY, &viewport);
             }
-            // A live, non-destructive Offset Path effect on this one item
-            // (Illustrator's Effect ▸ Path ▸ Offset Path nested under an
-            // Appearance-panel row) — recomputed from this item's own base
-            // geometry every frame via the same polygon-offset primitive
-            // that backs the destructive Object ▸ Path ▸ Offset Path
-            // command, just applied to one paint instead of a new object.
-            // A retargeted Offset Path dialog previewing live overrides
-            // this one item's effect for this frame — the item's own
-            // committed `offset` isn't touched until OK.
-            let live_offset = drag
-                .and_then(|d| d.appearance_offset)
-                .filter(|&(oid, oidx, _)| oid == id && oidx == item_idx)
-                .map(|(_, _, fx)| fx);
-            let offset_bp = live_offset.or(item.offset()).and_then(|fx| {
+            // This item's own live effect stack (Illustrator's Effect
+            // menu nested under an Appearance-panel row) — recomputed
+            // from this item's own base geometry every frame by chaining
+            // each effect's output into the next's input, via
+            // `apply_effect_chain`. A retargeted effect dialog previewing
+            // live overrides one specific slot for this frame — the
+            // item's own committed `effects` isn't touched until OK.
+            let live = drag
+                .and_then(|d| d.appearance_effect)
+                .filter(|&(oid, iidx, ..)| oid == id && iidx == item_idx);
+            let offset_bp = if item.effects().is_empty() && live.is_none() {
+                None
+            } else {
+                let mut effects = item.effects().to_vec();
+                if let Some((_, _, effect_idx, fx)) = live {
+                    match effects.get_mut(effect_idx) {
+                        Some(slot) => *slot = fx,
+                        None => effects.push(fx),
+                    }
+                }
                 let core_bp = convert::bez_path_to_core(bp);
-                amalith_commands::offset_path(&core_bp, fx.amount, fx.join, fx.miter_limit)
-                    .map(|pd| convert::bez_path(&pd.geometry))
-            });
+                apply_effect_chain(&core_bp, &effects).map(|g| convert::bez_path(&g))
+            };
             let ibp: &BezPath = offset_bp.as_ref().unwrap_or(bp);
             let iclosed = offset_bp.is_some()
                 || closed;
@@ -2242,5 +2305,37 @@ mod tests {
         assert_eq!(zoom_percent_label(1.0), "100%");
         assert_eq!(zoom_percent_label(0.05), "5.0%");
         assert_eq!(zoom_percent_label(0.001), "0.10%");
+    }
+
+    #[test]
+    fn apply_effect_chain_is_none_for_an_empty_stack() {
+        let square = amalith_core::geom::BezPath::from_svg("M0 0 L10 0 L10 10 L0 10 Z").unwrap();
+        assert!(apply_effect_chain(&square, &[]).is_none());
+    }
+
+    #[test]
+    fn apply_effect_chain_feeds_each_effects_output_into_the_next() {
+        use amalith_core::geom::Shape as _;
+        use amalith_core::{Effect, LineJoin, OffsetEffect};
+        let square = amalith_core::geom::BezPath::from_svg("M0 0 L10 0 L10 10 L0 10 Z").unwrap();
+        let one_step = apply_effect_chain(
+            &square,
+            &[Effect::Offset(OffsetEffect { amount: 2.0, join: LineJoin::Miter, miter_limit: 4.0 })],
+        )
+        .unwrap();
+        let two_steps = apply_effect_chain(
+            &square,
+            &[
+                Effect::Offset(OffsetEffect { amount: 2.0, join: LineJoin::Miter, miter_limit: 4.0 }),
+                Effect::Offset(OffsetEffect { amount: 2.0, join: LineJoin::Miter, miter_limit: 4.0 }),
+            ],
+        )
+        .unwrap();
+        // Two 2px outsets chained grow the bbox further than one — proves
+        // the second effect really started from the first's *output*,
+        // not from the original square again.
+        let one_bb = one_step.bounding_box();
+        let two_bb = two_steps.bounding_box();
+        assert!(two_bb.width() > one_bb.width() && two_bb.height() > one_bb.height());
     }
 }

@@ -47,7 +47,9 @@ impl App {
         if self.blend_dialog.is_some() && self.dock.floating_id_of(Self::blend_panel_id()) == Some(fid) {
             return true;
         }
-        if self.offset_dialog.is_some() && self.dock.floating_id_of(Self::offset_panel_id()) == Some(fid) {
+        if (self.offset_dialog.is_some() || self.effect_dialog.is_some())
+            && self.dock.floating_id_of(Self::offset_panel_id()) == Some(fid)
+        {
             return true;
         }
         if self.layer_dialog.is_some() && self.dock.floating_id_of(Self::layer_dialog_panel_id()) == Some(fid) {

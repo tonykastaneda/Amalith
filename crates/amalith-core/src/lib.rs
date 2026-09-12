@@ -29,7 +29,10 @@ pub mod warp;
 pub mod width;
 pub mod xform;
 
-pub use appearance::{Appearance, AppearanceItem, LineCap, LineJoin, OffsetEffect, Paint, StrokeAlign, StrokeStyle};
+pub use appearance::{
+    Appearance, AppearanceItem, Effect, LineCap, LineJoin, OffsetEffect, Paint, PuckerBloatEffect,
+    RoughenEffect, StrokeAlign, StrokeStyle, TransformEffect, TweakEffect, TwistEffect, ZigZagEffect,
+};
 pub use artboard::Artboard;
 pub use asset::{Asset, AssetKind, AssetSource};
 pub use document::Document;

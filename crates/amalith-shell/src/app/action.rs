@@ -106,7 +106,7 @@ impl App {
                     .editor
                     .document()
                     .object(object)
-                    .and_then(|o| o.appearance.items.get(idx).copied())
+                    .and_then(|o| o.appearance.items.get(idx).cloned())
                 else {
                     return;
                 };
@@ -122,15 +122,50 @@ impl App {
                 self.picker = Some(picker::Picker::from_color(slot, origin, item.paint().color()));
                 self.appearance_picker_target = Some((object, idx));
             }
-            panels::Action::OpenOffsetEffectDialog(idx) => {
+            panels::Action::OpenEffectDialog(idx, effect_idx) => {
                 self.appearance_selected = Some(idx);
-                // No `event_loop` here (menu/panel-click path) — same
-                // deferred-spawn pattern as Export / Object ▸ Path ▸
-                // Offset Path; picked up next `about_to_wait`.
-                self.pending_offset_effect_dialog = Some(idx);
+                self.appearance_fx_menu = false;
+                // Editing an existing entry — its own stored kind decides
+                // which dialog family opens. No `event_loop` here (menu/
+                // panel-click path) — same deferred-spawn pattern as
+                // Export / Object ▸ Path ▸ Offset Path; picked up next
+                // `about_to_wait`.
+                let effect = self.appearance_target().and_then(|object| {
+                    self.doc.editor.document().object(object)?.appearance.items.get(idx)?.effects().get(effect_idx).cloned()
+                });
+                self.pending_appearance_effect_dialog = effect.map(|effect| match effectdlg::EffectKind::of(&effect) {
+                    Some(kind) => effect_dialog::PendingAppearanceEffectDialog::Distort {
+                        item_index: idx,
+                        effect_index: Some(effect_idx),
+                        kind,
+                    },
+                    None => effect_dialog::PendingAppearanceEffectDialog::Offset {
+                        item_index: idx,
+                        effect_index: Some(effect_idx),
+                    },
+                });
                 self.request_main_redraw();
             }
-            panels::Action::AppearanceRemoveOffset(idx) => self.appearance_remove_offset(idx),
+            panels::Action::AppearanceAddEffect(idx, choice) => {
+                self.appearance_selected = Some(idx);
+                self.appearance_fx_menu = false;
+                self.pending_appearance_effect_dialog = Some(match choice {
+                    panels::EffectMenuChoice::Offset => {
+                        effect_dialog::PendingAppearanceEffectDialog::Offset { item_index: idx, effect_index: None }
+                    }
+                    panels::EffectMenuChoice::Distort(kind) => {
+                        effect_dialog::PendingAppearanceEffectDialog::Distort { item_index: idx, effect_index: None, kind }
+                    }
+                });
+                self.request_main_redraw();
+            }
+            panels::Action::AppearanceRemoveEffect(idx, effect_idx) => self.appearance_remove_effect(idx, effect_idx),
+            panels::Action::AppearanceToggleFxMenu => {
+                self.appearance_fx_menu = !self.appearance_fx_menu;
+                self.request_main_redraw();
+            }
+            panels::Action::AppearanceClearEffects => self.appearance_clear_effects(),
+            panels::Action::BeginAppearanceWidthEdit(idx) => self.begin_appearance_width_edit(idx),
             panels::Action::PickerSv(s, v) => {
                 if let Some(pk) = &mut self.picker {
                     pk.s = s;
@@ -273,6 +308,30 @@ impl App {
                     offsetdlg::Hit::Ok => self.close_offset_dialog(offset_dialog::OffsetClose::Ok),
                     offsetdlg::Hit::Cancel => self.close_offset_dialog(offset_dialog::OffsetClose::Cancel),
                     offsetdlg::Hit::None => {}
+                }
+                self.text_blink = Instant::now();
+                self.request_main_redraw();
+            }
+            panels::Action::EffectHit(hit) => {
+                match hit {
+                    effectdlg::Hit::Field(i) => {
+                        if let Some(dlg) = self.effect_dialog.as_mut() {
+                            dlg.focus = i;
+                        }
+                    }
+                    effectdlg::Hit::Check(i) => {
+                        if let Some(dlg) = self.effect_dialog.as_mut() {
+                            dlg.toggle_check(i);
+                        }
+                    }
+                    effectdlg::Hit::Preview => {
+                        if let Some(dlg) = self.effect_dialog.as_mut() {
+                            dlg.preview = !dlg.preview;
+                        }
+                    }
+                    effectdlg::Hit::Ok => self.close_effect_dialog(effect_dialog::EffectClose::Ok),
+                    effectdlg::Hit::Cancel => self.close_effect_dialog(effect_dialog::EffectClose::Cancel),
+                    effectdlg::Hit::None => {}
                 }
                 self.text_blink = Instant::now();
                 self.request_main_redraw();

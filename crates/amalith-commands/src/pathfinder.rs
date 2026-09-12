@@ -11,7 +11,7 @@ use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
 use i_overlay::float::single::SingleFloatOverlay;
 use i_overlay::mesh::outline::offset::OutlineOffset;
-use kurbo::{flatten, stroke, BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
+use kurbo::{flatten, stroke, Affine, BezPath, Cap, Join, PathEl, Point, Stroke, StrokeOpts, Vec2};
 
 use crate::command::PathfinderOp;
 
@@ -515,6 +515,330 @@ pub fn offset_path(path: &BezPath, offset: f64, join: LineJoin, miter_limit: f64
     contours_to_path(&flat)
 }
 
+/// A tiny deterministic PRNG for [`roughen`]/[`tweak`]'s per-point jitter —
+/// `splitmix64`. Not a real `rand`-crate dependency: both effects only
+/// need "a stable, reasonably-distributed value per (seed, index)", never
+/// re-rolled on repaint (the seed is fixed once, at add-time, in the
+/// effect's own params), so a proper RNG crate would be disproportionate.
+/// Returns a value in `-1.0..=1.0`.
+fn hash_jitter(seed: u64, i: usize) -> f64 {
+    let mut z = seed.wrapping_add((i as u64).wrapping_mul(0x9E3779B97F4A7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^= z >> 31;
+    (z as f64 / u64::MAX as f64) * 2.0 - 1.0
+}
+
+/// Walks each of `path`'s subpaths as a flattened polyline via
+/// [`amalith_core::ArcLengthPath`], sampling `sample_count(total_length)`
+/// evenly-spaced points along each one and letting `displace` move each
+/// sample (given its index *within that subpath* — resets to 0 at each
+/// subpath's start, so a per-sample alternation like Zig Zag's stays in
+/// phase there), then refits a `BezPath` from the results via
+/// [`push_subpath`]. The shared skeleton behind [`zig_zag`], [`roughen`],
+/// and [`twist`].
+///
+/// Every subpath is treated as closed if *any* subpath in `path` contains
+/// a `ClosePath` — the same coarse whole-path flag [`offset_path`] already
+/// uses instead of tracking each subpath's own closedness, which covers
+/// the common case of a uniformly open or uniformly closed path.
+fn resample_and_rebuild(
+    path: &BezPath,
+    sample_count: impl Fn(f64) -> usize,
+    smooth: bool,
+    mut displace: impl FnMut(usize, Point, f64) -> Point,
+) -> Option<BezPath> {
+    let closed = path.elements().iter().any(|e| matches!(e, PathEl::ClosePath));
+    let polylines = amalith_core::geom::flattened_points(path, TOL);
+    let mut out = BezPath::new();
+    for pts in &polylines {
+        let arc = amalith_core::ArcLengthPath::new(pts, closed);
+        let total = arc.total_length();
+        if total <= 0.0 {
+            continue;
+        }
+        let n = sample_count(total).max(3);
+        let steps = if closed { n } else { n + 1 };
+        let displaced: Vec<Point> = (0..steps)
+            .map(|i| {
+                let d = total * i as f64 / n as f64;
+                let (p, tangent) = arc.point_and_tangent(d);
+                displace(i, p, tangent)
+            })
+            .collect();
+        push_subpath(&mut out, &displaced, closed, smooth);
+    }
+    (!out.elements().is_empty()).then_some(out)
+}
+
+/// Appends one subpath to `out` from already-displaced points — straight
+/// segments, or (`smooth`) a quadratic through each consecutive pair's
+/// midpoint (the control point is the shared point itself), the same
+/// light "smooth a polyline" technique freehand-drawing tools use — not a
+/// true curve fit, just enough to read as rounded ridges/waves.
+fn push_subpath(out: &mut BezPath, pts: &[Point], closed: bool, smooth: bool) {
+    if pts.len() < 2 {
+        return;
+    }
+    out.move_to(pts[0]);
+    if smooth {
+        for i in 1..pts.len() - 1 {
+            let ctrl = pts[i];
+            let mid = Point::new((pts[i].x + pts[i + 1].x) * 0.5, (pts[i].y + pts[i + 1].y) * 0.5);
+            out.quad_to(ctrl, mid);
+        }
+        let last = pts[pts.len() - 1];
+        if closed {
+            out.quad_to(last, pts[0]);
+        } else {
+            out.line_to(last);
+        }
+    } else {
+        for &p in &pts[1..] {
+            out.line_to(p);
+        }
+    }
+    if closed {
+        out.close_path();
+    }
+}
+
+/// Effect ▸ Distort & Transform ▸ Zig Zag: alternates a perpendicular
+/// displacement of `±size` along the path. `ridges_per_segment` is an
+/// approximation of Illustrator's literal "per original Bezier segment"
+/// density — scaled against a fixed 40px reference length instead of the
+/// path's real segment count, simpler to compute and visually similar.
+/// `smooth` gives rounded ridges instead of sharp corners.
+pub fn zig_zag(path: &BezPath, size: f64, ridges_per_segment: f64, smooth: bool) -> Option<PathData> {
+    if size.abs() < 1e-6 || ridges_per_segment < 0.1 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    const REFERENCE_LEN: f64 = 40.0;
+    let result = resample_and_rebuild(
+        path,
+        |total| (((total / REFERENCE_LEN * ridges_per_segment).round() as usize).max(1) * 2).max(4),
+        smooth,
+        |i, p, tangent| {
+            let dir = if i % 2 == 0 { 1.0 } else { -1.0 };
+            let normal = tangent + std::f64::consts::FRAC_PI_2;
+            Point::new(p.x + normal.cos() * size * dir, p.y + normal.sin() * size * dir)
+        },
+    )?;
+    Some(PathData::from_bezpath(result))
+}
+
+/// Effect ▸ Distort & Transform ▸ Roughen: like [`zig_zag`], but each
+/// sample is displaced by a random (seeded, stable) amount instead of a
+/// clean alternation — `detail` is samples per document inch (96px),
+/// matching `width_outline`'s own px-per-inch convention.
+pub fn roughen(path: &BezPath, size: f64, detail: f64, smooth: bool, seed: u64) -> Option<PathData> {
+    if size.abs() < 1e-6 || detail < 0.1 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    const PX_PER_INCH: f64 = 96.0;
+    let result = resample_and_rebuild(
+        path,
+        |total| ((total / PX_PER_INCH * detail).round() as usize).max(3),
+        smooth,
+        |i, p, tangent| {
+            let normal = tangent + std::f64::consts::FRAC_PI_2;
+            let jitter = hash_jitter(seed, i) * size;
+            Point::new(p.x + normal.cos() * jitter, p.y + normal.sin() * jitter)
+        },
+    )?;
+    Some(PathData::from_bezpath(result))
+}
+
+/// Effect ▸ Distort & Transform ▸ Twist: rotates each sample around the
+/// path's own local-bounds center by `angle` degrees, decaying linearly
+/// to zero at the bounds' farthest corner — a swirl, strongest at the
+/// center. Resamples finely first (a twist needs enough resolution to
+/// read as a curve, not a faceted polygon — the same reasoning
+/// `width_outline` already uses a fixed fine resolution for).
+pub fn twist(path: &BezPath, angle: f64) -> Option<PathData> {
+    if angle.abs() < 1e-6 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    let bbox = amalith_core::geom::bez_path_bounds(path);
+    let center = Point::new((bbox.x0 + bbox.x1) * 0.5, (bbox.y0 + bbox.y1) * 0.5);
+    let max_dist = ((bbox.x1 - bbox.x0).powi(2) + (bbox.y1 - bbox.y0).powi(2)).sqrt() * 0.5;
+    if max_dist <= 0.0 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    const SAMPLES_PER_UNIT: f64 = 1.0 / 6.0;
+    let result = resample_and_rebuild(
+        path,
+        |total| ((total * SAMPLES_PER_UNIT).round() as usize).max(8),
+        true,
+        |_, p, _| {
+            let dist = (p - center).hypot();
+            let falloff = (1.0 - dist / max_dist).clamp(0.0, 1.0);
+            let theta = angle.to_radians() * falloff;
+            let v = p - center;
+            let (s, c) = theta.sin_cos();
+            center + Vec2::new(v.x * c - v.y * s, v.x * s + v.y * c)
+        },
+    )?;
+    Some(PathData::from_bezpath(result))
+}
+
+
+/// Effect ▸ Distort & Transform ▸ Pucker & Bloat: scales every segment's
+/// own Bezier handles' distance from their anchor by `1.0 +
+/// amount/100.0` — negative `amount` (pucker) shrinks handles toward the
+/// anchor, straightening curves and pulling points toward each segment's
+/// chord; positive (bloat) grows them, bulging segments outward. Operates
+/// directly on the existing control points, no resampling — a straight
+/// `PathEl::LineTo` grows/shrinks a matching bulge by being treated as a
+/// degenerate curve whose handles sit at the anchors themselves.
+pub fn pucker_bloat(path: &BezPath, amount: f64) -> Option<PathData> {
+    if amount.abs() < 1e-6 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    let factor = 1.0 + amount / 100.0;
+    // A straight `LineTo` has no existing handle to scale (its implicit
+    // handles sit exactly on the chord) — real Illustrator still visibly
+    // bulges/pinches straight edges, so this adds a perpendicular bulge of
+    // its own instead. `centroid` (the local bbox center, close enough for
+    // a directional sign) decides which way is "outward": whichever side
+    // of the chord is farther from it, regardless of this subpath's own
+    // winding direction, so positive `amount` (bloat) always bulges away
+    // from the shape and negative (pucker) always pulls toward it.
+    let bbox = amalith_core::geom::bez_path_bounds(path);
+    let centroid = Point::new((bbox.x0 + bbox.x1) * 0.5, (bbox.y0 + bbox.y1) * 0.5);
+    let bulge = amount / 100.0 * 0.33;
+    let mut out = BezPath::new();
+    let mut current = Point::ORIGIN;
+    let mut start = Point::ORIGIN;
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                out.move_to(p);
+                current = p;
+                start = p;
+            }
+            PathEl::LineTo(p) => {
+                let chord = p - current;
+                let len = chord.hypot();
+                if len < 1e-9 {
+                    out.line_to(p);
+                } else {
+                    let mid = current.midpoint(p);
+                    let mut normal = Vec2::new(-chord.y, chord.x) / len;
+                    if (mid + normal - centroid).hypot() < (mid - centroid).hypot() {
+                        normal = -normal;
+                    }
+                    let ctrl = mid + normal * (len * bulge);
+                    out.quad_to(ctrl, p);
+                }
+                current = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                let c1 = current + (c - current) * factor;
+                let c2 = p + (c - p) * factor;
+                out.curve_to(c1, c2, p);
+                current = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                let nc1 = current + (c1 - current) * factor;
+                let nc2 = p + (c2 - p) * factor;
+                out.curve_to(nc1, nc2, p);
+                current = p;
+            }
+            PathEl::ClosePath => {
+                out.close_path();
+                current = start;
+            }
+        }
+    }
+    (!out.elements().is_empty()).then_some(PathData::from_bezpath(out))
+}
+
+/// Effect ▸ Distort & Transform ▸ Transform: a single `Affine` built from
+/// move/scale/rotate/reflect, applied once around the path's own
+/// local-bounds center. No "copies" — see [`amalith_core::TransformEffect`]'s
+/// own doc comment for why that's a disclosed v1 gap rather than a silent
+/// omission.
+pub fn transform_effect(path: &BezPath, fx: &amalith_core::TransformEffect) -> Option<PathData> {
+    let bbox = amalith_core::geom::bez_path_bounds(path);
+    let center = Point::new((bbox.x0 + bbox.x1) * 0.5, (bbox.y0 + bbox.y1) * 0.5);
+    let sx = (fx.scale_x / 100.0) * if fx.reflect_x { -1.0 } else { 1.0 };
+    let sy = (fx.scale_y / 100.0) * if fx.reflect_y { -1.0 } else { 1.0 };
+    let xf = Affine::translate((fx.move_x, fx.move_y))
+        * Affine::translate((center.x, center.y))
+        * Affine::rotate(fx.rotate.to_radians())
+        * Affine::scale_non_uniform(sx, sy)
+        * Affine::translate((-center.x, -center.y));
+    Some(PathData::from_bezpath(xf * path.clone()))
+}
+
+/// Effect ▸ Distort & Transform ▸ Tweak: jitters each anchor (and, if
+/// `modify_in`/`modify_out`, each handle) by a random (seeded, stable)
+/// amount — `horizontal`/`vertical` bound the jitter as a percentage of
+/// that segment's own chord length. No resampling — operates on the
+/// existing anchors/handles directly, like [`pucker_bloat`].
+pub fn tweak(
+    path: &BezPath,
+    horizontal: f64,
+    vertical: f64,
+    modify_anchors: bool,
+    modify_in: bool,
+    modify_out: bool,
+    seed: u64,
+) -> Option<PathData> {
+    if horizontal.abs() < 1e-6 && vertical.abs() < 1e-6 {
+        return Some(PathData::from_bezpath(path.clone()));
+    }
+    let jitter = |i: usize, chord: f64| -> Vec2 {
+        Vec2::new(
+            hash_jitter(seed, i * 3) * horizontal / 100.0 * chord,
+            hash_jitter(seed, i * 3 + 1) * vertical / 100.0 * chord,
+        )
+    };
+    let mut out = BezPath::new();
+    let mut current = Point::ORIGIN;
+    let mut idx = 0usize;
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                let d = if modify_anchors { jitter(idx, 10.0) } else { Vec2::ZERO };
+                idx += 1;
+                out.move_to(p + d);
+                current = p;
+            }
+            PathEl::LineTo(p) => {
+                let chord = (p - current).hypot();
+                let d = if modify_anchors { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                out.line_to(p + d);
+                current = p;
+            }
+            PathEl::QuadTo(c, p) => {
+                let chord = (p - current).hypot();
+                let dc = if modify_in { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                let dp = if modify_anchors { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                out.quad_to(c + dc, p + dp);
+                current = p;
+            }
+            PathEl::CurveTo(c1, c2, p) => {
+                let chord = (p - current).hypot();
+                let d1 = if modify_out { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                let d2 = if modify_in { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                let dp = if modify_anchors { jitter(idx, chord) } else { Vec2::ZERO };
+                idx += 1;
+                out.curve_to(c1 + d1, c2 + d2, p + dp);
+                current = p;
+            }
+            PathEl::ClosePath => out.close_path(),
+        }
+    }
+    (!out.elements().is_empty()).then_some(PathData::from_bezpath(out))
+}
+
 /// Outline a stroke into a filled path (Object ▸ Expand Stroke).
 pub fn expand_stroke(path: &BezPath, appearance: &Appearance) -> Option<PathData> {
     if !has_visible_stroke(appearance) {
@@ -560,7 +884,7 @@ mod tests {
                     paint: Paint::Solid(Color::rgb(fill.0, fill.1, fill.2)),
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 }],
                 ..Appearance::default()
             },
@@ -633,7 +957,7 @@ mod tests {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
-                offset: None,
+                effects: Vec::new(),
             }],
             ..Appearance::default()
         };
@@ -734,5 +1058,111 @@ mod tests {
         let apart = flatten_path(&PathData::rectangle(Rect::new(20.0, 20.0, 30.0, 30.0)).geometry);
         assert!(intersects(&a, &overlapping));
         assert!(!intersects(&a, &apart));
+    }
+
+    #[test]
+    fn hash_jitter_is_deterministic_and_bounded() {
+        let a = hash_jitter(42, 7);
+        let b = hash_jitter(42, 7);
+        assert_eq!(a, b, "same seed and index always returns the same value");
+        assert!((-1.0..=1.0).contains(&a));
+        let c = hash_jitter(42, 8);
+        assert_ne!(a, c, "a different index (almost certainly) returns a different value");
+    }
+
+    #[test]
+    fn zig_zag_with_zero_size_is_a_no_op() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0)).geometry;
+        let out = zig_zag(&rect, 0.0, 4.0, false).unwrap();
+        assert_eq!(out.geometry.bounding_box(), rect.bounding_box());
+    }
+
+    #[test]
+    fn zig_zag_widens_the_bounding_box_by_about_the_ridge_size() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 100.0, 20.0)).geometry;
+        let out = zig_zag(&rect, 5.0, 4.0, false).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!(bb.height() > 20.0 + 5.0, "ridges push the top/bottom edges out by ~size, height was {}", bb.height());
+    }
+
+    #[test]
+    fn roughen_with_zero_size_is_a_no_op() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0)).geometry;
+        let out = roughen(&rect, 0.0, 8.0, false, 1).unwrap();
+        assert_eq!(out.geometry.bounding_box(), rect.bounding_box());
+    }
+
+    #[test]
+    fn roughen_is_stable_for_the_same_seed() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 100.0, 100.0)).geometry;
+        let a = roughen(&rect, 6.0, 8.0, false, 99).unwrap();
+        let b = roughen(&rect, 6.0, 8.0, false, 99).unwrap();
+        assert_eq!(a.geometry.bounding_box(), b.geometry.bounding_box(), "same seed renders identically every time");
+    }
+
+    #[test]
+    fn twist_with_zero_angle_is_a_no_op() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 40.0)).geometry;
+        let out = twist(&rect, 0.0).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!((bb.width() - 40.0).abs() < 0.5 && (bb.height() - 40.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn twist_rotates_a_square_into_a_rounder_shape() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 40.0)).geometry;
+        let out = twist(&rect, 45.0).unwrap();
+        // A twisted square's corners no longer meet at the original
+        // corners — its bounding box should differ from the untouched one.
+        assert_ne!(out.geometry.bounding_box(), rect.bounding_box());
+    }
+
+    #[test]
+    fn pucker_bloat_zero_amount_is_a_no_op() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0)).geometry;
+        let out = pucker_bloat(&rect, 0.0).unwrap();
+        assert_eq!(out.geometry.bounding_box(), rect.bounding_box());
+    }
+
+    #[test]
+    fn bloat_grows_a_shapes_bounding_box_and_pucker_shrinks_its_curvature() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 40.0)).geometry;
+        let bloated = pucker_bloat(&rect, 50.0).unwrap();
+        let bb = bloated.geometry.bounding_box();
+        assert!(bb.width() > 40.0 && bb.height() > 40.0, "bloat bulges segments outward past the original corners");
+    }
+
+    #[test]
+    fn transform_effect_moves_and_scales_around_the_local_center() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)).geometry;
+        let fx = amalith_core::TransformEffect {
+            move_x: 10.0,
+            move_y: 0.0,
+            scale_x: 200.0,
+            scale_y: 100.0,
+            rotate: 0.0,
+            reflect_x: false,
+            reflect_y: false,
+        };
+        let out = transform_effect(&rect, &fx).unwrap();
+        let bb = out.geometry.bounding_box();
+        assert!((bb.width() - 40.0).abs() < 0.5, "200% scale doubles width, got {}", bb.width());
+        assert!((bb.height() - 20.0).abs() < 0.5, "100% scale leaves height alone");
+        assert!((bb.center().x - 20.0).abs() < 0.5, "moved +10 from the original center (10) to 20");
+    }
+
+    #[test]
+    fn tweak_with_zero_bounds_is_a_no_op() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0)).geometry;
+        let out = tweak(&rect, 0.0, 0.0, true, true, true, 1).unwrap();
+        assert_eq!(out.geometry.bounding_box(), rect.bounding_box());
+    }
+
+    #[test]
+    fn tweak_is_stable_for_the_same_seed() {
+        let rect = PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 40.0)).geometry;
+        let a = tweak(&rect, 20.0, 20.0, true, true, true, 7).unwrap();
+        let b = tweak(&rect, 20.0, 20.0, true, true, true, 7).unwrap();
+        assert_eq!(a.geometry.bounding_box(), b.geometry.bounding_box());
     }
 }

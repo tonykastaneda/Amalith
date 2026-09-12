@@ -15,8 +15,8 @@ use crate::error::CommandError;
 use crate::history::History;
 use amalith_core::{
     Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, BlendData, BlendSpacing,
-    Color, Document, DocumentError, Gradient, GradientId, GradientKind, Layer, LayerId, Object,
-    ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, Vec2,
+    Color, Document, DocumentError, Effect, Gradient, GradientId, GradientKind, Layer, LayerId,
+    Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, Vec2,
 };
 use kurbo::BezPath;
 use std::collections::{HashMap, HashSet};
@@ -330,8 +330,13 @@ impl Editor {
         // a blend's dependencies, so it's skipped here to avoid a
         // redundant, wasteful rebuild of a blend right after it was
         // (re)built on purpose.
-        let skip_live_rebuild =
-            matches!(&command, Command::MakeBlend { .. } | Command::SetBlendOptions { .. });
+        let skip_live_rebuild = matches!(
+            &command,
+            Command::MakeBlend { .. }
+                | Command::SetBlendOptions { .. }
+                | Command::ReverseBlendSpine { .. }
+                | Command::ReverseBlendStacking { .. }
+        );
         let edits = self.compile(command)?;
         if edits.is_empty() {
             return Ok(CommandOutcome::None);
@@ -365,6 +370,8 @@ impl Editor {
                     blend.end,
                     blend.spine,
                     blend.spacing,
+                    blend.spine_reversed,
+                    blend.stack_reversed,
                 )?;
                 for edit in rebuild_edits {
                     let (inverse, _) = edit::apply(edit, &mut self.document)?;
@@ -429,6 +436,8 @@ impl Editor {
         end_id: ObjectId,
         spine_id: Option<ObjectId>,
         spacing: BlendSpacing,
+        spine_reversed: bool,
+        stack_reversed: bool,
     ) -> Result<Vec<Edit>, CommandError> {
         let start_obj = self
             .document
@@ -515,13 +524,36 @@ impl Editor {
         let end_stroke = end_obj.appearance.stroke();
         let start_width = start_obj.appearance.stroke_width();
         let end_width = end_obj.appearance.stroke_width();
+        // The topmost Fill/Stroke item's own live effect stack (Zig Zag,
+        // Roughen, ...) on each endpoint — `set_fill`/`set_stroke` below
+        // only ever touch paint, so without this a generated step would
+        // silently render as bare, effect-less geometry even though both
+        // endpoints show a live effect (see `blend::lerp_effect_stack`).
+        let effects_of = |obj: &Object, is_fill: bool| -> Vec<Effect> {
+            obj.appearance
+                .items
+                .iter()
+                .rev()
+                .find(|i| if is_fill { i.is_fill() } else { i.is_stroke() })
+                .map(|i| i.effects().to_vec())
+                .unwrap_or_default()
+        };
+        let start_fill_effects = effects_of(start_obj, true);
+        let end_fill_effects = effects_of(end_obj, true);
+        let start_stroke_effects = effects_of(start_obj, false);
+        let end_stroke_effects = effects_of(end_obj, false);
         for i in 1..=steps {
             let t = i as f64 / (steps as f64 + 1.0);
+            // Reverse Spine only ever changes *where* a step's center
+            // sits along the spine/line — the shape/color interpolation
+            // itself still runs start (t=0) to end (t=1) so `start`/`end`
+            // keep their own identity.
+            let spine_t = if spine_reversed { 1.0 - t } else { t };
             let center = match &spine_points {
-                Some(pts) => amalith_core::blend::point_on_path(pts, t),
+                Some(pts) => amalith_core::blend::point_on_path(pts, spine_t),
                 None => Point::new(
-                    center_a.x + (center_b.x - center_a.x) * t,
-                    center_a.y + (center_b.y - center_a.y) * t,
+                    center_a.x + (center_b.x - center_a.x) * spine_t,
+                    center_a.y + (center_b.y - center_a.y) * spine_t,
                 ),
             };
             let path = amalith_core::blend::interpolate_step(&a, &b, center_a, center_b, center, t);
@@ -530,11 +562,26 @@ impl Editor {
             obj.appearance.set_fill(amalith_core::blend::lerp_paint(start_fill, end_fill, t));
             obj.appearance.set_stroke(amalith_core::blend::lerp_paint(start_stroke, end_stroke, t));
             obj.appearance.set_stroke_width(start_width + (end_width - start_width) * t);
+            if !start_fill_effects.is_empty() || !end_fill_effects.is_empty() {
+                let fx = amalith_core::blend::lerp_effect_stack(&start_fill_effects, &end_fill_effects, t);
+                if let Some(item) = obj.appearance.items.iter_mut().rev().find(|i| i.is_fill()) {
+                    *item.effects_mut() = fx;
+                }
+            }
+            if !start_stroke_effects.is_empty() || !end_stroke_effects.is_empty() {
+                let fx = amalith_core::blend::lerp_effect_stack(&start_stroke_effects, &end_stroke_effects, t);
+                if let Some(item) = obj.appearance.items.iter_mut().rev().find(|i| i.is_stroke()) {
+                    *item.effects_mut() = fx;
+                }
+            }
             edits.push(Edit::InsertObject { object: Box::new(obj), index: append_at });
             append_at += 1;
             order.push(step_id);
         }
         order.push(end_id);
+        if stack_reversed {
+            order.reverse();
+        }
         edits.push(Edit::SetChildOrder { parent: ObjectParent::Group(group_id), order });
         Ok(edits)
     }
@@ -1464,6 +1511,8 @@ impl Editor {
                             end,
                             spine: None,
                             spacing: BlendSpacing::SmoothColor,
+                            spine_reversed: false,
+                            stack_reversed: false,
                         }),
                     }),
                 );
@@ -1492,6 +1541,8 @@ impl Editor {
                     end,
                     None,
                     BlendSpacing::SmoothColor,
+                    false,
+                    false,
                 )?);
                 edits
             }
@@ -1510,8 +1561,10 @@ impl Editor {
                     end: old_blend.end,
                     spine,
                     spacing,
+                    spine_reversed: old_blend.spine_reversed,
+                    stack_reversed: old_blend.stack_reversed,
                 };
-                let mut edits = vec![Edit::SetBlendData { group, blend: new_blend }];
+                let mut edits = vec![Edit::SetBlendData { group, blend: Some(new_blend) }];
                 edits.extend(self.compile_blend_steps(
                     group,
                     &existing_children,
@@ -1519,6 +1572,109 @@ impl Editor {
                     old_blend.end,
                     spine,
                     spacing,
+                    new_blend.spine_reversed,
+                    new_blend.stack_reversed,
+                )?);
+                edits
+            }
+            Command::ReleaseBlend { group } => {
+                let obj = self
+                    .document
+                    .object(group)
+                    .ok_or(CommandError::ObjectNotFound(group))?;
+                let ObjectKind::Group(g) = &obj.kind else {
+                    return Err(CommandError::NotABlend(group));
+                };
+                let blend = g.blend.ok_or(CommandError::NotABlend(group))?;
+                let existing_children = g.children.clone();
+                let parent = obj.parent;
+                let group_xf = obj.transform;
+                let siblings = self.document.children_of(parent);
+                let group_index = siblings
+                    .iter()
+                    .position(|&id| id == group)
+                    .expect("group was validated to exist in its own parent's children above");
+                let mut edits = Vec::new();
+                for &id in &existing_children {
+                    if id != blend.start && id != blend.end {
+                        edits.push(Edit::RemoveObject { id });
+                    }
+                }
+                for (offset, &child_id) in [blend.start, blend.end].iter().enumerate() {
+                    let mut child = self
+                        .document
+                        .object(child_id)
+                        .expect("a blend's start/end are always real objects")
+                        .clone();
+                    child.parent = parent;
+                    child.transform = group_xf * child.transform;
+                    edits.push(Edit::RemoveObject { id: child_id });
+                    edits.push(Edit::InsertObject {
+                        object: Box::new(child),
+                        index: group_index + offset,
+                    });
+                }
+                edits.push(Edit::RemoveObject { id: group });
+                edits
+            }
+            Command::ExpandBlend { group } => {
+                let obj = self
+                    .document
+                    .object(group)
+                    .ok_or(CommandError::ObjectNotFound(group))?;
+                let ObjectKind::Group(g) = &obj.kind else {
+                    return Err(CommandError::NotABlend(group));
+                };
+                if g.blend.is_none() {
+                    return Err(CommandError::NotABlend(group));
+                }
+                vec![Edit::SetBlendData { group, blend: None }]
+            }
+            Command::ReverseBlendSpine { group } => {
+                let obj = self
+                    .document
+                    .object(group)
+                    .ok_or(CommandError::ObjectNotFound(group))?;
+                let ObjectKind::Group(g) = &obj.kind else {
+                    return Err(CommandError::NotABlend(group));
+                };
+                let old_blend = g.blend.ok_or(CommandError::NotABlend(group))?;
+                let existing_children = g.children.clone();
+                let new_blend = BlendData { spine_reversed: !old_blend.spine_reversed, ..old_blend };
+                let mut edits = vec![Edit::SetBlendData { group, blend: Some(new_blend) }];
+                edits.extend(self.compile_blend_steps(
+                    group,
+                    &existing_children,
+                    new_blend.start,
+                    new_blend.end,
+                    new_blend.spine,
+                    new_blend.spacing,
+                    new_blend.spine_reversed,
+                    new_blend.stack_reversed,
+                )?);
+                edits
+            }
+            Command::ReverseBlendStacking { group } => {
+                let obj = self
+                    .document
+                    .object(group)
+                    .ok_or(CommandError::ObjectNotFound(group))?;
+                let ObjectKind::Group(g) = &obj.kind else {
+                    return Err(CommandError::NotABlend(group));
+                };
+                let old_blend = g.blend.ok_or(CommandError::NotABlend(group))?;
+                let existing_children = g.children.clone();
+                let new_blend = BlendData { stack_reversed: !old_blend.stack_reversed, ..old_blend };
+                let mut edits = vec![Edit::SetBlendData { group, blend: Some(new_blend) }];
+                edits.extend(self.compile_blend_steps(
+                    group,
+                    &existing_children,
+                    new_blend.start,
+                    new_blend.end,
+                    new_blend.spine,
+                    new_blend.spacing,
+                    new_blend.spine_reversed,
+                    new_blend.stack_reversed,
                 )?);
                 edits
             }

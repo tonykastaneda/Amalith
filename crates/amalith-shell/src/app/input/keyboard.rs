@@ -267,6 +267,13 @@ impl App {
             self.offset_dialog_key(&event);
             return;
         }
+        // The generic Distort & Transform effect dialog takes every key
+        // while open — shares `offset_dialog`'s own panel slot, never
+        // both `Some` at once.
+        if self.effect_dialog.is_some() {
+            self.effect_dialog_key(&event);
+            return;
+        }
         // The Layer Options dialog takes every key while open.
         if self.layer_dialog.is_some() {
             self.layer_dialog_key(&event);
@@ -382,6 +389,9 @@ impl App {
             return;
         }
         if self.opacity_edit.is_some() && self.opacity_key(&event) {
+            return;
+        }
+        if self.appearance_width_edit.is_some() && self.appearance_width_key(&event) {
             return;
         }
         if self.stroke_flyout_edit.is_some() && self.stroke_flyout_key(&event) {

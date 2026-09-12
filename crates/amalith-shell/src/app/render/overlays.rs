@@ -418,26 +418,24 @@ impl App {
         let viewport = self.canvas_viewport();
         if !viewport.contains(self.pointer) && matches!(self.drag, Drag::None) { return; }
         let to_screen = self.doc.view.to_screen();
-        let ink = smart_guides::SMART_GUIDE_INK;
         let (wl,hl) = self.main_logical_size().unwrap_or((1280.0,800.0));
         self.content.push_clip_layer(Fill::NonZero, ID, &viewport);
         if self.settings.sg_object_highlighting && matches!(self.drag, Drag::None) {
             if let Some(id) = self.sg_hovered_path {
                 let doc = self.doc.editor.document();
-                if let Some(pd) = doc.object(id).and_then(|o| o.kind.path_data()) {
-                    // Transform the real path, retaining MoveTo boundaries; never
-                    // connect separate contours with a synthetic straight line.
-                    let path = to_screen * convert::affine(doc.world_transform(id)) * convert::bez_path(&pd.geometry);
-                    // Illustrator tints this outline with the hovered
-                    // object's own layer color, not a fixed Smart Guides
-                    // pink — falls back to the fixed ink if the object's
-                    // layer somehow can't be found (shouldn't happen for
-                    // anything actually paintable).
-                    let highlight = self
-                        .owning_layer(id)
-                        .and_then(|lid| doc.layer(lid))
-                        .map_or(ink, |l| convert::color(l.color.rgb()));
-                    self.content.stroke(&Stroke::new(1.0), ID, highlight.with_alpha(0.65), None, &path);
+                // `object_contour` (not the object's raw stored geometry)
+                // — its own live effect stack applied, so the highlight
+                // traces what's actually painted, matching where
+                // `sg_hovered_path_at` just found the cursor to be.
+                if let Some(bez) = select::base_contour(doc, id) {
+                    let path = to_screen * bez;
+                    self.content.stroke(
+                        &Stroke::new(canvas::OBJECT_CONTOUR_WEIGHT),
+                        ID,
+                        canvas::OBJECT_CONTOUR_BLUE,
+                        None,
+                        &path,
+                    );
                 }
             }
         }

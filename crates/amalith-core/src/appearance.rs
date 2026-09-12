@@ -154,7 +154,8 @@ impl StrokeStyle {
 /// matching item directly (see [`Appearance::set_fill`]/`set_stroke`),
 /// so a color picked there *is* immediately the Appearance panel's top
 /// row.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "AppearanceItemOnDisk")]
 pub enum AppearanceItem {
     Fill {
         paint: Paint,
@@ -162,12 +163,189 @@ pub enum AppearanceItem {
         opacity: f32,
         #[serde(default = "default_true")]
         visible: bool,
-        /// A live Offset Path effect on this item alone — Illustrator's
-        /// Effect ▸ Path ▸ Offset Path applied to one Appearance-panel
-        /// row, distinct from Object ▸ Path ▸ Offset Path (which inserts
-        /// a whole new sibling object instead).
+        /// This item's own live, non-destructive effect stack —
+        /// Illustrator's Effect menu applied to one Appearance-panel row,
+        /// distinct from the *destructive* Object ▸ Path commands (which
+        /// insert a whole new sibling object instead). Ordered: each
+        /// effect's output feeds the next one's input (see
+        /// [`Effect`]'s own doc comment). Empty for most items.
+        #[serde(default)]
+        effects: Vec<Effect>,
+    },
+    Stroke {
+        paint: Paint,
+        width: f64,
+        #[serde(default)]
+        style: StrokeStyle,
+        #[serde(default = "default_opacity")]
+        opacity: f32,
+        #[serde(default = "default_true")]
+        visible: bool,
+        #[serde(default)]
+        effects: Vec<Effect>,
+    },
+}
+
+/// One live effect in an Appearance item's effect stack (see
+/// [`AppearanceItem`]'s `effects` field) — Illustrator's own Effect menu,
+/// applied to one Fill or Stroke row. Each variant is recomputed fresh
+/// from the previous stage's geometry every time this item paints (the
+/// first effect starts from the object's own current geometry, or for
+/// text, its glyph outline) — nothing here is baked into the document's
+/// real path data, the same "live" property the destructive Object ▸
+/// Path commands deliberately don't have.
+///
+/// `Offset` was the first variant (Illustrator's own "Offset Path"), added
+/// first because it needed no new rendering machinery — just the
+/// polygon-offset primitive already behind the destructive Object ▸ Path
+/// ▸ Offset Path command. The rest are Illustrator's Effect ▸ Distort &
+/// Transform submenu (Free Distort excepted — it needs an on-canvas
+/// corner-drag interaction, not a numeric dialog, so it isn't one of
+/// these). The surrounding stack/panel/dialog-retargeting plumbing is
+/// written generically over "whichever effect this is," so each variant
+/// only ever adds itself here plus its own compute function in
+/// `amalith_commands::pathfinder` — never a change to that plumbing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Effect {
+    Offset(OffsetEffect),
+    ZigZag(ZigZagEffect),
+    PuckerBloat(PuckerBloatEffect),
+    Roughen(RoughenEffect),
+    Transform(TransformEffect),
+    Tweak(TweakEffect),
+    Twist(TwistEffect),
+}
+
+/// [`Effect::Offset`]'s own parameters — negative `amount` insets,
+/// positive outsets. Computed via `amalith_commands::pathfinder::offset_path`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OffsetEffect {
+    pub amount: f64,
+    #[serde(default)]
+    pub join: LineJoin,
+    #[serde(default = "default_miter_limit")]
+    pub miter_limit: f64,
+}
+
+/// [`Effect::ZigZag`]'s parameters — Illustrator's Effect ▸ Distort &
+/// Transform ▸ Zig Zag. `size` is the ridge amplitude in document px;
+/// `smooth` chooses rounded ridges over sharp corners.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ZigZagEffect {
+    pub size: f64,
+    #[serde(default = "default_ridges")]
+    pub ridges_per_segment: f64,
+    #[serde(default)]
+    pub smooth: bool,
+}
+
+fn default_ridges() -> f64 {
+    4.0
+}
+
+/// [`Effect::PuckerBloat`]'s parameter — `-100.0..=100.0`; negative
+/// pulls each segment's handles toward its anchors (pucker), positive
+/// pushes them out (bloat).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PuckerBloatEffect {
+    pub amount: f64,
+}
+
+/// [`Effect::Roughen`]'s parameters — Illustrator's Effect ▸ Distort &
+/// Transform ▸ Roughen. `size` is the jitter amplitude in document px,
+/// `detail` the resample density (points per document inch). `seed` is
+/// set once when the effect is added (never re-rolled on repaint) so the
+/// jagged result stays stable across frames and after reload.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RoughenEffect {
+    pub size: f64,
+    #[serde(default = "default_detail")]
+    pub detail: f64,
+    #[serde(default)]
+    pub smooth: bool,
+    #[serde(default)]
+    pub seed: u64,
+}
+
+fn default_detail() -> f64 {
+    8.0
+}
+
+/// [`Effect::Transform`]'s parameters — Illustrator's Effect ▸ Distort &
+/// Transform ▸ Transform, applied once around the item's own local-bounds
+/// center. No `copies` field — stamping repeated transformed copies would
+/// mean one effect step producing more than one output shape, which the
+/// current one-shape-in-one-shape-out effect chain doesn't support; a
+/// disclosed v1 gap, not silently half-built.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransformEffect {
+    #[serde(default)]
+    pub move_x: f64,
+    #[serde(default)]
+    pub move_y: f64,
+    #[serde(default = "default_scale")]
+    pub scale_x: f64,
+    #[serde(default = "default_scale")]
+    pub scale_y: f64,
+    #[serde(default)]
+    pub rotate: f64,
+    #[serde(default)]
+    pub reflect_x: bool,
+    #[serde(default)]
+    pub reflect_y: bool,
+}
+
+fn default_scale() -> f64 {
+    100.0
+}
+
+/// [`Effect::Tweak`]'s parameters — Illustrator's Effect ▸ Distort &
+/// Transform ▸ Tweak. `horizontal`/`vertical` are jitter bounds as a
+/// percentage of each segment's own length; `modify_*` picks which parts
+/// of the path move. `seed` — see [`RoughenEffect`]'s own doc comment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TweakEffect {
+    pub horizontal: f64,
+    pub vertical: f64,
+    #[serde(default = "default_true")]
+    pub modify_anchors: bool,
+    #[serde(default = "default_true")]
+    pub modify_in: bool,
+    #[serde(default = "default_true")]
+    pub modify_out: bool,
+    #[serde(default)]
+    pub seed: u64,
+}
+
+/// [`Effect::Twist`]'s parameter — rotation in degrees at the item's own
+/// local-bounds center, decaying to zero at its bounds' farthest corner.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TwistEffect {
+    pub angle: f64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// On-disk shape for [`AppearanceItem`] before the effect *stack* existed
+/// — kept only as a `#[serde(from = ...)]` migration target so an item
+/// saved with the old single `offset: Option<OffsetEffect>` field still
+/// loads with the equivalent one-entry `effects` stack. New saves only
+/// ever write `effects`; one-way migration, same pattern as
+/// [`AppearanceOnDisk`] one level up.
+#[derive(Deserialize)]
+enum AppearanceItemOnDisk {
+    Fill {
+        paint: Paint,
+        #[serde(default = "default_opacity")]
+        opacity: f32,
+        #[serde(default = "default_true")]
+        visible: bool,
         #[serde(default)]
         offset: Option<OffsetEffect>,
+        #[serde(default)]
+        effects: Option<Vec<Effect>>,
     },
     Stroke {
         paint: Paint,
@@ -180,27 +358,34 @@ pub enum AppearanceItem {
         visible: bool,
         #[serde(default)]
         offset: Option<OffsetEffect>,
+        #[serde(default)]
+        effects: Option<Vec<Effect>>,
     },
 }
 
-/// A live, non-destructive Offset Path effect on one Appearance-panel
-/// item (see [`AppearanceItem`]'s `offset` field) — negative `amount`
-/// insets, positive outsets. Recomputed from the object's own current
-/// geometry (or, for text, its glyph outline) every time this item
-/// paints, via `amalith_commands::pathfinder::offset_path` — the same
-/// primitive behind the destructive Object ▸ Path ▸ Offset Path command,
-/// just applied live to one paint instead of producing a new object.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct OffsetEffect {
-    pub amount: f64,
-    #[serde(default)]
-    pub join: LineJoin,
-    #[serde(default = "default_miter_limit")]
-    pub miter_limit: f64,
+fn migrate_effects(offset: Option<OffsetEffect>, effects: Option<Vec<Effect>>) -> Vec<Effect> {
+    effects.unwrap_or_else(|| offset.into_iter().map(Effect::Offset).collect())
 }
 
-fn default_true() -> bool {
-    true
+impl From<AppearanceItemOnDisk> for AppearanceItem {
+    fn from(old: AppearanceItemOnDisk) -> Self {
+        match old {
+            AppearanceItemOnDisk::Fill { paint, opacity, visible, offset, effects } => AppearanceItem::Fill {
+                paint,
+                opacity,
+                visible,
+                effects: migrate_effects(offset, effects),
+            },
+            AppearanceItemOnDisk::Stroke { paint, width, style, opacity, visible, offset, effects } => AppearanceItem::Stroke {
+                paint,
+                width,
+                style,
+                opacity,
+                visible,
+                effects: migrate_effects(offset, effects),
+            },
+        }
+    }
 }
 
 impl AppearanceItem {
@@ -230,16 +415,28 @@ impl AppearanceItem {
         }
     }
 
-    pub fn offset(&self) -> Option<OffsetEffect> {
-        match *self {
-            AppearanceItem::Fill { offset, .. } | AppearanceItem::Stroke { offset, .. } => offset,
+    pub fn effects(&self) -> &[Effect] {
+        match self {
+            AppearanceItem::Fill { effects, .. } | AppearanceItem::Stroke { effects, .. } => effects,
         }
     }
 
-    pub fn set_offset(&mut self, new_offset: Option<OffsetEffect>) {
+    pub fn effects_mut(&mut self) -> &mut Vec<Effect> {
         match self {
-            AppearanceItem::Fill { offset, .. } | AppearanceItem::Stroke { offset, .. } => *offset = new_offset,
+            AppearanceItem::Fill { effects, .. } | AppearanceItem::Stroke { effects, .. } => effects,
         }
+    }
+
+    /// This item's Offset Path effect, if it has (at least) one — every
+    /// call site that only ever dealt with "the one offset" keeps
+    /// working via this, unaffected by other effect kinds landing later.
+    /// Real Illustrator lets the same effect appear more than once in a
+    /// stack; this reads the first.
+    pub fn offset_effect(&self) -> Option<OffsetEffect> {
+        self.effects().iter().find_map(|e| match e {
+            Effect::Offset(fx) => Some(*fx),
+            _ => None,
+        })
     }
 }
 
@@ -312,7 +509,7 @@ impl Appearance {
     pub fn set_fill(&mut self, paint: Paint) {
         match self.items.iter_mut().rev().find(|i| i.is_fill()) {
             Some(AppearanceItem::Fill { paint: p, .. }) => *p = paint,
-            _ => self.items.push(AppearanceItem::Fill { paint, opacity: 1.0, visible: true, offset: None }),
+            _ => self.items.push(AppearanceItem::Fill { paint, opacity: 1.0, visible: true, effects: Vec::new() }),
         }
     }
 
@@ -325,7 +522,7 @@ impl Appearance {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
-                offset: None,
+                effects: Vec::new(),
             }),
         }
     }
@@ -339,7 +536,7 @@ impl Appearance {
                 style: StrokeStyle::default(),
                 opacity: 1.0,
                 visible: true,
-                offset: None,
+                effects: Vec::new(),
             }),
         }
     }
@@ -353,7 +550,7 @@ impl Appearance {
                 style,
                 opacity: 1.0,
                 visible: true,
-                offset: None,
+                effects: Vec::new(),
             }),
         }
     }
@@ -371,7 +568,7 @@ impl Default for Appearance {
                     paint: Paint::Solid(Color::rgb(0.87, 0.87, 0.87)),
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.18, 0.18, 0.18)),
@@ -379,7 +576,7 @@ impl Default for Appearance {
                     style: StrokeStyle::default(),
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 },
             ],
             opacity: default_opacity(),
@@ -422,14 +619,14 @@ impl From<AppearanceOnDisk> for Appearance {
     fn from(old: AppearanceOnDisk) -> Self {
         let items = old.items.unwrap_or_else(|| {
             vec![
-                AppearanceItem::Fill { paint: old.fill, opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: old.fill, opacity: 1.0, visible: true, effects: Vec::new() },
                 AppearanceItem::Stroke {
                     paint: old.stroke,
                     width: old.stroke_width,
                     style: old.stroke_style,
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 },
             ]
         });
@@ -459,8 +656,8 @@ mod tests {
     fn fill_and_stroke_read_the_topmost_matching_item() {
         let mut a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
             ],
             opacity: 1.0,
         };
@@ -504,16 +701,16 @@ mod tests {
     fn new_shape_with_items_round_trips_a_multi_item_stack() {
         let a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
                     width: 2.0,
                     style: StrokeStyle::default(),
                     opacity: 0.6,
                     visible: true,
-                    offset: Some(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 }),
+                    effects: vec![Effect::Offset(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 })],
                 },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false, effects: Vec::new() },
             ],
             opacity: 0.8,
         };
@@ -523,26 +720,72 @@ mod tests {
         assert_eq!(back, a);
     }
 
+    /// An item saved before the effect *stack* existed has a single
+    /// top-level `offset` field on itself, no `effects` key at all — this
+    /// must still load, wrapping that one effect into a one-entry stack.
+    /// Built from raw JSON (not by constructing `AppearanceItem` and
+    /// re-serializing, which always writes the *new* shape now) to
+    /// genuinely simulate an old file.
     #[test]
-    fn offset_accessors_read_and_write_either_variant() {
+    fn old_shaped_item_with_a_flat_offset_field_migrates_into_a_one_entry_stack() {
+        let json = serde_json::json!({
+            "Stroke": {
+                "paint": "None",
+                "width": 2.0,
+                "offset": { "amount": -2.0, "join": "Round", "miter_limit": 4.0 },
+            }
+        });
+        let item: AppearanceItem = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            item.effects(),
+            &[Effect::Offset(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 })],
+        );
+        assert_eq!(item.offset_effect(), Some(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 }));
+    }
+
+    #[test]
+    fn old_shaped_item_with_neither_offset_nor_effects_migrates_to_an_empty_stack() {
+        let json = serde_json::json!({
+            "Fill": { "paint": "None" }
+        });
+        let item: AppearanceItem = serde_json::from_value(json).unwrap();
+        assert_eq!(item.effects(), &[]);
+    }
+
+    #[test]
+    fn effects_accessors_read_and_write_either_variant() {
         let fx = OffsetEffect { amount: -3.0, join: LineJoin::Bevel, miter_limit: 4.0 };
-        let mut fill = AppearanceItem::Fill { paint: Paint::None, opacity: 1.0, visible: true, offset: None };
+        let mut fill = AppearanceItem::Fill { paint: Paint::None, opacity: 1.0, visible: true, effects: Vec::new() };
         let mut stroke = AppearanceItem::Stroke {
             paint: Paint::None,
             width: 1.0,
             style: StrokeStyle::default(),
             opacity: 1.0,
             visible: true,
-            offset: None,
+            effects: Vec::new(),
         };
-        assert_eq!(fill.offset(), None);
-        assert_eq!(stroke.offset(), None);
-        fill.set_offset(Some(fx));
-        stroke.set_offset(Some(fx));
-        assert_eq!(fill.offset(), Some(fx));
-        assert_eq!(stroke.offset(), Some(fx));
-        fill.set_offset(None);
-        assert_eq!(fill.offset(), None, "set_offset(None) clears a previously-set effect");
+        assert_eq!(fill.offset_effect(), None);
+        assert_eq!(stroke.offset_effect(), None);
+        fill.effects_mut().push(Effect::Offset(fx));
+        stroke.effects_mut().push(Effect::Offset(fx));
+        assert_eq!(fill.offset_effect(), Some(fx));
+        assert_eq!(stroke.offset_effect(), Some(fx));
+        fill.effects_mut().clear();
+        assert_eq!(fill.offset_effect(), None, "clearing the stack drops a previously-added effect");
+    }
+
+    #[test]
+    fn offset_effect_reads_the_first_offset_in_a_multi_effect_stack() {
+        let a = OffsetEffect { amount: -1.0, join: LineJoin::Miter, miter_limit: 4.0 };
+        let b = OffsetEffect { amount: 5.0, join: LineJoin::Round, miter_limit: 4.0 };
+        let item = AppearanceItem::Fill {
+            paint: Paint::None,
+            opacity: 1.0,
+            visible: true,
+            effects: vec![Effect::Offset(a), Effect::Offset(b)],
+        };
+        assert_eq!(item.effects().len(), 2, "stacking the same effect twice is allowed, matching real Illustrator");
+        assert_eq!(item.offset_effect(), Some(a), "reads the first Offset entry in the stack");
     }
 
     #[test]

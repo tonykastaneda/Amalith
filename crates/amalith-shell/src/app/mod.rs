@@ -34,6 +34,7 @@ mod smart_guides;
 mod native_menu;
 mod area_type_dialog;
 mod layer_dialog;
+mod effect_dialog;
 mod offset_dialog;
 mod render;
 mod shape_dialog;
@@ -62,7 +63,7 @@ pub(crate) use crate::newdoc;
 pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
-    about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, home,
+    about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, effectdlg, home,
     icons, layerdlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
     settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
@@ -575,6 +576,15 @@ enum MenuAction {
     /// sets `pending_offset_dialog` for `about_to_wait` to pick up, same
     /// as `ExportForScreens` already does for `pending_export`.
     OffsetPath,
+    /// The top-level Effect menu — Illustrator's own live-effect menu,
+    /// distinct from Object ▸ Path ▸ Offset Path above (which is the
+    /// destructive one). Adds a new effect of `choice`'s kind to the
+    /// currently selected Appearance-panel row, or the topmost item in
+    /// the selected object's stack if no row is explicitly selected —
+    /// same "which item" resolution the Appearance panel's own fx menu
+    /// would use, just without a row having been clicked first. A no-op
+    /// if nothing on the canvas is selected.
+    EffectMenu(panels::EffectMenuChoice),
     /// Object ▸ Lock ▸ Selection (⌘2).
     LockSelection,
     /// Object ▸ Unlock All (⌘⌥2).
@@ -598,6 +608,25 @@ enum MenuAction {
     /// Object ▸ Clipping Mask ▸ Make / Release.
     ClipMake,
     ClipRelease,
+    /// Object ▸ Blend ▸ Make (⌥⌘B) — the two selected paths' menu-driven
+    /// equivalent of the Blend tool's own click-click flow (`press.rs`).
+    BlendMake,
+    /// Object ▸ Blend ▸ Release (⌥⇧⌘B).
+    BlendRelease,
+    /// Object ▸ Blend ▸ Blend Options… — same dialog the right-click
+    /// context menu's `CtxAction::BlendOptions` already opens; needs an
+    /// `ActiveEventLoop`, so this goes through the same
+    /// pending-dialog pickup in `about_to_wait` that `OffsetPath` uses.
+    BlendOptionsMenu,
+    /// Object ▸ Blend ▸ Expand.
+    BlendExpand,
+    /// Object ▸ Blend ▸ Replace Spine — same enabling condition as the
+    /// right-click context menu's `CtxAction::ReplaceSpine`.
+    BlendReplaceSpine,
+    /// Object ▸ Blend ▸ Reverse Spine.
+    BlendReverseSpine,
+    /// Object ▸ Blend ▸ Reverse Front to Back.
+    BlendReverseStacking,
     /// Type ▸ Convert to Area / Point Type (toggles by selection state).
     ConvertTextKind,
     /// Type ▸ Area Type Options… — needs an `ActiveEventLoop` to spawn its
@@ -1058,6 +1087,13 @@ struct App {
     /// Free-floating like the colour picker; never dockable, never in the
     /// Window menu.
     offset_dialog: Option<offsetdlg::OffsetDialog>,
+    /// The generic Distort & Transform effect dialog (Zig Zag, Pucker &
+    /// Bloat, Roughen, Transform, Tweak, Twist) — shares `offset_dialog`'s
+    /// own floating panel slot (`Self::offset_panel_id()`, `PanelKind::
+    /// Offsetdlg`) rather than getting a second one, since only one of
+    /// the two is ever open at a time. See `panels::Ctx::effect_dialog`'s
+    /// own doc comment for why.
+    effect_dialog: Option<effectdlg::EffectDialog>,
     /// The Layer Options dialog, opened by double-clicking a layer's color
     /// swatch in the Layers panel. Free-floating like the color picker;
     /// never dockable, never in the Window menu.
@@ -1079,15 +1115,19 @@ struct App {
     pending_export: bool,
     /// Same reason as `pending_export`, for the Offset Path dialog.
     pending_offset_dialog: bool,
-    /// Same reason as `pending_export`, for the Offset Path dialog
-    /// retargeted at one Appearance-panel item's live effect — the item's
-    /// real stack index; the object comes from `appearance_target()`.
-    pending_offset_effect_dialog: Option<usize>,
+    /// Same reason as `pending_export`, for the shared Appearance-item
+    /// effect dialog slot — either family (`offsetdlg`'s own, or the
+    /// generic `effectdlg`), whichever the target effect's kind resolves
+    /// to. The object comes from `appearance_target()`.
+    pending_appearance_effect_dialog: Option<effect_dialog::PendingAppearanceEffectDialog>,
     /// Same reason as `pending_export`, for the Layer Options dialog —
     /// which layer to open it for.
     pending_layer_dialog: Option<amalith_core::LayerId>,
     /// Same reason as `pending_export`, for the Area Type Options dialog.
     pending_area_type_dialog: bool,
+    /// Same reason as `pending_export`, for the Blend Options dialog —
+    /// which blend group to open it for.
+    pending_blend_dialog: Option<ObjectId>,
     /// The Home / Welcome screen. `Some` on launch and after the last tab is
     /// closed; while it's up the canvas takes no input.
     home: Option<home::Home>,
@@ -1202,6 +1242,13 @@ struct App {
     /// Appearance panel: which row (index into the target object's
     /// `appearance.items`) is selected.
     appearance_selected: Option<usize>,
+    /// Appearance panel: the footer "fx ▾" menu is open.
+    appearance_fx_menu: bool,
+    /// Appearance panel: live buffer while a Stroke row's weight field is
+    /// being typed — `(item index, buffer, fresh)`, same shape as
+    /// `stroke_weight_edit`/`align_spacing_edit`, just per-item instead
+    /// of whole-selection.
+    appearance_width_edit: Option<(usize, String, bool)>,
     /// Color panel slider space (RGB / HSB / CMYK).
     color_mode: panels::ColorSpace,
     /// A loaded ICC destination profile for real (Little CMS) RGB<->CMYK
@@ -1464,12 +1511,14 @@ impl App {
             xform_dialog: None,
             blend_dialog: None,
             offset_dialog: None,
+            effect_dialog: None,
             pending_offset_dialog: false,
-            pending_offset_effect_dialog: None,
+            pending_appearance_effect_dialog: None,
             layer_dialog: None,
             pending_layer_dialog: None,
             area_type_dialog: None,
             pending_area_type_dialog: false,
+            pending_blend_dialog: None,
             shape_builder: None,
             eraser_size: 20.0,
             home: home::Home::new(recent::load()),
@@ -1516,6 +1565,8 @@ impl App {
             picker: None,
             appearance_picker_target: None,
             appearance_selected: None,
+            appearance_fx_menu: false,
+            appearance_width_edit: None,
             appearance_drop: None,
             color_mode: panels::ColorSpace::Rgb,
             cmyk_profile: None,
@@ -2595,6 +2646,30 @@ impl App {
         }
     }
 
+    /// `(start, end)` for Object ▸ Blend ▸ Make from the menu — exactly
+    /// two selected plain paths sharing a parent, ordered back-to-front
+    /// (Illustrator's own rule for the menu command, distinct from the
+    /// Blend tool's click-order in `press.rs`).
+    fn blend_make_candidate(&self) -> Option<(ObjectId, ObjectId)> {
+        if self.doc.selection.len() != 2 {
+            return None;
+        }
+        let doc = self.doc.editor.document();
+        let (a, b) = (self.doc.selection[0], self.doc.selection[1]);
+        let obj_a = doc.object(a)?;
+        let obj_b = doc.object(b)?;
+        if !matches!(obj_a.kind, amalith_core::ObjectKind::Path(_))
+            || !matches!(obj_b.kind, amalith_core::ObjectKind::Path(_))
+            || obj_a.parent != obj_b.parent
+        {
+            return None;
+        }
+        let siblings = doc.children_of(obj_a.parent);
+        let ia = siblings.iter().position(|&id| id == a)?;
+        let ib = siblings.iter().position(|&id| id == b)?;
+        Some(if ia < ib { (a, b) } else { (b, a) })
+    }
+
     /// The two selected anchors, when both are open-path endpoints —
     /// right-click Join's enabling condition. Uses `doc.anchor_sel` as-is
     /// (already populated by shift-click in Direct Selection).
@@ -3246,7 +3321,7 @@ impl App {
             .map(|i| i.paint())
             .unwrap_or(self.doc.fill);
         let mut items = obj.appearance.items.clone();
-        items.push(amalith_core::AppearanceItem::Fill { paint, opacity: 1.0, visible: true, offset: None });
+        items.push(amalith_core::AppearanceItem::Fill { paint, opacity: 1.0, visible: true, effects: Vec::new() });
         self.appearance_selected = Some(items.len() - 1);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
@@ -3268,7 +3343,7 @@ impl App {
             self.doc.stroke_style,
         ));
         let mut items = obj.appearance.items.clone();
-        items.push(amalith_core::AppearanceItem::Stroke { paint, width, style, opacity: 1.0, visible: true, offset: None });
+        items.push(amalith_core::AppearanceItem::Stroke { paint, width, style, opacity: 1.0, visible: true, effects: Vec::new() });
         self.appearance_selected = Some(items.len() - 1);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
@@ -3282,7 +3357,7 @@ impl App {
         if idx >= items.len() {
             return;
         }
-        items.insert(idx + 1, items[idx]);
+        items.insert(idx + 1, items[idx].clone());
         self.appearance_selected = Some(idx + 1);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
@@ -3315,16 +3390,150 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// The nested effect row's own trash icon — clears that item's
-    /// `offset` straight back to `None`, no dialog needed.
-    fn appearance_remove_offset(&mut self, idx: usize) {
+    /// The nested effect row's own trash icon — removes that one entry
+    /// from the item's effect stack, no dialog needed.
+    fn appearance_remove_effect(&mut self, idx: usize, effect_idx: usize) {
         let Some(object) = self.appearance_target() else { return };
         let Some(obj) = self.doc.editor.document().object(object) else { return };
         let mut items = obj.appearance.items.clone();
         let Some(item) = items.get_mut(idx) else { return };
-        item.set_offset(None);
+        if effect_idx >= item.effects().len() {
+            return;
+        }
+        item.effects_mut().remove(effect_idx);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
+    }
+
+    /// Footer "Clear Effects" — empties every item's effect stack in one
+    /// command, distinct from Illustrator's own "Clear Appearance" (which
+    /// also wipes every fill/stroke); this only ever touches `effects`.
+    fn appearance_clear_effects(&mut self) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        for item in &mut items {
+            item.effects_mut().clear();
+        }
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    /// A Stroke row's weight field was clicked — begin editing it,
+    /// mirroring `begin_stroke_weight_edit`'s `(String, bool)` shape,
+    /// just seeded from one specific item's width instead of the whole
+    /// selection's.
+    fn begin_appearance_width_edit(&mut self, idx: usize) {
+        if self.appearance_width_edit.as_ref().is_some_and(|(i, ..)| *i == idx) {
+            return;
+        }
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let Some(width) = obj.appearance.items.get(idx).map(|i| match i {
+            amalith_core::AppearanceItem::Stroke { width, .. } => *width,
+            amalith_core::AppearanceItem::Fill { .. } => 0.0,
+        }) else {
+            return;
+        };
+        self.appearance_selected = Some(idx);
+        self.appearance_width_edit = Some((idx, action::trim_num(width), true));
+        self.request_main_redraw();
+    }
+
+    /// Applies the focused Appearance weight field's current buffer
+    /// live, without leaving edit mode — called after every keystroke.
+    fn apply_appearance_width_edit_live(&mut self) {
+        let Some((idx, buf, fresh)) = &self.appearance_width_edit else { return };
+        if *fresh {
+            return;
+        }
+        let Some(width) = action::parse_num(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)) else {
+            return;
+        };
+        let idx = *idx;
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get_mut(idx) else { return };
+        if let amalith_core::AppearanceItem::Stroke { width: w, .. } = item {
+            *w = width.max(0.0);
+        }
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+    }
+
+    pub(in crate::app) fn commit_appearance_width_edit(&mut self) {
+        self.apply_appearance_width_edit_live();
+        self.appearance_width_edit = None;
+        self.request_main_redraw();
+    }
+
+    /// Whether the pointer is currently over the Appearance panel's own
+    /// weight field being edited — an outside click commits it, same
+    /// convention as `stroke_weight_field_at_pointer`/
+    /// `align_spacing_field_at_pointer`.
+    pub(in crate::app) fn appearance_width_field_at_pointer(&mut self) -> bool {
+        let Some((idx, ..)) = self.appearance_width_edit else { return false };
+        let Some(pbody) = self.active_panel_body_at_pointer(PanelKind::Appearance) else { return false };
+        let items = self.appearance_items();
+        panels::appearance::row_weight_field_at(&items, pbody, self.pointer) == Some(idx)
+    }
+
+    /// Digit / Enter / Esc stay in the Appearance weight field.
+    pub(in crate::app) fn appearance_width_key(&mut self, event: &winit::event::KeyEvent) -> bool {
+        let Some((_, buf, fresh)) = &mut self.appearance_width_edit else {
+            return false;
+        };
+        if !event.state.is_pressed() {
+            return true;
+        }
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        match event.physical_key {
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => {
+                self.commit_appearance_width_edit();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                self.appearance_width_edit = None;
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::Backspace) => {
+                *fresh = false;
+                buf.pop();
+                self.apply_appearance_width_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            PhysicalKey::Code(KeyCode::ArrowUp | KeyCode::ArrowDown) => {
+                let dir = if event.physical_key == PhysicalKey::Code(KeyCode::ArrowUp) { 1.0 } else { -1.0 };
+                let step = if self.shift_down { 5.0 } else { 1.0 };
+                let cur = amalith_core::parse_measurement(buf, amalith_core::MeasureKind::Length(amalith_core::Unit::Px)).unwrap_or(0.0);
+                *buf = action::trim_num((cur + dir * step).max(0.0));
+                *fresh = false;
+                self.apply_appearance_width_edit_live();
+                self.request_main_redraw();
+                true
+            }
+            _ => {
+                let Some(txt) = &event.text else { return true };
+                let mut consumed = false;
+                for ch in txt.chars().filter(|c| !c.is_control()) {
+                    if crate::widgets::measurement_char(ch) {
+                        if *fresh {
+                            buf.clear();
+                            *fresh = false;
+                        }
+                        buf.push(ch);
+                        consumed = true;
+                    }
+                }
+                if consumed {
+                    self.apply_appearance_width_edit_live();
+                    self.request_main_redraw();
+                }
+                true
+            }
+        }
     }
 
     /// Commits an Appearance-panel drag: moves the selected row to
@@ -3342,6 +3551,23 @@ impl App {
         }
         let item = items.remove(from);
         let to = if target_real_index > from { target_real_index - 1 } else { target_real_index }.min(items.len());
+        items.insert(to, item);
+        self.appearance_selected = Some(to);
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    /// Alt-drag: instead of moving the selected row to the drop point,
+    /// drops a *duplicate* of it there, leaving the original exactly
+    /// where it was — Illustrator's own alt-drag-duplicate gesture,
+    /// applied to the Appearance panel's own drag-to-reorder.
+    fn appearance_duplicate_to(&mut self, target_real_index: usize) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(from) = self.appearance_selected else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get(from).cloned() else { return };
+        let to = target_real_index.min(items.len());
         items.insert(to, item);
         self.appearance_selected = Some(to);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
@@ -4129,6 +4355,23 @@ impl App {
             }
             MenuAction::TransformAgain => self.transform_again(),
             MenuAction::OffsetPath => self.pending_offset_dialog = true,
+            MenuAction::EffectMenu(choice) => {
+                // No specific Appearance-panel row was clicked to get
+                // here (unlike the panel's own fx menu) — fall back to
+                // whichever row is already selected there, or the
+                // topmost item in the target's stack.
+                let idx = self
+                    .appearance_selected
+                    .unwrap_or_else(|| self.appearance_items().len().saturating_sub(1));
+                self.pending_appearance_effect_dialog = Some(match choice {
+                    panels::EffectMenuChoice::Offset => {
+                        effect_dialog::PendingAppearanceEffectDialog::Offset { item_index: idx, effect_index: None }
+                    }
+                    panels::EffectMenuChoice::Distort(kind) => {
+                        effect_dialog::PendingAppearanceEffectDialog::Distort { item_index: idx, effect_index: None, kind }
+                    }
+                });
+            }
             MenuAction::LockSelection => self.lock_selection(),
             MenuAction::UnlockAll => self.unlock_all(),
             MenuAction::SelectAll => self.select_all(),
@@ -4161,6 +4404,93 @@ impl App {
             MenuAction::FitAll => self.fit_view(),
             MenuAction::ClipMake => self.clip_make(),
             MenuAction::ClipRelease => self.clip_release(),
+            MenuAction::BlendMake => {
+                if let Some((start, end)) = self.blend_make_candidate() {
+                    if let Ok(CommandOutcome::Object(group)) =
+                        self.doc.editor.execute(Command::MakeBlend { start, end, name: None })
+                    {
+                        self.doc.selection = vec![group];
+                    }
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::BlendRelease => {
+                let groups: Vec<ObjectId> = self
+                    .doc
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter(|&id| {
+                        matches!(
+                            self.doc.editor.document().object(id).map(|o| &o.kind),
+                            Some(amalith_core::ObjectKind::Group(g)) if g.blend.is_some()
+                        )
+                    })
+                    .collect();
+                let mut freed = Vec::new();
+                for group in groups {
+                    if let Ok(CommandOutcome::Object(id)) =
+                        self.doc.editor.execute(Command::ReleaseBlend { group })
+                    {
+                        freed.push(id);
+                    }
+                }
+                if !freed.is_empty() {
+                    self.doc.selection = freed;
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::BlendOptionsMenu => {
+                if let Some(g) = self.selected_blend_group() {
+                    self.pending_blend_dialog = Some(g);
+                }
+            }
+            MenuAction::BlendExpand => {
+                let groups: Vec<ObjectId> = self
+                    .doc
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter(|&id| {
+                        matches!(
+                            self.doc.editor.document().object(id).map(|o| &o.kind),
+                            Some(amalith_core::ObjectKind::Group(g)) if g.blend.is_some()
+                        )
+                    })
+                    .collect();
+                for group in groups {
+                    let _ = self.doc.editor.execute(Command::ExpandBlend { group });
+                }
+                self.request_main_redraw();
+            }
+            MenuAction::BlendReplaceSpine => {
+                if let Some((group, spine)) = self.replace_spine_candidate() {
+                    let spacing = match self.doc.editor.document().object(group).map(|o| &o.kind) {
+                        Some(amalith_core::ObjectKind::Group(g)) => {
+                            g.blend.map(|b| b.spacing).unwrap_or(amalith_core::BlendSpacing::SmoothColor)
+                        }
+                        _ => amalith_core::BlendSpacing::SmoothColor,
+                    };
+                    let _ = self.doc.editor.execute(Command::SetBlendOptions {
+                        group,
+                        spacing,
+                        spine: Some(spine),
+                    });
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::BlendReverseSpine => {
+                if let Some(group) = self.selected_blend_group() {
+                    let _ = self.doc.editor.execute(Command::ReverseBlendSpine { group });
+                    self.request_main_redraw();
+                }
+            }
+            MenuAction::BlendReverseStacking => {
+                if let Some(group) = self.selected_blend_group() {
+                    let _ = self.doc.editor.execute(Command::ReverseBlendStacking { group });
+                    self.request_main_redraw();
+                }
+            }
             MenuAction::HelpDocs => crate::about::open_url("https://amalith.app/docs"),
             MenuAction::ConvertTextKind => {
                 if let Some(&id) = self.doc.selection.first() {
@@ -5472,9 +5802,12 @@ impl App {
     fn eyedrop_at(&mut self, screen: Point) {
         let dp = self.doc_point(screen);
         let visible = self.visible_doc_rect();
-        let Some(src) =
-            select::topmost_selectable_at(self.doc.editor.document(), dp, visible)
-        else {
+        let Some(src) = select::topmost_selectable_at(
+            self.doc.editor.document(),
+            dp,
+            visible,
+            select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
+        ) else {
             return;
         };
         let src_obj = self.doc.editor.document().object(src);
@@ -6837,6 +7170,7 @@ impl App {
             xform_dialog: None,
             blend_dialog: None,
             offset_dialog: None,
+            effect_dialog: None,
             layer_dialog: None,
             area_type_dialog: None,
             gradient: self.gradient_ctx(),
@@ -6844,6 +7178,8 @@ impl App {
             appearance_items: Vec::new(),
             appearance_selected: None,
             appearance_drop: None,
+            appearance_fx_menu: false,
+            appearance_width_edit: None,
         }
     }
 
@@ -6902,6 +7238,7 @@ impl App {
             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, false)),
             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, false)),
+            effect_dialog: self.effect_dialog.as_ref().map(|d| (d, false)),
             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
@@ -6909,6 +7246,8 @@ impl App {
             appearance_items: self.appearance_items(),
             appearance_selected: self.appearance_selected,
             appearance_drop: self.appearance_drop,
+            appearance_fx_menu: self.appearance_fx_menu,
+            appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
         }
     }
 
@@ -7285,14 +7624,25 @@ impl App {
         }
     }
 
-    /// The open Stack-mode flyout's own on-screen `(bounds, close-button)`
-    /// rects, in `window`'s local coordinates — `None` if no flyout is
-    /// open, or `window` isn't the one it's actually showing in (a
-    /// docked source shows in the main window; a floating one in its own).
-    fn stack_flyout_hit_rects(&mut self, window: WindowId) -> Option<(Rect, Rect)> {
+    /// The open Stack-mode flyout's own on-screen `(bounds, close-button,
+    /// content body, panel)`, in `window`'s local coordinates — `None` if
+    /// no flyout is open, or `window` isn't the one it's actually showing
+    /// in (a docked source shows in the main window; a floating one in
+    /// its own).
+    ///
+    /// `bounds` must be computed exactly the way `main_view.rs` paints it
+    /// — `docked_flyout_rect` (rail-side-aware, opens past every docked
+    /// rail into the canvas) for a docked master, plain `flyout_rect` for
+    /// a floating one. Using the wrong one here — as this used to,
+    /// unconditionally using `flyout_rect` — silently desyncs the
+    /// hit-test rect from the visible flyout for any docked master (which
+    /// is every built-in one), so every click landing on the actually-
+    /// visible panel missed `bounds` and fell through to whatever's
+    /// underneath instead: the flyout looked interactive but wasn't.
+    fn stack_flyout_hit_rects(&mut self, window: WindowId) -> Option<(Rect, Rect, Rect, PanelId)> {
         let (fm, fg, fi) = self.stack_flyout?;
-        let is_docked = self.dock.master(fm)?.dock.is_some();
-        let bounds_in_window = if is_docked {
+        let dock_side = self.dock.master(fm)?.dock;
+        let bounds_in_window = if dock_side.is_some() {
             if Some(window) != self.main_id {
                 return None;
             }
@@ -7308,18 +7658,27 @@ impl App {
             Rect::new(0.0, 0.0, sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor())
         };
         let frame = self.build_master_frame(fm, bounds_in_window);
-        let row = frame.groups.get(fg)?.rows.get(fi)?.rect;
-        let (vw, vh) = if is_docked {
+        let row_frame = frame.groups.get(fg)?.rows.get(fi)?;
+        let (row, pid) = (row_frame.rect, row_frame.panel);
+        let (vw, vh) = if dock_side.is_some() {
             self.main_logical_size()?
         } else {
             let win = self.floating_window(fm)?;
             let sz = win.inner_size();
             (sz.width as f64 / win.scale_factor(), sz.height as f64 / win.scale_factor())
         };
-        let bounds = layout::flyout_rect(row, Rect::new(0.0, 0.0, vw, vh));
+        let viewport = Rect::new(0.0, 0.0, vw, vh);
+        let bounds = match dock_side {
+            Some((side, _)) => {
+                let (left_x, right_x) = self.canvas_x_span();
+                layout::docked_flyout_rect(row, side, (left_x, right_x), viewport)
+            }
+            None => layout::flyout_rect(row, viewport),
+        };
         let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
-        let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
-        Some((bounds, close))
+        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+        let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
+        Some((bounds, close, body, pid))
     }
 
 
@@ -8013,14 +8372,24 @@ impl ApplicationHandler for App {
         if std::mem::take(&mut self.pending_offset_dialog) {
             self.spawn_offset_dialog(event_loop);
         }
-        if let Some(idx) = self.pending_offset_effect_dialog.take() {
-            self.spawn_offset_dialog_for_appearance_item(event_loop, idx);
+        if let Some(pending) = self.pending_appearance_effect_dialog.take() {
+            match pending {
+                effect_dialog::PendingAppearanceEffectDialog::Offset { item_index, effect_index } => {
+                    self.spawn_offset_dialog_for_appearance_item(event_loop, item_index, effect_index);
+                }
+                effect_dialog::PendingAppearanceEffectDialog::Distort { item_index, effect_index, kind } => {
+                    self.spawn_effect_dialog(event_loop, item_index, effect_index, kind);
+                }
+            }
         }
         if let Some(id) = self.pending_layer_dialog.take() {
             self.spawn_layer_dialog(event_loop, id);
         }
         if std::mem::take(&mut self.pending_area_type_dialog) {
             self.spawn_area_type_dialog(event_loop);
+        }
+        if let Some(group) = self.pending_blend_dialog.take() {
+            self.spawn_blend_dialog(event_loop, group);
         }
         if self.pending_fit {
             self.fit_view();
@@ -8075,7 +8444,7 @@ impl ApplicationHandler for App {
         // Caret blink while a text object holds the caret. Toggles every
         // 530ms; ask for a frame only when the phase actually flips, then
         // sleep until the next flip.
-        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() || self.offset_dialog.is_some() || self.layer_dialog.is_some() {
+        if self.text_edit.is_some() || self.shape_dialog.is_some() || self.export.is_some() || self.xform_dialog.is_some() || self.blend_dialog.is_some() || self.offset_dialog.is_some() || self.effect_dialog.is_some() || self.layer_dialog.is_some() {
             if self.text_blink_on() != self.last_caret_drawn {
                 self.request_main_redraw();
             }
@@ -8373,6 +8742,7 @@ impl ApplicationHandler for App {
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some()
+                    || self.effect_dialog.is_some()
                     || self.layer_dialog.is_some()
                 {
                     self.cmd_down = if cfg!(target_os = "macos") { m.state().super_key() } else { m.state().control_key() };
@@ -8424,6 +8794,7 @@ impl ApplicationHandler for App {
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some()
+                    || self.effect_dialog.is_some()
                     || self.layer_dialog.is_some() =>
             {
                 self.on_key(event);
@@ -8436,7 +8807,8 @@ impl ApplicationHandler for App {
                     || self.shape_dialog.is_some()
                     || self.xform_dialog.is_some()
                     || self.blend_dialog.is_some()
-                    || self.offset_dialog.is_some() =>
+                    || self.offset_dialog.is_some()
+                    || self.effect_dialog.is_some() =>
             {
                 self.on_wheel(delta, scale);
             }

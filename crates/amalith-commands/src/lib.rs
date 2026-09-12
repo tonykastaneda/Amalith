@@ -38,7 +38,11 @@ mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
 pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathfinderOp};
-pub use pathfinder::{shape_builder_regions, shape_builder_union, polygon_path,apply as pathfinder_apply, flatten_path, has_visible_stroke, offset_path, PathInput, PathResult};
+pub use pathfinder::{
+    shape_builder_regions, shape_builder_union, polygon_path, apply as pathfinder_apply, flatten_path,
+    has_visible_stroke, offset_path, pucker_bloat, roughen, transform_effect, tweak, twist, zig_zag,
+    PathInput, PathResult,
+};
 pub use editor::Editor;
 pub use error::CommandError;
 
@@ -2773,7 +2777,7 @@ mod tests {
             paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
             opacity: 0.5,
             visible: true,
-            offset: None,
+            effects: Vec::new(),
         });
         editor
             .execute(Command::SetAppearanceItems { object: id, items: items.clone() })
@@ -3165,5 +3169,101 @@ mod tests {
         assert!(matches!(doc.object(b).unwrap().parent, ObjectParent::Layer(_)));
         assert_eq!(doc.object(a).unwrap().parent, doc.object(b).unwrap().parent);
         assert_eq!(doc.bounds_of(a), Some(Rect::new(0.0, 0.0, 20.0, 20.0)));
+    }
+
+    #[test]
+    fn release_blend_drops_the_generated_steps_and_restores_start_and_end_to_the_layer() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer_parent = editor.document().object(a).unwrap().parent;
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor.execute(Command::ReleaseBlend { group }).unwrap();
+        let doc = editor.document();
+        assert!(doc.object(group).is_none());
+        assert_eq!(doc.object(a).unwrap().parent, layer_parent);
+        assert_eq!(doc.object(b).unwrap().parent, layer_parent);
+    }
+
+    #[test]
+    fn expand_blend_clears_the_live_link_but_keeps_every_generated_step() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor
+            .execute(Command::SetBlendOptions {
+                group,
+                spacing: amalith_core::BlendSpacing::SpecifiedSteps(3),
+                spine: None,
+            })
+            .unwrap();
+        let before_len = {
+            let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+            g.children.len()
+        };
+        editor.execute(Command::ExpandBlend { group }).unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+        assert!(g.blend.is_none());
+        assert_eq!(g.children.len(), before_len);
+
+        // No longer live: moving the (former) start doesn't regenerate.
+        editor.execute(Command::MoveObject { object: a, delta: Vec2::new(10.0, 0.0) }).unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+        assert_eq!(g.children.len(), before_len);
+    }
+
+    #[test]
+    fn reverse_blend_spine_toggles_the_flag_and_regenerates_steps_along_it_backward() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        editor.execute(Command::ReverseBlendSpine { group }).unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+        assert!(g.blend.expect("still a blend").spine_reversed);
+        editor.execute(Command::ReverseBlendSpine { group }).unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+        assert!(!g.blend.expect("still a blend").spine_reversed);
+    }
+
+    #[test]
+    fn reverse_blend_stacking_toggles_the_flag_and_flips_child_order() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(group) = editor
+            .execute(Command::MakeBlend { start: a, end: b, name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let before_len = {
+            let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+            assert_eq!(g.children.first(), Some(&a));
+            assert_eq!(g.children.last(), Some(&b));
+            g.children.len()
+        };
+        editor.execute(Command::ReverseBlendStacking { group }).unwrap();
+        let ObjectKind::Group(g) = &editor.document().object(group).unwrap().kind else { panic!() };
+        assert!(g.blend.expect("still a blend").stack_reversed);
+        // Whole stacking order flips — `b` now paints first (backmost),
+        // `a` last (frontmost) — same shape/color/count as before, just
+        // reversed (the regenerated in-between step gets a fresh id
+        // either way, so only the endpoints are meaningful here).
+        assert_eq!(g.children.len(), before_len);
+        assert_eq!(g.children.first(), Some(&b));
+        assert_eq!(g.children.last(), Some(&a));
     }
 }

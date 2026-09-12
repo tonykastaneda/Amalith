@@ -402,6 +402,33 @@ pub enum Command {
         spacing: amalith_core::BlendSpacing,
         spine: Option<ObjectId>,
     },
+    /// Object ▸ Blend ▸ Release — discards the generated in-between
+    /// steps and ungroups `start`/`end` back into the blend group's own
+    /// parent, at its former position. Errors if `group` isn't a blend
+    /// group. Yields [`CommandOutcome::Object`] for `start`.
+    ReleaseBlend {
+        group: ObjectId,
+    },
+    /// Object ▸ Blend ▸ Expand — freezes a blend group: clears its live
+    /// `blend` link (so editing `start`/`end` no longer regenerates
+    /// anything) while keeping the group and every step it already
+    /// generated exactly as they currently render, as ordinary editable
+    /// objects. Errors if `group` isn't a blend group.
+    ExpandBlend {
+        group: ObjectId,
+    },
+    /// Object ▸ Blend ▸ Reverse Spine — walks the spine (or, with no
+    /// spine set, the straight line between the two shapes) from its
+    /// other end, without touching which shape is `start` and which is
+    /// `end`. Errors if `group` isn't a blend group.
+    ReverseBlendSpine {
+        group: ObjectId,
+    },
+    /// Object ▸ Blend ▸ Reverse Front to Back — flips the generated
+    /// steps' stacking order. Errors if `group` isn't a blend group.
+    ReverseBlendStacking {
+        group: ObjectId,
+    },
     /// Replaces one object's whole appearance stack — the Appearance
     /// panel's add/remove/duplicate/reorder/per-item-edit, all funneled
     /// through this single command (one commit per drop, add, delete, or

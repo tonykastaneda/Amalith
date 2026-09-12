@@ -13,7 +13,7 @@ use vello::Scene;
 use crate::text::TextContext;
 
 use super::{
-    draw_name_field, panel_footer_rects, paint_panel_footer, Action, Ctx, RenameId, metric_footer_h, ID,
+    draw_eye, draw_name_field, panel_footer_rects, paint_panel_footer, Action, Ctx, RenameId, metric_footer_h, ID,
     metric_pad, metric_row_h,
 };
 
@@ -632,22 +632,6 @@ fn layer_swatch_rect(row: Rect) -> Rect {
 /// Where a layer row's name starts — clear of the color swatch.
 fn layer_name_x(body: Rect) -> f64 {
     body.x0 + ui_px(16.0) + ui_px(10.0) + ui_px(16.0)
-}
-
-/// A small eye centred at `(cx, cy)`, with a slash through it when `off`.
-fn draw_eye(scene: &mut Scene, cx: f64, cy: f64, on: bool, color: Color) {
-    use vello::kurbo::Ellipse;
-    let outer = Ellipse::new((cx, cy), (5.0, 3.2), 0.0);
-    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &outer);
-    if on {
-        let pupil = Ellipse::new((cx, cy), (1.6, 1.6), 0.0);
-        scene.fill(Fill::NonZero, ID, color, None, &pupil);
-    } else {
-        let mut slash = BezPath::new();
-        slash.move_to((cx - ui_px(5.5), cy + ui_px(4.0)));
-        slash.line_to((cx + ui_px(5.5), cy - ui_px(4.0)));
-        scene.stroke(&Stroke::new(ui_px(1.4)), ID, color, None, &slash);
-    }
 }
 
 /// A small padlock centred at `(cx, cy)`.

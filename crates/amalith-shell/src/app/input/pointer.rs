@@ -1015,7 +1015,15 @@ impl App {
                 if moved {
                     let count = self.appearance_items().len();
                     if let Some((_, real_index)) = crate::panels::appearance::drop_target(body, self.pointer, count) {
-                        self.appearance_reorder(real_index);
+                        // Alt held at drop time (not press time — matches
+                        // `Drag::MoveObjects`'s own `dup: self.alt_down`,
+                        // read live so toggling Alt mid-drag still works)
+                        // drops a duplicate instead of moving the row.
+                        if self.alt_down {
+                            self.appearance_duplicate_to(real_index);
+                        } else {
+                            self.appearance_reorder(real_index);
+                        }
                     }
                 }
                 self.appearance_drop = None;

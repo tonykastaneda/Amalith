@@ -193,6 +193,14 @@ pub struct Ctx<'a> {
     /// The Offset Path dialog + caret-blink phase, when the `offsetdlg`
     /// float-only panel is being drawn / hit-tested.
     pub offset_dialog: Option<(&'a crate::offsetdlg::OffsetDialog, bool)>,
+    /// The generic Distort & Transform effect dialog + caret-blink phase
+    /// — shares the same `offsetdlg` float-only panel *slot* as
+    /// `offset_dialog` above (never both `Some` at once: only one of the
+    /// two dialog families is ever open), since every one of these
+    /// effects only ever edits an Appearance-item effect stack the same
+    /// way Offset Path's own retargeted mode does, with no destructive
+    /// counterpart of its own to also support.
+    pub effect_dialog: Option<(&'a crate::effectdlg::EffectDialog, bool)>,
     pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
     /// The Area Type Options dialog + caret-blink phase, when the
     /// `areatypedlg` float-only panel is being drawn / hit-tested.
@@ -214,6 +222,14 @@ pub struct Ctx<'a> {
     /// Appearance panel: live drag-reorder indicator — the *display* row
     /// index (top-to-bottom on screen) the dragged row would land at.
     pub appearance_drop: Option<usize>,
+    /// Appearance panel: the footer "fx ▾" menu is open — lists every
+    /// live effect available to add to the selected row (just Offset
+    /// Path today; more effects land here later without changing how the
+    /// menu itself works).
+    pub appearance_fx_menu: bool,
+    /// Appearance panel: live buffer while a Stroke row's weight field is
+    /// being typed — `(item index, buffer)`.
+    pub appearance_width_edit: Option<(usize, &'a str)>,
 }
 
 /// The primitive tool a `shapedlg.*` panel id stands for.
@@ -257,6 +273,17 @@ pub enum FontMenu {
     Family,
     Style,
     Size,
+}
+
+/// One entry in the Appearance panel footer's fx menu — Offset Path's own
+/// bespoke dialog, or one of the Distort & Transform effects sharing
+/// `effectdlg::EffectDialog`. Only meaningful for *adding* a new effect
+/// (see [`Action::AppearanceAddEffect`]) — editing an existing one reads
+/// its kind straight off the stored [`amalith_core::Effect`] instead.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EffectMenuChoice {
+    Offset,
+    Distort(crate::effectdlg::EffectKind),
 }
 
 /// What a click in a panel body asks the app to do.
@@ -431,6 +458,11 @@ pub enum Action {
     /// The whole Offset Path dialog hit-vocabulary passes through — the
     /// App applies it directly (field focus, join pick, Preview, OK/Cancel).
     OffsetHit(crate::offsetdlg::Hit),
+    /// The generic Distort & Transform effect dialog's own hit-vocabulary
+    /// (field focus, checkbox toggle, Preview, OK/Cancel) — see
+    /// `effect_dialog` and `Ctx::effect_dialog`'s own doc comments for why
+    /// this shares `offsetdlg`'s panel slot instead of getting its own.
+    EffectHit(crate::effectdlg::Hit),
     LayerDialogHit(crate::layerdlg::Hit),
     AreaTypeHit(crate::areatypedlg::Hit),
     // --- Links panel ---
@@ -461,16 +493,33 @@ pub enum Action {
     /// item (as opposed to `OpenPicker`'s topmost-Fill/topmost-Stroke
     /// slot) — see `App::appearance_picker_target`.
     OpenAppearanceItemPicker(usize),
-    /// The row's "fx" affordance (no effect yet) or its nested "Offset
-    /// Path" row (effect already present) — opens the Offset Path dialog
-    /// retargeted at this one stack item, seeded from its current effect
-    /// if it has one. Reuses the same dialog as Object ▸ Path ▸ Offset
-    /// Path, per the user's explicit direction to keep Illustrator's own
-    /// dialog-reuse muscle memory rather than inventing an inline editor.
-    OpenOffsetEffectDialog(usize),
-    /// The nested row's own delete affordance — clears that item's
-    /// `offset` back to `None` directly, no dialog needed.
-    AppearanceRemoveOffset(usize),
+    /// A nested effect row was clicked — opens that entry's own editor,
+    /// seeded from its current value. Which dialog actually opens is
+    /// dispatched by the *stored* effect's own kind (Offset Path's own
+    /// dialog, or the shared Distort & Transform one) — no kind is
+    /// threaded through this Action, the App-side handler reads it
+    /// straight off `items[idx].effects()[effect_idx]`.
+    OpenEffectDialog(usize, usize),
+    /// The footer's fx menu adding a *new* effect to the selected row —
+    /// unlike editing, there's no existing entry to read a kind off, so
+    /// the menu entry that was clicked carries it explicitly.
+    AppearanceAddEffect(usize, EffectMenuChoice),
+    /// The nested row's own delete affordance — removes that one effect
+    /// entry (item index, effect index) from the item's stack directly,
+    /// no dialog needed.
+    AppearanceRemoveEffect(usize, usize),
+    /// Footer "fx ▾" — opens/closes the menu of effects available to add
+    /// to the selected row (Illustrator's own fx button, not a per-row
+    /// icon — one entry point that grows as more effect types land).
+    AppearanceToggleFxMenu,
+    /// Footer "Clear Effects" — strips every item's live effect back to
+    /// `None` in one command (distinct from Illustrator's "Clear
+    /// Appearance", which also wipes fills/strokes; this only clears fx).
+    AppearanceClearEffects,
+    /// A Stroke row's weight text was clicked — begin editing it in
+    /// place (mirrors the context bar's own `BeginStrokeWeightEdit`, just
+    /// targeting one specific stack item instead of the whole selection).
+    BeginAppearanceWidthEdit(usize),
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
@@ -576,6 +625,8 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         PanelKind::Offsetdlg => {
             if let Some((dlg, caret)) = ctx.offset_dialog {
                 crate::offsetdlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            } else if let Some((dlg, caret)) = ctx.effect_dialog {
+                crate::effectdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
         PanelKind::LayerOptionsDlg => {
@@ -647,9 +698,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             None => Action::None,
         },
         PanelKind::Blenddlg => Action::BlendHit(crate::blenddlg::hit(body, local)),
-        PanelKind::Offsetdlg => match ctx.offset_dialog {
-            Some((dlg, _)) => Action::OffsetHit(crate::offsetdlg::hit(dlg, body, local)),
-            None => Action::None,
+        PanelKind::Offsetdlg => match (ctx.offset_dialog, ctx.effect_dialog) {
+            (Some((dlg, _)), _) => Action::OffsetHit(crate::offsetdlg::hit(dlg, body, local)),
+            (None, Some((dlg, _))) => Action::EffectHit(crate::effectdlg::hit(dlg, body, local)),
+            (None, None) => Action::None,
         },
         PanelKind::LayerOptionsDlg => match ctx.layer_dialog {
             Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
@@ -946,6 +998,25 @@ fn draw_name_field(
                 &vello::kurbo::Line::new((caret_x, row.y0 + ui_px(5.0)), (caret_x, row.y1 - ui_px(5.0))),
             );
         }
+    }
+}
+
+/// A small eye centred at `(cx, cy)`, with a slash through it when `off`
+/// — the one visibility glyph every panel that has a per-row "eye"
+/// toggle (Layers, Appearance) paints, so they read as the same control
+/// rather than each panel growing its own slightly different eye.
+pub fn draw_eye(scene: &mut Scene, cx: f64, cy: f64, on: bool, color: Color) {
+    use vello::kurbo::Ellipse;
+    let outer = Ellipse::new((cx, cy), (5.0, 3.2), 0.0);
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &outer);
+    if on {
+        let pupil = Ellipse::new((cx, cy), (1.6, 1.6), 0.0);
+        scene.fill(Fill::NonZero, ID, color, None, &pupil);
+    } else {
+        let mut slash = BezPath::new();
+        slash.move_to((cx - ui_px(5.5), cy + ui_px(4.0)));
+        slash.line_to((cx + ui_px(5.5), cy - ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.4)), ID, color, None, &slash);
     }
 }
 

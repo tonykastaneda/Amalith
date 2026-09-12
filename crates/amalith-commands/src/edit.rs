@@ -149,12 +149,12 @@ pub(crate) enum Edit {
         group: ObjectId,
         clip: Option<ObjectId>,
     },
-    /// Replaces a blend group's spacing/spine (never its `start`/`end` —
-    /// those are fixed at `Command::MakeBlend` time). Errors if `group`
-    /// isn't a blend group.
+    /// Replaces a blend group's spacing/spine/reverse flags (never its
+    /// `start`/`end` — those are fixed at `Command::MakeBlend` time), or
+    /// clears it back to a plain group (`Command::ExpandBlend`).
     SetBlendData {
         group: ObjectId,
-        blend: amalith_core::BlendData,
+        blend: Option<amalith_core::BlendData>,
     },
     InsertGuide {
         guide: Guide,
@@ -437,7 +437,7 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let object = doc.object_mut(group).ok_or(CommandError::ObjectNotFound(group))?;
             match &mut object.kind {
                 ObjectKind::Group(g) => {
-                    let old = g.blend.replace(blend).ok_or(CommandError::NotABlend(group))?;
+                    let old = std::mem::replace(&mut g.blend, blend);
                     Ok((Edit::SetBlendData { group, blend: old }, None))
                 }
                 _ => Err(CommandError::NotABlend(group)),

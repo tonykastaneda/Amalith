@@ -75,6 +75,7 @@ fn main() {
             xform_dialog: None,
             blend_dialog: None,
             offset_dialog: None,
+            effect_dialog: None,
             layer_dialog: None,
             area_type_dialog: None,
             gradient: None,
@@ -82,6 +83,8 @@ fn main() {
             appearance_items: Vec::new(),
             appearance_selected: None,
             appearance_drop: None,
+            appearance_fx_menu: false,
+            appearance_width_edit: None,
         };
         use amalith_shell::dock::PanelKind;
         for (i, kind) in [

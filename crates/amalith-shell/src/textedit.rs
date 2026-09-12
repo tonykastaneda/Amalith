@@ -1212,10 +1212,10 @@ pub fn paint_text_data(
     // Computed before `td_layout` borrows `tcx` for `layout`'s lifetime —
     // `outline_text_data` needs its own mutable borrow to shape the same
     // content a second time (a real, if wasteful, second shaping pass;
-    // only paid for when a Stroke item, or any live Offset Path effect,
-    // actually needs a glyph-outline base to work from).
+    // only paid for when a Stroke item, or any live effect stack, actually
+    // needs a glyph-outline base to work from).
     let needs_outline = appearance.items.iter().any(|i| {
-        i.visible() && ((i.is_stroke() && i.paint().is_visible()) || i.offset().is_some())
+        i.visible() && ((i.is_stroke() && i.paint().is_visible()) || !i.effects().is_empty())
     });
     let outline = needs_outline.then(|| crate::convert::bez_path(&outline_text_data(td, tcx)));
     let layout = td_layout(tcx, td);
@@ -1243,17 +1243,15 @@ pub fn paint_text_data(
         if !item.visible() {
             continue;
         }
-        // A live Offset Path effect on this item insets/outsets the whole
-        // glyph outline (every run/line, holes and all) before this item
-        // paints — the same "two fills, one offset negative" technique
-        // Illustrator's own Appearance panel uses for a crisp inset
-        // border, generalized to any Fill or Stroke row, not just text.
-        // See canvas.rs's identical per-item handling in `paint_object`.
-        let offset_bp = item.offset().and_then(|fx| {
-            let base = outline.as_ref()?;
+        // This item's own live effect stack, chained in order, applied to
+        // the whole glyph outline (every run/line, holes and all) before
+        // this item paints — the same "two fills, one offset negative"
+        // technique Illustrator's own Appearance panel uses for a crisp
+        // inset border, generalized to any Fill or Stroke row, not just
+        // text. See canvas.rs's identical `apply_effect_chain`.
+        let offset_bp = (!item.effects().is_empty()).then(|| outline.as_ref()).flatten().and_then(|base| {
             let core_bp = crate::convert::bez_path_to_core(base);
-            amalith_commands::offset_path(&core_bp, fx.amount, fx.join, fx.miter_limit)
-                .map(|pd| crate::convert::bez_path(&pd.geometry))
+            crate::canvas::apply_effect_chain(&core_bp, item.effects()).map(|g| crate::convert::bez_path(&g))
         });
         match item {
             AppearanceItem::Fill { paint, opacity, .. } => {

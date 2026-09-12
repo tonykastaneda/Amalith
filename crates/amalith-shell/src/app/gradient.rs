@@ -647,7 +647,14 @@ impl App {
                         .and_then(|o| o.kind.own_local_bounds())
                         .is_some()
                 })
-                .or_else(|| crate::select::topmost_selectable_at(doc, dp, vis))
+                .or_else(|| {
+                    crate::select::topmost_selectable_at(
+                        doc,
+                        dp,
+                        vis,
+                        crate::select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
+                    )
+                })
         };
         let Some(id) = target else {
             return;

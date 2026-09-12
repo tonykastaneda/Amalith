@@ -17,7 +17,10 @@
 //! possible: steps still morph start-shape to end-shape while their
 //! centers walk the spine instead of the line.
 
-use crate::appearance::Paint;
+use crate::appearance::{
+    Effect, OffsetEffect, Paint, PuckerBloatEffect, RoughenEffect, TransformEffect, TweakEffect,
+    TwistEffect, ZigZagEffect,
+};
 use crate::geom::{Point, Vec2};
 use crate::object::{Anchor, PathData, Subpath};
 use crate::swatch::Color;
@@ -199,6 +202,123 @@ pub fn smooth_color_steps(a: Paint, b: Paint) -> u32 {
     ((d * 255.0).round() as u32).clamp(1, 256)
 }
 
+/// `a` and `b`, `t` of the way from one to the other — only defined for
+/// two effects of the *same* variant (the caller checks discriminants
+/// first, see [`lerp_effect_stack`]). Every numeric field lerps; a
+/// boolean/style field just switches at the midpoint, the same "no
+/// obvious half-and-half" fallback [`lerp_paint`] uses for a paint kind
+/// mismatch.
+fn lerp_effect_same_kind(a: Effect, b: Effect, t: f64) -> Effect {
+    let f = |x: f64, y: f64| x + (y - x) * t;
+    let flag = |x: bool, y: bool| if t < 0.5 { x } else { y };
+    match (a, b) {
+        (Effect::Offset(a), Effect::Offset(b)) => Effect::Offset(OffsetEffect {
+            amount: f(a.amount, b.amount),
+            join: if t < 0.5 { a.join } else { b.join },
+            miter_limit: f(a.miter_limit, b.miter_limit),
+        }),
+        (Effect::ZigZag(a), Effect::ZigZag(b)) => Effect::ZigZag(ZigZagEffect {
+            size: f(a.size, b.size),
+            ridges_per_segment: f(a.ridges_per_segment, b.ridges_per_segment),
+            smooth: flag(a.smooth, b.smooth),
+        }),
+        (Effect::PuckerBloat(a), Effect::PuckerBloat(b)) => {
+            Effect::PuckerBloat(PuckerBloatEffect { amount: f(a.amount, b.amount) })
+        }
+        (Effect::Roughen(a), Effect::Roughen(b)) => Effect::Roughen(RoughenEffect {
+            size: f(a.size, b.size),
+            detail: f(a.detail, b.detail),
+            smooth: flag(a.smooth, b.smooth),
+            seed: if t < 0.5 { a.seed } else { b.seed },
+        }),
+        (Effect::Transform(a), Effect::Transform(b)) => Effect::Transform(TransformEffect {
+            move_x: f(a.move_x, b.move_x),
+            move_y: f(a.move_y, b.move_y),
+            scale_x: f(a.scale_x, b.scale_x),
+            scale_y: f(a.scale_y, b.scale_y),
+            rotate: f(a.rotate, b.rotate),
+            reflect_x: flag(a.reflect_x, b.reflect_x),
+            reflect_y: flag(a.reflect_y, b.reflect_y),
+        }),
+        (Effect::Tweak(a), Effect::Tweak(b)) => Effect::Tweak(TweakEffect {
+            horizontal: f(a.horizontal, b.horizontal),
+            vertical: f(a.vertical, b.vertical),
+            modify_anchors: flag(a.modify_anchors, b.modify_anchors),
+            modify_in: flag(a.modify_in, b.modify_in),
+            modify_out: flag(a.modify_out, b.modify_out),
+            seed: if t < 0.5 { a.seed } else { b.seed },
+        }),
+        (Effect::Twist(a), Effect::Twist(b)) => Effect::Twist(TwistEffect { angle: f(a.angle, b.angle) }),
+        // Unreachable via `lerp_effect_stack` (it only calls this once the
+        // two discriminants have already been checked equal) — kept total
+        // rather than panicking so a future caller mistake degrades to
+        // "picks one" instead of crashing.
+        (a, _) => a,
+    }
+}
+
+/// The same effect kind as `e`, with its visible strength dialed to
+/// zero (every other field copied from `e` unchanged) — the "nothing"
+/// counterpart [`lerp_effect_stack`] blends a real effect toward when
+/// the other side of a blend has no matching effect at that slot, so
+/// the effect fades out smoothly (amplitude shrinking to 0) instead of
+/// vanishing outright partway through the blend.
+fn neutral_like(e: Effect) -> Effect {
+    match e {
+        Effect::Offset(fx) => Effect::Offset(OffsetEffect { amount: 0.0, ..fx }),
+        Effect::ZigZag(fx) => Effect::ZigZag(ZigZagEffect { size: 0.0, ..fx }),
+        Effect::PuckerBloat(_) => Effect::PuckerBloat(PuckerBloatEffect { amount: 0.0 }),
+        Effect::Roughen(fx) => Effect::Roughen(RoughenEffect { size: 0.0, ..fx }),
+        Effect::Transform(fx) => Effect::Transform(TransformEffect {
+            move_x: 0.0,
+            move_y: 0.0,
+            scale_x: 100.0,
+            scale_y: 100.0,
+            rotate: 0.0,
+            ..fx
+        }),
+        Effect::Tweak(fx) => Effect::Tweak(TweakEffect { horizontal: 0.0, vertical: 0.0, ..fx }),
+        Effect::Twist(_) => Effect::Twist(TwistEffect { angle: 0.0 }),
+    }
+}
+
+/// One Fill or Stroke item's whole effect stack, `t` of the way from `a`
+/// to `b`. Real Illustrator has no published rule for blending a live
+/// Appearance effect stack through a blend's generated steps at all —
+/// this is Amalith's own: matched position-by-position (the common case
+/// is both stacks the same length with the same kind at each slot, e.g.
+/// both blend endpoints have one Zig Zag) rather than requiring the
+/// *whole* stack to match before interpolating anything. When one side
+/// is simply missing an effect the other side has — blending a plain
+/// line into a Zig Zagged one, say — that missing slot fills in with
+/// [`neutral_like`] the effect that's actually present, so it fades
+/// smoothly toward (or away from) zero strength across the generated
+/// steps instead of the effect just vanishing at the halfway step. Only
+/// a genuine kind mismatch *at the same slot* (both sides have
+/// something there, but a different effect) falls back to switching
+/// that one slot at the midpoint, since there's no shared "neutral" two
+/// different kinds can fade toward.
+pub fn lerp_effect_stack(a: &[Effect], b: &[Effect], t: f64) -> Vec<Effect> {
+    let n = a.len().max(b.len());
+    (0..n)
+        .map(|i| match (a.get(i).copied(), b.get(i).copied()) {
+            (Some(x), Some(y)) if std::mem::discriminant(&x) == std::mem::discriminant(&y) => {
+                lerp_effect_same_kind(x, y, t)
+            }
+            (Some(x), Some(y)) => {
+                if t < 0.5 {
+                    x
+                } else {
+                    y
+                }
+            }
+            (Some(x), None) => lerp_effect_same_kind(x, neutral_like(x), t),
+            (None, Some(y)) => lerp_effect_same_kind(neutral_like(y), y, t),
+            (None, None) => unreachable!("i < n == a.len().max(b.len())"),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +397,59 @@ mod tests {
         assert!((got_center.y - target_center.y).abs() < 1e-6);
         assert!((bounds.width() - 20.0).abs() < 0.5);
         assert!((bounds.height() - 20.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn lerp_effect_stack_interpolates_matching_zig_zag_stacks_field_by_field() {
+        let a = [Effect::ZigZag(ZigZagEffect { size: 0.0, ridges_per_segment: 4.0, smooth: false })];
+        let b = [Effect::ZigZag(ZigZagEffect { size: 20.0, ridges_per_segment: 4.0, smooth: false })];
+        let mid = lerp_effect_stack(&a, &b, 0.5);
+        match mid[..] {
+            [Effect::ZigZag(fx)] => assert!((fx.size - 10.0).abs() < 1e-9),
+            _ => panic!("expected a single interpolated ZigZag"),
+        }
+    }
+
+    /// The exact bug this replaced: blending a Zig Zag shape into a
+    /// plain line (no effects at all) used to just switch the whole
+    /// stack at the midpoint — half the generated steps showed the full
+    /// zigzag, the other half none at all, a visible snap instead of a
+    /// blend. Now the missing side fades the zigzag's own size toward 0
+    /// instead of dropping it outright.
+    #[test]
+    fn lerp_effect_stack_fades_a_zig_zag_toward_zero_when_the_other_side_has_none() {
+        let a: [Effect; 1] = [Effect::ZigZag(ZigZagEffect { size: 20.0, ridges_per_segment: 4.0, smooth: false })];
+        let b: [Effect; 0] = [];
+
+        let quarter = lerp_effect_stack(&a, &b, 0.25);
+        match quarter[..] {
+            [Effect::ZigZag(fx)] => assert!((fx.size - 15.0).abs() < 1e-9, "expected size faded 3/4 of the way from 20 toward 0, got {}", fx.size),
+            _ => panic!("expected a single ZigZag, faded toward zero, not dropped"),
+        }
+        let three_quarter = lerp_effect_stack(&a, &b, 0.75);
+        match three_quarter[..] {
+            [Effect::ZigZag(fx)] => assert!((fx.size - 5.0).abs() < 1e-9, "expected size faded 3/4 of the way toward 0, got {}", fx.size),
+            _ => panic!("expected a single ZigZag, faded toward zero, not dropped"),
+        }
+        // Right at the missing end, it's fully faded out (size 0) — not
+        // literally absent, so the generated step's own chain still
+        // finishes with a real (no-op) ZigZag rather than skipping it.
+        match lerp_effect_stack(&a, &b, 1.0)[..] {
+            [Effect::ZigZag(fx)] => assert!(fx.size.abs() < 1e-9),
+            _ => panic!("expected a single ZigZag at zero size"),
+        }
+    }
+
+    #[test]
+    fn lerp_effect_stack_switches_at_the_midpoint_only_for_a_genuine_kind_mismatch_at_the_same_slot() {
+        let a: [Effect; 1] = [Effect::ZigZag(ZigZagEffect { size: 10.0, ridges_per_segment: 4.0, smooth: false })];
+        let b: [Effect; 1] = [Effect::Twist(TwistEffect { angle: 45.0 })];
+        assert_eq!(lerp_effect_stack(&a, &b, 0.25), a.to_vec());
+        assert_eq!(lerp_effect_stack(&a, &b, 0.75), b.to_vec());
+    }
+
+    #[test]
+    fn lerp_effect_stack_is_empty_for_two_empty_stacks() {
+        assert!(lerp_effect_stack(&[], &[], 0.5).is_empty());
     }
 }

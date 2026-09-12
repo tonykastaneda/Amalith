@@ -34,6 +34,8 @@ pub(in crate::app) fn paint_main(
     appearance_items: Vec<amalith_core::AppearanceItem>,
     appearance_selected: Option<usize>,
     appearance_drop: Option<usize>,
+    appearance_fx_menu: bool,
+    appearance_width_edit: Option<(usize, &str)>,
     cur_fill: amalith_core::Paint,
     cur_stroke: amalith_core::Paint,
     pointer: Point,
@@ -422,7 +424,7 @@ pub(in crate::app) fn paint_main(
                     }
                 }
                 let vis = vt.inverse().transform_rect_bbox(viewport);
-                if let Some(hit) = select::topmost_selectable_at(doc, dp, vis) {
+                if let Some(hit) = select::topmost_selectable_at(doc, dp, vis, 4.0 / view.zoom) {
                     if !selection.contains(&hit) {
                         if let Some(mid) =
                             select::clip_mask_at_contour(doc, hit, dp, 4.0 / view.zoom)
@@ -624,6 +626,7 @@ pub(in crate::app) fn paint_main(
         xform_dialog: None,
         blend_dialog: None,
         offset_dialog: None,
+        effect_dialog: None,
         layer_dialog: None,
         area_type_dialog: None,
         gradient: gradient.clone(),
@@ -631,6 +634,8 @@ pub(in crate::app) fn paint_main(
         appearance_items,
         appearance_selected,
         appearance_drop,
+        appearance_fx_menu,
+        appearance_width_edit,
     };
     // Captured while walking the docked masters below, painted last (on
     // top of everything) once we know the open row's real screen rect.

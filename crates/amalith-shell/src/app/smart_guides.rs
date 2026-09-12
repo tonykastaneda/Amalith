@@ -1093,13 +1093,29 @@ impl App {
     }
 
     /// Object Highlighting: the path directly under the cursor, hover-only.
+    /// Tested against each candidate's own *painted* outline (live
+    /// Appearance effects applied), not `anchors::segment_at`'s raw
+    /// stored geometry — that function is deliberately geometry-only
+    /// for its other job (Direct Selection's click-a-segment-to-insert-
+    /// an-anchor, which only ever makes sense on the real underlying
+    /// path), but Object Highlighting exists purely to trace what's
+    /// visually under the cursor, so it needs [`select::nearest_painted_leaf`]
+    /// instead — otherwise a Zig Zag or Offset Path effect leaves the
+    /// highlight either missing or traced in the wrong place.
     fn sg_hovered_path_at(&self, cursor_doc: Point) -> Option<ObjectId> {
         if !self.settings.smart_guides_enabled || !self.settings.sg_object_highlighting {
             return None;
         }
         let doc = self.doc.editor.document();
-        let ids = anchors::path_leaves(doc);
-        anchors::segment_at(doc, &ids, cursor_doc, self.sg_tolerance_doc()).map(|(id, _, _)| id)
+        // A blend's generated in-between steps aren't independently
+        // selectable (see `select::is_blend_step`'s own doc comment) —
+        // only its two real originals are, so they're excluded here the
+        // same way click-selection already excludes them once isolated.
+        let ids: Vec<ObjectId> = anchors::path_leaves(doc)
+            .into_iter()
+            .filter(|&id| !select::is_blend_step(doc, id))
+            .collect();
+        select::nearest_painted_leaf(doc, &ids, cursor_doc, self.sg_tolerance_doc())
     }
 
     /// Unconditional per-pointer-move refresh (no drag active) — Anchor/

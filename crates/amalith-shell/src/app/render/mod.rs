@@ -91,19 +91,36 @@ impl App {
                 .unwrap_or_default(),
         };
 
-        // The Offset Path dialog, retargeted at one Appearance-panel
-        // item and previewing live — that item's committed `offset`
-        // isn't touched until OK, so this overrides just it for this
-        // frame's canvas paint (see `canvas.rs`'s `paint_path` closure).
-        // Independent of `self.drag`, so it's threaded into every arm
-        // below rather than living in the match itself.
-        let appearance_offset_preview: Option<(ObjectId, usize, amalith_core::OffsetEffect)> = self
+        // The Offset Path dialog, retargeted at one entry in an
+        // Appearance-panel item's effect stack and previewing live — that
+        // entry's committed value isn't touched until OK, so this
+        // overrides just it for this frame's canvas paint (see
+        // `canvas.rs`'s `apply_effect_chain`/`paint_path`). `usize::MAX`
+        // as the effect index (when adding a brand-new effect rather than
+        // editing an existing one) is a sentinel meaning "append" — always
+        // past any real stack's length, so `canvas.rs`'s "replace if in
+        // range, else push" logic pushes it instead. Independent of
+        // `self.drag`, so it's threaded into every arm below rather than
+        // living in the match itself.
+        // The generic Distort & Transform effect dialog previews the same
+        // way — shares this one slot with the Offset Path dialog above
+        // (never both open at once), so falls back to it when the offset
+        // dialog isn't the one showing.
+        let appearance_effect_preview: Option<(ObjectId, usize, usize, amalith_core::Effect)> = self
             .offset_dialog
             .as_ref()
             .filter(|d| d.preview)
             .and_then(|d| match d.target {
-                offsetdlg::Target::AppearanceItem { object, index } => Some((object, index, d.resolved_effect())),
+                offsetdlg::Target::AppearanceItem { object, item_index, effect_index } => {
+                    Some((object, item_index, effect_index.unwrap_or(usize::MAX), amalith_core::Effect::Offset(d.resolved_effect())))
+                }
                 offsetdlg::Target::Objects => None,
+            })
+            .or_else(|| {
+                self.effect_dialog
+                    .as_ref()
+                    .filter(|d| d.preview)
+                    .map(|d| (d.object, d.item_index, d.effect_index.unwrap_or(usize::MAX), d.resolved_effect()))
             });
 
         let preview = match &self.drag {
@@ -127,7 +144,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             Drag::Warp { preview, warping: false, .. }
             | Drag::Scale { preview, .. } | Drag::Rotate { preview, .. } => Some(DragPreview {
@@ -141,7 +158,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             // Alt-drag with one of these dedicated transform tools shows
             // a live ghost of the would-be copy (`dup_xf`) instead of
@@ -168,7 +185,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             Drag::ResizeTextBox { .. } => Some(DragPreview {
                 ids: &[],
@@ -181,7 +198,7 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             Drag::MoveAnchors {
                 start_doc,
@@ -205,7 +222,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             Drag::MoveHandle {
                 object,
@@ -229,7 +246,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             Drag::PathTextBracket { object, edit } => {
                 let live = pathtext::resolve(self.doc.editor.document(), *object, &edit.original)
@@ -245,7 +262,7 @@ impl App {
                     text_boxes: &[],
                     path_text: live.map(|pt| (*object, pt)),
                     width_points: None,
-                    appearance_offset: appearance_offset_preview,
+                    appearance_effect: appearance_effect_preview,
                 })
             }
             Drag::WidthPoint { object, points, .. } => Some(DragPreview {
@@ -259,9 +276,9 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: Some((*object, points.as_slice())),
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
-            _ if !resize_previews.is_empty() || appearance_offset_preview.is_some() => Some(DragPreview {
+            _ if !resize_previews.is_empty() || appearance_effect_preview.is_some() => Some(DragPreview {
                 ids: &[],
                 delta: Vec2::ZERO,
                 dup: false,
@@ -272,7 +289,7 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
-                appearance_offset: appearance_offset_preview,
+                appearance_effect: appearance_effect_preview,
             }),
             _ => None,
         };
@@ -510,6 +527,7 @@ impl App {
                     self.doc.editor.document(),
                     self.doc_point(self.pointer),
                     self.visible_doc_rect(),
+                    select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
                 )
                 .is_some();
             (self.effective_tool(), hint, over_selectable)
@@ -588,6 +606,8 @@ impl App {
                 appearance_items.clone(),
                 self.appearance_selected,
                 self.appearance_drop,
+                self.appearance_fx_menu,
+                self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                 self.doc.fill,
                 self.doc.stroke,
                 self.pointer,
@@ -757,6 +777,7 @@ impl App {
                             xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                            effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
@@ -764,6 +785,8 @@ impl App {
                             appearance_items: self.appearance_items(),
                             appearance_selected: self.appearance_selected,
                             appearance_drop: self.appearance_drop,
+                            appearance_fx_menu: self.appearance_fx_menu,
+                            appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                         };
                         if frame.body.height() > 0.0 {
                             self.content.push_clip_layer(Fill::NonZero, ID, &frame.body);
@@ -835,6 +858,7 @@ impl App {
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                                effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
@@ -842,6 +866,8 @@ impl App {
                                 appearance_items: self.appearance_items(),
                                 appearance_selected: self.appearance_selected,
                                 appearance_drop: self.appearance_drop,
+                                appearance_fx_menu: self.appearance_fx_menu,
+                                appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
                             panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);
@@ -854,7 +880,7 @@ impl App {
                             let (row_rect, pid) = (row.rect, row.panel);
                             let bounds = layout::flyout_rect(row_rect, Rect::new(0.0, 0.0, wl, hl));
                             let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
-                            let close = Rect::new(header.x1 - 26.0, header.y0, header.x1, header.y1);
+                            let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
                             chrome::paint_flyout_chrome(
                                 &mut self.content,
                                 bounds,
@@ -864,7 +890,7 @@ impl App {
                                 &self.theme,
                                 &mut self.text,
                             );
-                            let body = Rect::new(bounds.x0 + 8.0, header.y1 + 8.0, bounds.x1 - 8.0, bounds.y1 - 8.0);
+                            let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
                             let ctx = panels::Ctx {
                                 theme: &self.theme,
                                 doc: self.doc.editor.document(),
@@ -915,6 +941,7 @@ impl App {
                                 xform_dialog: self.xform_dialog.as_ref().map(|d| (d, caret_blink)),
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
+                                effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
@@ -922,6 +949,8 @@ impl App {
                                 appearance_items: self.appearance_items(),
                                 appearance_selected: self.appearance_selected,
                                 appearance_drop: self.appearance_drop,
+                                appearance_fx_menu: self.appearance_fx_menu,
+                                appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &body);
                             panels::paint(&mut self.content, &mut self.text, pid, body, &ctx);

@@ -967,6 +967,17 @@ pub struct BlendData {
     #[serde(default)]
     pub spine: Option<ObjectId>,
     pub spacing: BlendSpacing,
+    /// Illustrator's "Reverse Spine" — walks the spine (or, with no
+    /// spine, the straight line between the two shapes' centers) from
+    /// its far end instead of its near end, without touching `start`/
+    /// `end` themselves.
+    #[serde(default)]
+    pub spine_reversed: bool,
+    /// Illustrator's "Reverse Front to Back" — flips the generated
+    /// steps' stacking order (which one paints on top) without changing
+    /// which step is which along the blend.
+    #[serde(default)]
+    pub stack_reversed: bool,
 }
 
 /// How many steps a blend generates between its two shapes.

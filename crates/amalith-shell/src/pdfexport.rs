@@ -483,15 +483,12 @@ fn paint_shape(ctx: &mut PdfCtx<'_>, doc: &Document, bez: &BezPath, xf: CoreAffi
         if !item.visible() {
             continue;
         }
-        // A live Offset Path effect on this one item replaces its base
-        // geometry with the offset contour — same primitive as the
-        // destructive Object ▸ Path ▸ Offset Path command, applied to one
-        // paint instead of producing a new object. See canvas.rs's
-        // identical handling in `paint_object`'s `paint_path` closure.
-        let offset_bez = item
-            .offset()
-            .and_then(|fx| amalith_commands::offset_path(bez, fx.amount, fx.join, fx.miter_limit))
-            .map(|pd| pd.geometry);
+        // This item's own live effect stack, chained in order — same
+        // primitive as the destructive Object ▸ Path commands, applied to
+        // one paint instead of producing a new object. See canvas.rs's
+        // identical `apply_effect_chain` (no live-preview override here;
+        // export is a one-shot batch operation, not interactive).
+        let offset_bez = crate::canvas::apply_effect_chain(bez, item.effects());
         let ibez = offset_bez.as_ref().unwrap_or(bez);
         match item {
             amalith_core::AppearanceItem::Fill { paint, opacity, .. } => {

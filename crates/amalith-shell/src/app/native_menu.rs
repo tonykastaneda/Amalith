@@ -194,6 +194,38 @@ impl NativeMenu {
             MenuItem::new("Release", false, Some(Accelerator::new(sup_alt, Code::Digit7))),
             MenuAction::ClipRelease,
         );
+        let sup_alt_shift = Some(prim | Modifiers::ALT | Modifiers::SHIFT);
+        let blend_make_i = reg(
+            &mut items,
+            MenuItem::new("Make", true, Some(Accelerator::new(sup_alt, Code::KeyB))),
+            MenuAction::BlendMake,
+        );
+        let blend_release_i = reg(
+            &mut items,
+            MenuItem::new("Release", true, Some(Accelerator::new(sup_alt_shift, Code::KeyB))),
+            MenuAction::BlendRelease,
+        );
+        let blend_options_i = reg(
+            &mut items,
+            MenuItem::new("Blend Options…", true, None),
+            MenuAction::BlendOptionsMenu,
+        );
+        let blend_expand_i = reg(&mut items, MenuItem::new("Expand", true, None), MenuAction::BlendExpand);
+        let blend_replace_spine_i = reg(
+            &mut items,
+            MenuItem::new("Replace Spine", true, None),
+            MenuAction::BlendReplaceSpine,
+        );
+        let blend_reverse_spine_i = reg(
+            &mut items,
+            MenuItem::new("Reverse Spine", true, None),
+            MenuAction::BlendReverseSpine,
+        );
+        let blend_reverse_stacking_i = reg(
+            &mut items,
+            MenuItem::new("Reverse Front to Back", true, None),
+            MenuAction::BlendReverseStacking,
+        );
         let forward_i = reg(&mut items, mk("Bring Forward", sup, Code::BracketRight), MenuAction::BringForward);
         let front_i = reg(
             &mut items,
@@ -401,13 +433,30 @@ impl NativeMenu {
         .expect("same menu");
         let clip_menu = Submenu::with_items("Clipping Mask", true, &[&clip_make_i, &clip_release_i])
             .expect("clip menu");
+        let blend_menu = Submenu::with_items(
+            "Blend",
+            true,
+            &[
+                &blend_make_i,
+                &blend_release_i,
+                &sep(),
+                &blend_options_i,
+                &sep(),
+                &blend_expand_i,
+                &sep(),
+                &blend_replace_spine_i,
+                &blend_reverse_spine_i,
+                &blend_reverse_stacking_i,
+            ],
+        )
+        .expect("blend menu");
         let path_menu = Submenu::with_items("Path", true, &[&offset_path_i]).expect("path menu");
         let lock_menu = Submenu::with_items("Lock", true, &[&lock_selection_i]).expect("lock menu");
         let object_menu = Submenu::with_items(
             "Object",
             true,
             &[
-                &transform_again_i, &sep(), &path_menu, &clip_menu, &sep(), &lock_menu,
+                &transform_again_i, &sep(), &path_menu, &blend_menu, &clip_menu, &sep(), &lock_menu,
                 &unlock_all_i,
             ],
         )
@@ -440,6 +489,64 @@ impl NativeMenu {
             MenuAction::AreaTypeOptions,
         );
         let type_menu = Submenu::with_items("Type", true, &[&convert_text_i, &area_type_options_i]).expect("type menu");
+        // Effect menu — Illustrator's own live-effect menu (distinct from
+        // Object ▸ Path ▸ Offset Path above, which is the destructive
+        // one): adds a live effect to the currently selected Appearance-
+        // panel row (or the topmost item in the selection's stack if none
+        // is explicitly selected there — see `MenuAction::EffectMenu`'s
+        // own doc comment). Free Distort isn't here — it needs an
+        // on-canvas corner-drag interaction, not a menu item that opens a
+        // numeric dialog.
+        let effect_offset_i = reg(
+            &mut items,
+            MenuItem::new("Offset Path…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Offset),
+        );
+        let effect_zigzag_i = reg(
+            &mut items,
+            MenuItem::new("Zig Zag…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::ZigZag)),
+        );
+        let effect_pucker_bloat_i = reg(
+            &mut items,
+            MenuItem::new("Pucker & Bloat…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::PuckerBloat)),
+        );
+        let effect_roughen_i = reg(
+            &mut items,
+            MenuItem::new("Roughen…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::Roughen)),
+        );
+        let effect_transform_i = reg(
+            &mut items,
+            MenuItem::new("Transform…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::Transform)),
+        );
+        let effect_tweak_i = reg(
+            &mut items,
+            MenuItem::new("Tweak…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::Tweak)),
+        );
+        let effect_twist_i = reg(
+            &mut items,
+            MenuItem::new("Twist…", true, None),
+            MenuAction::EffectMenu(panels::EffectMenuChoice::Distort(crate::effectdlg::EffectKind::Twist)),
+        );
+        let distort_transform_menu = Submenu::with_items(
+            "Distort & Transform",
+            true,
+            &[
+                &effect_zigzag_i,
+                &effect_pucker_bloat_i,
+                &effect_roughen_i,
+                &effect_transform_i,
+                &effect_tweak_i,
+                &effect_twist_i,
+            ],
+        )
+        .expect("distort & transform menu");
+        let effect_menu = Submenu::with_items("Effect", true, &[&effect_offset_i, &sep(), &distort_transform_menu])
+            .expect("effect menu");
         let view = Submenu::with_items(
             "View",
             true,
@@ -536,6 +643,7 @@ impl NativeMenu {
         menu.append(&object_menu).expect("append object menu");
         menu.append(&select_menu).expect("append select menu");
         menu.append(&type_menu).expect("append type menu");
+        menu.append(&effect_menu).expect("append effect menu");
         menu.append(&view).expect("append view menu");
         menu.append(&panels_menu).expect("append panels menu");
         menu.append(&help_menu).expect("append help menu");

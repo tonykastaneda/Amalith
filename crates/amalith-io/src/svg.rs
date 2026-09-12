@@ -705,8 +705,8 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     );
     Appearance {
         items: vec![
-            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true, offset: None },
-            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true, offset: None },
+            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true, effects: Vec::new() },
+            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true, effects: Vec::new() },
         ],
         opacity: obj_opacity,
     }
@@ -1215,8 +1215,8 @@ mod tests {
         // Two fills: red underneath, green on top.
         object.appearance = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
             ],
             opacity: 1.0,
         };
@@ -1248,14 +1248,14 @@ mod tests {
         );
         object.appearance = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, offset: None },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)),
                     width: 3.0,
                     style: amalith_core::StrokeStyle::default(),
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
@@ -1263,7 +1263,7 @@ mod tests {
                     style: amalith_core::StrokeStyle::default(),
                     opacity: 1.0,
                     visible: true,
-                    offset: None,
+                    effects: Vec::new(),
                 },
             ],
             opacity: 1.0,
