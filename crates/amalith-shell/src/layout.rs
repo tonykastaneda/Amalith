@@ -56,6 +56,12 @@ pub fn metric_header_h() -> f64 { crate::metrics::with(|m| m.layout_header_h) }
 /// shorter than the Master's own header (it carries no controls of its
 /// own, only the light-blue pill drawn inside it).
 pub fn metric_group_handle_h() -> f64 { crate::metrics::with(|m| m.layout_group_handle_h) }
+/// Height of a Stack-mode flyout preview's own header — taller than an
+/// ordinary Master header, see [`crate::metrics::Metrics::chrome_flyout_header_h`].
+pub fn metric_flyout_header_h() -> f64 { crate::metrics::with(|m| m.chrome_flyout_header_h) }
+/// Left inset for a flyout header's title, and gap around its
+/// hamburger/close icons.
+pub fn metric_flyout_header_pad() -> f64 { crate::metrics::with(|m| m.chrome_flyout_header_pad) }
 
 /// One panel row in Stack-mode display.
 #[derive(Clone, Copy, Debug)]

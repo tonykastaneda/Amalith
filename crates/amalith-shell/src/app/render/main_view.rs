@@ -840,8 +840,8 @@ pub(in crate::app) fn paint_main(
     // `paint_smart_guides`'s own early-return for that).
     if let Some((row, pid, side)) = open_flyout {
         let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
-        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
-        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_flyout_header_h());
+        let close = Rect::new(header.x1 - ui_px(32.0), header.y0, header.x1, header.y1);
         let menu = panels::has_menu(pid).then(|| chrome::flyout_menu_rect(close, theme));
         chrome::paint_flyout_chrome(scene, bounds, header, menu, close, &tab_label(pid), theme, text);
         let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));

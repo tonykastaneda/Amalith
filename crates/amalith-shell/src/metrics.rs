@@ -44,6 +44,15 @@ pub struct Metrics {
     pub layout_group_handle_h: f64,
     pub layout_flyout_w: f64,
     pub layout_flyout_h: f64,
+    /// A Stack-mode flyout preview's own header band — taller than an
+    /// ordinary Master header (`layout_header_h`) on purpose: it carries
+    /// a title plus a hamburger and a close button and reads better with
+    /// real breathing room than the thin strip a docked/floating
+    /// master's chrome-only header needs.
+    pub chrome_flyout_header_h: f64,
+    /// Left inset for a flyout header's title text, and gap around its
+    /// hamburger/close icons.
+    pub chrome_flyout_header_pad: f64,
     pub newdoc_fh: f64,
     pub newdoc_footer_h: f64,
     pub stroke_panel_w: f64,
@@ -283,6 +292,8 @@ impl Metrics {
             layout_group_handle_h: 10.0 * scale,
             layout_flyout_w: 280.0 * scale,
             layout_flyout_h: 220.0 * scale,
+            chrome_flyout_header_h: 34.0 * scale,
+            chrome_flyout_header_pad: 14.0 * scale,
             newdoc_fh: 30.0 * scale,
             newdoc_footer_h: 62.0 * scale,
             stroke_panel_w: 240.0 * scale,

@@ -7845,8 +7845,8 @@ impl App {
             }
             None => layout::flyout_rect(row, viewport),
         };
-        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
-        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_flyout_header_h());
+        let close = Rect::new(header.x1 - ui_px(32.0), header.y0, header.x1, header.y1);
         let menu = chrome::flyout_menu_rect(close, &self.theme);
         let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
         Some((bounds, menu, close, body, pid))

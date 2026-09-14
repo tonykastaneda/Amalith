@@ -290,7 +290,7 @@ pub fn paint_flyout_chrome(
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
     let baseline = header.y0 + header.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
-    text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + ui_px(10.0), baseline);
+    text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + crate::layout::metric_flyout_header_pad(), baseline);
     if let Some(menu) = menu {
         paint_hamburger(scene, menu, theme.text_dim);
     }
