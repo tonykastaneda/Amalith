@@ -39,6 +39,7 @@ pub enum PanelKind {
     Links,
     Artboards,
     Swatches,
+    Symbols,
     Appearance,
     Character,
     Paragraph,
@@ -69,12 +70,13 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 28] = [
+    pub const ALL: [PanelKind; 29] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
         PanelKind::Artboards,
         PanelKind::Swatches,
+        PanelKind::Symbols,
         PanelKind::Appearance,
         PanelKind::Character,
         PanelKind::Paragraph,
@@ -112,6 +114,7 @@ impl PanelKind {
             PanelKind::Links => "links",
             PanelKind::Artboards => "artboards",
             PanelKind::Swatches => "swatches",
+            PanelKind::Symbols => "symbols",
             PanelKind::Appearance => "appearance",
             PanelKind::Character => "character",
             PanelKind::Paragraph => "paragraph",
@@ -149,6 +152,7 @@ impl PanelKind {
             "links" => PanelKind::Links,
             "artboards" => PanelKind::Artboards,
             "swatches" => PanelKind::Swatches,
+            "symbols" => PanelKind::Symbols,
             "appearance" => PanelKind::Appearance,
             "character" => PanelKind::Character,
             "paragraph" => PanelKind::Paragraph,
@@ -184,6 +188,7 @@ impl PanelKind {
             PanelKind::Links => "Links",
             PanelKind::Artboards => "Artboards",
             PanelKind::Swatches => "Swatches",
+            PanelKind::Symbols => "Symbols",
             PanelKind::Appearance => "Appearance",
             PanelKind::Character => "Character",
             PanelKind::Paragraph => "Paragraph",
@@ -617,6 +622,10 @@ impl DockModel {
         };
         if let Some(m) = self.master_mut(id) {
             m.dock = None;
+            // See `detach_group`'s doc comment — Stack mode is a docked-
+            // only concept, so a master that arrives at floating (by any
+            // path) always leaves Stack mode behind.
+            m.layout = MasterLayout::Tabs;
         }
         self.reflow_dock_indices(side);
     }
@@ -741,34 +750,32 @@ impl DockModel {
         if at >= m.groups.len() {
             return None;
         }
-        // The new Master keeps whichever display mode the group was
-        // pulled out of — detaching from a Tabs-mode master lands as a
-        // Tabs-mode master, from Stack as Stack.
-        let layout = m.layout;
         let g = m.groups.remove(at);
         self.prune_empty(master);
         let nid = self.alloc_id();
-        let mut new_master = Master::new(nid, MasterKind::Normal, vec![g], rect);
-        new_master.layout = layout;
+        // Always lands as Tabs, regardless of the source master's mode —
+        // Stack's compact icon-row chrome exists only to save space in a
+        // slim docked rail, and has no menu-button concept at all (see
+        // `chrome::paint_master`); a floating window has no such
+        // constraint and every floated panel needs its tab strip's
+        // hamburger to be reachable.
+        let new_master = Master::new(nid, MasterKind::Normal, vec![g], rect);
         self.masters.push(new_master);
         Some(nid)
     }
 
     /// Pulls `panel` out from wherever it sits and wraps it in a fresh
     /// group inside a brand-new floating Normal master at `rect` (⇐
-    /// `detachPanel`). `false` if `panel` wasn't placed. The new Master
-    /// keeps the layout mode `panel` was detached from (a tab stays a
-    /// tab, a Stack row stays a Stack row).
+    /// `detachPanel`). `false` if `panel` wasn't placed. Always lands as
+    /// Tabs — see [`DockModel::detach_group`]'s doc comment.
     pub fn detach_panel(&mut self, panel: PanelId, rect: [f32; 4]) -> Option<u64> {
-        let Some((old_mid, ..)) = self.locate(panel) else {
+        if self.locate(panel).is_none() {
             return None;
-        };
-        let layout = self.master(old_mid).map(|m| m.layout).unwrap_or(MasterLayout::Stack);
+        }
         self.remove(panel);
         let gid = self.alloc_id();
         let nid = self.alloc_id();
-        let mut new_master = Master::new(nid, MasterKind::Normal, vec![Group::new(gid, vec![panel])], rect);
-        new_master.layout = layout;
+        let new_master = Master::new(nid, MasterKind::Normal, vec![Group::new(gid, vec![panel])], rect);
         self.masters.push(new_master);
         Some(nid)
     }
@@ -853,6 +860,7 @@ mod tests {
                 | PanelKind::Links
                 | PanelKind::Artboards
                 | PanelKind::Swatches
+                | PanelKind::Symbols
                 | PanelKind::Appearance
                 | PanelKind::Character
                 | PanelKind::Paragraph
@@ -879,7 +887,7 @@ mod tests {
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 28);
+        assert_eq!(PanelKind::ALL.len(), 29);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }
@@ -900,12 +908,13 @@ mod tests {
         for k in PanelKind::ALL {
             assert_eq!(PanelKind::from_id_str(k.id_str()), k);
         }
-        let expected: [(PanelKind, &str); 27] = [
+        let expected: [(PanelKind, &str); 28] = [
             (PanelKind::Tools, "tools"),
             (PanelKind::Layers, "layers"),
             (PanelKind::Links, "links"),
             (PanelKind::Artboards, "artboards"),
             (PanelKind::Swatches, "swatches"),
+            (PanelKind::Symbols, "symbols"),
             (PanelKind::Character, "character"),
             (PanelKind::Paragraph, "paragraph"),
             (PanelKind::Color, "color"),
@@ -1091,28 +1100,39 @@ mod tests {
     }
 
     #[test]
-    fn detach_panel_keeps_the_source_masters_display_mode() {
+    fn detach_panel_always_lands_as_tabs_even_from_a_stack_mode_source() {
         let mut d = DockModel::new();
         let orig = d.spawn_master(vec![vec![A, B]], rect());
         d.master_mut(orig).unwrap().layout = MasterLayout::Tabs;
         let nid = d.detach_panel(B, rect()).unwrap();
         assert_eq!(d.master(nid).unwrap().layout, MasterLayout::Tabs);
 
-        // And the reverse: a Stack-mode source stays Stack.
+        // The source stays whatever it was — only the new floating
+        // master is forced to Tabs.
         let orig2 = d.spawn_master(vec![vec![C, D]], rect());
         d.master_mut(orig2).unwrap().layout = MasterLayout::Stack;
         let nid2 = d.detach_panel(D, rect()).unwrap();
         assert_eq!(d.master(orig2).unwrap().layout, MasterLayout::Stack);
-        assert_eq!(d.master(nid2).unwrap().layout, MasterLayout::Stack);
+        assert_eq!(d.master(nid2).unwrap().layout, MasterLayout::Tabs);
     }
 
     #[test]
-    fn detach_group_keeps_the_source_masters_display_mode() {
+    fn detach_group_always_lands_as_tabs_even_from_a_stack_mode_source() {
         let mut d = DockModel::new();
         let orig = d.spawn_master(vec![vec![A], vec![B]], rect());
-        d.master_mut(orig).unwrap().layout = MasterLayout::Tabs;
+        d.master_mut(orig).unwrap().layout = MasterLayout::Stack;
         let nid = d.detach_group(orig, 1, rect()).unwrap();
         assert_eq!(d.master(nid).unwrap().layout, MasterLayout::Tabs);
+    }
+
+    #[test]
+    fn undocking_a_stack_mode_master_converts_it_to_tabs() {
+        let mut d = DockModel::new();
+        let id = d.spawn_master(vec![vec![A]], rect());
+        d.dock_master(id, Side::Right, 0);
+        d.master_mut(id).unwrap().layout = MasterLayout::Stack;
+        d.undock(id);
+        assert_eq!(d.master(id).unwrap().layout, MasterLayout::Tabs);
     }
 
     #[test]

@@ -1303,7 +1303,9 @@ fn xf_for_quad(doc: &Document, selection: &[ObjectId], d: DragPreview<'_>) -> Af
         (Some(new), Some(obj)) => {
             let parent = match obj.parent {
                 amalith_core::ObjectParent::Group(id) => convert::affine(doc.world_transform(id)),
-                amalith_core::ObjectParent::Layer(_) => Affine::IDENTITY,
+                amalith_core::ObjectParent::Layer(_) | amalith_core::ObjectParent::Symbol(_) => {
+                    Affine::IDENTITY
+                }
             };
             parent * new * convert::affine(obj.transform).inverse() * parent.inverse()
         },
@@ -1879,6 +1881,46 @@ fn paint_object(
                 scene.pop_layer();
             }
         }
+        ObjectKind::Symbol(data) => {
+            // `m` already folds in the instance's own transform (plus any
+            // drag offset) — the definition's top-level children render
+            // relative to it, exactly like `Group` above recurses into
+            // its own children. A definition's content lives outside any
+            // layer (see `amalith_core::symbol`'s module docs), so this is
+            // the *only* place its children ever get resolved/painted —
+            // there is no other path that would draw them.
+            let child_drag = if replacement.is_some() { None } else { drag };
+            match doc.symbol(data.definition) {
+                Some(def) => {
+                    for &child in &def.children {
+                        paint_object(
+                            scene,
+                            doc,
+                            child,
+                            m,
+                            zoom,
+                            viewport,
+                            child_drag,
+                            text,
+                            editing_text,
+                            images,
+                            outline,
+                            link_ink,
+                        );
+                    }
+                }
+                // Dangling definition (deleted, or a future-format entry
+                // this build only half-understands) — draw whatever
+                // flattened fallback the instance was left with instead of
+                // nothing. "Symbols never break" per the format's
+                // compatibility policy (`amalith_io::manifest`'s doc).
+                None => {
+                    if let Some(fallback) = &obj.fallback {
+                        paint_path(scene, &convert::bez_path(&fallback.geometry), None);
+                    }
+                }
+            }
+        }
         ObjectKind::Text(td) => {
             // Live text stays solid in Outline view — only text that's been
             // expanded to paths (now a Path / CompoundPath) wireframes.
@@ -2002,15 +2044,14 @@ fn paint_object(
                 }
             }
         }
-        other => {
-            if let Some(b) = other.own_local_bounds() {
-                scene.stroke(
-                    &Stroke::new(1.0),
-                    m,
-                    Color::from_rgb8(0x88, 0x88, 0x88),
-                    None,
-                    &convert::rect(b),
-                );
+        // A kind this build doesn't recognize (see `ObjectKind::Unknown`'s
+        // docs) — draw whatever flattened fallback its writer left, so it
+        // reads as real content rather than nothing. Nothing to draw at
+        // all if there isn't one (no geometry of its own to guess a bbox
+        // outline from either — see `ObjectKind::own_local_bounds`).
+        ObjectKind::Unknown { .. } => {
+            if let Some(fallback) = &obj.fallback {
+                paint_path(scene, &convert::bez_path(&fallback.geometry), None);
             }
         }
     }

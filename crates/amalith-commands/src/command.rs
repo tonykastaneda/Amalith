@@ -7,8 +7,8 @@
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
     Affine, Appearance, AppearanceItem, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
-    GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, ColorMode, Rect,
-    StrokeStyle, TextData, Unit, Vec2,
+    GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, Point, ColorMode, Rect,
+    StrokeStyle, SymbolId, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
 
@@ -369,6 +369,49 @@ pub enum Command {
     /// nested inside them.
     Ungroup {
         ids: Vec<ObjectId>,
+    },
+    /// Converts `ids` into a new pooled symbol definition, replacing them
+    /// in place with a single instance that references it — Illustrator's
+    /// "drag artwork to the Symbols panel" behavior. Same parent/ordering
+    /// rules as [`Command::Group`] (`ids` must share a parent; their
+    /// relative order becomes the definition's own child order; the new
+    /// instance lands at the topmost grouped object's position). Editing
+    /// the definition's content afterward (e.g. via isolation mode) is
+    /// instantly visible through every instance — there is deliberately
+    /// no separate "redefine" command; see `amalith_core::SymbolDefinition`.
+    /// Yields [`CommandOutcome::Object`] with the new instance's id.
+    DefineSymbol {
+        ids: Vec<ObjectId>,
+        name: Option<String>,
+    },
+    /// Places a new instance of `symbol` as the topmost child of `layer`,
+    /// centered on `at` (document space). Yields [`CommandOutcome::Object`].
+    PlaceSymbolInstance {
+        symbol: SymbolId,
+        layer: LayerId,
+        at: Point,
+    },
+    /// The inverse of [`Command::DefineSymbol`]: detaches each symbol
+    /// instance in `ids` into an independent, editable copy of its
+    /// definition's *current* content, and removes the instance. The
+    /// definition itself is untouched, so any other instance keeps
+    /// working. Same multi-id outcome shape as [`Command::Ungroup`]
+    /// (handled directly by `Editor::execute`, not the generic compile
+    /// path) — errors if any id isn't a symbol instance.
+    BreakSymbolLink {
+        ids: Vec<ObjectId>,
+    },
+    /// Renames a pooled symbol definition.
+    RenameSymbol {
+        id: SymbolId,
+        name: String,
+    },
+    /// Removes a symbol definition from the pool. Every remaining
+    /// instance is broken first (see [`Command::BreakSymbolLink`]) so
+    /// nothing on canvas is ever left pointing at a gone definition —
+    /// "symbols never break."
+    DeleteSymbolDefinition {
+        id: SymbolId,
     },
     /// Makes a clipping mask: wraps `objects` in a new clip group (like
     /// [`Command::Group`]) whose topmost member becomes the clip path.

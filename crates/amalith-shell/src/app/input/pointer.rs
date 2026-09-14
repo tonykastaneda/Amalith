@@ -1049,25 +1049,33 @@ impl App {
                         }
                     }
                 } else if !self.doc.selection.is_empty() {
-                    let mut d = last_doc - start_doc;
-                    if self.shift_down {
-                        d = snap8(d);
-                    }
-                    let delta = convert::vec2_to_core(d);
-                    if self.alt_down {
-                        if let Ok(new_ids) = self
-                            .doc.editor
-                            .duplicate_objects(&self.doc.selection.clone(), delta)
-                        {
-                            self.doc.selection = new_ids;
-                        }
+                    // Dropped onto the Symbols panel (docked or floating):
+                    // make a symbol from the selection instead of moving it
+                    // — Illustrator's drag-to-Symbols-panel gesture.
+                    // Pre-empts the ordinary move/duplicate below entirely.
+                    if self.symbols_drop_target_at_pointer() {
+                        self.define_symbol_from_selection();
                     } else {
-                        let _ = self.doc.editor.execute(Command::MoveObjects {
-                            objects: self.doc.selection.clone(),
-                            delta,
-                        });
+                        let mut d = last_doc - start_doc;
+                        if self.shift_down {
+                            d = snap8(d);
+                        }
+                        let delta = convert::vec2_to_core(d);
+                        if self.alt_down {
+                            if let Ok(new_ids) = self
+                                .doc.editor
+                                .duplicate_objects(&self.doc.selection.clone(), delta)
+                            {
+                                self.doc.selection = new_ids;
+                            }
+                        } else {
+                            let _ = self.doc.editor.execute(Command::MoveObjects {
+                                objects: self.doc.selection.clone(),
+                                delta,
+                            });
+                        }
+                        self.record_transform_again(amalith_core::Affine::translate(delta), self.alt_down);
                     }
-                    self.record_transform_again(amalith_core::Affine::translate(delta), self.alt_down);
                     self.request_main_redraw();
                 }
             }

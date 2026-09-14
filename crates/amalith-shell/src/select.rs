@@ -371,12 +371,18 @@ pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[Obje
 /// which aren't independent objects at all. Locked children still count,
 /// same reasoning as `visible_top_level_bounds`.
 pub fn bounds_within(doc: &Document, group: ObjectId, visible: Rect, excluding: &[ObjectId]) -> Vec<(ObjectId, Rect)> {
-    let (clip, blend) = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => (g.clip, g.blend),
+    let (children, clip, blend): (&[ObjectId], _, _) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend),
+        // Isolated into a symbol definition's content (Edit Symbol) — same
+        // alignment-guide scoping as a group, resolved through the pool.
+        Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
+            Some(def) => (&def.children, None, None),
+            None => return Vec::new(),
+        },
         _ => return Vec::new(),
     };
     let mut out = Vec::new();
-    for &id in doc.children_of(ObjectParent::Group(group)).iter().rev() {
+    for &id in children.iter().rev() {
         if Some(id) == clip || excluding.contains(&id) {
             continue;
         }
@@ -417,13 +423,24 @@ pub fn topmost_in(
     point: Point,
     contour_tol: f64,
 ) -> Option<ObjectId> {
-    let (clip, blend) = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => (g.clip, g.blend),
+    let (children, clip, blend): (&[ObjectId], _, _) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend),
+        // Isolated straight into a symbol definition's own content (Edit
+        // Symbol) — its top-level children are as selectable as a
+        // group's, just resolved through the pool instead of
+        // `ObjectParent::Group`; a definition has no clip mask or blend
+        // of its own. A dangling definition (already-broken instance,
+        // shouldn't normally happen — see `Command::DeleteSymbolDefinition`)
+        // selects nothing rather than panicking.
+        Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
+            Some(def) => (&def.children, None, None),
+            None => return None,
+        },
         Some(kind) => {
             // A bare object was isolated: only it is selectable, hit the
             // same way any other path/compound path would be, or (for a
-            // shape with no precise test of its own — text, an image, a
-            // symbol) by its bounds.
+            // shape with no precise test of its own — text, an image) by
+            // its bounds.
             let hit = match kind {
                 ObjectKind::Path(_) | ObjectKind::CompoundPath(_) => path_hit(doc, group, point, contour_tol),
                 _ => bounds(doc, group).is_some_and(|b| b.contains(point)),
@@ -432,7 +449,7 @@ pub fn topmost_in(
         }
         None => return None,
     };
-    for &id in doc.children_of(ObjectParent::Group(group)).iter().rev() {
+    for &id in children.iter().rev() {
         if Some(id) == clip {
             continue;
         }
@@ -605,17 +622,22 @@ pub fn clip_mask_at_contour(
 /// Direct children of `group` whose bounds intersect `marquee`. When a
 /// bare object is isolated it is the only candidate.
 pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId> {
-    if !matches!(doc.object(group).map(|o| &o.kind), Some(ObjectKind::Group(_))) {
-        return match bounds(doc, group) {
-            Some(b) if overlaps(b, marquee) => vec![group],
-            _ => Vec::new(),
-        };
-    }
-    let blend = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => g.blend,
-        _ => None,
+    let (children, blend): (&[ObjectId], _) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.blend),
+        // Isolated into a symbol definition's content (Edit Symbol) — same
+        // marquee scoping as a group, resolved through the pool.
+        Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
+            Some(def) => (&def.children, None),
+            None => return Vec::new(),
+        },
+        _ => {
+            return match bounds(doc, group) {
+                Some(b) if overlaps(b, marquee) => vec![group],
+                _ => Vec::new(),
+            };
+        }
     };
-    doc.children_of(ObjectParent::Group(group))
+    children
         .iter()
         .copied()
         // A blend group's generated in-between steps aren't independently

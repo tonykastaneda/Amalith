@@ -276,14 +276,34 @@ pub fn paint_shadow(scene: &mut Scene, bounds: Rect) {
 /// The flyout preview beside a Stack-mode row (⇐ `#panel-flyout`): a small
 /// floating card with a header (title + close) and a body rect the caller
 /// paints the real panel content into.
-pub fn paint_flyout_chrome(scene: &mut Scene, bounds: Rect, header: Rect, close: Rect, title: &str, theme: &Theme, text: &mut TextContext) {
+pub fn paint_flyout_chrome(
+    scene: &mut Scene,
+    bounds: Rect,
+    header: Rect,
+    menu: Option<Rect>,
+    close: Rect,
+    title: &str,
+    theme: &Theme,
+    text: &mut TextContext,
+) {
     paint_shadow(scene, bounds);
     scene.fill(Fill::NonZero, ID, theme.panel_bg, None, &bounds);
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &header);
     let baseline = header.y0 + header.height() * 0.5 + TAB_TEXT_PX as f64 * 0.34;
     text.draw(scene, title, TAB_TEXT_PX, theme.text, header.x0 + ui_px(10.0), baseline);
+    if let Some(menu) = menu {
+        paint_hamburger(scene, menu, theme.text_dim);
+    }
     paint_x(scene, close, theme.text_dim, 3.5);
     scene.stroke(&Stroke::new(ui_px(1.5)), ID, theme.text_dim, None, &bounds);
+}
+
+/// The hamburger button on a Stack-mode flyout preview's own header — same
+/// idea as [`panel_menu_rect`], just anchored to `close` (the flyout's one
+/// close button) instead of a tab strip's right edge, since a flyout has
+/// no tabs of its own.
+pub fn flyout_menu_rect(close: Rect, theme: &Theme) -> Rect {
+    Rect::new(close.x0 - theme.panel_menu_w, close.y0, close.x0, close.y1)
 }
 
 /// A close ("×") glyph centered in `r`, arm half-length `a`.

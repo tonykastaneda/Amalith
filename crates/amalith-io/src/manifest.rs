@@ -15,7 +15,39 @@
 //!    `Document`'s internal fields change shape, the on-disk schema
 //!    doesn't silently change with it — `DocumentManifest` is the explicit,
 //!    versioned contract external tools/plugins read.
-use amalith_core::{Artboard, Asset, Gradient, Guide, LayerColor, LayerId, Metadata, Object, Settings, Swatch};
+//!
+//! ## Compatibility policy: a `.amalith` file never stops opening
+//!
+//! This has two independent halves, and every future schema change to
+//! `DocumentManifest`, `ArtworkFile`, or `amalith_core::ObjectKind` needs
+//! to keep both intact:
+//!
+//! - **Old files stay readable in new Amalith** (backward compatibility).
+//!   Standard practice: a changed field/shape gets `#[serde(default)]` if
+//!   it's purely additive, or an `#[serde(untagged)]` "try new shape, fall
+//!   back to old shape" repr enum plus a `#[serde(from = "...")]` shim if
+//!   the shape itself changed — see `PathData`'s `PathDataRepr` in
+//!   `amalith-core/src/object.rs` for the latter, and `gradients`/`guides`
+//!   below for the former. Never delete an old shim; newer code must
+//!   always know every shape any older version ever wrote.
+//! - **New files stay openable in old Amalith** (forward compatibility) —
+//!   the harder half, and the one a plain `#[derive(Deserialize)]` enum
+//!   can't give you: an old build hard-fails the moment it meets a
+//!   variant tag it's never seen. `ObjectKind` (`amalith-core/src/
+//!   object.rs`) is deliberately *not* a plain derive for this reason —
+//!   its `ObjectKindRepr` shim tries every variant this build knows, and
+//!   falls back to `ObjectKind::Unknown { kind, raw }` (capturing the
+//!   original tag and JSON body losslessly) for anything it doesn't. That
+//!   keeps the file openable and keeps a re-save from destroying the part
+//!   it didn't understand; `Object::fallback` (baked flattened geometry,
+//!   populated by whichever future version introduced the unrecognized
+//!   kind) is what lets that old build still render something recognizable
+//!   instead of a blank hole. This is the deliberate size-for-durability
+//!   trade the policy makes: some objects carry redundant baked geometry
+//!   so files stay bigger on average, in exchange for never refusing to
+//!   open. Every future `ObjectKind` variant should ship with a
+//!   `fallback`-populating writer from day one, the same way `Symbol` does.
+use amalith_core::{Artboard, Asset, Gradient, Guide, LayerColor, LayerId, Metadata, Object, Settings, Swatch, SymbolId};
 use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
@@ -24,7 +56,11 @@ use serde::{Deserialize, Serialize};
 /// v2: path objects store an anchor/handle model (`PathData::subpaths`)
 /// instead of a flat `geometry` BezPath. Readers still accept v1's
 /// `{ "geometry": ... }` shape (see `PathData`'s deserialize shim).
-pub const FORMAT_VERSION: u32 = 2;
+///
+/// v3: adds the `symbols` pool (`DocumentManifest::symbols`) and its own
+/// `artwork/symbols.json` container entry. `#[serde(default)]` on the new
+/// field means v1/v2 files still load, just with an empty pool.
+pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct DocumentManifest {
@@ -43,6 +79,13 @@ pub(crate) struct DocumentManifest {
     pub guides: Vec<Guide>,
     pub assets: Vec<Asset>,
     pub layers: Vec<LayerManifest>,
+    /// Symbol definitions' identity/panel-state only, same split as
+    /// `LayerManifest`/`layers` — each definition's content lives in its
+    /// own `artwork/symbol-<id>.json` (see `symbol_container_path`).
+    /// `#[serde(default)]` so containers written before symbols existed
+    /// still load, with an empty pool.
+    #[serde(default)]
+    pub symbols: Vec<SymbolManifest>,
 }
 
 /// Layer identity/panel-state only; `Layer::children` lives in
@@ -83,4 +126,26 @@ pub(crate) struct ArtworkFile {
 
 pub(crate) fn artwork_container_path(layer_id: LayerId) -> String {
     format!("artwork/layer-{layer_id}.json")
+}
+
+/// Symbol definition identity/panel-state only; `SymbolDefinition::children`
+/// lives in `SymbolArtworkFile` instead (derived from the object tree on
+/// load), same split as `LayerManifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SymbolManifest {
+    pub id: SymbolId,
+    pub name: String,
+}
+
+/// One symbol definition's object tree, same DFS-pre-order convention as
+/// `ArtworkFile`. A definition's content is never reachable from any
+/// `Layer::children` — see `amalith_core::symbol`'s module doc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SymbolArtworkFile {
+    pub symbol_id: SymbolId,
+    pub objects: Vec<Object>,
+}
+
+pub(crate) fn symbol_container_path(symbol_id: SymbolId) -> String {
+    format!("artwork/symbol-{symbol_id}.json")
 }

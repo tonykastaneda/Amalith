@@ -16,6 +16,7 @@ pub mod gradient;
 pub(crate) mod layers;
 pub(crate) mod links;
 mod swatches;
+pub(crate) mod symbols;
 pub mod tools;
 pub mod transform;
 pub mod pathfinder;
@@ -65,6 +66,7 @@ pub enum RenameId {
     Layer(LayerId),
     Object(ObjectId),
     Artboard(ArtboardId),
+    Symbol(amalith_core::SymbolId),
 }
 
 /// The preset palette (plus a leading `Paint::None`).
@@ -163,6 +165,14 @@ pub struct Ctx<'a> {
     pub links_scroll: f64,
     /// Links panel: the highlighted asset row.
     pub selected_asset: Option<AssetId>,
+    /// Symbols panel: wheel-scroll offset of the row list, px.
+    pub symbols_scroll: f64,
+    /// Symbols panel: the highlighted definition row.
+    pub selected_symbol: Option<amalith_core::SymbolId>,
+    /// A canvas object drag is currently hovering the docked Symbols
+    /// panel, ready to make a symbol from the selection on release — see
+    /// `App::docked_symbols_panel_body_at`.
+    pub symbols_drop_hover: bool,
     /// Color panel: RGB / HSB / CMYK slider set.
     pub color_mode: ColorSpace,
     /// Color panel: the loaded ICC CMYK profile, if any — used for real
@@ -480,6 +490,22 @@ pub enum Action {
     /// Footer "Update Link": re-stamp a Linked asset from disk and
     /// invalidate its decoded cache.
     UpdateLinkAsset(AssetId),
+    // --- Symbols panel ---
+    /// A row was clicked — just highlights it.
+    SelectSymbol(amalith_core::SymbolId),
+    /// Hamburger "New Symbol": `Command::DefineSymbol` from the current
+    /// canvas selection.
+    DefineSymbol,
+    /// Footer "Place": a new instance at the current view's center.
+    PlaceSymbolInstance(amalith_core::SymbolId),
+    /// Footer "Edit": isolate into the first existing instance of this
+    /// definition (Edit Symbol) — a no-op if none is placed anywhere.
+    EditSymbolDefinition(amalith_core::SymbolId),
+    /// Hamburger "Rename".
+    RenameSymbol(amalith_core::SymbolId),
+    /// Footer "Delete": removes the definition, breaking every remaining
+    /// instance first (see `Command::DeleteSymbolDefinition`).
+    DeleteSymbolDefinition(amalith_core::SymbolId),
     // --- Appearance panel ---
     /// A row was clicked — just selects it.
     AppearanceSelect(usize),
@@ -545,6 +571,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
         PanelKind::Color => color::menu(ctx),
         PanelKind::Transform => transform::menu(ctx),
         PanelKind::Align => align::menu(ctx),
+        PanelKind::Symbols => symbols::menu(ctx),
         PanelKind::Links => links::menu(ctx),
         _ => Vec::new(),
     }
@@ -577,12 +604,19 @@ pub fn links_content_height(doc: &Document) -> f64 {
     links::content_height(doc)
 }
 
+/// Full content height of the Symbols panel for the given document state —
+/// the shell's wheel handler uses it to size the scroll range.
+pub fn symbols_content_height(doc: &Document) -> f64 {
+    symbols::content_height(doc)
+}
+
 /// Draw panel `id`'s body into `body`.
 pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect, ctx: &Ctx) {
     match id.0 {
         PanelKind::Tools => tools::paint(scene, text, body, ctx),
         PanelKind::Layers => layers::paint(scene, text, body, ctx),
         PanelKind::Links => links::paint(scene, text, body, ctx),
+        PanelKind::Symbols => symbols::paint(scene, text, body, ctx),
         PanelKind::Artboards => artboards::paint(scene, text, body, ctx),
         PanelKind::Swatches => swatches::paint(scene, text, body, ctx),
         PanelKind::Appearance => appearance::paint(scene, text, body, ctx),
@@ -654,6 +688,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         PanelKind::Tools => tools::hit(body, local, ctx),
         PanelKind::Layers => layers::hit(body, local, ctx),
         PanelKind::Links => links::hit(body, local, ctx),
+        PanelKind::Symbols => symbols::hit(body, local, ctx),
         PanelKind::Artboards => artboards::hit(body, local, ctx),
         PanelKind::Swatches => swatches::hit(body, local, ctx),
         PanelKind::Appearance => appearance::hit(body, local, ctx),
@@ -741,6 +776,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Tools => tools::natural_height(width, tools::hide_wip()),
         PanelKind::Layers => layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Links => metric_row_h() * 2.0 + metric_footer_h(),
+        PanelKind::Symbols => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
         PanelKind::Appearance => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Color => color::metric_natural_h(),

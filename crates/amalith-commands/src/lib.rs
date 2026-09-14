@@ -51,7 +51,7 @@ mod tests {
     use super::*;
     use amalith_core::{
         Affine, AssetKind, AssetSource, Color, Document, GradientKind, Layer, LayerId, Object,
-        ObjectId, ObjectKind, ObjectParent, Paint, Rect, Vec2,
+        ObjectId, ObjectKind, ObjectParent, Paint, Point, Rect, SymbolData, Vec2,
     };
 
     fn new_editor() -> Editor {
@@ -3265,5 +3265,228 @@ mod tests {
         assert_eq!(g.children.len(), before_len);
         assert_eq!(g.children.first(), Some(&b));
         assert_eq!(g.children.last(), Some(&a));
+    }
+
+    #[test]
+    fn define_symbol_replaces_the_selection_in_place_with_an_instance() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer = match editor.document().object(a).unwrap().parent {
+            ObjectParent::Layer(id) => id,
+            _ => panic!(),
+        };
+        let bounds_before = (
+            editor.document().bounds_of(a).unwrap(),
+            editor.document().bounds_of(b).unwrap(),
+        );
+
+        let CommandOutcome::Object(instance) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: Some("Icon".into()) })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        // The instance takes over the slot; `a`/`b` move into the pool,
+        // never reachable from the layer any more.
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[instance]);
+        let ObjectKind::Symbol(data) = &editor.document().object(instance).unwrap().kind else {
+            panic!("expected a Symbol instance")
+        };
+        let symbol_id = data.definition;
+        assert_eq!(editor.document().symbol(symbol_id).unwrap().name, "Icon");
+        assert_eq!(editor.document().children_of(ObjectParent::Symbol(symbol_id)), &[a, b]);
+
+        // Grouping-into-a-symbol must not move anything on screen.
+        assert_eq!(editor.document().bounds_of(a), Some(bounds_before.0));
+        assert_eq!(editor.document().bounds_of(b), Some(bounds_before.1));
+        assert_eq!(editor.document().bounds_of(instance), editor.document().bounds_of(a).map(|r| r.union(bounds_before.1)));
+
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[a, b]);
+        assert!(editor.document().symbol(symbol_id).is_none());
+        assert!(editor.document().object(instance).is_none());
+
+        editor.redo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[instance]);
+        assert!(editor.document().symbol(symbol_id).is_some());
+    }
+
+    #[test]
+    fn place_symbol_instance_adds_another_reference_to_the_same_definition() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer = match editor.document().object(a).unwrap().parent {
+            ObjectParent::Layer(id) => id,
+            _ => panic!(),
+        };
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ObjectKind::Symbol(data) = &editor.document().object(first).unwrap().kind else {
+            panic!()
+        };
+        let symbol_id = data.definition;
+
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::PlaceSymbolInstance { symbol: symbol_id, layer, at: Point::new(500.0, 500.0) })
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_ne!(second, first);
+        let ObjectKind::Symbol(data2) = &editor.document().object(second).unwrap().kind else {
+            panic!()
+        };
+        assert_eq!(data2.definition, symbol_id);
+        // Placed centered on `at`.
+        let placed_bounds = editor.document().bounds_of(second).unwrap();
+        let center = placed_bounds.center();
+        assert!((center.x - 500.0).abs() < 0.5);
+        assert!((center.y - 500.0).abs() < 0.5);
+        // Only one definition exists — both instances share it.
+        assert_eq!(editor.document().symbols().len(), 1);
+    }
+
+    #[test]
+    fn editing_the_shared_definitions_content_needs_no_redefine_command() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer = match editor.document().object(a).unwrap().parent {
+            ObjectParent::Layer(id) => id,
+            _ => panic!(),
+        };
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ObjectKind::Symbol(data) = &editor.document().object(first).unwrap().kind else { panic!() };
+        let symbol_id = data.definition;
+        let CommandOutcome::Object(_second) = editor
+            .execute(Command::PlaceSymbolInstance { symbol: symbol_id, layer, at: Point::new(500.0, 500.0) })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        // Edit one of the definition's own children with an ordinary
+        // object-targeted command — no symbol-specific "redefine" verb
+        // exists at all (see `Command::DefineSymbol`'s docs).
+        editor
+            .execute(Command::SetFill { objects: vec![a], paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)) })
+            .unwrap();
+
+        // Both instances resolve the *same* pooled definition, so there is
+        // nothing per-instance left stale — re-reading the definition's
+        // content from either instance's perspective sees the edit.
+        let resolved_child = editor.document().symbol(symbol_id).unwrap().children[0];
+        assert_eq!(resolved_child, a);
+        assert_eq!(editor.document().object(a).unwrap().appearance.fill(), Paint::Solid(Color::rgb(1.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn break_symbol_link_bakes_an_independent_copy_and_leaves_the_definition_intact() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer = match editor.document().object(a).unwrap().parent {
+            ObjectParent::Layer(id) => id,
+            _ => panic!(),
+        };
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ObjectKind::Symbol(data) = &editor.document().object(first).unwrap().kind else { panic!() };
+        let symbol_id = data.definition;
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::PlaceSymbolInstance { symbol: symbol_id, layer, at: Point::new(500.0, 500.0) })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        let freed = editor.break_symbol_links(&[first]).unwrap();
+        assert_eq!(freed.len(), 2, "the definition's two children each become an independent copy");
+        assert!(editor.document().object(first).is_none(), "the instance itself is gone");
+        for &id in &freed {
+            assert!(!matches!(editor.document().object(id).unwrap().kind, ObjectKind::Symbol(_)));
+        }
+        // Definition, its original content, and the *other* instance are
+        // all untouched.
+        assert!(editor.document().symbol(symbol_id).is_some());
+        assert_eq!(editor.document().children_of(ObjectParent::Symbol(symbol_id)), &[a, b]);
+        assert!(editor.document().object(second).is_some());
+
+        editor.undo().unwrap();
+        assert!(editor.document().object(first).is_some());
+        for &id in &freed {
+            assert!(editor.document().object(id).is_none());
+        }
+    }
+
+    #[test]
+    fn deleting_a_symbol_definition_breaks_every_remaining_instance_first() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let layer = match editor.document().object(a).unwrap().parent {
+            ObjectParent::Layer(id) => id,
+            _ => panic!(),
+        };
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: None })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ObjectKind::Symbol(data) = &editor.document().object(first).unwrap().kind else { panic!() };
+        let symbol_id = data.definition;
+        let CommandOutcome::Object(second) = editor
+            .execute(Command::PlaceSymbolInstance { symbol: symbol_id, layer, at: Point::new(500.0, 500.0) })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        editor.execute(Command::DeleteSymbolDefinition { id: symbol_id }).unwrap();
+
+        assert!(editor.document().symbol(symbol_id).is_none());
+        assert!(editor.document().object(first).is_none());
+        assert!(editor.document().object(second).is_none());
+        // Nothing anywhere still points at the removed definition.
+        assert!(editor
+            .document()
+            .objects()
+            .all(|o| !matches!(&o.kind, ObjectKind::Symbol(s) if s.definition == symbol_id)));
+
+        editor.undo().unwrap();
+        assert!(editor.document().symbol(symbol_id).is_some());
+        assert!(editor.document().object(first).is_some());
+        assert!(editor.document().object(second).is_some());
+    }
+
+    #[test]
+    fn rename_symbol_is_undoable() {
+        let mut editor = new_editor();
+        let (a, b) = two_rects(&mut editor);
+        let CommandOutcome::Object(first) = editor
+            .execute(Command::DefineSymbol { ids: vec![a, b], name: Some("Original".into()) })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let ObjectKind::Symbol(data) = &editor.document().object(first).unwrap().kind else { panic!() };
+        let symbol_id = data.definition;
+
+        editor.execute(Command::RenameSymbol { id: symbol_id, name: "Renamed".into() }).unwrap();
+        assert_eq!(editor.document().symbol(symbol_id).unwrap().name, "Renamed");
+        editor.undo().unwrap();
+        assert_eq!(editor.document().symbol(symbol_id).unwrap().name, "Original");
     }
 }

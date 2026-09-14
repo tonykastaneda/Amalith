@@ -16,7 +16,8 @@ use crate::history::History;
 use amalith_core::{
     Affine, Appearance, Artboard, ArtboardId, Asset, AssetId, AssetKind, BlendData, BlendSpacing,
     Color, Document, DocumentError, Effect, Gradient, GradientId, GradientKind, Layer, LayerId,
-    Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, Vec2,
+    Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, SymbolData,
+    SymbolDefinition, SymbolId, Vec2,
 };
 use kurbo::BezPath;
 use std::collections::{HashMap, HashSet};
@@ -233,6 +234,23 @@ impl Editor {
         Ok(freed_ids)
     }
 
+    /// See [`Command::BreakSymbolLink`]. Same multi-id-outcome shape as
+    /// [`Editor::ungroup`] and the identical reason: the freed top-level
+    /// ids (one instance's definition can have several) can't fit in
+    /// `Editor::execute`'s single-id [`CommandOutcome`].
+    pub fn break_symbol_links(&mut self, ids: &[ObjectId]) -> Result<Vec<ObjectId>, CommandError> {
+        let (edits, freed_ids) = self.compile_break_symbol_links(ids)?;
+        let mut inverses = Vec::with_capacity(edits.len());
+        for edit in edits {
+            let (inverse, _created) = edit::apply(edit, &mut self.document)?;
+            inverses.push(inverse);
+        }
+        inverses.reverse();
+        self.history.record(inverses);
+        self.bounds_cache.clear();
+        Ok(freed_ids)
+    }
+
     /// Read-only access to the underlying document. There is no
     /// `document_mut`: every mutation must go through [`Editor::execute`].
     pub fn document(&self) -> &Document {
@@ -311,6 +329,14 @@ impl Editor {
         // it validly frees zero ids — `None`, not a panic, in that case.
         if let Command::Ungroup { ids } = command {
             let freed_ids = self.ungroup(&ids)?;
+            return Ok(freed_ids
+                .first()
+                .map_or(CommandOutcome::None, |&id| CommandOutcome::Object(id)));
+        }
+        // Same multi-id problem as `Ungroup` above — see
+        // `Editor::break_symbol_links`.
+        if let Command::BreakSymbolLink { ids } = command {
+            let freed_ids = self.break_symbol_links(&ids)?;
             return Ok(freed_ids
                 .first()
                 .map_or(CommandOutcome::None, |&id| CommandOutcome::Object(id)));
@@ -1208,6 +1234,11 @@ impl Editor {
                             return Err(CommandError::Document(DocumentError::NotAGroup(g)));
                         }
                     }
+                    ObjectParent::Symbol(s) => {
+                        self.document
+                            .symbol(s)
+                            .ok_or(DocumentError::SymbolNotFound(s))?;
+                    }
                 }
 
                 let raw: Vec<ObjectId> = ids;
@@ -1228,7 +1259,7 @@ impl Editor {
                                 Some(o) => p = o.parent,
                                 None => break,
                             },
-                            ObjectParent::Layer(_) => break,
+                            ObjectParent::Layer(_) | ObjectParent::Symbol(_) => break,
                         }
                     }
                 }
@@ -1279,7 +1310,7 @@ impl Editor {
                 }
 
                 let new_world_inv = match parent {
-                    ObjectParent::Layer(_) => Affine::IDENTITY,
+                    ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
                     ObjectParent::Group(g) => self.document.world_transform(g).inverse(),
                 };
 
@@ -1379,6 +1410,144 @@ impl Editor {
             }
             Command::Ungroup { .. } => {
                 unreachable!("Editor::execute intercepts Command::Ungroup before calling compile")
+            }
+            Command::DefineSymbol { ids, name } => {
+                if ids.is_empty() {
+                    return Err(CommandError::NothingToDefine);
+                }
+                // Same shared-parent / restacking math as `Command::Group`
+                // above — a definition's content is a container exactly
+                // like a group's, just addressed via `ObjectParent::Symbol`
+                // instead of `ObjectParent::Group`.
+                let mut parent = None;
+                for &id in &ids {
+                    let object = self
+                        .document
+                        .object(id)
+                        .ok_or(CommandError::ObjectNotFound(id))?;
+                    match parent {
+                        None => parent = Some(object.parent),
+                        Some(p) if p == object.parent => {}
+                        Some(_) => return Err(CommandError::ObjectsSpanMultipleParents),
+                    }
+                }
+                let parent =
+                    parent.expect("ids is non-empty, so the loop above always sets parent");
+
+                let selected: HashSet<ObjectId> = ids.iter().copied().collect();
+                let siblings = self.document.children_of(parent);
+                let topmost_index = siblings
+                    .iter()
+                    .rposition(|id| selected.contains(id))
+                    .expect("every id was validated to exist in this parent's children above");
+                let instance_index = siblings[..=topmost_index]
+                    .iter()
+                    .filter(|id| !selected.contains(id))
+                    .count();
+                let definition_children: Vec<ObjectId> = siblings
+                    .iter()
+                    .copied()
+                    .filter(|id| selected.contains(id))
+                    .collect();
+
+                // Captured before any reparenting, in `parent`'s own local
+                // space — the same space the new instance's (identity)
+                // transform places it in, so this is exactly the bounds
+                // the instance should report as long as its definition
+                // stays resolvable.
+                let local_bounds = union_local_bounds(&self.document, &definition_children)
+                    .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+
+                let symbol_id = SymbolId::new();
+                let instance_id = ObjectId::new();
+                let instance = Object::new(
+                    instance_id,
+                    parent,
+                    ObjectKind::Symbol(SymbolData { definition: symbol_id, local_bounds }),
+                );
+                // The instance's own `InsertObject` must be the very first
+                // edit so `execute` reports *its* id as the outcome (see
+                // `ApplyGradient`'s identical "must be first" comment).
+                let mut edits = vec![Edit::InsertObject {
+                    object: Box::new(instance),
+                    index: instance_index,
+                }];
+                edits.push(Edit::InsertSymbol {
+                    symbol: SymbolDefinition {
+                        id: symbol_id,
+                        name: name.unwrap_or_else(|| "New Symbol".into()),
+                        children: Vec::new(),
+                    },
+                    index: self.document.symbols().len(),
+                });
+                for (index, &child_id) in definition_children.iter().enumerate() {
+                    let mut child = self
+                        .document
+                        .object(child_id)
+                        .expect("child_id came from this parent's own children list")
+                        .clone();
+                    child.parent = ObjectParent::Symbol(symbol_id);
+                    edits.push(Edit::RemoveObject { id: child_id });
+                    edits.push(Edit::InsertObject {
+                        object: Box::new(child),
+                        index,
+                    });
+                }
+                edits
+            }
+            Command::PlaceSymbolInstance { symbol, layer, at } => {
+                let definition = self
+                    .document
+                    .symbol(symbol)
+                    .ok_or(DocumentError::SymbolNotFound(symbol))?;
+                let local_bounds =
+                    union_local_bounds(&self.document, &definition.children).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+                self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
+
+                let center = Point::new(
+                    (local_bounds.x0 + local_bounds.x1) * 0.5,
+                    (local_bounds.y0 + local_bounds.y1) * 0.5,
+                );
+                let instance = Object {
+                    transform: Affine::translate(at - center),
+                    ..Object::new(
+                        ObjectId::new(),
+                        ObjectParent::Layer(layer),
+                        ObjectKind::Symbol(SymbolData { definition: symbol, local_bounds }),
+                    )
+                };
+                vec![Edit::InsertObject {
+                    object: Box::new(instance),
+                    index: self.document.children_of(ObjectParent::Layer(layer)).len(),
+                }]
+            }
+            Command::RenameSymbol { id, name } => {
+                self.document.symbol(id).ok_or(DocumentError::SymbolNotFound(id))?;
+                vec![Edit::RenameSymbol { id, name }]
+            }
+            Command::BreakSymbolLink { .. } => {
+                unreachable!(
+                    "Editor::execute intercepts Command::BreakSymbolLink before calling compile"
+                )
+            }
+            Command::DeleteSymbolDefinition { id } => {
+                self.document.symbol(id).ok_or(DocumentError::SymbolNotFound(id))?;
+                // Every remaining instance is broken *first* (folded into
+                // this same undo group) so nothing is ever left pointing
+                // at a gone definition — see the command's own docs.
+                let instances: Vec<ObjectId> = self
+                    .document
+                    .objects()
+                    .filter(|o| matches!(&o.kind, ObjectKind::Symbol(s) if s.definition == id))
+                    .map(|o| o.id)
+                    .collect();
+                let mut edits = if instances.is_empty() {
+                    Vec::new()
+                } else {
+                    self.compile_break_symbol_links(&instances)?.0
+                };
+                edits.push(Edit::RemoveSymbol { id });
+                edits
             }
             Command::ClipMake { objects, name } => {
                 if objects.len() < 2 {
@@ -1821,7 +1990,9 @@ impl Editor {
             // One parent-chain walk: world = parent * local. Layer children
             // skip the inverse entirely.
             let new_local = match obj.parent {
-                ObjectParent::Layer(_) => Affine::translate(world_delta) * obj.transform,
+                ObjectParent::Layer(_) | ObjectParent::Symbol(_) => {
+                    Affine::translate(world_delta) * obj.transform
+                }
                 ObjectParent::Group(g) => {
                     let p = self.document.world_transform(g);
                     p.inverse() * Affine::translate(world_delta) * p * obj.transform
@@ -1975,7 +2146,7 @@ impl Editor {
         let parent = parent.unwrap();
         let parent_world = match parent {
             ObjectParent::Group(g) => self.document.world_transform(g),
-            ObjectParent::Layer(_) => Affine::IDENTITY,
+            ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
         };
         let results = pathfinder::apply(op, &inputs);
         if results.is_empty() {
@@ -2055,7 +2226,7 @@ impl Editor {
         let parent = parent.unwrap();
         let parent_world = match parent {
             ObjectParent::Group(g) => self.document.world_transform(g),
-            ObjectParent::Layer(_) => Affine::IDENTITY,
+            ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
         };
         let touched_contours = pathfinder::flatten_path(&touched.geometry);
 
@@ -2142,7 +2313,7 @@ impl Editor {
             any = true;
             let parent_world = match obj.parent {
                 ObjectParent::Group(g) => self.document.world_transform(g),
-                ObjectParent::Layer(_) => Affine::IDENTITY,
+                ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
             };
             let local = PathData::from_bezpath(parent_world.inverse() * outlined.geometry.clone());
             let stroke_paint = obj.appearance.stroke();
@@ -2218,7 +2389,7 @@ impl Editor {
             };
             let parent_world = match obj.parent {
                 ObjectParent::Group(g) => self.document.world_transform(g),
-                ObjectParent::Layer(_) => Affine::IDENTITY,
+                ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
             };
             let local = PathData::from_bezpath(parent_world.inverse() * offset_pd.geometry);
             let siblings = self.document.children_of(obj.parent);
@@ -2484,6 +2655,83 @@ impl Editor {
         }
         Ok((edits, freed_ids))
     }
+
+    /// See [`Command::BreakSymbolLink`]. Deep-clones each instance's
+    /// resolved definition content with fresh ids (so the definition, and
+    /// any other instance of it, is untouched), composing the instance's
+    /// own transform the same way `compile_ungroup` composes a dissolved
+    /// group's — then removes the instance. Errors if any id isn't a
+    /// symbol instance, or its definition has already been removed (not
+    /// reachable through [`Command::DeleteSymbolDefinition`], which always
+    /// breaks links first; only possible by calling this directly on
+    /// already-corrupt state).
+    fn compile_break_symbol_links(
+        &self,
+        ids: &[ObjectId],
+    ) -> Result<(Vec<Edit>, Vec<ObjectId>), CommandError> {
+        if ids.is_empty() {
+            return Err(CommandError::NothingToDefine);
+        }
+        // Same purely-local, read-only index bookkeeping as
+        // `compile_ungroup`/`compile_duplicate_objects` — needed here too
+        // since breaking several instances that share a parent must not
+        // use indices left stale by an earlier one's splice in this same
+        // batch.
+        let mut shadow: HashMap<ObjectParent, Vec<ObjectId>> = HashMap::new();
+        let mut edits = Vec::new();
+        let mut freed_ids = Vec::new();
+        for &id in ids {
+            let object = self
+                .document
+                .object(id)
+                .ok_or(CommandError::ObjectNotFound(id))?;
+            let ObjectKind::Symbol(data) = &object.kind else {
+                return Err(CommandError::NotASymbolInstance(id));
+            };
+            let definition = self
+                .document
+                .symbol(data.definition)
+                .ok_or(DocumentError::SymbolNotFound(data.definition))?;
+            let parent = object.parent;
+            let instance_xf = object.transform;
+            let def_children = definition.children.clone();
+
+            let mut subtree = HashMap::new();
+            for &child_id in &def_children {
+                collect_subtree(&self.document, child_id, &mut subtree);
+            }
+            let id_map: HashMap<ObjectId, ObjectId> = subtree
+                .keys()
+                .map(|&old_id| (old_id, ObjectId::new()))
+                .collect();
+            let new_top_ids: Vec<ObjectId> = def_children.iter().map(|old| id_map[old]).collect();
+
+            let list = shadow_children(&self.document, &mut shadow, parent);
+            let instance_index = list
+                .iter()
+                .position(|&sibling| sibling == id)
+                .expect("id was validated to exist as this parent's child above");
+            list.remove(instance_index);
+            for (offset, &new_id) in new_top_ids.iter().enumerate() {
+                list.insert(instance_index + offset, new_id);
+            }
+
+            for (offset, &child_id) in def_children.iter().enumerate() {
+                push_deep_copy_edits(
+                    &subtree,
+                    &id_map,
+                    child_id,
+                    parent,
+                    instance_index + offset,
+                    Some(instance_xf),
+                    &mut edits,
+                );
+            }
+            edits.push(Edit::RemoveObject { id });
+            freed_ids.extend(new_top_ids);
+        }
+        Ok((edits, freed_ids))
+    }
 }
 
 /// Recursively clones `old_id` (and, for a group, its descendants) out of
@@ -2556,6 +2804,7 @@ fn resolve_parent(
     let exists = source_parent.is_some_and(|parent| match parent {
         ObjectParent::Layer(id) => document.layer(id).is_some(),
         ObjectParent::Group(id) => document.object(id).is_some_and(Object::is_group),
+        ObjectParent::Symbol(id) => document.symbol(id).is_some(),
     });
     match (exists, source_parent) {
         (true, Some(parent)) => Ok(parent),
@@ -2603,6 +2852,22 @@ fn imported_bounds(objects: &HashMap<ObjectId, Object>, id: ObjectId) -> Option<
 
 /// Returns the shadow child list for `parent`, seeding it from the real
 /// document on first access. See `compile_paste`.
+/// Union of `children`'s bounds in their *shared parent's* local space —
+/// what [`Document::local_bounds_of`] would return for a group wrapping
+/// exactly these children, without needing one to actually exist. Used to
+/// seed a new symbol instance's cached `SymbolData::local_bounds` (see
+/// `Command::DefineSymbol`/`Command::PlaceSymbolInstance`).
+fn union_local_bounds(document: &Document, children: &[ObjectId]) -> Option<Rect> {
+    children
+        .iter()
+        .filter_map(|&id| {
+            let object = document.object(id)?;
+            let local = document.local_bounds_of(id)?;
+            Some(object.transform.transform_rect_bbox(local))
+        })
+        .reduce(|a, b| a.union(b))
+}
+
 fn shadow_children<'a>(
     document: &Document,
     shadow: &'a mut HashMap<ObjectParent, Vec<ObjectId>>,

@@ -146,7 +146,11 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String, defs: &mut D
             }
         }
         // Stub kinds with no real content to export yet (see module docs).
-        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) => {}
+        // `Unknown` (a kind this build doesn't recognize) has no exporter
+        // to defer to either — a future build adds its own SVG export
+        // alongside real support for the kind, same as every other case
+        // here eventually will.
+        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

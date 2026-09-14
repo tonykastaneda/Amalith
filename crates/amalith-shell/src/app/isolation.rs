@@ -12,8 +12,9 @@ impl App {
     }
 
     /// Drop breadcrumb entries whose object no longer exists. Every level
-    /// except the deepest must still be a group to drill through; the
-    /// deepest may be a bare object (path / shape / image).
+    /// except the deepest must still be a group or a symbol instance (Edit
+    /// Symbol) to drill through; the deepest may be a bare object (path /
+    /// shape / image).
     pub(in crate::app) fn prune_isolation(&mut self) {
         let doc = self.doc.editor.document();
         let n = self.isolation.len();
@@ -24,6 +25,7 @@ impl App {
             .take_while(|(i, id)| match doc.object(**id).map(|o| &o.kind) {
                 None => false,
                 Some(amalith_core::ObjectKind::Group(_)) => true,
+                Some(amalith_core::ObjectKind::Symbol(_)) => true,
                 Some(_) => *i + 1 == n,
             })
             .count();
@@ -33,20 +35,23 @@ impl App {
     }
 
     /// Enter (or drill deeper into) isolation on `id`. Any object except
-    /// text can be isolated: a group opens its contents; a bare path,
-    /// shape or image just dims everything else and scopes selection to
-    /// itself.
+    /// text can be isolated: a group opens its contents, a symbol instance
+    /// opens its *definition's* contents (Edit Symbol — every other
+    /// instance keeps showing the unedited version, exactly like every
+    /// instance keeps working after `Command::BreakSymbolLink` on a
+    /// different one), and a bare path, shape or image just dims
+    /// everything else and scopes selection to itself.
     pub(in crate::app) fn enter_isolation(&mut self, id: ObjectId) {
-        let is_group = match self.doc.editor.document().object(id).map(|o| &o.kind) {
+        let is_container = match self.doc.editor.document().object(id).map(|o| &o.kind) {
             Some(amalith_core::ObjectKind::Text(_)) | None => return,
-            Some(amalith_core::ObjectKind::Group(_)) => true,
+            Some(amalith_core::ObjectKind::Group(_) | amalith_core::ObjectKind::Symbol(_)) => true,
             Some(_) => false,
         };
         if self.isolation.last() == Some(&id) {
             return;
         }
         self.isolation.push(id);
-        self.doc.selection = if is_group { Vec::new() } else { vec![id] };
+        self.doc.selection = if is_container { Vec::new() } else { vec![id] };
         self.sync_align_mode();
         self.request_main_redraw();
     }
@@ -92,6 +97,11 @@ impl App {
                     break doc.layers().iter().find(|x| x.id == l).map(|x| x.name.clone());
                 }
                 Some(amalith_core::ObjectParent::Group(g)) => walk = g,
+                // Isolated straight into a symbol definition's own content
+                // (Edit Symbol) rather than a layer — show its name instead.
+                Some(amalith_core::ObjectParent::Symbol(s)) => {
+                    break doc.symbol(s).map(|d| d.name.clone());
+                }
                 None => break None,
             }
         };
@@ -108,9 +118,12 @@ impl App {
                     Some(amalith_core::ObjectKind::Path(_)) => "Path".into(),
                     Some(amalith_core::ObjectKind::CompoundPath(_)) => "Compound Path".into(),
                     Some(amalith_core::ObjectKind::Image(_)) => "Image".into(),
-                    Some(amalith_core::ObjectKind::Symbol(_)) => "Symbol".into(),
+                    Some(amalith_core::ObjectKind::Symbol(data)) => doc
+                        .symbol(data.definition)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| "Symbol".into()),
                     Some(amalith_core::ObjectKind::Text(_)) => "Type".into(),
-                    None => "Object".into(),
+                    Some(amalith_core::ObjectKind::Unknown { .. }) | None => "Object".into(),
                 });
             out.push(name);
         }
@@ -269,6 +282,65 @@ impl App {
         }
         let _ = self.doc.editor.execute(Command::SetLocked { objects: ids.clone(), locked: false });
         self.doc.selection = ids;
+        self.request_main_redraw();
+    }
+
+    /// Symbols panel "New Symbol" / Object ▸ Symbol Instance — converts
+    /// the current selection into a new pooled symbol definition, in
+    /// place. No-op on an empty selection.
+    pub(in crate::app) fn define_symbol_from_selection(&mut self) {
+        if self.doc.selection.is_empty() {
+            return;
+        }
+        if let Ok(CommandOutcome::Object(instance)) = self.doc.editor.execute(Command::DefineSymbol {
+            ids: self.doc.selection.clone(),
+            name: None,
+        }) {
+            self.doc.selection = vec![instance];
+            if let Some(amalith_core::ObjectKind::Symbol(data)) =
+                self.doc.editor.document().object(instance).map(|o| &o.kind)
+            {
+                self.doc.selected_symbol = Some(data.definition);
+            }
+        }
+        self.request_main_redraw();
+    }
+
+    /// Symbols panel footer "Place" — a new instance of `symbol`, centered
+    /// on the current view.
+    pub(in crate::app) fn place_symbol_instance(&mut self, symbol: amalith_core::SymbolId) {
+        let Some(layer) = self.doc.selected_layer.or_else(|| self.doc.editor.document().layers().last().map(|l| l.id)) else {
+            return;
+        };
+        let at = crate::convert::point_to_core(self.visible_doc_rect().center());
+        if let Ok(CommandOutcome::Object(instance)) =
+            self.doc.editor.execute(Command::PlaceSymbolInstance { symbol, layer, at })
+        {
+            self.doc.selection = vec![instance];
+            self.request_main_redraw();
+        }
+    }
+
+    /// Symbols panel footer "Edit" (Edit Symbol) — isolate into the first
+    /// existing instance of `symbol` found anywhere in the document. A
+    /// no-op if none is currently placed (nothing to isolate into).
+    pub(in crate::app) fn edit_symbol_definition(&mut self, symbol: amalith_core::SymbolId) {
+        let instance = self.doc.editor.document().objects().find_map(|o| match &o.kind {
+            amalith_core::ObjectKind::Symbol(data) if data.definition == symbol => Some(o.id),
+            _ => None,
+        });
+        if let Some(id) = instance {
+            self.enter_isolation(id);
+        }
+    }
+
+    /// Symbols panel footer "Delete" — removes the definition, breaking
+    /// every remaining instance first (see `Command::DeleteSymbolDefinition`).
+    pub(in crate::app) fn delete_symbol_definition(&mut self, symbol: amalith_core::SymbolId) {
+        let _ = self.doc.editor.execute(Command::DeleteSymbolDefinition { id: symbol });
+        if self.doc.selected_symbol == Some(symbol) {
+            self.doc.selected_symbol = None;
+        }
         self.request_main_redraw();
     }
 

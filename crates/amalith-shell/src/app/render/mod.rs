@@ -123,6 +123,15 @@ impl App {
                     .map(|d| (d.object, d.item_index, d.effect_index.unwrap_or(usize::MAX), d.resolved_effect()))
             });
 
+        // Live "drop here to make a symbol" affordance for the Symbols
+        // panel — computed fresh every frame from `self.drag`/`self.pointer`,
+        // the same way `preview` below is, rather than tracked incrementally
+        // during pointer-move. See `docked_symbols_panel_body_at`'s docs and
+        // `Drag::MoveObjects`'s release handling in `app/input/pointer.rs`.
+        let symbols_drop_hover = matches!(&self.drag, Drag::MoveObjects { moved: true, .. })
+            && !self.doc.selection.is_empty()
+            && self.symbols_drop_target_at_pointer();
+
         let preview = match &self.drag {
             Drag::MoveObjects {
                 start_doc,
@@ -694,6 +703,8 @@ impl App {
                 grad_annot.clone(),
                 self.stack_flyout,
                 self.settings.hide_wip_tools,
+                self.doc.selected_symbol,
+                symbols_drop_hover,
             ),
             Role::Floating(fid) => {
                 let exists = self.dock.master(fid).is_some();
@@ -764,6 +775,9 @@ impl App {
                             layer_drop: None,
                             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                             selected_asset: self.doc.selected_asset,
+                            symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
+                            selected_symbol: self.doc.selected_symbol,
+                            symbols_drop_hover: false,
                             color_mode: self.color_mode,
                             cmyk_profile: self.cmyk_profile.as_ref(),
                             recent: &self.recent_colors,
@@ -846,6 +860,9 @@ impl App {
                                 },
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
+                                symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
+                                selected_symbol: self.doc.selected_symbol,
+                                symbols_drop_hover: symbols_drop_hover && pid == PanelId(PanelKind::Symbols),
                                 color_mode: self.color_mode,
                                 cmyk_profile: self.cmyk_profile.as_ref(),
                                 recent: &self.recent_colors,
@@ -884,10 +901,12 @@ impl App {
                             let bounds = layout::flyout_rect(row_rect, Rect::new(0.0, 0.0, wl, hl));
                             let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
                             let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+                            let menu = panels::has_menu(pid).then(|| chrome::flyout_menu_rect(close, &self.theme));
                             chrome::paint_flyout_chrome(
                                 &mut self.content,
                                 bounds,
                                 header,
+                                menu,
                                 close,
                                 &tab_label(pid),
                                 &self.theme,
@@ -930,6 +949,9 @@ impl App {
                                 layer_drop: None,
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
+                                symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
+                                selected_symbol: self.doc.selected_symbol,
+                                symbols_drop_hover: false,
                                 color_mode: self.color_mode,
                                 cmyk_profile: self.cmyk_profile.as_ref(),
                                 recent: &self.recent_colors,

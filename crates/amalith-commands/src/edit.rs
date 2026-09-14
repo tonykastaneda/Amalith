@@ -19,7 +19,7 @@ use crate::error::CommandError;
 use amalith_core::{
     Affine, AppearanceItem, Artboard, ArtboardId, Asset, AssetId, AssetSource, Color, Document,
     DocumentError, Gradient, GradientId, Guide, GuideId, ColorMode, Layer, LayerId, Object, ObjectId,
-    ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, TextData, Unit,
+    ObjectKind, ObjectParent, Paint, PathData, StrokeStyle, SymbolDefinition, SymbolId, TextData, Unit,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +178,17 @@ pub(crate) enum Edit {
         id: GradientId,
         gradient: Gradient,
     },
+    InsertSymbol {
+        symbol: SymbolDefinition,
+        index: usize,
+    },
+    RemoveSymbol {
+        id: SymbolId,
+    },
+    RenameSymbol {
+        id: SymbolId,
+        name: String,
+    },
 }
 
 /// Applies `edit` to `doc`, returning its inverse (to file for undo/redo)
@@ -330,6 +341,7 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or_else(|| match parent {
                     ObjectParent::Layer(id) => CommandError::LayerNotFound(id),
                     ObjectParent::Group(id) => CommandError::ObjectNotFound(id),
+                    ObjectParent::Symbol(id) => DocumentError::SymbolNotFound(id).into(),
                 })?;
             Ok((
                 Edit::SetChildOrder {
@@ -479,6 +491,22 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 .ok_or(CommandError::GradientNotFound(id))?;
             let old = std::mem::replace(slot, gradient);
             Ok((Edit::SetGradient { id, gradient: old }, None))
+        }
+        Edit::InsertSymbol { symbol, index } => {
+            let id = symbol.id;
+            doc.insert_symbol(symbol, index);
+            Ok((Edit::RemoveSymbol { id }, None))
+        }
+        Edit::RemoveSymbol { id } => {
+            let (symbol, index) = doc
+                .remove_symbol(id)
+                .ok_or(DocumentError::SymbolNotFound(id))?;
+            Ok((Edit::InsertSymbol { symbol, index }, None))
+        }
+        Edit::RenameSymbol { id, name } => {
+            let symbol = doc.symbol_mut(id).ok_or(DocumentError::SymbolNotFound(id))?;
+            let old = std::mem::replace(&mut symbol.name, name);
+            Ok((Edit::RenameSymbol { id, name: old }, None))
         }
     }
 }

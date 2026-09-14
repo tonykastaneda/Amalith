@@ -4,9 +4,10 @@
 use crate::assets::AssetStore;
 use crate::error::IoError;
 use crate::manifest::{
-    artwork_container_path, ArtworkFile, DocumentManifest, LayerManifest, FORMAT_VERSION,
+    artwork_container_path, symbol_container_path, ArtworkFile, DocumentManifest, LayerManifest,
+    SymbolArtworkFile, SymbolManifest, FORMAT_VERSION,
 };
-use amalith_core::{AssetSource, Document, Layer, Object, ObjectKind};
+use amalith_core::{AssetSource, Document, Layer, Object, ObjectKind, SymbolDefinition};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -48,6 +49,11 @@ pub fn save(
                 dim_images_to: layer.dim_images_to,
             })
             .collect(),
+        symbols: document
+            .symbols()
+            .iter()
+            .map(|s| SymbolManifest { id: s.id, name: s.name.clone() })
+            .collect(),
     };
     zip.start_file("document.json", options)?;
     serde_json::to_writer_pretty(&mut zip, &manifest)?;
@@ -55,9 +61,18 @@ pub fn save(
     for layer in document.layers() {
         let artwork = ArtworkFile {
             layer_id: layer.id,
-            objects: gather_layer_objects(document, layer),
+            objects: gather_children_objects(document, &layer.children),
         };
         zip.start_file(artwork_container_path(layer.id), options)?;
+        serde_json::to_writer_pretty(&mut zip, &artwork)?;
+    }
+
+    for symbol in document.symbols() {
+        let artwork = SymbolArtworkFile {
+            symbol_id: symbol.id,
+            objects: gather_children_objects(document, &symbol.children),
+        };
+        zip.start_file(symbol_container_path(symbol.id), options)?;
         serde_json::to_writer_pretty(&mut zip, &artwork)?;
     }
 
@@ -134,6 +149,26 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
         }
     }
 
+    // Symbol definitions are added to the pool *before* their content is
+    // replayed — `insert_object` validates `ObjectParent::Symbol(id)`
+    // against `Document::symbol`, same as a layer needing to exist first.
+    for symbol_manifest in manifest.symbols {
+        document.add_symbol(SymbolDefinition {
+            id: symbol_manifest.id,
+            name: symbol_manifest.name,
+            children: Vec::new(),
+        });
+
+        let artwork: SymbolArtworkFile = {
+            let entry = zip.by_name(&symbol_container_path(symbol_manifest.id))?;
+            serde_json::from_reader(entry)?
+        };
+        for object in artwork.objects {
+            let index = document.children_of(object.parent).len();
+            document.insert_object(object, index)?;
+        }
+    }
+
     let mut assets = AssetStore::new();
     for asset in document.assets() {
         if let AssetSource::Embedded { container_path } = &asset.source {
@@ -147,11 +182,12 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
     Ok((document, assets))
 }
 
-/// Flattens a layer's object tree into DFS pre-order (parent before every
-/// descendant), matching the order `load` replays with `insert_object`.
-fn gather_layer_objects(document: &Document, layer: &Layer) -> Vec<Object> {
+/// Flattens a container's (layer or symbol definition's) top-level object
+/// tree into DFS pre-order (parent before every descendant), matching the
+/// order `load` replays with `insert_object`.
+fn gather_children_objects(document: &Document, children: &[amalith_core::ObjectId]) -> Vec<Object> {
     let mut out = Vec::new();
-    for &id in &layer.children {
+    for &id in children {
         gather_recursive(document, id, &mut out);
     }
     out

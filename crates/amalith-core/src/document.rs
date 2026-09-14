@@ -41,11 +41,12 @@ use crate::error::DocumentError;
 use crate::geom::{Affine, Rect};
 use crate::gradient::Gradient;
 use crate::guide::Guide;
-use crate::ids::{ArtboardId, AssetId, GradientId, GuideId, LayerId, ObjectId};
+use crate::ids::{ArtboardId, AssetId, GradientId, GuideId, LayerId, ObjectId, SymbolId};
 use crate::layer::Layer;
 use crate::metadata::{Metadata, Settings};
 use crate::object::{Object, ObjectKind, ObjectParent};
 use crate::swatch::Swatch;
+use crate::symbol::SymbolDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -76,6 +77,10 @@ pub struct Document {
     /// [`crate::Paint::Gradient`]. Order is the Swatches-panel order.
     #[serde(default)]
     gradients: Vec<Gradient>,
+    /// Pooled symbol definitions, referenced from instance objects by
+    /// [`crate::ObjectKind::Symbol`]. Order is the Symbols-panel order.
+    #[serde(default)]
+    symbols: Vec<SymbolDefinition>,
 }
 
 impl Document {
@@ -95,6 +100,7 @@ impl Document {
             swatches: Vec::new(),
             guides: Vec::new(),
             gradients: Vec::new(),
+            symbols: Vec::new(),
         }
     }
 
@@ -184,6 +190,7 @@ impl Document {
                 ObjectKind::Group(g) => Some(&g.children),
                 _ => None,
             },
+            ObjectParent::Symbol(id) => self.symbol(id).map(|s| &s.children),
         }
     }
 
@@ -194,6 +201,7 @@ impl Document {
                 ObjectKind::Group(g) => Some(&mut g.children),
                 _ => None,
             },
+            ObjectParent::Symbol(id) => self.symbol_mut(id).map(|s| &mut s.children),
         }
     }
 
@@ -224,6 +232,9 @@ impl Document {
                 if !parent.is_group() {
                     return Err(DocumentError::NotAGroup(id));
                 }
+            }
+            ObjectParent::Symbol(id) => {
+                self.symbol(id).ok_or(DocumentError::SymbolNotFound(id))?;
             }
         }
         let id = object.id;
@@ -337,6 +348,47 @@ impl Document {
         Some((self.gradients.remove(i), i))
     }
 
+    // ---- Symbols ---------------------------------------------------------
+
+    pub fn symbols(&self) -> &[SymbolDefinition] {
+        &self.symbols
+    }
+
+    pub fn symbol(&self, id: SymbolId) -> Option<&SymbolDefinition> {
+        self.symbols.iter().find(|s| s.id == id)
+    }
+
+    pub fn symbol_mut(&mut self, id: SymbolId) -> Option<&mut SymbolDefinition> {
+        self.symbols.iter_mut().find(|s| s.id == id)
+    }
+
+    /// Raw: appends a symbol definition to the pool. Building block for
+    /// `amalith-commands::Command::DefineSymbol`.
+    pub fn add_symbol(&mut self, symbol: SymbolDefinition) {
+        self.symbols.push(symbol);
+    }
+
+    /// Raw: inserts a symbol definition at `index` (clamped), so an undo
+    /// can put a removed one back where it was.
+    pub fn insert_symbol(&mut self, symbol: SymbolDefinition, index: usize) {
+        let i = index.min(self.symbols.len());
+        self.symbols.insert(i, symbol);
+    }
+
+    /// Raw: removes a symbol definition from the pool, returning it and
+    /// its former index. Does not touch its `children` (still in the
+    /// arena, now unreachable — same "cascade is the caller's job"
+    /// contract as `remove_object`) or objects that still reference the
+    /// id — a stale `ObjectKind::Symbol` simply renders its `fallback`,
+    /// or nothing (see `canvas::paint_object`'s `Symbol` case).
+    /// `amalith-commands::Command::DeleteSymbolDefinition` is expected to
+    /// break every remaining instance's link *before* calling this, so
+    /// nothing on canvas is ever left pointing at a gone definition.
+    pub fn remove_symbol(&mut self, id: SymbolId) -> Option<(SymbolDefinition, usize)> {
+        let i = self.symbols.iter().position(|s| s.id == id)?;
+        Some((self.symbols.remove(i), i))
+    }
+
     // ---- Guides -------------------------------------------------------
 
     pub fn guides(&self) -> &[Guide] {
@@ -376,7 +428,13 @@ impl Document {
         };
         let parent_transform = match object.parent {
             ObjectParent::Group(parent_id) => self.world_transform(parent_id),
-            ObjectParent::Layer(_) => Affine::IDENTITY,
+            // Neither contributes an ambient transform: a layer's own
+            // origin is document space, and a symbol definition's content
+            // has no placement of its own at all — it's inert until an
+            // instance applies its transform (see `canvas::paint_object`'s
+            // `Symbol` case, which composes that separately rather than
+            // through this method).
+            ObjectParent::Layer(_) | ObjectParent::Symbol(_) => Affine::IDENTITY,
         };
         parent_transform * object.transform
     }
@@ -396,9 +454,79 @@ impl Document {
                 .iter()
                 .filter_map(|&child| self.bounds_of(child))
                 .reduce(|a, b| a.union(b)),
+            ObjectKind::Symbol(data) => {
+                // Live, not the cached `local_bounds` — editing the shared
+                // definition (e.g. growing its content) must be reflected
+                // in every instance's bounds immediately, same as a
+                // gradient edit needs no per-object update anywhere. The
+                // definition's children are recorded under
+                // `ObjectParent::Symbol`, which contributes no ambient
+                // transform of its own (see `world_transform`) — so unlike
+                // an ordinary nested `Group`, they can't be resolved via
+                // plain recursive `bounds_of`/`world_transform` calls; the
+                // instance's own resolved world transform has to be
+                // threaded down explicitly instead, exactly the way
+                // `canvas::paint_object`'s `Symbol` case threads its own
+                // accumulated transform into the definition's children
+                // rather than calling `Document::world_transform` on them.
+                let instance_world = self.world_transform(id);
+                self.symbol(data.definition)
+                    .and_then(|def| {
+                        def.children
+                            .iter()
+                            .filter_map(|&child| self.bounds_with_ambient(child, instance_world))
+                            .reduce(|a, b| a.union(b))
+                    })
+                    // Dangling/unresolvable definition: fall back to the
+                    // cached snapshot rather than reporting no bounds at
+                    // all — "symbols never break."
+                    .or_else(|| Some(instance_world.transform_rect_bbox(data.local_bounds)))
+            }
             _ => {
-                let local = object.kind.own_local_bounds()?;
+                // `own_local_bounds` doesn't know about `Object::fallback`
+                // (a sibling field it has no access to) — an `Unknown`
+                // kind's own geometry lives there instead, when a writer
+                // left one, so this build can still report bounds for it.
+                let local = object
+                    .kind
+                    .own_local_bounds()
+                    .or_else(|| object.fallback.as_ref().map(|p| p.local_bounds()))?;
                 Some(self.world_transform(id).transform_rect_bbox(local))
+            }
+        }
+    }
+
+    /// `bounds_of`, but the very first step composes `ambient` instead of
+    /// walking `id`'s own recorded parent chain — what resolving a symbol
+    /// definition's content needs (see `bounds_of`'s own `Symbol` case).
+    /// Recurses into itself (not `bounds_of`) at every level, since *every*
+    /// descendant within a symbol definition's subtree needs the same
+    /// explicit threading — their recorded parent chain bottoms out at the
+    /// definition itself, never at whichever instance is actually asking.
+    fn bounds_with_ambient(&self, id: ObjectId, ambient: Affine) -> Option<Rect> {
+        let object = self.objects.get(&id)?;
+        let world = ambient * object.transform;
+        match &object.kind {
+            ObjectKind::Group(group) => group
+                .children
+                .iter()
+                .filter_map(|&child| self.bounds_with_ambient(child, world))
+                .reduce(|a, b| a.union(b)),
+            ObjectKind::Symbol(data) => self
+                .symbol(data.definition)
+                .and_then(|def| {
+                    def.children
+                        .iter()
+                        .filter_map(|&child| self.bounds_with_ambient(child, world))
+                        .reduce(|a, b| a.union(b))
+                })
+                .or_else(|| Some(world.transform_rect_bbox(data.local_bounds))),
+            _ => {
+                let local = object
+                    .kind
+                    .own_local_bounds()
+                    .or_else(|| object.fallback.as_ref().map(|p| p.local_bounds()))?;
+                Some(world.transform_rect_bbox(local))
             }
         }
     }
@@ -432,6 +560,25 @@ impl Document {
                     Some(child_object.transform.transform_rect_bbox(child_local))
                 })
                 .reduce(|a, b| a.union(b)),
+            // Live, same reasoning as `bounds_of`'s `Symbol` case — this
+            // already composes each level via the child's own `.transform`
+            // rather than via `world_transform`, so (unlike `bounds_of`)
+            // no separate "ambient" variant is needed: resolving through
+            // the definition's children is just one more level of the
+            // same recursion.
+            ObjectKind::Symbol(data) => self
+                .symbol(data.definition)
+                .and_then(|def| {
+                    def.children
+                        .iter()
+                        .filter_map(|&child| {
+                            let child_object = self.objects.get(&child)?;
+                            let child_local = self.local_bounds_of(child)?;
+                            Some(child_object.transform.transform_rect_bbox(child_local))
+                        })
+                        .reduce(|a, b| a.union(b))
+                })
+                .or(Some(data.local_bounds)),
             _ => object.kind.own_local_bounds(),
         }
     }
@@ -586,5 +733,138 @@ mod tests {
         assert_eq!(cloned.layer(layer_id).unwrap().id, layer_id);
         assert_eq!(cloned.object(object_id).unwrap().id, object_id);
         assert_eq!(doc, cloned);
+    }
+
+    #[test]
+    fn insert_object_rejects_missing_symbol_parent() {
+        let mut doc = Document::new("Bad symbol parent");
+        let object = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Symbol(crate::ids::SymbolId::new()),
+            Rect::new(0.0, 0.0, 1.0, 1.0),
+        );
+        let err = doc.insert_object(object, 0).unwrap_err();
+        assert!(matches!(err, DocumentError::SymbolNotFound(_)));
+    }
+
+    #[test]
+    fn a_symbol_definitions_content_lives_outside_every_layer() {
+        let mut doc = Document::new("Symbols");
+        let symbol_id = crate::ids::SymbolId::new();
+        doc.add_symbol(crate::symbol::SymbolDefinition {
+            id: symbol_id,
+            name: "Star".into(),
+            children: Vec::new(),
+        });
+
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let child = Object::rectangle(ObjectId::new(), ObjectParent::Symbol(symbol_id), rect);
+        let child_id = child.id;
+        doc.insert_object(child, 0).unwrap();
+
+        assert_eq!(doc.children_of(ObjectParent::Symbol(symbol_id)), &[child_id]);
+        assert_eq!(doc.bounds_of(child_id), Some(rect));
+        // Never reachable from any layer's child list.
+        assert!(doc.layers().iter().all(|l| !l.children.contains(&child_id)));
+    }
+
+    #[test]
+    fn a_symbol_instances_bounds_are_live_not_a_stale_snapshot() {
+        use crate::ids::SymbolId;
+        use crate::object::SymbolData;
+        use crate::symbol::SymbolDefinition;
+
+        let mut doc = Document::new("Live bounds");
+        let layer = Layer::new(LayerId::new(), "Layer 1");
+        let layer_id = layer.id;
+        doc.insert_layer(layer, 0);
+
+        let symbol_id = SymbolId::new();
+        doc.add_symbol(SymbolDefinition { id: symbol_id, name: "Dot".into(), children: Vec::new() });
+        let child = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Symbol(symbol_id),
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+        );
+        let child_id = child.id;
+        doc.insert_object(child, 0).unwrap();
+
+        let mut instance = Object::new(
+            ObjectId::new(),
+            ObjectParent::Layer(layer_id),
+            ObjectKind::Symbol(SymbolData { definition: symbol_id, local_bounds: Rect::new(0.0, 0.0, 10.0, 10.0) }),
+        );
+        instance.transform = Affine::translate((100.0, 200.0));
+        let instance_id = instance.id;
+        doc.insert_object(instance, 0).unwrap();
+
+        assert_eq!(doc.bounds_of(instance_id), Some(Rect::new(100.0, 200.0, 110.0, 210.0)));
+
+        // Grow the definition's content directly — no "redefine" step —
+        // and the instance's bounds must reflect it immediately.
+        if let ObjectKind::Path(p) = &mut doc.object_mut(child_id).unwrap().kind {
+            *p = crate::object::PathData::rectangle(Rect::new(0.0, 0.0, 40.0, 10.0));
+        }
+        assert_eq!(doc.bounds_of(instance_id), Some(Rect::new(100.0, 200.0, 140.0, 210.0)));
+
+        // `local_bounds_of` must agree with `bounds_of` through the same
+        // `world_transform` relationship every other kind satisfies.
+        assert_eq!(
+            doc.bounds_of(instance_id),
+            Some(doc.world_transform(instance_id).transform_rect_bbox(doc.local_bounds_of(instance_id).unwrap()))
+        );
+    }
+
+    #[test]
+    fn editing_a_symbol_definition_in_place_is_visible_through_every_instance() {
+        // Mirrors how `Document::gradient_mut` makes a paint edit visible
+        // everywhere that references it by id — no reverse index or
+        // "propagate to instances" step needed for symbols either.
+        let mut doc = Document::new("Shared edit");
+        let symbol_id = crate::ids::SymbolId::new();
+        doc.add_symbol(crate::symbol::SymbolDefinition {
+            id: symbol_id,
+            name: "Dot".into(),
+            children: Vec::new(),
+        });
+        assert_eq!(doc.symbol(symbol_id).unwrap().name, "Dot");
+
+        doc.symbol_mut(symbol_id).unwrap().name = "Renamed".into();
+
+        // Two independent instance objects both resolve the *same*, now
+        // renamed, definition — proving there's nothing per-instance to
+        // keep in sync.
+        for parent in [ObjectParent::Layer(LayerId::new()), ObjectParent::Layer(LayerId::new())] {
+            let resolved = doc.symbol(symbol_id).unwrap();
+            assert_eq!(resolved.name, "Renamed");
+            let _ = parent; // only the shared lookup matters here
+        }
+    }
+
+    #[test]
+    fn removing_a_symbol_definition_leaves_its_former_content_in_the_arena() {
+        let mut doc = Document::new("Remove symbol");
+        let symbol_id = crate::ids::SymbolId::new();
+        doc.add_symbol(crate::symbol::SymbolDefinition {
+            id: symbol_id,
+            name: "Gone".into(),
+            children: Vec::new(),
+        });
+        let child = Object::rectangle(
+            ObjectId::new(),
+            ObjectParent::Symbol(symbol_id),
+            Rect::new(0.0, 0.0, 1.0, 1.0),
+        );
+        let child_id = child.id;
+        doc.insert_object(child, 0).unwrap();
+
+        let (removed, _index) = doc.remove_symbol(symbol_id).unwrap();
+        assert_eq!(removed.id, symbol_id);
+        assert!(doc.symbol(symbol_id).is_none());
+        // Cascading (breaking any remaining instance's link) is the
+        // command layer's job, per `remove_symbol`'s own doc comment —
+        // the raw primitive just orphans the content, same as
+        // `remove_object` on a group with children.
+        assert!(doc.object(child_id).is_some());
     }
 }

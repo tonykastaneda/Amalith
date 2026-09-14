@@ -197,6 +197,7 @@ fn owning_layer(doc: &Document, mut id: ObjectId) -> Option<LayerId> {
         match doc.object(id)?.parent {
             ObjectParent::Layer(l) => return Some(l),
             ObjectParent::Group(g) => id = g,
+            ObjectParent::Symbol(_) => return None,
         }
     }
 }
@@ -252,7 +253,7 @@ fn parent_blocked(doc: &Document, moved: &[ObjectId], parent: ObjectParent) -> b
                 Some(o) => p = o.parent,
                 None => return false,
             },
-            ObjectParent::Layer(_) => return false,
+            ObjectParent::Layer(_) | ObjectParent::Symbol(_) => return false,
         }
     }
 }
@@ -358,7 +359,7 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
         Some(ObjectKind::Text(_)) => "Text",
         Some(ObjectKind::Image(_)) => "Image",
         Some(ObjectKind::Symbol(_)) => "Symbol",
-        None => "?",
+        Some(ObjectKind::Unknown { .. }) | None => "?",
     }
     .to_string()
 }

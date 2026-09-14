@@ -24,6 +24,7 @@ pub mod metadata;
 pub mod object;
 pub mod pathtext;
 pub mod swatch;
+pub mod symbol;
 pub mod units;
 pub mod warp;
 pub mod width;
@@ -40,7 +41,7 @@ pub use error::DocumentError;
 pub use geom::{Affine, Bounds, Point, Rect, Size, Vec2};
 pub use gradient::{FreeformPoint, Gradient, GradientKind, GradientStop};
 pub use guide::{Guide, GuideId, GuideOrient};
-pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId};
+pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId, SymbolId};
 pub use layer::{Layer, LayerColor};
 pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
@@ -55,6 +56,7 @@ pub use object::{
     Paragraph, PathTextAlign, PathTextData, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };
 pub use swatch::{Color, Swatch};
+pub use symbol::SymbolDefinition;
 pub use units::{Length, Unit};
 pub use warp::Homography;
 pub use width::{preset_points, width_at, width_outline, WidthPoint, WidthProfilePreset};

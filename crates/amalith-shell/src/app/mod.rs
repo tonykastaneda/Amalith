@@ -868,6 +868,8 @@ struct Doc {
     selected_layer: Option<LayerId>,
     /// Links panel: the currently highlighted asset row.
     selected_asset: Option<amalith_core::AssetId>,
+    /// Symbols panel: the currently highlighted definition row.
+    selected_symbol: Option<amalith_core::SymbolId>,
     /// The artboard the user last clicked inside (any tool). Targets
     /// artboard-relative Paste in Front / Back.
     current_artboard: Option<ArtboardId>,
@@ -903,6 +905,7 @@ impl Doc {
             selected_artboard: None,
             selected_layer: None,
             selected_asset: None,
+            selected_symbol: None,
             current_artboard: None,
             clip_artboard: None,
             last_svg: None,
@@ -1835,6 +1838,8 @@ impl App {
             )
         } else if id == PanelId(PanelKind::Links) {
             panels::links_content_height(self.doc.editor.document())
+        } else if id == PanelId(PanelKind::Symbols) {
+            panels::symbols_content_height(self.doc.editor.document())
         } else {
             panels::max_scroll(id, body.width(), body.height()) + body.height()
         }
@@ -1877,6 +1882,123 @@ impl App {
             }
         }
         None
+    }
+
+    /// The docked Symbols panel's on-screen body rect, if `p` (main-window
+    /// logical px) currently lands on it — what a canvas object drag
+    /// checks on release to decide "drop here to make a symbol" instead of
+    /// moving the selection (see `Drag::MoveObjects`'s release handling in
+    /// `app/input/pointer.rs`, and the live drop-hover highlight computed
+    /// alongside `DragPreview` in `app/render/mod.rs`). Mirrors
+    /// `scrollable_panel_at`'s exact pattern, filtered to one specific
+    /// panel. `None` if Symbols isn't docked at all (floated into its own
+    /// window — cross-window drag-and-drop is a separate, harder problem,
+    /// out of scope for now) or isn't the active tab in whichever group
+    /// holds it.
+    fn docked_symbols_panel_body_at(&mut self, p: Point) -> Option<Rect> {
+        let (w, h) = self.main_logical_size()?;
+        let mid = [Side::Left, Side::Right]
+            .into_iter()
+            .find_map(|side| self.dock.docked(side).into_iter().find(|&mid| self.docked_master_rect(mid, w, h).contains(p)))?;
+        let bounds = self.docked_master_rect(mid, w, h);
+        let frame = self.build_master_frame(mid, bounds);
+        for g in &frame.groups {
+            if !g.content.contains(p) {
+                continue;
+            }
+            let pid = self
+                .dock
+                .master(mid)
+                .and_then(|m| m.group(g.index))
+                .and_then(|gg| gg.panels.get(gg.active).copied());
+            if pid == Some(PanelId(PanelKind::Symbols)) {
+                return Some(g.content);
+            }
+        }
+        None
+    }
+
+    /// The floating Symbols panel's on-screen body rect in *global*
+    /// (virtual-desktop) logical coordinates, if it's currently floated
+    /// into its own OS window rather than docked. A canvas drag's own
+    /// pointer position is local to whichever window it started in (the
+    /// main window, for an object drag) and never crosses into another
+    /// window's local space on its own, so testing this needs both sides
+    /// converted to the same global space — see [`Self::pointer_global`].
+    fn floating_symbols_panel_body_global(&mut self) -> Option<Rect> {
+        let fid = self.dock.floating_id_of(PanelId(PanelKind::Symbols))?;
+        let window = self.floating_window(fid)?.clone();
+        let scale = window.scale_factor();
+        let origin = window.inner_position().ok()?.to_logical::<f64>(scale);
+        let size: LogicalSize<f64> = window.inner_size().to_logical(scale);
+        let bounds = Rect::new(0.0, 0.0, size.width, size.height);
+        let frame = self.build_master_frame(fid, bounds);
+        for g in &frame.groups {
+            let pid = self
+                .dock
+                .master(fid)
+                .and_then(|m| m.group(g.index))
+                .and_then(|gg| gg.panels.get(gg.active).copied());
+            if pid == Some(PanelId(PanelKind::Symbols)) {
+                return Some(Rect::new(
+                    origin.x + g.content.x0,
+                    origin.y + g.content.y0,
+                    origin.x + g.content.x1,
+                    origin.y + g.content.y1,
+                ));
+            }
+        }
+        None
+    }
+
+    /// `self.pointer` translated into global (virtual-desktop) logical
+    /// coordinates, using whichever window it's currently scoped to
+    /// (`self.pointer_win`) for the origin — what testing a drag against
+    /// a *floating* panel's separate OS window needs, since that window's
+    /// screen rect isn't expressed in the dragging window's own local
+    /// space (contrast [`Self::docked_symbols_panel_body_at`], which stays
+    /// entirely in the main window's local space and needs none of this).
+    fn pointer_global(&self) -> Option<Point> {
+        let host = self.hosts.get(&self.pointer_win?)?;
+        let origin = host.window.inner_position().ok()?.to_logical::<f64>(host.window.scale_factor());
+        Some(Point::new(origin.x + self.pointer.x, origin.y + self.pointer.y))
+    }
+
+    /// Whether `self.pointer` is currently over the Symbols panel, docked
+    /// or floating — the single check both the drag-release handler
+    /// (`app/input/pointer.rs`) and the live drop-hover highlight
+    /// (`app/render/mod.rs`) use, so the two can never disagree about
+    /// what counts as "on the panel."
+    fn symbols_drop_target_at_pointer(&mut self) -> bool {
+        if self.docked_symbols_panel_body_at(self.pointer).is_some() {
+            return true;
+        }
+        if self.symbols_flyout_body_at_pointer() {
+            return true;
+        }
+        let Some(gp) = self.pointer_global() else {
+            return false;
+        };
+        self.floating_symbols_panel_body_global().is_some_and(|r| r.contains(gp))
+    }
+
+    /// Whether `self.pointer` is over the Symbols panel's own open
+    /// Stack-mode flyout preview (⇐ `App::toggle_stack_flyout`) — a third
+    /// on-screen surface Symbols can appear in, distinct from both its
+    /// docked tab body and a fully torn-off floating window. This is the
+    /// one `symbols_drop_target_at_pointer` was missing entirely: the
+    /// flyout preview paints the real Symbols panel content, so dropping
+    /// a selection onto it should work exactly like dropping onto the
+    /// docked body does. Reuses `stack_flyout_hit_rects`'s own geometry
+    /// (main-window-local, since a docked master's flyout preview paints
+    /// inside the main window) so this can never disagree with what's
+    /// actually on screen.
+    fn symbols_flyout_body_at_pointer(&mut self) -> bool {
+        let Some(main_id) = self.main_id else { return false };
+        let Some((.., body, pid)) = self.stack_flyout_hit_rects(main_id) else {
+            return false;
+        };
+        pid == PanelId(PanelKind::Symbols) && body.contains(self.pointer)
     }
 
     /// Move the live (active) document state off `App` into a [`Doc`],
@@ -3155,6 +3277,7 @@ impl App {
                 Some(doc.object(id).and_then(|o| o.name.clone()).unwrap_or_default())
             }
             panels::RenameId::Artboard(id) => doc.artboard(id).map(|a| a.name.clone()),
+            panels::RenameId::Symbol(id) => doc.symbol(id).map(|s| s.name.clone()),
         };
         if let Some(buf) = buf {
             self.doc.rename = Some(Rename {
@@ -3180,6 +3303,7 @@ impl App {
                     name: Some(name),
                 },
                 panels::RenameId::Artboard(id) => Command::RenameArtboard { id, name },
+                panels::RenameId::Symbol(id) => Command::RenameSymbol { id, name },
             };
             let _ = self.doc.editor.execute(cmd);
         }
@@ -6592,6 +6716,8 @@ impl App {
             match self.doc.editor.document().object(id)?.parent {
                 amalith_core::ObjectParent::Layer(l) => return Some(l),
                 amalith_core::ObjectParent::Group(g) => id = g,
+                // Owned by a symbol definition, not any real layer.
+                amalith_core::ObjectParent::Symbol(_) => return None,
             }
         }
     }
@@ -7181,6 +7307,9 @@ impl App {
             layer_drop: None,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
+            symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
+            selected_symbol: self.doc.selected_symbol,
+            symbols_drop_hover: false,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
             recent: &self.recent_colors,
@@ -7253,6 +7382,9 @@ impl App {
             layer_drop,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
+            symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
+            selected_symbol: self.doc.selected_symbol,
+            symbols_drop_hover: false,
             color_mode: self.color_mode,
             cmyk_profile: self.cmyk_profile.as_ref(),
             recent: &self.recent_colors,
@@ -7612,6 +7744,14 @@ impl App {
                 };
             }
             MasterKind::Normal => {
+                // Stack mode is a docked-only concept (a compact icon
+                // rail to save space) — see `DockModel::undock`'s doc
+                // comment. A floating master has no such constraint and
+                // Stack mode has no hamburger/menu chrome at all, so a
+                // floating master can't toggle into it.
+                if m.layout == MasterLayout::Tabs && m.dock.is_none() {
+                    return;
+                }
                 m.layout = if m.layout == MasterLayout::Tabs {
                     MasterLayout::Stack
                 } else {
@@ -7669,7 +7809,7 @@ impl App {
     /// is every built-in one), so every click landing on the actually-
     /// visible panel missed `bounds` and fell through to whatever's
     /// underneath instead: the flyout looked interactive but wasn't.
-    fn stack_flyout_hit_rects(&mut self, window: WindowId) -> Option<(Rect, Rect, Rect, PanelId)> {
+    fn stack_flyout_hit_rects(&mut self, window: WindowId) -> Option<(Rect, Rect, Rect, Rect, PanelId)> {
         let (fm, fg, fi) = self.stack_flyout?;
         let dock_side = self.dock.master(fm)?.dock;
         let bounds_in_window = if dock_side.is_some() {
@@ -7707,8 +7847,9 @@ impl App {
         };
         let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
         let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+        let menu = chrome::flyout_menu_rect(close, &self.theme);
         let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
-        Some((bounds, close, body, pid))
+        Some((bounds, menu, close, body, pid))
     }
 
 
@@ -8614,24 +8755,34 @@ impl ApplicationHandler for App {
         let scale = self.hosts.get(&id).map_or(1.0, |h| h.dpi.factor());
         match event {
             WindowEvent::Focused(focused) => {
-                let was_active = !self.focused.is_empty();
+                // Panels ride above the main window only while Amalith is
+                // the frontmost app. This used to toggle only on the
+                // false→true/true→false *edge* of "some Amalith window is
+                // focused" — but an intra-app focus handoff (clicking from
+                // a floating panel to the main window, or back) can have
+                // macOS momentarily report neither window focused before
+                // the new one reports focused, tripping a spurious
+                // demote-then-promote that can leave a floating panel's
+                // real on-screen z-order behind the window that just got
+                // raised, even once the level is nominally back to
+                // AlwaysOnTop. Re-asserting AlwaysOnTop on *every* focus
+                // gain (not just the edge) is idempotent and self-heals
+                // that — it costs one syscall per floating window, on an
+                // event that only fires on an actual click into a window.
                 if focused {
                     self.focused.insert(id);
-                } else {
-                    self.focused.remove(&id);
-                }
-                let now_active = !self.focused.is_empty();
-                if now_active != was_active {
-                    // Panels ride above the main window only while Amalith
-                    // is the frontmost app.
-                    let level = if now_active {
-                        winit::window::WindowLevel::AlwaysOnTop
-                    } else {
-                        winit::window::WindowLevel::Normal
-                    };
                     for host in self.hosts.values() {
                         if matches!(host.role, Role::Floating(_)) {
-                            host.window.set_window_level(level);
+                            host.window.set_window_level(winit::window::WindowLevel::AlwaysOnTop);
+                        }
+                    }
+                } else {
+                    self.focused.remove(&id);
+                    if self.focused.is_empty() {
+                        for host in self.hosts.values() {
+                            if matches!(host.role, Role::Floating(_)) {
+                                host.window.set_window_level(winit::window::WindowLevel::Normal);
+                            }
                         }
                     }
                 }
@@ -8709,7 +8860,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorLeft { .. } => {
-                if Some(id) == self.pointer_win {
+                // A held-button drag keeps delivering `CursorMoved` past
+                // the window's edge on macOS (mouse capture), but the
+                // *tracking-area* `CursorLeft` still fires the moment the
+                // cursor visually crosses out of bounds. Clearing
+                // `pointer_win` here would break every global-position
+                // computation a drag does against another on-screen
+                // window (e.g. dropping a selection onto a floating
+                // panel — see `App::pointer_global`) even though the
+                // drag is still very much alive; only clear it when
+                // nothing's being dragged.
+                if Some(id) == self.pointer_win && matches!(self.drag, Drag::None) {
                     self.pointer_win = None;
                     self.smart_guide_hit = None;
                     self.sg_hovered_path = None;
@@ -9208,7 +9369,7 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 /// The panels the Panels menu lists, alphabetical like Illustrator. A
 /// deliberate subset of `PanelKind::ALL` — excludes the color picker and
 /// every float-only dialog panel, which never belong in this menu.
-const WINDOW_PANELS: [PanelKind; 13] = [
+const WINDOW_PANELS: [PanelKind; 14] = [
     PanelKind::Align,
     PanelKind::Appearance,
     PanelKind::Artboards,
@@ -9220,6 +9381,7 @@ const WINDOW_PANELS: [PanelKind; 13] = [
     PanelKind::Paragraph,
     PanelKind::Pathfinder,
     PanelKind::Swatches,
+    PanelKind::Symbols,
     PanelKind::Tools,
     PanelKind::Transform,
 ];

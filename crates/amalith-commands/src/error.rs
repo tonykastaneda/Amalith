@@ -54,4 +54,8 @@ pub enum CommandError {
     NotABlend(ObjectId),
     #[error("select exactly two open-path endpoints to join")]
     JoinNeedsTwoOpenEndpoints,
+    #[error("no objects to make a symbol from")]
+    NothingToDefine,
+    #[error("object {0} is not a symbol instance")]
+    NotASymbolInstance(ObjectId),
 }

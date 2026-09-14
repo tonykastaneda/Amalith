@@ -9,22 +9,26 @@
 //! native format is not "serialized DOM" (see `DESIGN.md`).
 use crate::appearance::Appearance;
 use crate::geom::{Affine, BezPath, PathEl, Point, Rect, Vec2};
-use crate::ids::{AssetId, LayerId, ObjectId};
+use crate::ids::{AssetId, LayerId, ObjectId, SymbolId};
 use serde::{Deserialize, Serialize};
 
 /// Where an object lives in the ownership tree.
 ///
-/// Every object has exactly one parent: either a layer (top-level within
-/// that layer) or another object that is a [`ObjectKind::Group`]. This
-/// field is a cache of the edge already recorded in the parent's
-/// child-order list (`Layer::children` or the group's own children); it
-/// exists so callers can answer "who owns this object" and "what is this
-/// object's world transform" in O(depth) instead of a full tree scan.
-/// Kept in sync exclusively by the raw mutation methods on [`crate::Document`].
+/// Every object has exactly one parent: a layer (top-level within that
+/// layer), another object that is a [`ObjectKind::Group`], or a symbol
+/// definition's own content list (top-level within that definition,
+/// never reachable from any layer — see [`crate::SymbolDefinition`]).
+/// This field is a cache of the edge already recorded in the parent's
+/// child-order list (`Layer::children`, the group's own children, or
+/// `SymbolDefinition::children`); it exists so callers can answer "who
+/// owns this object" and "what is this object's world transform" in
+/// O(depth) instead of a full tree scan. Kept in sync exclusively by the
+/// raw mutation methods on [`crate::Document`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ObjectParent {
     Layer(LayerId),
     Group(ObjectId),
+    Symbol(SymbolId),
 }
 
 /// How an anchor's two bezier handles are kept related while editing.
@@ -1229,17 +1233,29 @@ pub struct ImageData {
     pub local_bounds: Rect,
 }
 
-/// Stub symbol instance: references a definition object by [`ObjectId`]
-/// (the definition itself is an ordinary object, typically a group, held
-/// outside the visible layer tree) plus an explicit local bounds box.
+/// A symbol instance: references a [`crate::SymbolDefinition`] in the
+/// document's symbol pool by [`SymbolId`] — the same pooled-reference
+/// shape as [`crate::Paint::Gradient`] — plus an explicit local bounds
+/// box (a cached copy of the definition's own bounds, used when the
+/// definition can't be resolved rather than recomputed live every time).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SymbolData {
-    pub definition: ObjectId,
+    pub definition: SymbolId,
     pub local_bounds: Rect,
 }
 
 /// The kind-specific payload of an [`Object`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Deserializes via [`ObjectKindRepr`] rather than a plain derive so that a
+/// variant this build doesn't recognize — one a *newer* Amalith wrote —
+/// falls into [`ObjectKind::Unknown`] instead of failing to parse the whole
+/// document. This is the forward-compatibility half of the format's
+/// "never stops opening" policy (see `amalith_io::manifest`'s module doc);
+/// `PathData`'s `#[serde(from = "PathDataRepr")]` shim just above is the
+/// same idiom used for the backward-compatibility half (an *older* shape
+/// still loading in a newer build).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "ObjectKindRepr")]
 pub enum ObjectKind {
     Path(PathData),
     Group(GroupData),
@@ -1247,6 +1263,102 @@ pub enum ObjectKind {
     Image(ImageData),
     CompoundPath(CompoundPathData),
     Symbol(SymbolData),
+    /// A kind this build doesn't recognize, preserved losslessly (its
+    /// original tag name and raw JSON body) instead of refusing to open
+    /// the document. Renders via the owning [`Object`]'s `fallback`
+    /// geometry, if the writer left one, else as nothing — never a panic
+    /// and never a hard parse failure. Round-trips byte-for-byte if this
+    /// build re-saves the document unchanged, so passing a file through
+    /// an older Amalith and back never destroys the newer data.
+    Unknown {
+        kind: String,
+        raw: serde_json::Value,
+    },
+}
+
+/// Every wire shape [`ObjectKind`] actually knows how to interpret, tried
+/// before [`ObjectKindRepr`] falls back to `Unknown`. A plain mirror of
+/// `ObjectKind` minus `Unknown` — kept separate (rather than reusing
+/// `ObjectKind` itself) because `ObjectKind`'s own `Deserialize` is this
+/// type's caller, not something it can recurse back into.
+#[derive(Deserialize)]
+enum ObjectKindKnown {
+    Path(PathData),
+    Group(GroupData),
+    Text(TextData),
+    Image(ImageData),
+    CompoundPath(CompoundPathData),
+    Symbol(SymbolData),
+}
+
+impl From<ObjectKindKnown> for ObjectKind {
+    fn from(known: ObjectKindKnown) -> Self {
+        match known {
+            ObjectKindKnown::Path(p) => ObjectKind::Path(p),
+            ObjectKindKnown::Group(g) => ObjectKind::Group(g),
+            ObjectKindKnown::Text(t) => ObjectKind::Text(t),
+            ObjectKindKnown::Image(i) => ObjectKind::Image(i),
+            ObjectKindKnown::CompoundPath(c) => ObjectKind::CompoundPath(c),
+            ObjectKindKnown::Symbol(s) => ObjectKind::Symbol(s),
+        }
+    }
+}
+
+/// On-disk shape of [`ObjectKind`]: try every known variant's shape first
+/// (`Known`), and only capture the raw tag+body as `Unknown` if none of
+/// them match — the same try-in-order semantics `PathDataRepr` already
+/// relies on for its own `#[serde(untagged)]` shim.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ObjectKindRepr {
+    Known(ObjectKindKnown),
+    Unknown(std::collections::BTreeMap<String, serde_json::Value>),
+}
+
+impl From<ObjectKindRepr> for ObjectKind {
+    fn from(repr: ObjectKindRepr) -> Self {
+        match repr {
+            ObjectKindRepr::Known(known) => known.into(),
+            ObjectKindRepr::Unknown(mut map) => match map.pop_first() {
+                Some((kind, raw)) => ObjectKind::Unknown { kind, raw },
+                // An empty JSON object `{}` — not a real externally-tagged
+                // payload, but still shouldn't be a parse failure.
+                None => ObjectKind::Unknown { kind: String::new(), raw: serde_json::Value::Null },
+            },
+        }
+    }
+}
+
+// `ObjectKind` can't use the plain derive: `Unknown`'s wire shape is
+// `{ "<original tag>": <original body> }` (so it round-trips byte-for-byte
+// through a build that doesn't understand it), not the derive's default
+// `{ "Unknown": { "kind": ..., "raw": ... } }`. Every other variant keeps
+// exactly the externally-tagged shape the derive would have produced.
+impl Serialize for ObjectKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        fn one<S: serde::Serializer, T: Serialize>(
+            serializer: S,
+            tag: &str,
+            body: &T,
+        ) -> Result<S::Ok, S::Error> {
+            let mut map = serializer.serialize_map(Some(1))?;
+            map.serialize_entry(tag, body)?;
+            map.end()
+        }
+        match self {
+            ObjectKind::Path(p) => one(serializer, "Path", p),
+            ObjectKind::Group(g) => one(serializer, "Group", g),
+            ObjectKind::Text(t) => one(serializer, "Text", t),
+            ObjectKind::Image(i) => one(serializer, "Image", i),
+            ObjectKind::CompoundPath(c) => one(serializer, "CompoundPath", c),
+            ObjectKind::Symbol(s) => one(serializer, "Symbol", s),
+            ObjectKind::Unknown { kind, raw } => one(serializer, kind, raw),
+        }
+    }
 }
 
 impl ObjectKind {
@@ -1279,6 +1391,11 @@ impl ObjectKind {
             ObjectKind::Image(i) => Some(i.local_bounds),
             ObjectKind::Symbol(s) => Some(s.local_bounds),
             ObjectKind::Group(_) => None,
+            // No geometry of its own to report — callers that care about
+            // an `Unknown` object's extent fall back to `Object::fallback`
+            // instead (see `Document::bounds_of`), since that's a sibling
+            // field this method has no access to.
+            ObjectKind::Unknown { .. } => None,
         }
     }
 }
@@ -1300,6 +1417,17 @@ pub struct Object {
     /// appearance) instead of failing to parse.
     #[serde(default)]
     pub appearance: Appearance,
+    /// Baked flattened geometry for a build that can't fully interpret
+    /// `kind` — set whenever `kind` is something an older Amalith might
+    /// not understand (a [`ObjectKind::Symbol`] instance, and by
+    /// convention any future kind in the same situation), so that build
+    /// still renders *something* recognizable instead of nothing.
+    /// `#[serde(default)]` so every file written before this field
+    /// existed still loads, with no fallback (there was nothing to fall
+    /// back from). See `amalith_io::manifest`'s format-compatibility
+    /// policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<PathData>,
 }
 
 impl Object {
@@ -1313,6 +1441,7 @@ impl Object {
             parent,
             kind,
             appearance: Appearance::default(),
+            fallback: None,
         }
     }
 

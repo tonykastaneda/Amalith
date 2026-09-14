@@ -140,6 +140,8 @@ pub(in crate::app) fn paint_main(
     // branch instead.
     stack_flyout: Option<(u64, usize, usize)>,
     hide_wip_tools: bool,
+    selected_symbol: Option<amalith_core::SymbolId>,
+    symbols_drop_hover: bool,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -613,6 +615,9 @@ pub(in crate::app) fn paint_main(
         layer_drop,
         links_scroll: panel_scroll.get(&PanelId(PanelKind::Links)).copied().unwrap_or(0.0),
         selected_asset,
+        symbols_scroll: panel_scroll.get(&PanelId(PanelKind::Symbols)).copied().unwrap_or(0.0),
+        selected_symbol,
+        symbols_drop_hover,
         color_mode,
         cmyk_profile,
         recent,
@@ -725,16 +730,6 @@ pub(in crate::app) fn paint_main(
             }
         }
     }
-    if let Some((row, pid, side)) = open_flyout {
-        let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
-        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
-        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
-        chrome::paint_flyout_chrome(scene, bounds, header, close, &tab_label(pid), theme, text);
-        let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
-        scene.push_clip_layer(Fill::NonZero, ID, &body);
-        panels::paint(scene, text, pid, body, &ctx);
-        scene.pop_layer();
-    }
     if let Some((side, index)) = master_dock_preview {
         let widths: Vec<f64> = dock
             .docked(side)
@@ -830,6 +825,30 @@ pub(in crate::app) fn paint_main(
         }
     }
 
+
+    // The open Stack-mode flyout preview — painted after every ordinary
+    // canvas/panel/tool-flyout element above (so nothing on the canvas
+    // side can land on top of an open flyout), but *before* the on-
+    // document cursor glyph just below, which stands in for the OS
+    // pointer and must stay visible above absolutely everything,
+    // including this. It was computed way up in the docked-masters loop,
+    // once the open row's real on-screen rect was known. Note this still
+    // doesn't cover every possible overlay — `App::paint_smart_guides`
+    // (hover-highlight contour, ctx menus, etc.) runs later still, in
+    // `render/mod.rs`, entirely outside this function; those are
+    // responsible for not drawing over an open flyout themselves (see
+    // `paint_smart_guides`'s own early-return for that).
+    if let Some((row, pid, side)) = open_flyout {
+        let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
+        let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_header_h());
+        let close = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+        let menu = panels::has_menu(pid).then(|| chrome::flyout_menu_rect(close, theme));
+        chrome::paint_flyout_chrome(scene, bounds, header, menu, close, &tab_label(pid), theme, text);
+        let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
+        scene.push_clip_layer(Fill::NonZero, ID, &body);
+        panels::paint(scene, text, pid, body, &ctx);
+        scene.pop_layer();
+    }
 
     // The active tool's on-document glyph, standing in for the OS cursor.
     if let Some((tool, hint, over_selectable)) = cursor_glyph {

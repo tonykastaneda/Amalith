@@ -31,6 +31,10 @@ impl App {
                     amalith_core::ObjectParent::Layer(layer) => {
                         return in_selection && doc.layer(layer).is_some_and(|l| l.visible && !l.locked);
                     }
+                    // A symbol definition has no visible/locked flag of its
+                    // own (editing one happens via isolation, which already
+                    // gates what's reachable) — selection alone decides.
+                    amalith_core::ObjectParent::Symbol(_) => return in_selection,
                 }
             }
         }).map(|o| o.id).collect()

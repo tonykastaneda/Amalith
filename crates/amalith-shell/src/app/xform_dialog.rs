@@ -142,7 +142,9 @@ impl App {
             .filter_map(|&(id, local)| {
                 let obj = doc.object(id)?;
                 let parent = match obj.parent {
-                    amalith_core::ObjectParent::Layer(_) => amalith_core::Affine::IDENTITY,
+                    amalith_core::ObjectParent::Layer(_) | amalith_core::ObjectParent::Symbol(_) => {
+                        amalith_core::Affine::IDENTITY
+                    }
                     amalith_core::ObjectParent::Group(g) => doc.world_transform(g),
                 };
                 Some((id, dlg.resolve(local, parent)))
@@ -208,7 +210,8 @@ impl App {
                         .filter_map(|(&nid, &(_, local))| {
                             let obj = doc.object(nid)?;
                             let parent = match obj.parent {
-                                amalith_core::ObjectParent::Layer(_) => amalith_core::Affine::IDENTITY,
+                                amalith_core::ObjectParent::Layer(_)
+                                | amalith_core::ObjectParent::Symbol(_) => amalith_core::Affine::IDENTITY,
                                 amalith_core::ObjectParent::Group(g) => doc.world_transform(g),
                             };
                             let new = dlg.resolve(local, parent);

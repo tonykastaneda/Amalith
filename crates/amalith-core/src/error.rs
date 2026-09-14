@@ -1,4 +1,4 @@
-use crate::ids::{ArtboardId, AssetId, LayerId, ObjectId};
+use crate::ids::{ArtboardId, AssetId, LayerId, ObjectId, SymbolId};
 use thiserror::Error;
 
 /// Errors from the low-level document mutation API (`Document`'s `raw`
@@ -17,4 +17,6 @@ pub enum DocumentError {
     NotAGroup(ObjectId),
     #[error("no asset with id {0}")]
     AssetNotFound(AssetId),
+    #[error("no symbol definition with id {0}")]
+    SymbolNotFound(SymbolId),
 }

@@ -853,6 +853,9 @@ fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextConte
             embed_image_object(ctx, images, img.asset, doc_bounds);
         }
         ObjectKind::Symbol(_) => {}
+        // A kind this build doesn't recognize — no PDF export for it yet
+        // either (would draw `obj.fallback` once one exists to draw).
+        ObjectKind::Unknown { .. } => {}
     }
 }
 

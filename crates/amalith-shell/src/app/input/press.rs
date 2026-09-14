@@ -505,9 +505,13 @@ impl App {
         // `dispatch_panel_press` a docked/floating panel's own content
         // pane uses — not just swallowed, since the flyout paints the
         // real panel, not a static preview.
-        if let Some((bounds, close, body, pid)) = self.stack_flyout_hit_rects(id) {
+        if let Some((bounds, menu, close, body, pid)) = self.stack_flyout_hit_rects(id) {
             if close.contains(self.pointer) {
                 self.dismiss_flyout();
+                return;
+            }
+            if panels::has_menu(pid) && menu.contains(self.pointer) {
+                self.toggle_panel_menu(pid, menu, id);
                 return;
             }
             if body.contains(self.pointer) {

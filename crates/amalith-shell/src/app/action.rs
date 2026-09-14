@@ -746,6 +746,16 @@ impl App {
                             _ => {}
                         }
                     }
+                } else if panel.0 == PanelKind::Symbols {
+                    match id {
+                        "new-symbol" => self.define_symbol_from_selection(),
+                        "rename" => {
+                            if let Some(sid) = self.doc.selected_symbol {
+                                self.begin_rename(panels::RenameId::Symbol(sid));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             panels::Action::SelectAsset(id) => {
@@ -754,6 +764,14 @@ impl App {
             panels::Action::GoToLinkAsset(id) => self.go_to_link(id),
             panels::Action::RelinkAsset(id) => self.relink_asset(id),
             panels::Action::UpdateLinkAsset(id) => self.update_linked_asset(id),
+            panels::Action::SelectSymbol(id) => {
+                self.doc.selected_symbol = Some(id);
+            }
+            panels::Action::DefineSymbol => self.define_symbol_from_selection(),
+            panels::Action::PlaceSymbolInstance(id) => self.place_symbol_instance(id),
+            panels::Action::EditSymbolDefinition(id) => self.edit_symbol_definition(id),
+            panels::Action::RenameSymbol(id) => self.begin_rename(panels::RenameId::Symbol(id)),
+            panels::Action::DeleteSymbolDefinition(id) => self.delete_symbol_definition(id),
             panels::Action::SetXformRef(rp) => {
                 self.xform_ref = rp;
             }
@@ -978,7 +996,7 @@ impl App {
                 };
                 let parent = match obj.parent {
                     ObjectParent::Group(g) => doc.world_transform(g),
-                    ObjectParent::Layer(_) => amalith_core::Affine::IDENTITY,
+                    ObjectParent::Layer(_) | ObjectParent::Symbol(_) => amalith_core::Affine::IDENTITY,
                 };
                 let local = obj.transform;
                 let next = match field {

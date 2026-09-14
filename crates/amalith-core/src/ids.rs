@@ -75,6 +75,10 @@ define_id!(
     GradientId,
     "Identifies a [`crate::Gradient`] in the document's gradient pool."
 );
+define_id!(
+    SymbolId,
+    "Identifies a [`crate::SymbolDefinition`] in the document's symbol pool."
+);
 
 #[cfg(test)]
 mod tests {

@@ -422,6 +422,26 @@ impl App {
         self.content.push_clip_layer(Fill::NonZero, ID, &viewport);
         if self.settings.sg_object_highlighting && matches!(self.drag, Drag::None) {
             if let Some(id) = self.sg_hovered_path {
+                // This highlight is computed from raw canvas hit-testing
+                // that has no idea an open Stack-mode flyout preview is
+                // sitting on top of the canvas (`docked_flyout_rect` opens
+                // flyouts *into* the canvas area on purpose) —
+                // `paint_main`'s own paint order can't fix this, since
+                // this whole function runs after it returns. Gating this
+                // on whether the *pointer* sits over the flyout isn't
+                // enough: the pointer only has to be hovering *some* part
+                // of the hovered object, but the highlight strokes its
+                // *entire* contour — for a large object, most of that
+                // contour can still pass straight through the flyout's
+                // rect while the cursor itself sits well outside it. Clip
+                // the flyout's rect out of the paintable region instead,
+                // so whichever *part* of the contour would land there
+                // simply doesn't get painted, regardless of where the
+                // cursor is.
+                let mid = self.main_id;
+                let flyout_bounds = mid.and_then(|mid| {
+                    self.stack_flyout_hit_rects(mid).map(|(bounds, ..)| bounds)
+                });
                 let doc = self.doc.editor.document();
                 // `object_contour` (not the object's raw stored geometry)
                 // — its own live effect stack applied, so the highlight
@@ -429,6 +449,16 @@ impl App {
                 // `sg_hovered_path_at` just found the cursor to be.
                 if let Some(bez) = select::base_contour(doc, id) {
                     let path = to_screen * bez;
+                    if let Some(fb) = flyout_bounds {
+                        use vello::kurbo::{BezPath, Shape};
+                        // Even-odd fill of the (larger) viewport plus the
+                        // (nested) flyout rect punches a hole exactly the
+                        // shape of the flyout out of the clip region.
+                        let mut hole = BezPath::new();
+                        hole.extend(viewport.path_elements(0.1));
+                        hole.extend(fb.path_elements(0.1));
+                        self.content.push_clip_layer(Fill::EvenOdd, ID, &hole);
+                    }
                     self.content.stroke(
                         &Stroke::new(canvas::OBJECT_CONTOUR_WEIGHT),
                         ID,
@@ -436,6 +466,9 @@ impl App {
                         None,
                         &path,
                     );
+                    if flyout_bounds.is_some() {
+                        self.content.pop_layer();
+                    }
                 }
             }
         }
