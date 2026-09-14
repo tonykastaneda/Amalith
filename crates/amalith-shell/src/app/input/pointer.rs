@@ -1116,6 +1116,7 @@ impl App {
                     {
                         self.doc.selection = vec![id];
                         self.apply_new_appearance(id);
+                        self.reparent_new_object_into_isolation(id);
                     }
                     self.request_main_redraw();
                 }
@@ -1188,6 +1189,7 @@ impl App {
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
                         self.apply_new_appearance(id);
+                        self.reparent_new_object_into_isolation(id);
                     }
                     self.request_main_redraw();
                 }

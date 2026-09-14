@@ -480,6 +480,7 @@ impl App {
                 &anchor_paths,
                 self.doc_point(self.pointer),
                 6.0 / self.doc.view.zoom,
+                self.isolation_ambient(),
             )
         } else {
             None

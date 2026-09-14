@@ -7,24 +7,58 @@ use vello::kurbo::{Affine, ParamCurveNearest, Point, Rect};
 
 use crate::convert;
 
-/// Every leaf path id under a visible layer, in paint order (groups
-/// expanded — Direct Selection reaches into groups).
-pub fn path_leaves(doc: &Document) -> Vec<ObjectId> {
-    fn rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId>) {
-        for &id in doc.children_of(parent) {
-            if !doc.object(id).is_some_and(|o| o.visible) { continue; }
-            match doc.object(id).map(|o| &o.kind) {
-                Some(kind) if kind.path_data().is_some() => out.push(id),
-                Some(ObjectKind::Group(_)) => rec(doc, ObjectParent::Group(id), out),
-                _ => {}
-            }
+fn path_leaves_rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId>) {
+    for &id in doc.children_of(parent) {
+        if !doc.object(id).is_some_and(|o| o.visible) { continue; }
+        match doc.object(id).map(|o| &o.kind) {
+            Some(kind) if kind.path_data().is_some() => out.push(id),
+            Some(ObjectKind::Group(_)) => path_leaves_rec(doc, ObjectParent::Group(id), out),
+            _ => {}
         }
     }
+}
+
+/// Every leaf path id under a visible layer, in paint order (groups
+/// expanded — Direct Selection reaches into groups). Never reaches into a
+/// Symbol's definition — that content has no fixed position of its own
+/// (see `App::isolation_ambient`'s doc comment), so scanning it only
+/// makes sense scoped to one specific instance; see [`path_leaves_in`]
+/// for that case, used instead whenever the canvas is isolated.
+pub fn path_leaves(doc: &Document) -> Vec<ObjectId> {
     let mut out = Vec::new();
     for layer in doc.layers() {
         if layer.visible {
-            rec(doc, ObjectParent::Layer(layer.id), &mut out);
+            path_leaves_rec(doc, ObjectParent::Layer(layer.id), &mut out);
         }
+    }
+    out
+}
+
+/// [`path_leaves`]'s isolation-scoped counterpart: every leaf path
+/// reachable from inside `root` (a Group or a Symbol instance) —
+/// `root`'s own children if it's a group, or its definition's children
+/// (resolved through the pool) if it's a symbol instance, recursing
+/// through any further nested groups either way. `root` itself if it's
+/// a bare path (an isolated leaf object, selectable but with no children
+/// to scan). Object Highlighting has to use this instead of
+/// `path_leaves` while isolated — that function starts from every Layer
+/// and can never reach a Symbol's content in the first place, and even
+/// where it *could* (an ordinary nested group), unfiltered top-level
+/// scanning would let something outside the isolated scope light up,
+/// which Illustrator's own "rest of the document is alignment noise once
+/// isolated" convention (see `select::bounds_within`'s doc comment)
+/// says shouldn't happen either.
+pub fn path_leaves_in(doc: &Document, root: ObjectId) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    match doc.object(root).map(|o| &o.kind) {
+        Some(ObjectKind::Group(_)) => path_leaves_rec(doc, ObjectParent::Group(root), &mut out),
+        Some(ObjectKind::Symbol(data)) => {
+            if let Some(def) = doc.symbol(data.definition) {
+                path_leaves_rec(doc, ObjectParent::Symbol(def.id), &mut out);
+            }
+        }
+        Some(kind) if kind.path_data().is_some() => out.push(root),
+        _ => {}
     }
     out
 }
@@ -70,12 +104,23 @@ pub fn handles_of(doc: &Document, id: ObjectId) -> Vec<(usize, HandleSide, Point
 }
 
 /// Topmost handle within `radius` doc units of `p`, restricted to `ids`.
+///
+/// `ambient` is `App::isolation_ambient()` — identity unless isolated
+/// into a symbol instance specifically, in which case `handles_of`'s
+/// (and `anchors_of`'s, `segment_at`'s) own `world_transform`-derived
+/// positions are really in that definition's local space, not on-screen
+/// document space (a definition has no fixed position of its own — see
+/// `App::isolation_ambient`'s doc comment for the full reasoning), so `p`
+/// has to be rebased into that same local space before comparing against
+/// them.
 pub fn handle_at(
     doc: &Document,
     ids: &[ObjectId],
     p: Point,
     radius: f64,
+    ambient: Affine,
 ) -> Option<(ObjectId, usize, HandleSide)> {
+    let p = ambient.inverse() * p;
     let r2 = radius * radius;
     for &id in ids.iter().rev() {
         let best = handles_of(doc, id)
@@ -95,12 +140,15 @@ pub fn handle_at(
 /// Topmost path segment within `radius` doc units of `p`, restricted to
 /// `ids`. Returns `(id, flat segment ordinal, t)` where `t` in `0..=1`
 /// locates the closest point along that segment.
+/// `ambient` — see [`handle_at`]'s doc comment.
 pub fn segment_at(
     doc: &Document,
     ids: &[ObjectId],
     p: Point,
     radius: f64,
+    ambient: Affine,
 ) -> Option<(ObjectId, usize, f64)> {
+    let p = ambient.inverse() * p;
     let r2 = radius * radius;
     for &id in ids.iter().rev() {
         let Some(obj) = doc.object(id) else { continue };
@@ -146,12 +194,16 @@ pub fn topmost_anchor_at(doc: &Document, p: Point, radius: f64) -> Option<(Objec
 /// Topmost anchor within `radius` document units of `p`, restricted to
 /// `ids` (the paths whose nodes are currently on screen). Illustrator's
 /// white arrow only grabs nodes of a path you've already selected.
+///
+/// `ambient` — see [`handle_at`]'s doc comment.
 pub fn topmost_anchor_among(
     doc: &Document,
     ids: &[ObjectId],
     p: Point,
     radius: f64,
+    ambient: Affine,
 ) -> Option<(ObjectId, usize)> {
+    let p = ambient.inverse() * p;
     let r2 = radius * radius;
     for &id in ids.iter().rev() {
         let best = anchors_of(doc, id)

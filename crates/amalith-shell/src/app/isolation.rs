@@ -11,6 +11,97 @@ impl App {
         self.isolation.last().copied()
     }
 
+    /// The extra transform needed to convert between document space and
+    /// the current isolation's own local space — identity unless isolated
+    /// *into a symbol instance specifically*. A plain group's own world
+    /// transform is already correct via the normal parent chain (there's
+    /// only one of it), but a symbol definition has none of its own by
+    /// design (`Document::world_transform` treats `ObjectParent::Symbol`
+    /// as identity, same as a bare layer, since the same definition can
+    /// sit under any number of differently-placed instances) — so every
+    /// child's stored geometry is really in "definition-local" space, and
+    /// needs this instance's own real world transform to mean anything on
+    /// screen. `select::topmost_in`'s doc comment has the full reasoning;
+    /// this is the same correction, exposed for every other isolation-
+    /// scoped hit-test/render call site to share (anchor/handle hit-
+    /// testing in `anchors.rs`, selection-box rendering in `canvas.rs`)
+    /// instead of re-deriving it ad hoc.
+    pub(in crate::app) fn isolation_ambient(&self) -> Affine {
+        let Some(root) = self.isolation_root() else { return Affine::IDENTITY };
+        let doc = self.doc.editor.document();
+        if matches!(doc.object(root).map(|o| &o.kind), Some(amalith_core::ObjectKind::Symbol(_))) {
+            convert::affine(doc.world_transform(root))
+        } else {
+            Affine::IDENTITY
+        }
+    }
+
+    /// Whether any level of the current isolation breadcrumb is a Symbol
+    /// instance (Edit Symbol) rather than a plain group — checked at
+    /// every depth, not just the deepest, since drilling into an ordinary
+    /// group *inside* a symbol's content is still editing that symbol's
+    /// shared definition. Drives the isolation bar's purple underline
+    /// (`paint_isolation_bar`) so editing a symbol always reads as
+    /// visually distinct from ordinary group isolation.
+    pub(in crate::app) fn is_editing_symbol(&self) -> bool {
+        let doc = self.doc.editor.document();
+        self.isolation.iter().any(|&id| {
+            matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Symbol(_)))
+        })
+    }
+
+    /// Every "draw a brand-new object" path (shape tools, Pen, Type,
+    /// placed images, …) creates its object on the active layer via
+    /// `ensure_layer()` — that's the only parent a `Create*` command
+    /// knows how to target. If the canvas is currently isolated, a freshly
+    /// drawn object has to be moved into whatever's isolated instead, or
+    /// isolation would be purely cosmetic for drawing: the new shape
+    /// would just sit on the layer, invisible to the group/symbol you're
+    /// actually working inside and never shared by other instances.
+    /// Called right after every such creation succeeds, a no-op when
+    /// nothing is isolated.
+    ///
+    /// A plain group's own world transform is already well-defined (there
+    /// is only one of it), so `Command::Reparent` rebases onto it
+    /// correctly on its own. A symbol *definition* has no such thing — by
+    /// design its content has no fixed position, only whatever transform
+    /// each instance places on it (`Document::world_transform` returns
+    /// identity for `ObjectParent::Symbol`, same as a Layer) — so
+    /// reparenting into one always keeps the object's *absolute* document
+    /// transform verbatim. Since the object was drawn to look right on
+    /// screen through *this specific instance*, it has to be rebased onto
+    /// *that instance's* world transform by hand first (`SetTransform`),
+    /// not the (nonexistent) definition's — otherwise it renders in the
+    /// wrong place through every instance, including the one just edited.
+    pub(in crate::app) fn reparent_new_object_into_isolation(&mut self, id: ObjectId) {
+        let Some(root) = self.isolation_root() else { return };
+        let doc = self.doc.editor.document();
+        let kind = doc.object(root).map(|o| &o.kind);
+        match kind {
+            Some(amalith_core::ObjectKind::Group(_)) => {
+                let _ = self.doc.editor.execute(Command::Reparent {
+                    ids: vec![id],
+                    parent: amalith_core::ObjectParent::Group(root),
+                    index: usize::MAX,
+                });
+            }
+            Some(amalith_core::ObjectKind::Symbol(data)) => {
+                let definition = data.definition;
+                let instance_world = doc.world_transform(root);
+                let Some(current) = doc.object(id).map(|o| o.transform) else { return };
+                let rebased = instance_world.inverse() * current;
+                let _ = self.doc.editor.execute(Command::SetTransform { object: id, transform: rebased });
+                let _ = self.doc.editor.execute(Command::Reparent {
+                    ids: vec![id],
+                    parent: amalith_core::ObjectParent::Symbol(definition),
+                    index: usize::MAX,
+                });
+            }
+            _ => return,
+        }
+        self.request_main_redraw();
+    }
+
     /// Drop breadcrumb entries whose object no longer exists. Every level
     /// except the deepest must still be a group or a symbol instance (Edit
     /// Symbol) to drill through; the deepest may be a bare object (path /
@@ -321,13 +412,41 @@ impl App {
         }
     }
 
-    /// Symbols panel footer "Edit" (Edit Symbol) — isolate into the first
-    /// existing instance of `symbol` found anywhere in the document. A
-    /// no-op if none is currently placed (nothing to isolate into).
+    /// Symbols panel footer "Edit" (Edit Symbol) — isolate into an
+    /// existing instance of `symbol` if one is placed anywhere in the
+    /// document; otherwise place a fresh one (centered on the current
+    /// view, same as the footer's own "Place") and isolate into that
+    /// instead. Isolation is scoped to a real placed object — a
+    /// definition with zero instances has nothing to isolate *into* —
+    /// but the definition itself is exactly as editable either way, so
+    /// "no instances yet" shouldn't be a dead end: this is the one path
+    /// that lets you edit *any* symbol, used or not.
     pub(in crate::app) fn edit_symbol_definition(&mut self, symbol: amalith_core::SymbolId) {
-        let instance = self.doc.editor.document().objects().find_map(|o| match &o.kind {
-            amalith_core::ObjectKind::Symbol(data) if data.definition == symbol => Some(o.id),
-            _ => None,
+        let doc = self.doc.editor.document();
+        let is_this_symbol = |o: &amalith_core::Object| {
+            matches!(&o.kind, amalith_core::ObjectKind::Symbol(data) if data.definition == symbol)
+        };
+        // Prefer whichever instance you actually selected (e.g. just
+        // placed) over an arbitrary one — the document's own object order
+        // has nothing to do with what's currently on screen or which
+        // instance you meant, so falling back to "the first match found"
+        // could just as easily land you back in a *different* instance
+        // (very often the original) instead of the one you were looking
+        // at when you clicked Edit.
+        let instance = self
+            .doc.selection
+            .iter()
+            .find_map(|&id| doc.object(id).filter(|o| is_this_symbol(o)).map(|_| id))
+            .or_else(|| doc.objects().find_map(|o| is_this_symbol(o).then_some(o.id)));
+        let instance = instance.or_else(|| {
+            let layer = self
+                .doc.selected_layer
+                .or_else(|| self.doc.editor.document().layers().last().map(|l| l.id))?;
+            let at = crate::convert::point_to_core(self.visible_doc_rect().center());
+            match self.doc.editor.execute(Command::PlaceSymbolInstance { symbol, layer, at }) {
+                Ok(CommandOutcome::Object(id)) => Some(id),
+                _ => None,
+            }
         });
         if let Some(id) = instance {
             self.enter_isolation(id);

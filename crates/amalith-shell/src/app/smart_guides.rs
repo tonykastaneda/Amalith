@@ -1107,15 +1107,27 @@ impl App {
             return None;
         }
         let doc = self.doc.editor.document();
+        // Scoped to the current isolation, same as every other hit-test
+        // once isolated — `path_leaves` starts from every Layer and can
+        // never reach a Symbol's content at all, let alone the *specific
+        // instance* you're actually looking at (see `path_leaves_in`'s
+        // doc comment).
+        let ids: Vec<ObjectId> = match self.isolation_root() {
+            Some(root) => anchors::path_leaves_in(doc, root),
+            None => anchors::path_leaves(doc),
+        };
         // A blend's generated in-between steps aren't independently
         // selectable (see `select::is_blend_step`'s own doc comment) —
         // only its two real originals are, so they're excluded here the
         // same way click-selection already excludes them once isolated.
-        let ids: Vec<ObjectId> = anchors::path_leaves(doc)
-            .into_iter()
-            .filter(|&id| !select::is_blend_step(doc, id))
-            .collect();
-        select::nearest_painted_leaf(doc, &ids, cursor_doc, self.sg_tolerance_doc())
+        let ids: Vec<ObjectId> = ids.into_iter().filter(|&id| !select::is_blend_step(doc, id)).collect();
+        // `nearest_painted_leaf` compares against each candidate's own
+        // `world_transform`-derived painted shape, which for a path
+        // living inside a symbol's definition is really in that
+        // definition's local space (see `App::isolation_ambient`'s doc
+        // comment) — rebase the cursor into that same space first.
+        let local_cursor = self.isolation_ambient().inverse() * cursor_doc;
+        select::nearest_painted_leaf(doc, &ids, local_cursor, self.sg_tolerance_doc())
     }
 
     /// Unconditional per-pointer-move refresh (no drag active) — Anchor/

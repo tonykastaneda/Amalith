@@ -42,6 +42,14 @@ pub struct Theme {
     pub artboard_label: Color,
     pub text: Color,
     pub text_dim: Color,
+    /// Distinguishes "editing a Symbol's shared definition" from ordinary
+    /// group isolation — the isolation bar's underline while any
+    /// breadcrumb in the current isolation stack is a Symbol instance
+    /// (see `App::is_editing_symbol`). Deliberately not derived from
+    /// `accent` (which the user can repoint) — this needs to stay a
+    /// stable, recognizable "you're inside a Symbol" color regardless of
+    /// the user's chosen selection-UI accent.
+    pub symbol_accent: Color,
 
     /// Height of a tab strip.
     pub tab_strip_h: f64,
@@ -117,6 +125,7 @@ impl Default for Theme {
             artboard_label: Color::from_rgb8(0xe1, 0xe1, 0xe1),
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),
             text_dim: Color::from_rgb8(0x8a, 0x8a, 0x8a),
+            symbol_accent: Color::from_rgb8(0xa0, 0x6c, 0xf5),
 
             tab_strip_h: 27.3,
             group_title_h: 20.0,

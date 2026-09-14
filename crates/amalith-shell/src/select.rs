@@ -371,12 +371,19 @@ pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[Obje
 /// which aren't independent objects at all. Locked children still count,
 /// same reasoning as `visible_top_level_bounds`.
 pub fn bounds_within(doc: &Document, group: ObjectId, visible: Rect, excluding: &[ObjectId]) -> Vec<(ObjectId, Rect)> {
-    let (children, clip, blend): (&[ObjectId], _, _) = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend),
+    let (children, clip, blend, ambient): (&[ObjectId], _, _, Affine) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend, Affine::IDENTITY),
         // Isolated into a symbol definition's content (Edit Symbol) — same
         // alignment-guide scoping as a group, resolved through the pool.
+        // `bounds(doc, id)` below resolves each child in definition-local
+        // space (identity ambient — see `topmost_in`'s doc comment on why
+        // a definition has no fixed position of its own); rebase through
+        // *this instance's* real world transform so what's returned lines
+        // up with `visible` and with every other (ordinarily-resolved,
+        // already-world-space) object's bounds a caller compares it
+        // against.
         Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
-            Some(def) => (&def.children, None, None),
+            Some(def) => (&def.children, None, None, convert::affine(doc.world_transform(group))),
             None => return Vec::new(),
         },
         _ => return Vec::new(),
@@ -396,6 +403,7 @@ pub fn bounds_within(doc: &Document, group: ObjectId, visible: Rect, excluding: 
             continue;
         }
         if let Some(b) = bounds(doc, id) {
+            let b = ambient.transform_rect_bbox(b);
             if overlaps(b, visible) {
                 out.push((id, b));
             }
@@ -423,8 +431,8 @@ pub fn topmost_in(
     point: Point,
     contour_tol: f64,
 ) -> Option<ObjectId> {
-    let (children, clip, blend): (&[ObjectId], _, _) = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend),
+    let (children, clip, blend, point): (&[ObjectId], _, _, Point) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.clip, g.blend, point),
         // Isolated straight into a symbol definition's own content (Edit
         // Symbol) — its top-level children are as selectable as a
         // group's, just resolved through the pool instead of
@@ -432,8 +440,27 @@ pub fn topmost_in(
         // of its own. A dangling definition (already-broken instance,
         // shouldn't normally happen — see `Command::DeleteSymbolDefinition`)
         // selects nothing rather than panicking.
+        //
+        // Unlike a plain group, a definition has no position of its own
+        // — `Document::world_transform` treats `ObjectParent::Symbol` as
+        // identity, same as a bare layer, since the *same* definition can
+        // sit under any number of differently-placed instances. Every
+        // child's stored transform is relative to that identity origin
+        // ("definition-local" space), but `point` arrives in document
+        // space, matching wherever *this specific instance* (`group`)
+        // actually sits on screen. Rebasing `point` into definition-local
+        // space via this instance's own (very much real) world transform
+        // is what makes hit-testing agree with what's actually rendered
+        // through it — without this, every child hit test silently
+        // assumed the instance sat at the origin, which only ever held
+        // for whichever instance happened to be first (`DefineSymbol`
+        // moves the original selection's own transforms into the pool
+        // unchanged), never any instance placed anywhere else.
         Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
-            Some(def) => (&def.children, None, None),
+            Some(def) => {
+                let ambient = convert::affine(doc.world_transform(group));
+                (&def.children, None, None, ambient.inverse() * point)
+            }
             None => return None,
         },
         Some(kind) => {
@@ -622,12 +649,19 @@ pub fn clip_mask_at_contour(
 /// Direct children of `group` whose bounds intersect `marquee`. When a
 /// bare object is isolated it is the only candidate.
 pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId> {
-    let (children, blend): (&[ObjectId], _) = match doc.object(group).map(|o| &o.kind) {
-        Some(ObjectKind::Group(g)) => (&g.children, g.blend),
+    let (children, blend, marquee): (&[ObjectId], _, Rect) = match doc.object(group).map(|o| &o.kind) {
+        Some(ObjectKind::Group(g)) => (&g.children, g.blend, marquee),
         // Isolated into a symbol definition's content (Edit Symbol) — same
-        // marquee scoping as a group, resolved through the pool.
+        // marquee scoping as a group, resolved through the pool. `marquee`
+        // arrives in document space but children resolve in
+        // definition-local space (see `topmost_in`'s doc comment), so
+        // rebase it through this instance's inverse world transform first
+        // — same reasoning, just a dragged rect instead of a click point.
         Some(ObjectKind::Symbol(data)) => match doc.symbol(data.definition) {
-            Some(def) => (&def.children, None),
+            Some(def) => {
+                let ambient = convert::affine(doc.world_transform(group));
+                (&def.children, None, ambient.inverse().transform_rect_bbox(marquee))
+            }
             None => return Vec::new(),
         },
         _ => {
@@ -1489,6 +1523,78 @@ mod smart_guide_bounds_tests {
             nearest_painted_leaf(&doc, &ids, Point::new(10., 10.), 4.0),
             Some(start),
             "the blend's own start must still highlight normally"
+        );
+    }
+
+    /// Regression test for the exact bug reported live: a symbol's
+    /// definition has no fixed position of its own (`DefineSymbol`
+    /// leaves the pool's content wherever the original selection
+    /// happened to sit, and `Document::world_transform` treats
+    /// `ObjectParent::Symbol` as identity, same as a bare layer) — so
+    /// hit-testing while isolated into a placed instance has to rebase
+    /// the click point through *that instance's own* world transform
+    /// before comparing it against the children, or every instance
+    /// except one sitting at the origin becomes silently unselectable
+    /// (`topmost_in` used to compare the raw document-space click point
+    /// directly against definition-local geometry, which only ever
+    /// happened to line up for whichever instance was first).
+    #[test]
+    fn topmost_in_hits_a_symbol_child_through_a_non_identity_instance() {
+        let mut doc = Document::new("symbol-hit-test");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+
+        let symbol_id = amalith_core::SymbolId::new();
+        let child = ObjectId::new();
+        doc.add_symbol(amalith_core::SymbolDefinition {
+            id: symbol_id,
+            name: "Dot".into(),
+            children: vec![child],
+        });
+        doc.insert_object(
+            rect_path(child, ObjectParent::Symbol(symbol_id), amalith_core::geom::Rect::new(0., 0., 20., 20.), false),
+            0,
+        )
+        .unwrap();
+
+        let symbol_kind = |bounds| {
+            ObjectKind::Symbol(amalith_core::SymbolData { definition: symbol_id, local_bounds: bounds })
+        };
+        let local_bounds = amalith_core::geom::Rect::new(0., 0., 20., 20.);
+
+        // Instance A sits at the origin — exactly the position
+        // `DefineSymbol` would leave the "original" instance at.
+        let instance_a = ObjectId::new();
+        doc.insert_object(Object::new(instance_a, ObjectParent::Layer(layer), symbol_kind(local_bounds)), 0)
+            .unwrap();
+
+        // Instance B is placed somewhere else entirely — any other
+        // `PlaceSymbolInstance` call.
+        let instance_b = ObjectId::new();
+        let mut obj_b = Object::new(instance_b, ObjectParent::Layer(layer), symbol_kind(local_bounds));
+        obj_b.transform = amalith_core::Affine::translate((500.0, 500.0));
+        doc.insert_object(obj_b, 1).unwrap();
+
+        // Clicking where the child actually renders *through instance
+        // B* must hit it while isolated into B.
+        assert_eq!(
+            topmost_in(&doc, instance_b, Point::new(510., 510.), 0.0),
+            Some(child),
+            "must hit the shared child at instance B's own on-screen position"
+        );
+        // The same click must miss while isolated into A — B's content
+        // isn't rendered there.
+        assert_eq!(
+            topmost_in(&doc, instance_a, Point::new(510., 510.), 0.0),
+            None,
+            "instance A's own isolation must not see instance B's on-screen position"
+        );
+        // And instance A's own position must still hit while isolated
+        // into A (the case that already worked).
+        assert_eq!(
+            topmost_in(&doc, instance_a, Point::new(10., 10.), 0.0),
+            Some(child),
+            "instance A must still work at its own position"
         );
     }
 }

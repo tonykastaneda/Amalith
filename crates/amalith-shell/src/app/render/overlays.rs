@@ -6,6 +6,45 @@ use crate::metrics::px as ui_px;
 use super::super::*;
 use vello::kurbo::Line;
 
+/// Whether `id` is still a legitimate Object Highlighting candidate given
+/// `isolation` (the live breadcrumb stack) — reachable by walking Group
+/// parents up to either a Layer (not isolated) or exactly the current
+/// isolation root (isolated), matching whichever scan
+/// `anchors::path_leaves`/`path_leaves_in` would have used to find it in
+/// the first place. A path living inside a Symbol's definition is only
+/// ever a valid candidate while isolated *into that specific instance* —
+/// its content has no fixed position of its own outside that scope (see
+/// `App::isolation_ambient`'s doc comment) — so this doesn't just check
+/// "does it bottom out at a Symbol somewhere," it checks "does it bottom
+/// out at *the* Symbol instance currently isolated." O(depth), not
+/// O(document size), so it's cheap enough to check every frame — unlike
+/// re-running `path_leaves`/`path_leaves_in` themselves.
+fn reachable_from_layer(doc: &Document, id: ObjectId, isolation: &[ObjectId]) -> bool {
+    let root = isolation.last().copied();
+    // A symbol definition's content lives under `ObjectParent::Symbol
+    // (SymbolId)` — a different id namespace from the instance's own
+    // `ObjectId` — so walking up from one of its children can never
+    // literally equal `root` the way it would for a plain group. What
+    // actually has to match is the *definition* — `root`'s own
+    // `data.definition` — against the `SymbolId` the walk hits.
+    let isolated_definition = root.and_then(|r| match doc.object(r).map(|o| &o.kind) {
+        Some(amalith_core::ObjectKind::Symbol(data)) => Some(data.definition),
+        _ => None,
+    });
+    let mut cur = id;
+    loop {
+        if Some(cur) == root {
+            return true;
+        }
+        match doc.object(cur).map(|o| o.parent) {
+            Some(amalith_core::ObjectParent::Layer(_)) => return root.is_none(),
+            Some(amalith_core::ObjectParent::Group(g)) => cur = g,
+            Some(amalith_core::ObjectParent::Symbol(def)) => return Some(def) == isolated_definition,
+            None => return false,
+        }
+    }
+}
+
 impl App {
     pub(in crate::app) fn paint_font_menu(&mut self) {
         let Some(m) = &self.font_menu else {
@@ -151,14 +190,21 @@ impl App {
         let region = self.canvas_region();
         let inset = if self.rulers { crate::rulers::THICK } else { 0.0 };
         let bar = Rect::new(region.x0 + inset, region.y0 + inset, region.x1, region.y0 + inset + ui_px(24.0));
+        let editing_symbol = self.is_editing_symbol();
         let th = &self.theme;
         self.content.fill(Fill::NonZero, ID, th.strip_bg, None, &bar);
+        // Editing a Symbol's shared definition gets a thicker purple
+        // underline instead of the ordinary hairline border — the one
+        // visual cue that this isolation isn't scoped to a plain group,
+        // it's live-editing every placed instance at once.
+        let (underline_color, underline_h) =
+            if editing_symbol { (th.symbol_accent, ui_px(2.5)) } else { (th.border, ui_px(1.0)) };
         self.content.fill(
             Fill::NonZero,
             ID,
-            th.border,
+            underline_color,
             None,
-            &Rect::new(bar.x0, bar.y1, bar.x1, bar.y1 + 1.0),
+            &Rect::new(bar.x0, bar.y1, bar.x1, bar.y1 + underline_h),
         );
         // "<" back arrow.
         let arrow = Rect::new(bar.x0 + ui_px(4.0), bar.y0, bar.x0 + ui_px(22.0), bar.y1);
@@ -421,6 +467,26 @@ impl App {
         let (wl,hl) = self.main_logical_size().unwrap_or((1280.0,800.0));
         self.content.push_clip_layer(Fill::NonZero, ID, &viewport);
         if self.settings.sg_object_highlighting && matches!(self.drag, Drag::None) {
+            // `sg_hovered_path` is a cached id from the *last* cursor move
+            // (`refresh_smart_guides`), redrawn every frame in between —
+            // including frames where a command has since moved it
+            // somewhere `anchors::path_leaves` (what set this id in the
+            // first place) can no longer see, most commonly "Define
+            // Symbol" pulling the very thing you were just hovering into
+            // a symbol's definition. Nothing then clears the stale id
+            // until the next actual mouse move, so without this check it
+            // keeps rendering a hover contour at its old, pre-move
+            // position indefinitely — on whatever instance happens to
+            // sit there, regardless of what's actually under the cursor
+            // now, or even *selected* now. Self-heals by dropping it the
+            // moment it's found stale, rather than merely skipping this
+            // one draw.
+            if self
+                .sg_hovered_path
+                .is_some_and(|id| !reachable_from_layer(self.doc.editor.document(), id, &self.isolation))
+            {
+                self.sg_hovered_path = None;
+            }
             if let Some(id) = self.sg_hovered_path {
                 // This highlight is computed from raw canvas hit-testing
                 // that has no idea an open Stack-mode flyout preview is
@@ -448,7 +514,12 @@ impl App {
                 // traces what's actually painted, matching where
                 // `sg_hovered_path_at` just found the cursor to be.
                 if let Some(bez) = select::base_contour(doc, id) {
-                    let path = to_screen * bez;
+                    // `base_contour` bakes in `id`'s plain `world_transform`,
+                    // which for a path living inside a symbol's definition
+                    // is really in that definition's local space (see
+                    // `App::isolation_ambient`'s doc comment) — rebase onto
+                    // this instance's real position before going to screen.
+                    let path = to_screen * self.isolation_ambient() * bez;
                     if let Some(fb) = flyout_bounds {
                         use vello::kurbo::{BezPath, Shape};
                         // Even-odd fill of the (larger) viewport plus the

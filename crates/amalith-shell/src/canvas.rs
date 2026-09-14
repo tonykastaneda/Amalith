@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use amalith_core::{
-    ArtboardId, AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, StrokeAlign,
+    ArtboardId, AssetId, Document, LineCap, LineJoin, ObjectId, ObjectKind, ObjectParent, StrokeAlign,
     StrokeStyle, TextKind,
 };
 use vello::kurbo::{Affine, BezPath, Cap, Circle, Join, Line, Point, Rect, Shape, Stroke, Vec2};
@@ -266,6 +266,43 @@ pub fn export_scene(
     scene
 }
 
+/// Whether `id` is a legitimate member of the current isolation scope —
+/// `isolate` itself, something reachable by walking Group parents up to
+/// it, or (when `isolate` is `None`) reachable up to a Layer directly.
+/// Drives the Direct Selection contour's hard safety filter: regardless
+/// of how `av.paths` was built, this is checked fresh against the real
+/// object graph before drawing anything, so nothing outside what you're
+/// actually isolated into can ever get a contour on screen.
+///
+/// A symbol definition's content lives under `ObjectParent::Symbol
+/// (SymbolId)` — a *different id namespace* from the instance's own
+/// `ObjectId` — so walking up from one of its children can never
+/// literally equal `isolate` (the instance's `ObjectId`) the way it would
+/// for a plain group. What actually has to match is the *definition* —
+/// `isolate`'s own `data.definition` — against the `SymbolId` the walk
+/// hits. Getting this backwards (comparing the `SymbolId` against
+/// `isolate`'s raw `ObjectId`) silently excludes every symbol's content
+/// unconditionally — the exact live bug this now has a regression test
+/// for.
+pub fn in_isolation_scope(doc: &Document, id: ObjectId, isolate: Option<ObjectId>) -> bool {
+    let isolated_definition = isolate.and_then(|r| match doc.object(r).map(|o| &o.kind) {
+        Some(ObjectKind::Symbol(data)) => Some(data.definition),
+        _ => None,
+    });
+    let mut cur = id;
+    loop {
+        if Some(cur) == isolate {
+            return true;
+        }
+        match doc.object(cur).map(|o| o.parent) {
+            Some(ObjectParent::Layer(_)) => return isolate.is_none(),
+            Some(ObjectParent::Group(g)) => cur = g,
+            Some(ObjectParent::Symbol(def)) => return Some(def) == isolated_definition,
+            None => return false,
+        }
+    }
+}
+
 pub fn paint(
     scene: &mut Scene,
     doc: &Document,
@@ -424,6 +461,24 @@ pub fn paint(
             theme.accent,
         );
     }
+
+    // `select::selection_quad`/`union_bounds` resolve a selected object's
+    // box via its plain `world_transform`, which is only ever correct as
+    // long as nothing above it resets ambient to identity — true for an
+    // ordinary group, but never true for a Symbol definition (by design:
+    // the same definition can sit under any number of differently-placed
+    // instances, so it has no fixed position of its own to give a world
+    // transform). When isolated *into* a symbol instance, everything
+    // `selection_quad` returns below is really in that definition's own
+    // local space, and has to be rebased onto this *specific* instance's
+    // real world transform before it means anything on screen — the same
+    // correction `select::topmost_in` applies for hit-testing, just
+    // heading the opposite direction (local space out to screen, not
+    // screen down to local).
+    let sel_ambient: Affine = isolate
+        .filter(|&r| matches!(doc.object(r).map(|o| &o.kind), Some(ObjectKind::Symbol(_))))
+        .map(|r| convert::affine(doc.world_transform(r)))
+        .unwrap_or(Affine::IDENTITY);
 
     // Duplicate drag: draw the copy-to-be at the offset, full opacity —
     // the originals stay put underneath and the blue outline marks it.
@@ -683,7 +738,7 @@ pub fn paint(
             _ => Affine::IDENTITY,
         };
         let quad = text_box_quad.or_else(|| {
-            select::selection_quad(doc, selection).map(|q| q.map(|p| vt * extra * p))
+            select::selection_quad(doc, selection).map(|q| q.map(|p| vt * extra * sel_ambient * p))
         });
         if let Some(q) = quad {
             let mut path = BezPath::new();
@@ -844,17 +899,28 @@ pub fn paint(
             // (Illustrator always traces every selected object's own
             // contour).
             for &id in selection {
+                if !in_isolation_scope(doc, id, isolate) {
+                    continue;
+                }
                 let Some(obj) = doc.object(id) else { continue };
                 if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
                     continue;
                 }
                 if let Some(bez) = select::base_contour(doc, id) {
+                    // `base_contour` bakes in `id`'s plain `world_transform`,
+                    // which for a path living inside a symbol's definition
+                    // is really in that definition's local space (see
+                    // `App::isolation_ambient`'s doc comment) — without
+                    // `sel_ambient` here this traces the shared child's
+                    // contour at its *raw* stored position, which happens
+                    // to land on whichever instance was first (identity
+                    // transform), not the instance actually being edited.
                     scene.stroke(
                         &Stroke::new(OBJECT_CONTOUR_WEIGHT),
                         Affine::IDENTITY,
                         OBJECT_CONTOUR_BLUE,
                         None,
-                        &(vt * extra * bez),
+                        &(vt * extra * sel_ambient * bez),
                     );
                 }
             }
@@ -890,7 +956,7 @@ pub fn paint(
                         select::selection_quad(doc, &[id])
                     };
                     if let Some(fq) = fq {
-                        let fq = fq.map(|p| vt * p);
+                        let fq = fq.map(|p| vt * sel_ambient * p);
                         let mut p = BezPath::new();
                         p.move_to(fq[0]);
                         for c in &fq[1..] {
@@ -915,8 +981,8 @@ pub fn paint(
                         continue;
                     };
                     let seg = Line::new(
-                        vt * qa[2] + Vec2::new(2.0, -17.0),
-                        vt * qb[0] + Vec2::new(-2.0, -17.0),
+                        vt * sel_ambient * qa[2] + Vec2::new(2.0, -17.0),
+                        vt * sel_ambient * qb[0] + Vec2::new(-2.0, -17.0),
                     );
                     scene.stroke(
                         &Stroke::new(5.0),
@@ -1082,7 +1148,7 @@ pub fn paint(
                     Some(d) if d.is_dragged(kid) => Affine::translate(d.delta),
                     _ => Affine::IDENTITY,
                 };
-                let q = q.map(|p| vt * extra * p);
+                let q = q.map(|p| vt * extra * sel_ambient * p);
                 let mut path = BezPath::new();
                 path.move_to(q[0]);
                 for p in &q[1..] {
@@ -1113,12 +1179,20 @@ pub fn paint(
         let white = Color::from_rgb8(0xff, 0xff, 0xff);
 
         // Outline every selected path, deformed live by an anchor drag or a
-        // handle drag in progress.
+        // handle drag in progress. Hard safety filter: never draw this for
+        // anything outside the current isolation scope (exactly `isolate`
+        // itself, or reachable from a Layer if nothing's isolated) — no
+        // matter how a stale or mis-scoped id ended up in `av.paths`, it
+        // can't put a contour on the wrong object on screen.
+        let in_scope = |cur: ObjectId| in_isolation_scope(doc, cur, isolate);
         for &id in av.paths {
+            if !in_scope(id) {
+                continue;
+            }
             let Some(pd) = doc.object(id).and_then(|o| o.kind.path_data()) else {
                 continue;
             };
-            let m = vt * convert::affine(doc.world_transform(id));
+            let m = vt * sel_ambient * convert::affine(doc.world_transform(id));
             let preview_pd = hdrag
                 .filter(|&(o, ..)| o == id)
                 .map(|(_, n, side, hd)| crate::anchors::deformed_handle(pd, n, side, hd));
@@ -2313,6 +2387,63 @@ pub fn is_raster_path(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression test for the exact live repro: draw two circles, select
+    /// both, make them a symbol (the "original" instance lands wherever
+    /// they were, at identity — `DefineSymbol` leaves it in place), place
+    /// a second instance elsewhere, then edit *that* one and select one
+    /// of the shared circles. `in_isolation_scope` has to say the circle
+    /// belongs to the isolation *regardless* of which of the two
+    /// instances is currently isolated — the whole point of a shared
+    /// definition — which the naive "compare ObjectId to ObjectId"
+    /// version of this check got backwards for symbols specifically (a
+    /// definition's content parents to a `SymbolId`, not either
+    /// instance's own `ObjectId`), silently excluding it always.
+    #[test]
+    fn in_isolation_scope_recognizes_a_symbol_childs_shared_definition_through_either_instance() {
+        use amalith_core::{ObjectParent, SymbolData, SymbolDefinition, SymbolId};
+
+        let mut doc = Document::new("symbol-scope-test");
+        let layer = amalith_core::LayerId::new();
+        doc.insert_layer(amalith_core::Layer::new(layer, "Layer"), 0);
+
+        let symbol_id = SymbolId::new();
+        let circle = ObjectId::new();
+        doc.add_symbol(SymbolDefinition { id: symbol_id, name: "Two Circles".into(), children: vec![circle] });
+        doc.insert_object(
+            amalith_core::Object::rectangle(circle, ObjectParent::Symbol(symbol_id), amalith_core::geom::Rect::new(0., 0., 10., 10.)),
+            0,
+        )
+        .unwrap();
+
+        let local_bounds = amalith_core::geom::Rect::new(0., 0., 10., 10.);
+        let symbol_kind = || ObjectKind::Symbol(SymbolData { definition: symbol_id, local_bounds });
+
+        let original = ObjectId::new();
+        doc.insert_object(amalith_core::Object::new(original, ObjectParent::Layer(layer), symbol_kind()), 0).unwrap();
+
+        let placed = ObjectId::new();
+        let mut placed_obj = amalith_core::Object::new(placed, ObjectParent::Layer(layer), symbol_kind());
+        placed_obj.transform = amalith_core::Affine::translate((500.0, 500.0));
+        doc.insert_object(placed_obj, 1).unwrap();
+
+        assert!(
+            in_isolation_scope(&doc, circle, Some(placed)),
+            "the shared circle must be in-scope while isolated into the *placed* instance"
+        );
+        assert!(
+            in_isolation_scope(&doc, circle, Some(original)),
+            "and must still be in-scope while isolated into the original instance"
+        );
+        // A completely unrelated object isolated elsewhere must not see it.
+        let other_group = ObjectId::new();
+        doc.insert_object(
+            amalith_core::Object::new(other_group, ObjectParent::Layer(layer), ObjectKind::Group(Default::default())),
+            2,
+        )
+        .unwrap();
+        assert!(!in_isolation_scope(&doc, circle, Some(other_group)));
+    }
 
     #[test]
     fn atlas_fit_caps_the_long_side_and_keeps_aspect() {

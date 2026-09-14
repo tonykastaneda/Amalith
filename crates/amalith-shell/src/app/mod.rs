@@ -4104,12 +4104,13 @@ impl App {
         }
         let dp = self.doc_point(self.pointer);
         let r = 6.0 / self.doc.view.zoom;
+        let ambient = self.isolation_ambient();
         // An anchor under the pointer takes priority (a click there would
         // start a new path, not insert) — don't offer "+".
-        if anchors::topmost_anchor_among(self.doc.editor.document(), &paths, dp, r).is_some() {
+        if anchors::topmost_anchor_among(self.doc.editor.document(), &paths, dp, r, ambient).is_some() {
             return None;
         }
-        anchors::segment_at(self.doc.editor.document(), &paths, dp, r)
+        anchors::segment_at(self.doc.editor.document(), &paths, dp, r, ambient)
     }
 
     /// When `(id, n)` is a free endpoint of an open path, the seed for
@@ -4208,6 +4209,7 @@ impl App {
             self.doc.selection = vec![id];
             self.last_pen = Some((id, anchors, closed));
             self.apply_new_appearance(id);
+            self.reparent_new_object_into_isolation(id);
         }
         self.request_main_redraw();
     }
@@ -5241,6 +5243,7 @@ impl App {
                 self.doc.selection = vec![id];
                 self.doc.anchor_sel.clear();
                 self.doc.io_error = None;
+                self.reparent_new_object_into_isolation(id);
             }
             Err(err) => self.doc.io_error = Some(format!("Place failed: {err}")),
             _ => {}
@@ -5452,6 +5455,7 @@ impl App {
                 self.doc.selection = vec![id];
                 self.doc.anchor_sel.clear();
                 self.doc.io_error = None;
+                self.reparent_new_object_into_isolation(id);
             }
             Err(err) => self.doc.io_error = Some(format!("Place failed: {err}")),
             _ => {}
@@ -6464,6 +6468,7 @@ impl App {
         };
         if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
             self.doc.selection = vec![id];
+            self.reparent_new_object_into_isolation(id);
             self.enter_text_edit(id, origin, None);
         }
     }
@@ -6554,6 +6559,7 @@ impl App {
         };
         if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
             self.doc.selection = vec![id];
+            self.reparent_new_object_into_isolation(id);
             let origin = click_doc;
             self.enter_text_edit(id, origin, None);
         }
@@ -6587,7 +6593,10 @@ impl App {
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
         }) {
-            Ok(CommandOutcome::Object(id)) => Some(id),
+            Ok(CommandOutcome::Object(id)) => {
+                self.reparent_new_object_into_isolation(id);
+                Some(id)
+            }
             _ => None,
         }
     }
