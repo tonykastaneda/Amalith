@@ -43,6 +43,11 @@ const OUTLINE_INK: Color = Color::from_rgb8(0x20, 0x20, 0x20);
 /// reads identically whether you're hovering it or have it selected.
 pub const OBJECT_CONTOUR_BLUE: Color = Color::from_rgb8(0x3d, 0x82, 0xff);
 pub const OBJECT_CONTOUR_WEIGHT: f64 = 2.0;
+/// Radius (screen px) of the solid center-point dot on a selected object,
+/// and the arm half-length of the hollow "×" Object Highlighting's hover
+/// shows at that same spot before it's clicked — see
+/// `app/render/overlays.rs::paint_hover_center_mark`.
+pub const CENTER_MARK_RADIUS: f64 = 3.0;
 
 impl Default for CanvasView {
     fn default() -> Self {
@@ -903,7 +908,10 @@ pub fn paint(
                     continue;
                 }
                 let Some(obj) = doc.object(id) else { continue };
-                if !matches!(obj.kind, ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) {
+                if !matches!(
+                    obj.kind,
+                    ObjectKind::Path(_) | ObjectKind::CompoundPath(_) | ObjectKind::Group(_) | ObjectKind::Symbol(_)
+                ) {
                     continue;
                 }
                 if let Some(bez) = select::base_contour(doc, id) {
@@ -915,12 +923,25 @@ pub fn paint(
                     // contour at its *raw* stored position, which happens
                     // to land on whichever instance was first (identity
                     // transform), not the instance actually being edited.
+                    let screen_bez = vt * extra * sel_ambient * bez;
                     scene.stroke(
                         &Stroke::new(OBJECT_CONTOUR_WEIGHT),
                         Affine::IDENTITY,
                         OBJECT_CONTOUR_BLUE,
                         None,
-                        &(vt * extra * sel_ambient * bez),
+                        &screen_bez,
+                    );
+                    // A small solid dot marks a selected object's own
+                    // center — the same landmark Object Highlighting's
+                    // hover shows as a hollow "×" (`paint_smart_guides`)
+                    // before it's clicked.
+                    let center = screen_bez.bounding_box().center();
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        OBJECT_CONTOUR_BLUE,
+                        None,
+                        &Circle::new(center, CENTER_MARK_RADIUS),
                     );
                 }
             }

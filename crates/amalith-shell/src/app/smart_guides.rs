@@ -1113,8 +1113,8 @@ impl App {
         // instance* you're actually looking at (see `path_leaves_in`'s
         // doc comment).
         let ids: Vec<ObjectId> = match self.isolation_root() {
-            Some(root) => anchors::path_leaves_in(doc, root),
-            None => anchors::path_leaves(doc),
+            Some(root) => anchors::hover_leaves_in(doc, root),
+            None => anchors::hover_leaves(doc),
         };
         // A blend's generated in-between steps aren't independently
         // selectable (see `select::is_blend_step`'s own doc comment) —

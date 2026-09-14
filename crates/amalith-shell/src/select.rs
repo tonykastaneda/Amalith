@@ -293,6 +293,14 @@ fn group_hit(doc: &Document, id: ObjectId, point: Point, tol: f64) -> bool {
 /// sub-objects a plain click-select wouldn't, by design).
 pub fn nearest_painted_leaf(doc: &Document, ids: &[ObjectId], point: Point, tol: f64) -> Option<ObjectId> {
     ids.iter().rev().copied().find(|&id| {
+        // A Group/Symbol instance has no painted fill/stroke shapes of its
+        // own to test against (`item_shapes` is empty for it) — hovering
+        // one as a whole unit falls back to plain bounds containment,
+        // same as `topmost_selectable_at`'s own default case for
+        // anything without a precise test of its own.
+        if matches!(doc.object(id).map(|o| &o.kind), Some(ObjectKind::Group(_) | ObjectKind::Symbol(_))) {
+            return bounds(doc, id).is_some_and(|b| b.inflate(tol, tol).contains(point));
+        }
         item_shapes(doc, id).iter().any(|shape| {
             if shape.paint == amalith_core::Paint::None {
                 return false;
@@ -528,6 +536,16 @@ pub fn base_contour(doc: &Document, id: ObjectId) -> Option<vello::kurbo::BezPat
             }
             b
         }
+        // A Group/Symbol instance has no single precise outline of its
+        // own — hovering or selecting one as a whole unit (from outside,
+        // not isolated into it) reads the same way clicking one already
+        // does: as one object, traced by its own bounding box, exactly
+        // like a plain path's contour stands in for "this is what you'd
+        // select here."
+        ObjectKind::Group(_) | ObjectKind::Symbol(_) => {
+            let local = convert::rect(doc.local_bounds_of(id)?);
+            local.to_path(0.1)
+        }
         _ => return None,
     };
     let m: Affine = convert::affine(doc.world_transform(id));
@@ -743,6 +761,39 @@ mod smart_guide_bounds_tests {
         let mut o = Object::new(id, parent, ObjectKind::Path(PathData::rectangle(r)));
         o.locked = locked;
         o
+    }
+
+    /// A Group (and, by the same code path, a Symbol instance) has no
+    /// single precise outline of its own — hovering or selecting one as
+    /// a whole unit needs *some* contour to trace, and its own bounding
+    /// box is what Illustrator uses too. Before this, `base_contour`
+    /// returned `None` for anything but a Path/CompoundPath, so hovering
+    /// or selecting a group/symbol got no blue contour and no center
+    /// mark at all — the exact gap this closes.
+    #[test]
+    fn base_contour_traces_a_groups_own_bounding_box() {
+        let mut doc = Document::new("group-contour-test");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let group = ObjectId::new();
+        let child = ObjectId::new();
+        doc.insert_object(
+            Object::new(group, ObjectParent::Layer(layer), ObjectKind::Group(GroupData::default())),
+            0,
+        )
+        .unwrap();
+        doc.insert_object(
+            rect_path(child, ObjectParent::Group(group), amalith_core::geom::Rect::new(10., 20., 30., 50.), false),
+            0,
+        )
+        .unwrap();
+
+        let bez = base_contour(&doc, group).expect("a group must have a contour now");
+        let bbox = bez.bounding_box();
+        assert!((bbox.x0 - 10.0).abs() < 1e-6);
+        assert!((bbox.y0 - 20.0).abs() < 1e-6);
+        assert!((bbox.x1 - 30.0).abs() < 1e-6);
+        assert!((bbox.y1 - 50.0).abs() < 1e-6);
     }
 
     /// A click on *either* of a blend's two originals — un-isolated, at

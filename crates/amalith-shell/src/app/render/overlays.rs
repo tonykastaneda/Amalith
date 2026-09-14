@@ -4,7 +4,7 @@
 use crate::metrics::px as ui_px;
 
 use super::super::*;
-use vello::kurbo::Line;
+use vello::kurbo::{Line, Shape};
 
 /// Whether `id` is still a legitimate Object Highlighting candidate given
 /// `isolation` (the live breadcrumb stack) — reachable by walking Group
@@ -537,6 +537,24 @@ impl App {
                         None,
                         &path,
                     );
+                    // A hollow "×" marks the hovered object's own center —
+                    // the same landmark a selected object shows as a solid
+                    // dot (`canvas.rs`'s per-selected-path contour loop).
+                    // Skipped once it's actually selected: that dot is
+                    // already there, right on top of where this would go.
+                    if !self.doc.selection.contains(&id) {
+                        let c = path.bounding_box().center();
+                        let a = canvas::CENTER_MARK_RADIUS;
+                        let stroke = Stroke::new(1.4);
+                        self.content.stroke(
+                            &stroke, ID, canvas::OBJECT_CONTOUR_BLUE, None,
+                            &Line::new((c.x - a, c.y - a), (c.x + a, c.y + a)),
+                        );
+                        self.content.stroke(
+                            &stroke, ID, canvas::OBJECT_CONTOUR_BLUE, None,
+                            &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)),
+                        );
+                    }
                     if flyout_bounds.is_some() {
                         self.content.pop_layer();
                     }

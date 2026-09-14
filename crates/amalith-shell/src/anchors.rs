@@ -63,6 +63,66 @@ pub fn path_leaves_in(doc: &Document, root: ObjectId) -> Vec<ObjectId> {
     out
 }
 
+fn hover_leaves_rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId>) {
+    for &id in doc.children_of(parent) {
+        if !doc.object(id).is_some_and(|o| o.visible) { continue; }
+        match doc.object(id).map(|o| &o.kind) {
+            Some(kind) if kind.path_data().is_some() => out.push(id),
+            // Pushed *before* recursing into its own children: later
+            // entries are checked first (`nearest_painted_leaf` walks the
+            // list in reverse), so a precise child match still wins over
+            // the group's own broader bounding-box fallback.
+            Some(ObjectKind::Group(_)) => {
+                out.push(id);
+                hover_leaves_rec(doc, ObjectParent::Group(id), out);
+            }
+            // Not recursed into — a symbol instance's content has no
+            // fixed position of its own to hover *from the outside*
+            // (same reasoning as `path_leaves`'s doc comment); it's only
+            // reachable once you isolate into it, at which point this
+            // scan starts fresh from `hover_leaves_in`.
+            Some(ObjectKind::Symbol(_)) => out.push(id),
+            _ => {}
+        }
+    }
+}
+
+/// [`path_leaves`]'s Object-Highlighting counterpart: also treats a
+/// Group or Symbol instance as a hoverable whole unit (via its bounding
+/// box — see `select::base_contour`'s `Group`/`Symbol` arm), not just
+/// the individual leaf paths inside it. Hovering an unselected symbol,
+/// or an empty stretch of a group's own bounds, should highlight *that*
+/// — the same whole-unit contour clicking it would select — instead of
+/// nothing at all. Anchor-level scans (`path_leaves`'s own callers:
+/// `topmost_anchor_at`, `anchors_within`, `within`, the Join tool) need
+/// real paths only, so they keep using `path_leaves` unchanged.
+pub fn hover_leaves(doc: &Document) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    for layer in doc.layers() {
+        if layer.visible {
+            hover_leaves_rec(doc, ObjectParent::Layer(layer.id), &mut out);
+        }
+    }
+    out
+}
+
+/// [`hover_leaves`]'s isolation-scoped counterpart, mirroring
+/// [`path_leaves_in`].
+pub fn hover_leaves_in(doc: &Document, root: ObjectId) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    match doc.object(root).map(|o| &o.kind) {
+        Some(ObjectKind::Group(_)) => hover_leaves_rec(doc, ObjectParent::Group(root), &mut out),
+        Some(ObjectKind::Symbol(data)) => {
+            if let Some(def) = doc.symbol(data.definition) {
+                hover_leaves_rec(doc, ObjectParent::Symbol(def.id), &mut out);
+            }
+        }
+        Some(kind) if kind.path_data().is_some() => out.push(root),
+        _ => {}
+    }
+    out
+}
+
 /// `(flat anchor ordinal, document-space position)` for every anchor of
 /// `id`, in subpath walk order.
 pub fn anchors_of(doc: &Document, id: ObjectId) -> Vec<(usize, Point)> {
