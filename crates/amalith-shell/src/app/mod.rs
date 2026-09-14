@@ -33,6 +33,7 @@ mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
 mod area_type_dialog;
+mod symbol_name_dialog;
 mod layer_dialog;
 mod effect_dialog;
 mod offset_dialog;
@@ -1114,9 +1115,10 @@ struct App {
     /// the two is ever open at a time. See `panels::Ctx::effect_dialog`'s
     /// own doc comment for why.
     effect_dialog: Option<effectdlg::EffectDialog>,
-    /// The Layer Options dialog, opened by double-clicking a layer's color
-    /// swatch in the Layers panel. Free-floating like the color picker;
-    /// never dockable, never in the Window menu.
+    /// Pending symbol conversion; its window opens in about_to_wait.
+    symbol_name_dialog: Option<crate::symbol_name_dialog::SymbolNameDialog>,
+    pending_symbol_name_dialog: bool,
+    /// The Layer Options dialog, opened by double-clicking a layer's color swatch.
     layer_dialog: Option<layerdlg::LayerOptionsDialog>,
     /// The Area Type Options dialog, opened from Type ▸ Area Type
     /// Options… for a single selected Area Type frame. Free-floating like
@@ -1196,6 +1198,11 @@ struct App {
     /// Last resizability pushed to the main window — false while the Home
     /// screen (a fixed-size card) is up.
     main_resizable: bool,
+    /// In-memory previews, invalidated by document edits and image decoding.
+    symbol_thumbnails: HashMap<amalith_core::SymbolId, vello::peniko::ImageData>,
+    symbol_thumbnail_revision: (u64, usize),
+    symbol_thumbnail_attempted: std::collections::HashSet<amalith_core::SymbolId>,
+    symbol_tiles: std::cell::RefCell<Vec<(Rect, amalith_core::SymbolId)>>,
     /// Application settings (Amalith ▸ Preferences).
     settings: prefs::Settings,
     /// User scripts folder + per-script key bindings (File ▸ Scripts,
@@ -1534,6 +1541,8 @@ impl App {
             effect_dialog: None,
             pending_offset_dialog: false,
             pending_appearance_effect_dialog: None,
+            symbol_name_dialog: None,
+            pending_symbol_name_dialog: false,
             layer_dialog: None,
             pending_layer_dialog: None,
             area_type_dialog: None,
@@ -1560,6 +1569,10 @@ impl App {
             layer_query: String::new(),
             layer_search_focused: false,
             main_resizable: true,
+            symbol_thumbnails: HashMap::new(),
+            symbol_thumbnail_revision: (0, 0),
+            symbol_thumbnail_attempted: Default::default(),
+            symbol_tiles: Default::default(),
             settings: {
                 let s = settings::load();
                 panels::tools::set_hide_wip(s.hide_wip_tools);
@@ -1839,7 +1852,7 @@ impl App {
         } else if id == PanelId(PanelKind::Links) {
             panels::links_content_height(self.doc.editor.document())
         } else if id == PanelId(PanelKind::Symbols) {
-            panels::symbols_content_height(self.doc.editor.document())
+            panels::symbols_content_height(self.doc.editor.document(), body.width(), self.settings.symbols_view)
         } else {
             panels::max_scroll(id, body.width(), body.height()) + body.height()
         }
@@ -2009,6 +2022,7 @@ impl App {
 
     /// Make `doc` the live document on `App`.
     fn load_active_doc(&mut self, doc: Doc) {
+        self.close_symbol_name_dialog(false);
         self.doc = doc;
         // Transient interaction state doesn't cross documents.
         self.drag = Drag::None;
@@ -2039,6 +2053,7 @@ impl App {
 
     /// Switch the live document to tab `i`.
     fn switch_to(&mut self, i: usize) {
+        self.close_symbol_name_dialog(false);
         if i == self.active || i >= self.tabs.len() {
             return;
         }
@@ -2051,6 +2066,7 @@ impl App {
 
     /// Close tab `i`. Closing the last one drops back to the Home screen.
     fn close_tab(&mut self, i: usize) {
+        self.close_symbol_name_dialog(false);
         if i >= self.tabs.len() {
             return;
         }
@@ -5535,6 +5551,7 @@ impl App {
             dirty = true;
         }
         if dirty {
+            self.symbol_thumbnail_revision = (0, 0);
             self.request_main_redraw();
         }
     }
@@ -5587,7 +5604,25 @@ impl App {
 
     /// Kick off LOD decode for visible image assets that have no GPU copy yet.
     fn warm_images(&mut self) {
-        let needed = self.visible_image_assets();
+        let mut needed = self.visible_image_assets();
+        if self.dock.contains(PanelId(PanelKind::Symbols)) {
+            // Definition content is outside the visible layer traversal.
+            let doc = self.doc.editor.document();
+            for object in doc.objects() {
+                let amalith_core::ObjectKind::Image(image) = &object.kind else { continue };
+                let mut parent = object.parent;
+                loop {
+                    match parent {
+                        amalith_core::ObjectParent::Symbol(_) => { needed.insert(image.asset); break; }
+                        amalith_core::ObjectParent::Group(id) => {
+                            let Some(group) = doc.object(id) else { break };
+                            parent = group.parent;
+                        }
+                        amalith_core::ObjectParent::Layer(_) => break,
+                    }
+                }
+            }
+        }
         let mut linked = Vec::new();
         let mut embedded = Vec::new();
         for a in self.doc.editor.document().assets() {
@@ -7316,6 +7351,9 @@ impl App {
             layer_drop: None,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
+            symbols_view: self.settings.symbols_view,
+            symbol_thumbnails: &self.symbol_thumbnails,
+            symbol_tiles: &self.symbol_tiles,
             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
             selected_symbol: self.doc.selected_symbol,
             symbols_drop_hover: false,
@@ -7338,6 +7376,7 @@ impl App {
             blend_dialog: None,
             offset_dialog: None,
             effect_dialog: None,
+            symbol_name_dialog: None,
             layer_dialog: None,
             area_type_dialog: None,
             gradient: self.gradient_ctx(),
@@ -7391,6 +7430,9 @@ impl App {
             layer_drop,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
+            symbols_view: self.settings.symbols_view,
+            symbol_thumbnails: &self.symbol_thumbnails,
+            symbol_tiles: &self.symbol_tiles,
             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
             selected_symbol: self.doc.selected_symbol,
             symbols_drop_hover: false,
@@ -7410,6 +7452,7 @@ impl App {
             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, false)),
             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, false)),
             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, false)),
+            symbol_name_dialog: self.symbol_name_dialog.as_ref(),
             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
@@ -7590,6 +7633,7 @@ impl App {
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
         self.stack_flyout = None;
+        if pid.0 == PanelKind::SymbolNameDlg { self.symbol_name_dialog = None; self.pending_symbol_name_dialog = false; }
         if pid.0 == PanelKind::Picker {
             self.picker = None;
             self.appearance_picker_target = None;
@@ -8562,6 +8606,7 @@ impl ApplicationHandler for App {
                 }
             }
         }
+        if std::mem::take(&mut self.pending_symbol_name_dialog) { self.spawn_symbol_name_dialog(event_loop); }
         if let Some(id) = self.pending_layer_dialog.take() {
             self.spawn_layer_dialog(event_loop, id);
         }
@@ -8797,6 +8842,10 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CloseRequested => {
+                if self.hosts.get(&id).is_some_and(|h| matches!(h.role, Role::Floating(fid) if self.dock.floating_id_of(PanelId(PanelKind::SymbolNameDlg)) == Some(fid))) {
+                    self.close_symbol_name_dialog(false);
+                    return;
+                }
                 self.focused.remove(&id);
                 if Some(id) == self.main_id {
                     self.request_quit();

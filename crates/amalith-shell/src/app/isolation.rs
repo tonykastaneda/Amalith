@@ -383,17 +383,9 @@ impl App {
         if self.doc.selection.is_empty() {
             return;
         }
-        if let Ok(CommandOutcome::Object(instance)) = self.doc.editor.execute(Command::DefineSymbol {
-            ids: self.doc.selection.clone(),
-            name: None,
-        }) {
-            self.doc.selection = vec![instance];
-            if let Some(amalith_core::ObjectKind::Symbol(data)) =
-                self.doc.editor.document().object(instance).map(|o| &o.kind)
-            {
-                self.doc.selected_symbol = Some(data.definition);
-            }
-        }
+        if self.symbol_name_dialog.is_some() { return; }
+        self.symbol_name_dialog = Some(crate::symbol_name_dialog::SymbolNameDialog { ids: self.doc.selection.clone(), buf: "New Symbol".to_string(), fresh: true });
+        self.pending_symbol_name_dialog = true;
         self.request_main_redraw();
     }
 

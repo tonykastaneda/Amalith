@@ -29,6 +29,7 @@ impl App {
         self.last_frame = Some(now);
 
         self.warm_images();
+        self.warm_symbol_thumbnails();
         self.prune_isolation();
         let iso_root = self.isolation_root();
         let Some(host) = self.hosts.get_mut(&id) else {
@@ -705,6 +706,9 @@ impl App {
                 self.stack_flyout,
                 self.settings.hide_wip_tools,
                 self.doc.selected_symbol,
+                self.settings.symbols_view,
+                &self.symbol_thumbnails,
+                &self.symbol_tiles,
                 symbols_drop_hover,
             ),
             Role::Floating(fid) => {
@@ -776,6 +780,9 @@ impl App {
                             layer_drop: None,
                             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                             selected_asset: self.doc.selected_asset,
+                            symbols_view: self.settings.symbols_view,
+                            symbol_thumbnails: &self.symbol_thumbnails,
+                            symbol_tiles: &self.symbol_tiles,
                             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
                             selected_symbol: self.doc.selected_symbol,
                             symbols_drop_hover: false,
@@ -795,6 +802,7 @@ impl App {
                             blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                             offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
+                            symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
@@ -861,6 +869,9 @@ impl App {
                                 },
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
+                                symbols_view: self.settings.symbols_view,
+                                symbol_thumbnails: &self.symbol_thumbnails,
+                                symbol_tiles: &self.symbol_tiles,
                                 symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
                                 selected_symbol: self.doc.selected_symbol,
                                 symbols_drop_hover: symbols_drop_hover && pid == PanelId(PanelKind::Symbols),
@@ -880,7 +891,8 @@ impl App {
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
-                            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                symbol_name_dialog: self.symbol_name_dialog.as_ref(),
+                                layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
@@ -950,6 +962,9 @@ impl App {
                                 layer_drop: None,
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
+                                symbols_view: self.settings.symbols_view,
+                                symbol_thumbnails: &self.symbol_thumbnails,
+                                symbol_tiles: &self.symbol_tiles,
                                 symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
                                 selected_symbol: self.doc.selected_symbol,
                                 symbols_drop_hover: false,
@@ -969,7 +984,8 @@ impl App {
                                 blend_dialog: self.blend_dialog.as_ref().map(|d| (d, caret_blink)),
                                 offset_dialog: self.offset_dialog.as_ref().map(|d| (d, caret_blink)),
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
-                            layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                symbol_name_dialog: self.symbol_name_dialog.as_ref(),
+                                layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),

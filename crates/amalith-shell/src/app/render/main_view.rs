@@ -141,6 +141,9 @@ pub(in crate::app) fn paint_main(
     stack_flyout: Option<(u64, usize, usize)>,
     hide_wip_tools: bool,
     selected_symbol: Option<amalith_core::SymbolId>,
+    symbols_view: crate::prefs::SymbolsView,
+    symbol_thumbnails: &HashMap<amalith_core::SymbolId, vello::peniko::ImageData>,
+    symbol_tiles: &std::cell::RefCell<Vec<(Rect, amalith_core::SymbolId)>>,
     symbols_drop_hover: bool,
 ) {
     scene.fill(
@@ -615,6 +618,9 @@ pub(in crate::app) fn paint_main(
         layer_drop,
         links_scroll: panel_scroll.get(&PanelId(PanelKind::Links)).copied().unwrap_or(0.0),
         selected_asset,
+        symbols_view,
+        symbol_thumbnails,
+        symbol_tiles,
         symbols_scroll: panel_scroll.get(&PanelId(PanelKind::Symbols)).copied().unwrap_or(0.0),
         selected_symbol,
         symbols_drop_hover,
@@ -634,6 +640,7 @@ pub(in crate::app) fn paint_main(
         blend_dialog: None,
         offset_dialog: None,
         effect_dialog: None,
+        symbol_name_dialog: None,
         layer_dialog: None,
         area_type_dialog: None,
         gradient: gradient.clone(),

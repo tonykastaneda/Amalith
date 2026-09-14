@@ -271,6 +271,37 @@ pub fn export_scene(
     scene
 }
 
+/// Render explicit arena roots, including children of pooled symbol definitions.
+pub fn export_scene_of(
+    doc: &Document,
+    ids: &[ObjectId],
+    src: Rect,
+    scale: f64,
+    bg: Option<Color>,
+    images: &HashMap<AssetId, ImageLods>,
+    outline: bool,
+    text: &mut TextContext,
+    link_ink: Color,
+) -> Scene {
+    let mut scene = Scene::new();
+    let px = Rect::new(
+        0.0,
+        0.0,
+        (src.width() * scale).max(1.0),
+        (src.height() * scale).max(1.0),
+    );
+    let vt = Affine::scale(scale) * Affine::translate((-src.x0, -src.y0));
+    scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &px);
+    if let Some(c) = bg {
+        scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &px);
+    }
+    for &id in ids {
+        paint_object(&mut scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink);
+    }
+    scene.pop_layer();
+    scene
+}
+
 /// Whether `id` is a legitimate member of the current isolation scope —
 /// `isolate` itself, something reachable by walking Group parents up to
 /// it, or (when `isolate` is `None`) reachable up to a Layer directly.
@@ -2408,6 +2439,25 @@ pub fn is_raster_path(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_scene_of_renders_symbol_roots_outside_layers() {
+        use amalith_core::{ObjectParent, SymbolDefinition, SymbolId};
+        let mut doc = Document::new("thumbnail");
+        let sid = SymbolId::new();
+        let id = ObjectId::new();
+        doc.add_symbol(SymbolDefinition { id: sid, name: "Square".into(), children: vec![] });
+        let mut object = amalith_core::Object::rectangle(id, ObjectParent::Symbol(sid), amalith_core::Rect::new(10., 20., 30., 40.));
+        object.appearance.set_fill(amalith_core::Paint::Solid(amalith_core::Color::rgb(1., 0., 0.)));
+        doc.insert_object(object, 0).unwrap();
+        let src = Rect::new(10., 20., 30., 40.);
+        let mut text = TextContext::new();
+        let images = HashMap::new();
+        let empty = export_scene_of(&doc, &[], src, 2., None, &images, false, &mut text, Color::BLACK);
+        let rendered = export_scene_of(&doc, &[id], src, 2., None, &images, false, &mut text, Color::BLACK);
+        assert!(rendered.encoding().path_tags.len() > empty.encoding().path_tags.len());
+        assert!(doc.layers().is_empty());
+    }
 
     /// Regression test for the exact live repro: draw two circles, select
     /// both, make them a symbol (the "original" instance lands wherever

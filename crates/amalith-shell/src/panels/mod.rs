@@ -165,7 +165,12 @@ pub struct Ctx<'a> {
     pub links_scroll: f64,
     /// Links panel: the highlighted asset row.
     pub selected_asset: Option<AssetId>,
-    /// Symbols panel: wheel-scroll offset of the row list, px.
+    /// Symbols panel browsing mode and cached artwork previews.
+    pub symbols_view: crate::prefs::SymbolsView,
+    pub symbol_thumbnails: &'a std::collections::HashMap<amalith_core::SymbolId, vello::peniko::ImageData>,
+    /// Painted tile rectangles, shared with pointer hit-testing.
+    pub symbol_tiles: &'a std::cell::RefCell<Vec<(Rect, amalith_core::SymbolId)>>,
+    /// Wheel-scroll offset of the current browsing mode, px.
     pub symbols_scroll: f64,
     /// Symbols panel: the highlighted definition row.
     pub selected_symbol: Option<amalith_core::SymbolId>,
@@ -215,6 +220,7 @@ pub struct Ctx<'a> {
     /// way Offset Path's own retargeted mode does, with no destructive
     /// counterpart of its own to also support.
     pub effect_dialog: Option<(&'a crate::effectdlg::EffectDialog, bool)>,
+    pub symbol_name_dialog: Option<&'a crate::symbol_name_dialog::SymbolNameDialog>,
     pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
     /// The Area Type Options dialog + caret-blink phase, when the
     /// `areatypedlg` float-only panel is being drawn / hit-tested.
@@ -477,6 +483,7 @@ pub enum Action {
     /// `effect_dialog` and `Ctx::effect_dialog`'s own doc comments for why
     /// this shares `offsetdlg`'s panel slot instead of getting its own.
     EffectHit(crate::effectdlg::Hit),
+    SymbolNameDialogHit(bool),
     LayerDialogHit(crate::layerdlg::Hit),
     AreaTypeHit(crate::areatypedlg::Hit),
     // --- Links panel ---
@@ -606,8 +613,8 @@ pub fn links_content_height(doc: &Document) -> f64 {
 
 /// Full content height of the Symbols panel for the given document state —
 /// the shell's wheel handler uses it to size the scroll range.
-pub fn symbols_content_height(doc: &Document) -> f64 {
-    symbols::content_height(doc)
+pub fn symbols_content_height(doc: &Document, width: f64, view: crate::prefs::SymbolsView) -> f64 {
+    symbols::content_height(doc, width, view)
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -667,6 +674,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
                 crate::effectdlg::paint(scene, dlg, body, ctx.theme, text, caret);
             }
         }
+        PanelKind::SymbolNameDlg => { if let Some(dlg) = ctx.symbol_name_dialog { crate::symbol_name_dialog::paint(scene, dlg, body, ctx.theme, text); } }
         PanelKind::LayerOptionsDlg => {
             if let Some((dlg, caret)) = ctx.layer_dialog {
                 crate::layerdlg::paint(scene, dlg, body, ctx.theme, text, caret);
@@ -742,6 +750,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             (None, Some((dlg, _))) => Action::EffectHit(crate::effectdlg::hit(dlg, body, local)),
             (None, None) => Action::None,
         },
+        PanelKind::SymbolNameDlg => crate::symbol_name_dialog::hit(body, local).map_or(Action::None, Action::SymbolNameDialogHit),
         PanelKind::LayerOptionsDlg => match ctx.layer_dialog {
             Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
             None => Action::None,
@@ -791,6 +800,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::XformdlgShear => crate::xformdlg::body_height(crate::xformdlg::Kind::Shear),
         PanelKind::Blenddlg => crate::blenddlg::body_height(),
         PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
+        PanelKind::SymbolNameDlg => crate::symbol_name_dialog::height(),
         PanelKind::LayerOptionsDlg => crate::layerdlg::body_height(),
         PanelKind::AreaTypeDlg => crate::areatypedlg::body_height(),
         PanelKind::ShapedlgRect

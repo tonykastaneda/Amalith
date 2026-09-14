@@ -3268,6 +3268,28 @@ mod tests {
     }
 
     #[test]
+    fn revision_changes_on_edits_undo_redo_and_differs_between_editors() {
+        let mut editor = new_editor();
+        let initial = editor.revision();
+        assert_ne!(initial, new_editor().revision());
+        let (a, _) = two_rects(&mut editor);
+        let created = editor.revision();
+        assert_ne!(initial, created);
+        editor.execute(Command::RenameObject { id: a, name: Some("renamed".into()) }).unwrap();
+        let renamed = editor.revision();
+        assert_ne!(created, renamed);
+        editor.undo().unwrap();
+        let undone = editor.revision();
+        assert_ne!(renamed, undone);
+        editor.redo().unwrap();
+        assert_ne!(undone, editor.revision());
+        let stable = editor.revision();
+        let _ = editor.document();
+        let _ = editor.bounds_of(a);
+        assert_eq!(stable, editor.revision());
+    }
+
+    #[test]
     fn define_symbol_replaces_the_selection_in_place_with_an_instance() {
         let mut editor = new_editor();
         let (a, b) = two_rects(&mut editor);

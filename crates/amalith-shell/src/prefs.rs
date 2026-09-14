@@ -256,6 +256,13 @@ pub enum BindTarget {
     Script(usize),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SymbolsView {
+    #[default]
+    List,
+    Thumbnails,
+}
+
 /// The settings the app actually reads. Cheap to copy; the modal edits a
 /// working copy and only writes back on OK.
 #[derive(Clone, Copy, PartialEq)]
@@ -317,6 +324,8 @@ pub struct Settings {
     /// Construction Guides' preset angles (degrees from the last anchor);
     /// 6 slots, matching Illustrator's own Smart Guides preferences.
     pub sg_angles: [f64; 6],
+    /// Browsing mode selected in the Symbols panel hamburger menu.
+    pub symbols_view: SymbolsView,
     /// View ▸ Show Grid (⌘'). A real persisted preference, same reasoning
     /// as `smart_guides_enabled`.
     pub show_grid: bool,
@@ -368,6 +377,7 @@ impl Default for Settings {
             sg_spacing_guides: true,
             sg_tolerance: 4.0,
             sg_angles: [0.0, 45.0, 90.0, 135.0, 0.0, 0.0],
+            symbols_view: SymbolsView::List,
             show_grid: false,
             snap_to_grid: false,
             snap_to_pixel: false,

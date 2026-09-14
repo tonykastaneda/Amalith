@@ -336,6 +336,7 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::SymbolNameDialogHit(commit) => self.close_symbol_name_dialog(commit),
             panels::Action::LayerDialogHit(hit) => {
                 match hit {
                     layerdlg::Hit::Name => {}
@@ -748,6 +749,10 @@ impl App {
                     }
                 } else if panel.0 == PanelKind::Symbols {
                     match id {
+                        "symbols-list" | "symbols-thumbnails" => {
+                            self.settings.symbols_view = if id == "symbols-list" { prefs::SymbolsView::List } else { prefs::SymbolsView::Thumbnails };
+                            settings::save(&self.settings);
+                        }
                         "new-symbol" => self.define_symbol_from_selection(),
                         "rename" => {
                             if let Some(sid) = self.doc.selected_symbol {
@@ -766,6 +771,7 @@ impl App {
             panels::Action::UpdateLinkAsset(id) => self.update_linked_asset(id),
             panels::Action::SelectSymbol(id) => {
                 self.doc.selected_symbol = Some(id);
+                if double { self.begin_rename(panels::RenameId::Symbol(id)); }
             }
             panels::Action::DefineSymbol => self.define_symbol_from_selection(),
             panels::Action::PlaceSymbolInstance(id) => self.place_symbol_instance(id),

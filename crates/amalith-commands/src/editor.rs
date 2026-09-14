@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Debug)]
 pub struct Editor {
     document: Document,
+    revision: u64,
     history: History,
     bounds_cache: HashMap<ObjectId, Option<Rect>>,
     clipboard: Option<Clipboard>,
@@ -76,10 +77,19 @@ struct ClipboardRoot {
     bounds: Option<Rect>,
 }
 
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Editor {
+    /// Content token, unique across editors and every document mutation.
+    pub fn revision(&self) -> u64 { self.revision }
+
     pub fn new(document: Document) -> Self {
         Self {
             document,
+            revision: next_revision(),
             history: History::default(),
             bounds_cache: HashMap::new(),
             clipboard: None,
@@ -185,6 +195,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(root_ids)
     }
@@ -210,6 +221,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(new_ids)
     }
@@ -230,6 +242,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(freed_ids)
     }
@@ -247,6 +260,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(freed_ids)
     }
@@ -407,6 +421,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(outcome_of(new_id))
     }
@@ -416,6 +431,7 @@ impl Editor {
         let group = self.history.pop_undo().ok_or(CommandError::NothingToUndo)?;
         let redo_group = apply_group(&mut self.document, group)?;
         self.history.push_redo(redo_group);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(())
     }
@@ -425,6 +441,7 @@ impl Editor {
         let group = self.history.pop_redo().ok_or(CommandError::NothingToRedo)?;
         let undo_group = apply_group(&mut self.document, group)?;
         self.history.push_undo(undo_group);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(())
     }
@@ -2433,6 +2450,7 @@ impl Editor {
         }
         inverses.reverse();
         self.history.record(inverses);
+        self.revision = next_revision();
         self.bounds_cache.clear();
         Ok(new_ids)
     }

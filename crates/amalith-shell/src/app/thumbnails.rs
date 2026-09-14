@@ -71,7 +71,10 @@ impl App {
         let scale = (THUMB_PX / src.width().max(src.height())).min(4.0);
         let w = (src.width() * scale).round().max(1.0) as u32;
         let h = (src.height() * scale).round().max(1.0) as u32;
-        let bg = Some(fill.map(|c| Color::new([c.r, c.g, c.b, c.a])).unwrap_or(Color::WHITE));
+        let bg = Some(
+            fill.map(|c| Color::new([c.r, c.g, c.b, c.a]))
+                .unwrap_or(Color::WHITE),
+        );
 
         // No image cache — a recent file's linked/embedded raster assets
         // aren't decoded for this, so they render blank. Acceptable for a
@@ -99,6 +102,73 @@ impl App {
             }
         }
 
+        Some(ImageData {
+            data: Blob::from(rgba),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: w,
+            height: h,
+        })
+    }
+}
+
+impl App {
+    pub(in crate::app) fn warm_symbol_thumbnails(&mut self) {
+        if !self.dock.contains(PanelId(PanelKind::Symbols)) {
+            return;
+        }
+        let token = (self.doc.editor.revision(), self.image_cache.len());
+        if token != self.symbol_thumbnail_revision {
+            self.symbol_thumbnail_revision = token;
+            self.symbol_thumbnails.clear();
+            self.symbol_thumbnail_attempted.clear();
+        }
+        let next = self
+            .doc
+            .editor
+            .document()
+            .symbols()
+            .iter()
+            .find(|def| !self.symbol_thumbnail_attempted.contains(&def.id))
+            .cloned();
+        if let Some(def) = next {
+            self.symbol_thumbnail_attempted.insert(def.id);
+            if let Some(image) = self.symbol_thumbnail(&def) {
+                self.symbol_thumbnails.insert(def.id, image);
+            }
+            self.request_main_redraw();
+        }
+    }
+
+    pub(in crate::app) fn symbol_thumbnail(
+        &mut self,
+        def: &amalith_core::SymbolDefinition,
+    ) -> Option<ImageData> {
+        let doc = self.doc.editor.document();
+        let bounds = def
+            .children
+            .iter()
+            .filter_map(|id| doc.bounds_of(*id))
+            .reduce(|a, b| a.union(b))?;
+        let src = convert::rect(bounds).inflate(2.0, 2.0);
+        if !src.width().is_finite() || !src.height().is_finite() {
+            return None;
+        }
+        let scale = 96.0 / src.width().max(src.height()).max(1.0);
+        let w = (src.width() * scale).ceil().max(1.0) as u32;
+        let h = (src.height() * scale).ceil().max(1.0) as u32;
+        let scene = canvas::export_scene_of(
+            doc,
+            &def.children,
+            src,
+            scale,
+            None,
+            &self.image_cache,
+            false,
+            &mut self.text,
+            self.theme.accent,
+        );
+        let rgba = self.render_scene_to_rgba(&scene, w, h)?;
         Some(ImageData {
             data: Blob::from(rgba),
             format: ImageFormat::Rgba8,
