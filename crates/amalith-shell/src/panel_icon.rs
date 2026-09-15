@@ -42,6 +42,7 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         PanelKind::Swatches => "M2 2H7V7H2Z M11 2H16V7H11Z M2 11H7V16H2Z M11 11H16V16H11Z",
         // A diamond (Illustrator's own Symbols-panel glyph) with a small
         // corner tab standing in for a second, smaller instance.
+        PanelKind::ImageTrace => "M2 3H16V15H2Z M3 13L7 8L10 11L14 5 M5 5H6",
         PanelKind::Symbols => "M9 2L16 9L9 16L2 9Z M13 13H16V16H13Z",
         // Two overlapping attribute chips — a stacked fill and stroke.
         PanelKind::Appearance => "M3 3H11V11H3Z M7 7H15V15H7Z",

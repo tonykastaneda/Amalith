@@ -185,24 +185,8 @@ fn paint_locator(scene: &mut Scene, l: &L, ctx: &Ctx) {
         for col in 0..3u8 {
             let r = l.cells[(row * 3 + col) as usize];
             let on = rp.col == col && rp.row == row;
-            let hot = r.contains(ctx.pointer);
-            let fill = if on {
-                th.accent
-            } else if hot {
-                th.text_dim
-            } else {
-                th.border
-            };
-            scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(ui_px(1.5)));
-            if !on {
-                scene.fill(
-                    Fill::NonZero,
-                    ID,
-                    th.panel_bg,
-                    None,
-                    &r.inset(ui_px(1.5)).to_rounded_rect(ui_px(1.0)),
-                );
-            }
+            let fill = if on { th.accent } else { th.text_dim };
+            scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(ui_px(1.0)));
         }
     }
 }

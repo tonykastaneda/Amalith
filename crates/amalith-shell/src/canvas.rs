@@ -1735,21 +1735,21 @@ fn paint_object(
     }
     let off = drag.map_or(Affine::IDENTITY, |d| d.object_offset(id));
     let replacement = drag.and_then(|d| d.replacement(id));
-    // Same cull as the egui-ui branch: skip anything whose bounds miss
-    // the canvas. Off-screen copies of a huge raster must not enter
-    // Vello's image atlas.
+    let m = match replacement {
+        Some(a) => vt * a,
+        None => vt * off * convert::affine(obj.transform),
+    };
+    // Recursion already includes ancestor transforms in `vt`. Cull local
+    // bounds with the exact painting transform, once; document-space bounds
+    // would apply ancestors twice and drop visible children when zooming.
     if replacement.is_none() {
-        if let Some(b) = doc.bounds_of(id) {
-            let screen = (vt * off).transform_rect_bbox(convert::rect(b));
+        if let Some(b) = doc.local_bounds_of(id) {
+            let screen = m.transform_rect_bbox(convert::rect(b));
             if !overlaps(screen, viewport) {
                 return;
             }
         }
     }
-    let m = match replacement {
-        Some(a) => vt * a,
-        None => vt * off * convert::affine(obj.transform),
-    };
     let fill = obj.appearance.fill().color().map(convert::color);
     let sw = obj.appearance.stroke_width();
     // Object-level opacity (Illustrator's Transparency panel / the
@@ -2439,6 +2439,31 @@ pub fn is_raster_path(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoomed_transformed_group_keeps_visible_children_and_culls_offscreen_paths() {
+        use amalith_core::{Object, ObjectParent, LayerId};
+        let mut doc = Document::new("Trace culling");
+        let layer = LayerId::new();
+        doc.insert_layer(amalith_core::Layer::new(layer, "Layer"), 0);
+        let group = ObjectId::new();
+        let mut object = Object::new(group, ObjectParent::Layer(layer), ObjectKind::Group(Default::default()));
+        object.transform = amalith_core::Affine::translate((500., 300.)) * amalith_core::Affine::scale(2.);
+        doc.insert_object(object, 0).unwrap();
+        let child = ObjectId::new();
+        doc.insert_object(Object::rectangle(child, ObjectParent::Group(group), amalith_core::Rect::new(0., 0., 20., 20.)), 0).unwrap();
+        let mut text = TextContext::new();
+        let images = HashMap::new();
+        for zoom in [1., 4., 16., 64.] {
+            let view = Affine::translate((50., 50.)) * Affine::scale(zoom) * Affine::translate((-500., -300.));
+            let mut scene = Scene::new();
+            paint_object(&mut scene, &doc, group, view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK);
+            assert!(!scene.encoding().path_tags.is_empty(), "visible child culled at zoom {zoom}");
+            let mut offscreen = Scene::new();
+            paint_object(&mut offscreen, &doc, group, Affine::translate((10000., 10000.)) * view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK);
+            assert!(offscreen.encoding().path_tags.is_empty());
+        }
+    }
 
     #[test]
     fn export_scene_of_renders_symbol_roots_outside_layers() {

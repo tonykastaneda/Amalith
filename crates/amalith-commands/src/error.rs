@@ -4,6 +4,10 @@ use thiserror::Error;
 /// Errors from executing a [`crate::Command`] or from `undo`/`redo`.
 #[derive(Debug, Error, Clone, PartialEq)]
 pub enum CommandError {
+    #[error("object {0} is not an image")]
+    NotAnImage(ObjectId),
+    #[error("trace contains no usable paths")]
+    InvalidTrace,
     #[error("the distortion maps path geometry to infinity")]
     InvalidWarp,
     #[error("no artboard with id {0}")]

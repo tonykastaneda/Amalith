@@ -98,6 +98,7 @@ pub struct Ctx<'a> {
     pub artboard_fill_menu: bool,
     /// The single selected object's asset, when it's a Linked image —
     /// flips the `embed` segment's "Embed" button on.
+    pub trace_target: bool,
     pub embed_target: Option<amalith_core::AssetId>,
     /// The active text context is vertical — flips the `area_type` segment
     /// on (together with `text_kind_is_area`).

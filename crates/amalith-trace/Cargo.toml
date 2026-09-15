@@ -1,0 +1,12 @@
+[package]
+name = "amalith-trace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+amalith-core = { path = "../amalith-core" }
+kurbo.workspace = true
+serde.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+vtracer = { git = "https://github.com/visioncortex/vtracer", rev = "669a29481449366f0f235b6e4d24134d8f91c9b4" }

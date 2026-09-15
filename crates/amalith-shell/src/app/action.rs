@@ -9,6 +9,7 @@ use super::*;
 impl App {
     pub(in crate::app) fn apply_panel_action(&mut self, action: panels::Action, double: bool) {
         match action {
+            panels::Action::ImageTrace(hit) => self.trace_hit(hit),
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
             panels::Action::Select(id) => {
@@ -747,6 +748,8 @@ impl App {
                             _ => {}
                         }
                     }
+                } else if panel.0 == PanelKind::ImageTrace {
+                    self.trace_preset_action(id);
                 } else if panel.0 == PanelKind::Symbols {
                     match id {
                         "symbols-list" | "symbols-thumbnails" => {
@@ -916,6 +919,19 @@ impl App {
             panels::Action::ColorSpectrum { t, track } => {
                 self.set_color_spectrum(t);
                 self.drag = Drag::ColorSpectrum { track };
+            }
+            panels::Action::StartImageTrace => {
+                let pid = PanelId(PanelKind::ImageTrace);
+                if !self.dock.contains(pid) { self.toggle_panel(PanelKind::ImageTrace); }
+                if let Some((master, group, index)) = self.dock.locate(pid) {
+                    if let Some(m) = self.dock.master_mut(master) {
+                        m.groups[group].active = index;
+                        if m.layout == MasterLayout::Stack { self.stack_flyout = Some((master, group, index)); }
+                    }
+                }
+                self.trace_tick();
+                if !self.image_trace.panel.busy { self.trace_hit(crate::image_trace::Hit::Trace); }
+                self.request_main_redraw();
             }
             panels::Action::EmbedAsset(id) => self.embed_asset(id),
         }

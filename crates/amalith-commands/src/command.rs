@@ -15,6 +15,10 @@ use crate::align::{AlignKind, AlignTo};
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// Replace an image in-place with a group of traced, image-pixel paths.
+    /// Preserves the original ID, transform, appearance and stacking position;
+    /// undo restores the exact linked/embedded image in one step.
+    ExpandImageTrace { id: ObjectId, width: u32, height: u32, paths: Vec<(PathData, Color)> },
     /// Creates a new artboard. `index` is the position among existing
     /// artboards (`None` appends at the end).
     CreateArtboard {

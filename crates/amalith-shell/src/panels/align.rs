@@ -396,73 +396,36 @@ fn paint_space_icon(scene: &mut Scene, r: Rect, horiz: bool, ink: Color) {
 }
 
 pub(crate) fn paint_to_icon(scene: &mut Scene, r: Rect, to: AlignTo, ink: Color) {
+    // One centered 20-unit icon box, including stroke and handle extents.
+    // Positive Rect::inset expands a rectangle; never use it for padding.
+    let size = ui_px(20.0).min(r.width() - ui_px(4.0)).min(r.height() - ui_px(4.0)).max(1.0);
+    let xf = vello::kurbo::Affine::translate((r.center().x - size / 2.0, r.center().y - size / 2.0))
+        * vello::kurbo::Affine::scale(size / 20.0);
+    let stroke = Stroke::new(1.25);
     match to {
         AlignTo::Artboard => {
-            let p = Rect::new(r.x0 + ui_px(7.0), r.y0 + ui_px(5.5), r.x1 - ui_px(7.0), r.y1 - ui_px(5.5));
-            let fold = ui_px(4.5);
-            let mut path = BezPath::new();
-            path.move_to((p.x0, p.y0));
-            path.line_to((p.x1 - fold, p.y0));
-            path.line_to((p.x1 - fold, p.y0 + fold));
-            path.line_to((p.x1, p.y0 + fold));
-            path.line_to((p.x1, p.y1));
-            path.line_to((p.x0, p.y1));
-            path.close_path();
-            scene.fill(Fill::NonZero, ID, ink, None, &path);
+            scene.stroke(&stroke, xf, ink, None, &Rect::new(4., 3., 16., 17.));
+            let mut marks = BezPath::new();
+            for (a, b) in [((1., 6.), (6., 6.)), ((6., 1.), (6., 6.)),
+                           ((14., 14.), (19., 14.)), ((14., 14.), (14., 19.))] {
+                marks.move_to(a);
+                marks.line_to(b);
+            }
+            scene.stroke(&stroke, xf, ink, None, &marks);
         }
         AlignTo::Selection => {
-            paint_marquee(scene, r.inset(ui_px(5.5)), ink);
+            scene.stroke(&Stroke::new(1.).with_dashes(0., [2., 2.]), xf, ink, None, &Rect::new(3., 3., 17., 17.));
+            for (x, y) in [(3., 3.), (17., 3.), (17., 17.), (3., 17.)] {
+                scene.fill(Fill::NonZero, xf, ink, None, &Rect::new(x - 1.5, y - 1.5, x + 1.5, y + 1.5));
+            }
+            scene.fill(Fill::NonZero, xf, ink, None, &Rect::new(6., 6., 10., 10.));
+            scene.fill(Fill::NonZero, xf, ink, None, &Rect::new(11., 11., 14., 14.));
         }
         AlignTo::KeyObject => {
-            let box_ = Rect::new(r.x0 + ui_px(5.0), r.y0 + ui_px(4.5), r.x1 - ui_px(8.0), r.y1 - ui_px(8.0));
-            paint_marquee(scene, box_, ink);
-            paint_pointer(scene, Point::new(r.center().x + 1.0, r.center().y - 1.0), ink);
+            scene.stroke(&stroke, xf, ink, None, &Rect::new(2.5, 2.5, 10.5, 10.5));
+            scene.fill(Fill::NonZero, xf, ink, None, &Rect::new(8., 8., 17., 17.));
         }
     }
-}
-
-fn paint_marquee(scene: &mut Scene, r: Rect, ink: Color) {
-    scene.stroke(
-        &Stroke::new(ui_px(1.2)).with_dashes(0.0, [2.2, 1.8]),
-        ID,
-        ink,
-        None,
-        &r,
-    );
-    let d = ui_px(2.4);
-    let pts = [
-        Point::new(r.x0, r.y0),
-        Point::new(r.center().x, r.y0),
-        Point::new(r.x1, r.y0),
-        Point::new(r.x1, r.center().y),
-        Point::new(r.x1, r.y1),
-        Point::new(r.center().x, r.y1),
-        Point::new(r.x0, r.y1),
-        Point::new(r.x0, r.center().y),
-    ];
-    for p in pts {
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            ink,
-            None,
-            &Rect::from_center_size(p, (d, d)),
-        );
-    }
-}
-
-fn paint_pointer(scene: &mut Scene, tip: Point, ink: Color) {
-    let mut p = BezPath::new();
-    p.move_to(tip);
-    p.line_to((tip.x + ui_px(6.0), tip.y + ui_px(10.0)));
-    p.line_to((tip.x + ui_px(3.4), tip.y + ui_px(10.0)));
-    p.line_to((tip.x + ui_px(5.2), tip.y + ui_px(14.0)));
-    p.line_to((tip.x + ui_px(3.8), tip.y + ui_px(14.6)));
-    p.line_to((tip.x + 1.8, tip.y + ui_px(10.4)));
-    p.line_to((tip.x - 0.4, tip.y + ui_px(13.0)));
-    p.close_path();
-    scene.fill(Fill::NonZero, ID, ink, None, &p);
-    scene.stroke(&Stroke::new(ui_px(0.8)), ID, ink, None, &p);
 }
 
 pub fn hit(body: Rect, p: Point, _ctx: &Ctx) -> Action {

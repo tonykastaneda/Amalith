@@ -228,6 +228,7 @@ impl App {
             return;
         };
         if self.symbol_name_dialog.is_some() && !matches!(role, Role::Floating(fid) if self.dock.floating_id_of(PanelId(PanelKind::SymbolNameDlg)) == Some(fid)) { return; }
+        if self.image_trace.pick_ignore && matches!(role, Role::Main) && self.trace_pick_at() {return;}
         // The command palette (⌘K) is topmost while open.
         if self.palette.is_some() {
             let hit = self

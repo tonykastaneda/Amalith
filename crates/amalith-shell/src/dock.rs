@@ -39,6 +39,7 @@ pub enum PanelKind {
     Links,
     Artboards,
     Swatches,
+    ImageTrace,
     Symbols,
     Appearance,
     Character,
@@ -71,12 +72,13 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 30] = [
+    pub const ALL: [PanelKind; 31] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
         PanelKind::Artboards,
         PanelKind::Swatches,
+        PanelKind::ImageTrace,
         PanelKind::Symbols,
         PanelKind::Appearance,
         PanelKind::Character,
@@ -116,6 +118,7 @@ impl PanelKind {
             PanelKind::Links => "links",
             PanelKind::Artboards => "artboards",
             PanelKind::Swatches => "swatches",
+            PanelKind::ImageTrace => "image-trace",
             PanelKind::Symbols => "symbols",
             PanelKind::Appearance => "appearance",
             PanelKind::Character => "character",
@@ -155,6 +158,7 @@ impl PanelKind {
             "links" => PanelKind::Links,
             "artboards" => PanelKind::Artboards,
             "swatches" => PanelKind::Swatches,
+            "image-trace" => PanelKind::ImageTrace,
             "symbols" => PanelKind::Symbols,
             "appearance" => PanelKind::Appearance,
             "character" => PanelKind::Character,
@@ -192,6 +196,7 @@ impl PanelKind {
             PanelKind::Links => "Links",
             PanelKind::Artboards => "Artboards",
             PanelKind::Swatches => "Swatches",
+            PanelKind::ImageTrace => "Image Trace",
             PanelKind::Symbols => "Symbols",
             PanelKind::Appearance => "Appearance",
             PanelKind::Character => "Character",
@@ -865,6 +870,7 @@ mod tests {
                 | PanelKind::Links
                 | PanelKind::Artboards
                 | PanelKind::Swatches
+                | PanelKind::ImageTrace
                 | PanelKind::Symbols
                 | PanelKind::Appearance
                 | PanelKind::Character
@@ -893,7 +899,7 @@ mod tests {
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 30);
+        assert_eq!(PanelKind::ALL.len(), 31);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }
@@ -914,12 +920,13 @@ mod tests {
         for k in PanelKind::ALL {
             assert_eq!(PanelKind::from_id_str(k.id_str()), k);
         }
-        let expected: [(PanelKind, &str); 29] = [
+        let expected: [(PanelKind, &str); 30] = [
             (PanelKind::Tools, "tools"),
             (PanelKind::Layers, "layers"),
             (PanelKind::Links, "links"),
             (PanelKind::Artboards, "artboards"),
             (PanelKind::Swatches, "swatches"),
+            (PanelKind::ImageTrace, "image-trace"),
             (PanelKind::Symbols, "symbols"),
             (PanelKind::Character, "character"),
             (PanelKind::Paragraph, "paragraph"),

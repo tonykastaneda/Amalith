@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/amalith-trace",
     "crates/amalith-core",
     "crates/amalith-commands",
     "crates/amalith-io",

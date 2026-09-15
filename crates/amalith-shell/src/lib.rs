@@ -25,6 +25,7 @@
 //! [`main.rs`](../../main.rs) is a launcher that calls [`app::run`].
 
 pub mod symbol_name_dialog;
+pub mod image_trace;
 pub mod about;
 pub mod anchors;
 pub mod app;

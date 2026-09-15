@@ -11,8 +11,8 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{
     CGBitmapContextCreate, CGBitmapContextGetBytesPerRow, CGBitmapContextGetData,
-    CGColorSpaceCreateDeviceRGB, CGContextDrawImage, CGContextScaleCTM, CGContextTranslateCTM,
-    CGImage, CGImageAlphaInfo, CGImageGetHeight, CGImageGetWidth,
+    CGColorSpaceCreateDeviceRGB, CGContextDrawImage, CGImage, CGImageAlphaInfo, CGImageGetHeight,
+    CGImageGetWidth,
 };
 use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
 
@@ -59,7 +59,10 @@ fn thumb_options(max_side: u32) -> CFRetained<CFMutableDictionary<CFString, CFTy
     let yes = CFBoolean::new(true);
     unsafe {
         dict.set(kCGImageSourceThumbnailMaxPixelSize, as_cf_type(&*max));
-        dict.set(kCGImageSourceCreateThumbnailFromImageAlways, as_cf_type(yes));
+        dict.set(
+            kCGImageSourceCreateThumbnailFromImageAlways,
+            as_cf_type(yes),
+        );
         dict.set(kCGImageSourceCreateThumbnailWithTransform, as_cf_type(yes));
     }
     dict
@@ -115,7 +118,11 @@ pub fn pixel_size_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
 fn thumbnail_from_source(src: &CFType, max_side: u32) -> Option<ImageData> {
     let opts = thumb_options(max_side);
     let img = unsafe {
-        CGImageSourceCreateThumbnailAtIndex(src_ptr(src), 0, &*opts as *const _ as *const CFDictionary)
+        CGImageSourceCreateThumbnailAtIndex(
+            src_ptr(src),
+            0,
+            &*opts as *const _ as *const CFDictionary,
+        )
     };
     let img = NonNull::new(img)?;
     let img = unsafe { CFRetained::<CGImage>::from_raw(img) };
@@ -150,8 +157,8 @@ fn cgimage_to_gpu(image: &CGImage) -> Option<ImageData> {
             CGImageAlphaInfo::PremultipliedLast.0,
         )
     }?;
-    CGContextTranslateCTM(Some(&ctx), 0.0, h as f64);
-    CGContextScaleCTM(Some(&ctx), 1.0, -1.0);
+    // Bitmap memory already follows the CGImage row order. A UIKit-style
+    // CTM flip here would invert the pixels uploaded to Vello.
     let rect = objc2_core_foundation::CGRect {
         origin: objc2_core_foundation::CGPoint { x: 0.0, y: 0.0 },
         size: objc2_core_foundation::CGSize {
@@ -186,4 +193,32 @@ fn cgimage_to_gpu(image: &CGImage) -> Option<ImageData> {
         width: w as u32,
         height: h as u32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn native_thumbnail_preserves_top_and_bottom_rows() {
+        let mut source = image::RgbaImage::new(8, 8);
+        for (x, y, pixel) in source.enumerate_pixels_mut() {
+            *pixel = image::Rgba(if y < 4 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            });
+            let _ = x;
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let thumb = super::thumbnail_bytes(bytes.get_ref(), 8).unwrap();
+        let pixels = thumb.data.data();
+        assert!(pixels[0] > 240 && pixels[2] < 10, "top row must stay red");
+        let bottom = ((thumb.height - 1) * thumb.width * 4) as usize;
+        assert!(
+            pixels[bottom] < 10 && pixels[bottom + 2] > 240,
+            "bottom row must stay blue"
+        );
+    }
 }

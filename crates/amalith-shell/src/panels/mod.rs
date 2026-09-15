@@ -92,6 +92,7 @@ pub fn palette() -> Vec<Paint> {
 
 /// Read-only context a panel body draws from.
 pub struct Ctx<'a> {
+    pub image_trace: &'a crate::image_trace::Panel,
     pub theme: &'a Theme,
     pub doc: &'a Document,
     pub selection: &'a [ObjectId],
@@ -309,6 +310,7 @@ pub enum EffectMenuChoice {
 /// What a click in a panel body asks the app to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    ImageTrace(crate::image_trace::Hit),
     None,
     SetTool(Tool),
     Select(ObjectId),
@@ -469,6 +471,7 @@ pub enum Action {
     /// Context bar "Embed" button — copy a Linked image's bytes into the
     /// document's own asset store and switch its source to Embedded.
     EmbedAsset(AssetId),
+    StartImageTrace,
     /// The whole Reflect/Shear dialog hit-vocabulary passes through — the
     /// App owns the state machine (`xformdlg::TransformDialog::apply`).
     XformHit(crate::xformdlg::Hit),
@@ -578,6 +581,14 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
         PanelKind::Color => color::menu(ctx),
         PanelKind::Transform => transform::menu(ctx),
         PanelKind::Align => align::menu(ctx),
+        PanelKind::ImageTrace => {
+            let mut items=vec![MenuEntry::Item{id:"trace-save",label:"Save as New Preset",checked:false}];
+            if ctx.image_trace.preset.is_some_and(|i|i>=amalith_trace::Options::presets().len()) {
+                items.push(MenuEntry::Item{id:"trace-rename",label:"Rename Preset",checked:false});
+                items.push(MenuEntry::Item{id:"trace-delete",label:"Delete Preset",checked:false});
+            }
+            items
+        }
         PanelKind::Symbols => symbols::menu(ctx),
         PanelKind::Links => links::menu(ctx),
         _ => Vec::new(),
@@ -623,6 +634,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         PanelKind::Tools => tools::paint(scene, text, body, ctx),
         PanelKind::Layers => layers::paint(scene, text, body, ctx),
         PanelKind::Links => links::paint(scene, text, body, ctx),
+        PanelKind::ImageTrace => crate::image_trace::paint(scene,text,body,ctx.theme,ctx.image_trace),
         PanelKind::Symbols => symbols::paint(scene, text, body, ctx),
         PanelKind::Artboards => artboards::paint(scene, text, body, ctx),
         PanelKind::Swatches => swatches::paint(scene, text, body, ctx),
@@ -696,6 +708,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         PanelKind::Tools => tools::hit(body, local, ctx),
         PanelKind::Layers => layers::hit(body, local, ctx),
         PanelKind::Links => links::hit(body, local, ctx),
+        PanelKind::ImageTrace => Action::ImageTrace(crate::image_trace::hit(body,local,ctx.image_trace)),
         PanelKind::Symbols => symbols::hit(body, local, ctx),
         PanelKind::Artboards => artboards::hit(body, local, ctx),
         PanelKind::Swatches => swatches::hit(body, local, ctx),
@@ -789,6 +802,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
         PanelKind::Appearance => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Color => color::metric_natural_h(),
+        PanelKind::ImageTrace => crate::image_trace::height(),
         PanelKind::Gradient => gradient::metric_natural_h(),
         PanelKind::Transform => transform::natural_height(),
         PanelKind::Pathfinder => pathfinder::natural_height(),
@@ -823,6 +837,7 @@ fn fixed_content_height(id: PanelId, width: f64) -> Option<f64> {
         PanelKind::Character => character::natural_height(),
         PanelKind::Tools => tools::natural_height(width, tools::hide_wip()),
         PanelKind::Color => color::metric_natural_h(),
+        PanelKind::ImageTrace => crate::image_trace::height(),
         PanelKind::Gradient => gradient::metric_natural_h(),
         PanelKind::Transform => transform::natural_height(),
         PanelKind::Pathfinder => pathfinder::natural_height(),

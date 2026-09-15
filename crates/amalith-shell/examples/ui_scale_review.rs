@@ -22,10 +22,40 @@ fn main() {
     let mut theme = Theme::default();
     theme.set_ui_scale(scale);
     let panel_gallery = std::env::args().nth(3).as_deref() == Some("panels");
-    if panel_gallery {
+    let trace_gallery = std::env::args().nth(3).as_deref() == Some("trace");
+    if trace_gallery {
+        use amalith_shell::{image_trace,convert};
+        use vello::{kurbo::{Rect,Affine},peniko::{Fill,ImageData,ImageFormat,ImageAlphaType,Blob}};
+        let img=image::RgbaImage::from_fn(128,128,|x,y| {
+            let dx=x as f64-64.;let dy=y as f64-56.;let d=(dx*dx+dy*dy).sqrt();
+            image::Rgba(if d<22. {[0,0,0,0]}else if d<45. {[238,76,62,255]}else if y>101&&y<117&&x>20&&x<108 {[40,126,220,255]}else{[0,0,0,0]})
+        });
+        let mut png=std::io::Cursor::new(Vec::new());image::DynamicImage::ImageRgba8(img.clone()).write_to(&mut png,image::ImageFormat::Png).unwrap();
+        std::fs::write(format!("{output}.source.png"),png.get_ref()).unwrap();
+        let mut tracer=amalith_trace::Tracer::decode(png.get_ref()).unwrap();
+        let options=amalith_trace::Options{mode:amalith_trace::Mode::Color,colors:6,noise:1,paths:80.,..Default::default()};
+        let result=tracer.trace(&options,true,&amalith_trace::CancelToken::new(),&mut |_|{}).unwrap();
+        let p=image_trace::Panel{options,enabled:true,can_expand:true,counts:Some((result.paths.len(),result.anchors,result.colors)),status:"Trace ready".into(),preset:None,..Default::default()};
+        scene.fill(Fill::NonZero,Affine::IDENTITY,theme.bg,None,&Rect::new(0.,0.,1100.*scale,760.*scale));
+        let body=Rect::new(20.*scale,50.*scale,340.*scale,660.*scale);
+        scene.fill(Fill::NonZero,Affine::IDENTITY,theme.panel_bg,None,&body);
+        tcx.draw(&mut scene,"Image Trace",16.,theme.text,20.*scale,30.*scale);
+        image_trace::paint(&mut scene,&mut tcx,body,&theme,&p);
+        let image=ImageData{data:Blob::from(img.into_raw()),format:ImageFormat::Rgba8,alpha_type:ImageAlphaType::Alpha,width:128,height:128};
+        for (x,title) in [(380.,"Original PNG"),(740.,"Editable trace")] {
+            tcx.draw(&mut scene,title,14.,theme.text,x*scale,78.*scale);
+            let area=Rect::new(x*scale,100.*scale,(x+320.)*scale,420.*scale);
+            scene.fill(Fill::NonZero,Affine::IDENTITY,theme.panel_bg,None,&area);
+            let xf=Affine::translate((x*scale,100.*scale))*Affine::scale(2.5*scale);
+            if x==380. {scene.draw_image(&image,xf);}else{for(path,color)in &result.paths{scene.fill(Fill::NonZero,xf,convert::color(*color),None,&convert::bez_path(&path.geometry));}}
+        }
+        tcx.draw(&mut scene,"Window > Panels > Image Trace",12.,theme.text_dim,380.*scale,475.*scale);
+        tcx.draw(&mut scene,"Preview keeps the original. Expand creates editable paths.",12.,theme.text_dim,380.*scale,500.*scale);
+    } else if panel_gallery {
         let doc = amalith_shell::sample::document();
         let expanded = std::collections::HashSet::new();
         let ctx = panels::Ctx {
+            image_trace: &Default::default(),
             theme: &theme,
             doc: &doc,
             selection: &[],
@@ -154,7 +184,7 @@ fn main() {
     let dev = &context.devices[index];
     let mut renderer =
         vello::Renderer::new(&dev.device, vello::RendererOptions::default()).unwrap();
-    let (width, height) = if panel_gallery {
+    let (width, height) = if trace_gallery { ((1100.*scale) as u32,(760.*scale) as u32) } else if panel_gallery {
         (2200, 2300)
     } else {
         (1800, 1600)

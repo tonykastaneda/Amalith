@@ -709,6 +709,8 @@ impl App {
                 self.settings.symbols_view,
                 &self.symbol_thumbnails,
                 &self.symbol_tiles,
+                &self.image_trace.panel,
+                self.image_trace.canvas.as_ref(),
                 symbols_drop_hover,
             ),
             Role::Floating(fid) => {
@@ -745,6 +747,7 @@ impl App {
                     let caret_blink = self.text_blink_on();
                     if master.is_tools() {
                         let ctx = panels::Ctx {
+                            image_trace: &self.image_trace.panel,
                             theme: &self.theme,
                             doc: self.doc.editor.document(),
                             selection: &self.doc.selection,
@@ -830,6 +833,7 @@ impl App {
                             let clip_body = g.content;
                             let (body, scroll) = panels::scrolled_body(pid, g.content, self.panel_scroll_of(pid));
                             let ctx = panels::Ctx {
+                                image_trace: &self.image_trace.panel,
                                 theme: &self.theme,
                                 doc: self.doc.editor.document(),
                                 selection: &self.doc.selection,
@@ -912,6 +916,7 @@ impl App {
                         if let Some(row) = frame.groups.get(fg).and_then(|g| g.rows.get(fi)) {
                             let (row_rect, pid) = (row.rect, row.panel);
                             let bounds = layout::flyout_rect(row_rect, Rect::new(0.0, 0.0, wl, hl));
+                            let bounds = layout::panel_flyout_bounds(bounds, row_rect, Rect::new(0.0, 0.0, wl, hl), pid);
                             let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_flyout_header_h());
                             let close = Rect::new(header.x1 - ui_px(32.0), header.y0, header.x1, header.y1);
                             let menu = panels::has_menu(pid).then(|| chrome::flyout_menu_rect(close, &self.theme));
@@ -927,6 +932,7 @@ impl App {
                             );
                             let body = Rect::new(bounds.x0 + ui_px(8.0), header.y1 + ui_px(8.0), bounds.x1 - ui_px(8.0), bounds.y1 - ui_px(8.0));
                             let ctx = panels::Ctx {
+                                image_trace: &self.image_trace.panel,
                                 theme: &self.theme,
                                 doc: self.doc.editor.document(),
                                 selection: &self.doc.selection,

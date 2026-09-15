@@ -6,6 +6,7 @@ use super::super::*;
 
 impl App {
     pub(in crate::app) fn on_cursor_move(&mut self) {
+        if self.image_trace.slider.is_some() { self.trace_slider_at(self.pointer.x); return; }
         // A live text-selection drag in the About panel.
         if self.about.as_ref().is_some_and(about::About::is_dragging) {
             if let Some(a) = &mut self.about {
@@ -894,6 +895,7 @@ impl App {
     }
 
     pub(in crate::app) fn on_release(&mut self) {
+        if self.trace_release() { return; }
         // Only catch up a Free Transform gesture that never got a single
         // pointer-move event (a very fast click-drag-release can coalesce
         // away every intermediate move on some platforms) — `dst_quad`

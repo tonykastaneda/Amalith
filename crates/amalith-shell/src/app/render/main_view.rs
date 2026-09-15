@@ -144,6 +144,8 @@ pub(in crate::app) fn paint_main(
     symbols_view: crate::prefs::SymbolsView,
     symbol_thumbnails: &HashMap<amalith_core::SymbolId, vello::peniko::ImageData>,
     symbol_tiles: &std::cell::RefCell<Vec<(Rect, amalith_core::SymbolId)>>,
+    image_trace: &crate::image_trace::Panel,
+    trace_canvas: Option<&Document>,
     symbols_drop_hover: bool,
 ) {
     scene.fill(
@@ -176,7 +178,7 @@ pub(in crate::app) fn paint_main(
     };
     canvas::paint(
         scene,
-        doc,
+        trace_canvas.unwrap_or(doc),
         view,
         viewport,
         theme,
@@ -583,6 +585,7 @@ pub(in crate::app) fn paint_main(
     }
 
     let ctx = panels::Ctx {
+        image_trace,
         theme,
         doc,
         selection,
@@ -790,6 +793,7 @@ pub(in crate::app) fn paint_main(
         artboard_edit,
         artboard_link,
         artboard_fill_menu,
+        trace_target: matches!(selection, [id] if doc.object(*id).is_some_and(|o| !o.locked && matches!(o.kind, amalith_core::ObjectKind::Image(_)))),
         embed_target: match selection {
             [id] => match doc.object(*id).map(|o| &o.kind) {
                 Some(amalith_core::ObjectKind::Image(img)) => {
@@ -847,6 +851,7 @@ pub(in crate::app) fn paint_main(
     // `paint_smart_guides`'s own early-return for that).
     if let Some((row, pid, side)) = open_flyout {
         let bounds = layout::docked_flyout_rect(row, side, (left_x, right_x), Rect::new(0.0, 0.0, width, height));
+        let bounds = layout::panel_flyout_bounds(bounds, row, Rect::new(0.0, metric_chrome_top(), width, height), pid);
         let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_flyout_header_h());
         let close = Rect::new(header.x1 - ui_px(32.0), header.y0, header.x1, header.y1);
         let menu = panels::has_menu(pid).then(|| chrome::flyout_menu_rect(close, theme));

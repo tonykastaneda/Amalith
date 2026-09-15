@@ -32,6 +32,7 @@ impl App {
             return;
         }
         if self.symbol_name_dialog.is_some() { self.symbol_name_dialog_key(&event); return; }
+        if self.trace_key(&event) { return; }
         // The command palette (⌘K) swallows every key while open.
         if self.palette.is_some() {
             if !event.state.is_pressed() {

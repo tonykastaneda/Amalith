@@ -493,6 +493,17 @@ pub fn docked_flyout_rect(row: Rect, side: Side, canvas: (f64, f64), viewport: R
     Rect::new(left, top, left + metric_flyout_w(), top + metric_flyout_h())
 }
 
+/// Fit a panel's full body plus flyout chrome into the available window.
+/// Shared by rendering and hit testing, including bottom-anchored rows.
+pub fn panel_flyout_bounds(base: Rect, row: Rect, viewport: Rect, panel: PanelId) -> Rect {
+    let body_width = (base.width() - ui_px(16.0)).max(1.0);
+    let wanted = crate::panels::min_body_height(panel, body_width)
+        + metric_flyout_header_h() + ui_px(16.0);
+    let height = wanted.max(metric_flyout_h()).min((viewport.height() - ui_px(20.0)).max(1.0));
+    let top = row.y0.min(viewport.y1 - ui_px(12.0) - height).max(viewport.y0 + ui_px(8.0));
+    Rect::new(base.x0, top, base.x1, top + height)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,6 +536,20 @@ mod tests {
             rect: [0.0, 0.0, 280.0, 400.0],
             scroll: 0.0,
         }
+    }
+
+    #[test]
+    fn tall_panel_flyout_fits_content_and_stays_inside_window() {
+        let row = Rect::new(900., 750., 940., 780.);
+        let viewport = Rect::new(0., 0., 1000., 900.);
+        let pid = PanelId(PanelKind::ImageTrace);
+        let base = flyout_rect(row, viewport);
+        let fitted = panel_flyout_bounds(base, row, viewport, pid);
+        assert!(fitted.height() >= crate::panels::min_body_height(pid, fitted.width() - ui_px(16.)) + metric_flyout_header_h() + ui_px(16.));
+        assert!(fitted.y1 <= viewport.y1 - ui_px(12.));
+        let small = Rect::new(0., 0., 1000., 400.);
+        let fitted = panel_flyout_bounds(base, row, small, pid);
+        assert!(fitted.y0 >= small.y0 && fitted.y1 <= small.y1);
     }
 
     #[test]

@@ -649,6 +649,27 @@ impl Editor {
 
     fn compile(&self, command: Command) -> Result<Vec<Edit>, CommandError> {
         let edits = match command {
+            Command::ExpandImageTrace { id, width, height, paths } => {
+                let source = self.document.object(id).ok_or(CommandError::ObjectNotFound(id))?;
+                let ObjectKind::Image(image) = &source.kind else { return Err(CommandError::NotAnImage(id)); };
+                if width == 0 || height == 0 || paths.is_empty() || paths.iter().any(|(p,_)| !p.geometry.is_finite()) {
+                    return Err(CommandError::InvalidTrace);
+                }
+                let index = self.document.children_of(source.parent).iter().position(|i| *i == id).ok_or(CommandError::ObjectNotFound(id))?;
+                let local = image.local_bounds;
+                let xf = Affine::translate((local.x0, local.y0)) * Affine::scale_non_uniform(local.width()/width as f64, local.height()/height as f64);
+                let mut group = source.clone();
+                group.kind = ObjectKind::Group(Default::default());
+                group.name = Some("Image Trace".into());
+                let mut edits = vec![Edit::RemoveObject { id }, Edit::InsertObject { object: Box::new(group), index }];
+                for (index, (path, color)) in paths.into_iter().enumerate() {
+                    let mut object = Object::new(ObjectId::new(), ObjectParent::Group(id), ObjectKind::Path(PathData::from_bezpath(xf * path.geometry)));
+                    object.appearance.set_fill(Paint::Solid(color));
+                    object.appearance.set_stroke(Paint::None);
+                    edits.push(Edit::InsertObject { object: Box::new(object), index });
+                }
+                edits
+            }
             Command::CreateArtboard { name, rect, index } => {
                 let artboard = Artboard::new(ArtboardId::new(), name, rect);
                 let index = index.unwrap_or_else(|| self.document.artboards().len());

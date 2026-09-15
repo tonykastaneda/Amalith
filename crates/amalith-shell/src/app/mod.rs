@@ -33,6 +33,7 @@ mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod native_menu;
 mod area_type_dialog;
+mod image_trace;
 mod symbol_name_dialog;
 mod layer_dialog;
 mod effect_dialog;
@@ -1044,6 +1045,7 @@ struct LastTransform {
 }
 
 struct App {
+    image_trace: image_trace::TraceState,
     context: RenderContext,
     /// A headless vello renderer, made on first use by Export for Screens.
     export_renderer: Option<Renderer>,
@@ -1569,6 +1571,7 @@ impl App {
             layer_query: String::new(),
             layer_search_focused: false,
             main_resizable: true,
+            image_trace: image_trace::TraceState::load(),
             symbol_thumbnails: HashMap::new(),
             symbol_thumbnail_revision: (0, 0),
             symbol_thumbnail_attempted: Default::default(),
@@ -2022,6 +2025,7 @@ impl App {
 
     /// Make `doc` the live document on `App`.
     fn load_active_doc(&mut self, doc: Doc) {
+        self.image_trace.reset();
         self.close_symbol_name_dialog(false);
         self.doc = doc;
         // Transient interaction state doesn't cross documents.
@@ -6374,6 +6378,7 @@ impl App {
             artboard_edit: None,
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
+            trace_target: false,
             embed_target: None,
             text_vertical: false,
             text_kind_is_area: false,
@@ -6435,6 +6440,7 @@ impl App {
             artboard_edit: self.artboard_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             artboard_link: self.artboard_link,
             artboard_fill_menu: self.artboard_fill_menu,
+            trace_target: matches!(self.doc.selection.as_slice(), [id] if self.doc.editor.document().object(*id).is_some_and(|o| !o.locked && matches!(o.kind, amalith_core::ObjectKind::Image(_)))),
             embed_target: self.embed_target(),
             text_vertical: self.active_text_vertical(),
             text_kind_is_area: self.active_text_kind_is_area(),
@@ -7316,6 +7322,7 @@ impl App {
     /// A minimal [`panels::Ctx`] for hit-only / tip-only queries.
     fn tip_ctx(&self) -> panels::Ctx<'_> {
         panels::Ctx {
+            image_trace: &self.image_trace.panel,
             theme: &self.theme,
             doc: self.doc.editor.document(),
             selection: &self.doc.selection,
@@ -7395,6 +7402,7 @@ impl App {
     /// handler used to build inline, once each).
     fn panel_press_ctx(&self, layer_drop: Option<(i64, bool)>) -> panels::Ctx<'_> {
         panels::Ctx {
+            image_trace: &self.image_trace.panel,
             theme: &self.theme,
             doc: self.doc.editor.document(),
             selection: &self.doc.selection,
@@ -7898,6 +7906,8 @@ impl App {
             }
             None => layout::flyout_rect(row, viewport),
         };
+        let available = if dock_side.is_some() { Rect::new(0.0, metric_chrome_top(), vw, vh) } else { viewport };
+        let bounds = layout::panel_flyout_bounds(bounds, row, available, pid);
         let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y0 + layout::metric_flyout_header_h());
         let close = Rect::new(header.x1 - ui_px(32.0), header.y0, header.x1, header.y1);
         let menu = chrome::flyout_menu_rect(close, &self.theme);
@@ -8590,6 +8600,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
         }
         self.drain_lod();
+        self.trace_tick();
         if std::mem::take(&mut self.pending_export) {
             self.spawn_export_dialog(event_loop);
         }
@@ -8716,7 +8727,7 @@ impl ApplicationHandler for App {
 
         // A finished background image decode has no wake channel of its
         // own — poll while jobs are outstanding, then fall back to sleep.
-        if !self.lod_inflight.is_empty() {
+        if !self.lod_inflight.is_empty() || self.image_trace.pending() {
             wake = merge(wake, Duration::from_millis(30));
         }
 
@@ -9427,13 +9438,14 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 /// The panels the Panels menu lists, alphabetical like Illustrator. A
 /// deliberate subset of `PanelKind::ALL` — excludes the color picker and
 /// every float-only dialog panel, which never belong in this menu.
-const WINDOW_PANELS: [PanelKind; 14] = [
+const WINDOW_PANELS: [PanelKind; 15] = [
     PanelKind::Align,
     PanelKind::Appearance,
     PanelKind::Artboards,
     PanelKind::Character,
     PanelKind::Color,
     PanelKind::Gradient,
+    PanelKind::ImageTrace,
     PanelKind::Layers,
     PanelKind::Links,
     PanelKind::Paragraph,
