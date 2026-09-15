@@ -599,6 +599,29 @@ impl App {
             }
             v
         };
+        // Built from direct field projections (not a method call) so the
+        // borrow checker sees it as tied only to `self.terminal`, leaving
+        // `self.content`/`self.text` free to be borrowed mutably below in
+        // the same `paint_main(...)` call.
+        // The single source of truth for "where does the document canvas
+        // actually sit" — also what real hit-testing uses. `paint_main`
+        // used to hand-recompute this itself from `dock`/`rulers`, which
+        // could (and did) drift from this; passed in explicitly now so
+        // there's only one implementation, not two kept in lockstep by hand.
+        let canvas_viewport_now = self.canvas_viewport();
+        let terminal_visible = self.terminal_visible();
+        let terminal_rect_now = terminal_visible.then(|| self.terminal_pane_bounds());
+        let terminal_pane_arg = self.terminal.as_ref().filter(|_| terminal_visible).map(|pane| {
+            crate::terminal_paint::TerminalPaintArgs {
+                rect: terminal_rect_now.expect("terminal_rect_now is Some whenever terminal_visible"),
+                focused: pane.focused,
+                term: &pane.term,
+                font: &pane.font,
+                cell_w: pane.cell_w,
+                cell_h: pane.cell_h,
+                ascent: pane.ascent,
+            }
+        });
         match role {
             Role::Main => main_view::paint_main(
                 &mut self.content,
@@ -631,6 +654,7 @@ impl App {
                 self.marquee,
                 wl,
                 hl,
+                canvas_viewport_now,
                 self.master_dock_preview,
                 self.group_drop_preview.as_ref(),
                 self.panel_drop_preview.as_ref(),
@@ -712,6 +736,7 @@ impl App {
                 &self.image_trace.panel,
                 self.image_trace.canvas.as_ref(),
                 symbols_drop_hover,
+                terminal_pane_arg,
             ),
             Role::Floating(fid) => {
                 let exists = self.dock.master(fid).is_some();

@@ -43,6 +43,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 pdf-writer = "0.15.0"
 lcms2 = { version = "6.2.0", features = ["static"] }
+# Embedded terminal pane (File ▸ Scripts ▸ Terminal): cross-platform PTY
+# spawn + the VTE/grid engine extracted from Alacritty.
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
 
 # Native menu bar: NSMenu on macOS, an HMENU attached to the window on Windows.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]

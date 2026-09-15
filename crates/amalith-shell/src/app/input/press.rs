@@ -846,6 +846,40 @@ impl App {
                         return;
                     }
                 }
+                if let Some(term_rect) = self.terminal_rect() {
+                    let edge_rect = Rect::new(
+                        term_rect.x0 - metric_rail_edge(),
+                        term_rect.y0,
+                        term_rect.x0,
+                        term_rect.y1,
+                    );
+                    if edge_rect.inflate(metric_grab_slop() + 1.0, 0.0).contains(self.pointer) {
+                        self.drag = Drag::TerminalSplit {
+                            start_ratio: self.terminal_split,
+                            start_x: self.pointer.x,
+                        };
+                        return;
+                    }
+                    if crate::terminal_paint::close_button_rect(&mut self.text, term_rect).contains(self.pointer) {
+                        self.toggle_terminal();
+                        return;
+                    }
+                    if term_rect.contains(self.pointer) {
+                        if let Some(t) = &mut self.terminal {
+                            t.focused = true;
+                        }
+                        self.request_main_redraw();
+                        return;
+                    }
+                }
+                // A click anywhere else blurs a focused terminal pane, so
+                // shortcuts/tools work normally again.
+                if let Some(t) = &mut self.terminal {
+                    if t.focused {
+                        t.focused = false;
+                        self.request_main_redraw();
+                    }
+                }
                 if self.space_down && self.cmd_down {
                     // Illustrator scrubby zoom — anchored at the press.
                     self.drag = Drag::ScrubZoom {

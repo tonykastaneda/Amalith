@@ -74,6 +74,7 @@ pub mod stroke_panel;
 pub mod text;
 pub mod text_field;
 pub mod textedit;
+pub mod terminal_paint;
 pub mod thread;
 pub mod theme;
 pub mod metrics;

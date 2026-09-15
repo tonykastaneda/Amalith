@@ -399,6 +399,16 @@ impl App {
         if self.stroke_flyout_edit.is_some() && self.stroke_flyout_key(&event) {
             return;
         }
+        // The terminal pane gets first crack at every key while focused —
+        // including control characters and Escape (a real PTY needs both,
+        // e.g. for vim), so this deliberately does NOT reuse the
+        // filtered-text `rename_key`/`workspace_prompt_key` pattern.
+        // Losing focus happens by clicking elsewhere (see `press.rs`),
+        // not via Escape.
+        if self.terminal.as_ref().is_some_and(|t| t.focused) {
+            self.terminal_key(&event);
+            return;
+        }
         if self.doc.rename.is_some() {
             self.rename_key(&event);
             return;

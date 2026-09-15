@@ -39,6 +39,13 @@ pub struct Layout {
     /// reasonable default either way.
     #[serde(default)]
     pub window_size: Option<(f32, f32)>,
+    /// Embedded terminal pane's share of canvas width (0.0-1.0), if it's
+    /// ever been dragged from the 0.20 default. Deliberately just the
+    /// ratio — an open shell process itself isn't something a saved
+    /// layout can restore, so this never auto-reopens the pane, only
+    /// remembers how wide it should be if/when the user reopens it.
+    #[serde(default)]
+    pub terminal_split: Option<f32>,
 }
 
 impl Layout {
@@ -49,6 +56,7 @@ impl Layout {
         guides_hidden: bool,
         guides_locked: bool,
         window_size: Option<(f32, f32)>,
+        terminal_split: Option<f32>,
     ) -> Self {
         Self {
             masters: dock.masters.iter().filter(|m| m.dock.is_some()).cloned().map(|mut m| {
@@ -59,6 +67,7 @@ impl Layout {
             guides_hidden,
             guides_locked,
             window_size,
+            terminal_split,
         }
     }
 

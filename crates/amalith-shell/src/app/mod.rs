@@ -40,6 +40,7 @@ mod effect_dialog;
 mod offset_dialog;
 mod render;
 mod shape_dialog;
+mod terminal;
 mod thumbnails;
 mod width_tool;
 mod xform_dialog;
@@ -164,6 +165,14 @@ enum Drag {
         group: usize,
         start_h: f32,
         start_y: f64,
+    },
+    /// Dragging the divider between the document canvas and the embedded
+    /// terminal pane (see `terminal.rs`). Stores a *ratio*, not a pixel
+    /// width — unlike `MasterWidth` — so the split stays proportional
+    /// across window resizes.
+    TerminalSplit {
+        start_ratio: f32,
+        start_x: f64,
     },
     /// Pressed a Master's header (not its close/chevron); a drag moves the
     /// whole Master, undocking it first if it was docked (⇐ the
@@ -678,6 +687,9 @@ enum MenuAction {
     RemoveScriptsFolder,
     /// Run the user script at this path.
     RunScript(std::path::PathBuf),
+    /// File ▸ Scripts ▸ Terminal — toggles the embedded PTY terminal pane
+    /// split next to the canvas.
+    OpenTerminal,
     /// Windows menu: show/hide the panel with this id.
     TogglePanel(PanelKind),
     /// Windows ▸ Workspace: switch to the named workspace.
@@ -994,6 +1006,8 @@ enum CanvasCursor {
     /// "Fit to text" — hovering an area-text box's auto-fit tab (an
     /// up-arrow-to-bar glyph).
     FitUp,
+    /// Real OS resize cursor — hovering the terminal/canvas divider.
+    EwResize,
 }
 
 impl CanvasCursor {
@@ -1210,6 +1224,13 @@ struct App {
     /// User scripts folder + per-script key bindings (File ▸ Scripts,
     /// Preferences ▸ Scripts). Persisted outside the app bundle.
     scripts: crate::scripts::ScriptsConfig,
+    /// The embedded PTY terminal pane (File ▸ Scripts ▸ Terminal), when
+    /// open. `None` = closed; no PTY/thread alive.
+    terminal: Option<terminal::TerminalPane>,
+    /// Terminal pane's share of the canvas width (0.0-1.0). Kept even
+    /// while `terminal` is `None` so it's remembered across close/reopen
+    /// and app restart.
+    terminal_split: f32,
     /// Named keyboard-shortcut presets (Preferences ▸ Keyboard ▸ Preset).
     keymaps: crate::keymap::Keymaps,
     /// The Preferences modal, when open.
@@ -1381,6 +1402,12 @@ struct App {
     cmd_down: bool,
     shift_down: bool,
     alt_down: bool,
+    /// The literal physical Ctrl key — unlike `cmd_down` (which is Ctrl
+    /// *or* Cmd depending on platform, for this app's own shortcuts),
+    /// this is only ever the real Ctrl key, needed for terminal control
+    /// characters (Ctrl+C etc.), which are a platform-independent
+    /// convention distinct from this app's own shortcut modifier.
+    ctrl_down: bool,
     space_down: bool,
     drag: Drag,
     /// Live drop cue while dragging a panel over a Master's body — which
@@ -1504,12 +1531,14 @@ impl App {
         let mut guides_hidden = base.guides_hidden;
         let mut guides_locked = base.guides_locked;
         let mut window_size = base.window_size;
+        let mut terminal_split = base.terminal_split.unwrap_or(0.20);
         if let Some(saved) = workspace::load() {
             saved.apply_to(&mut dock);
             rulers = saved.rulers;
             guides_hidden = saved.guides_hidden;
             guides_locked = saved.guides_locked;
             window_size = saved.window_size.or(window_size);
+            terminal_split = saved.terminal_split.unwrap_or(terminal_split);
         }
         dock.ensure_next_id();
         Self {
@@ -1582,6 +1611,8 @@ impl App {
                 s
             },
             scripts: crate::scripts::load(),
+            terminal: None,
+            terminal_split,
             keymaps: crate::keymap::load(),
             prefs: None,
             active_tool: Tool::Select,
@@ -1651,6 +1682,7 @@ impl App {
             cmd_down: false,
             shift_down: false,
             alt_down: false,
+            ctrl_down: false,
             space_down: false,
             drag: Drag::None,
             panel_drop_preview: None,
@@ -1777,6 +1809,7 @@ impl App {
             self.guides_hidden,
             self.guides_locked,
             window_size,
+            Some(self.terminal_split),
         ));
     }
 
@@ -1798,6 +1831,9 @@ impl App {
                 let _ = win.request_inner_size(LogicalSize::new(w as f64, h as f64));
             }
         }
+        if let Some(split) = layout.terminal_split {
+            self.terminal_split = split;
+        }
         self.workspaces.active = name.to_string();
         workspaces::save(&self.workspaces);
         self.save_layout();
@@ -1817,6 +1853,7 @@ impl App {
             self.guides_hidden,
             self.guides_locked,
             window_size,
+            Some(self.terminal_split),
         );
         self.workspaces.upsert(name, layout);
         workspaces::save(&self.workspaces);
@@ -4710,6 +4747,7 @@ impl App {
                 self.rebuild_native_menu();
             }
             MenuAction::RunScript(path) => crate::scripts::run(&path),
+            MenuAction::OpenTerminal => self.toggle_terminal(),
         }
     }
 
@@ -7220,11 +7258,10 @@ impl App {
         }
     }
 
-    /// The document-space rect currently visible in the canvas (between the
-    /// rails). Used to cull hit-testing to what the user can see.
-    /// Logical x-range of the canvas viewport — window edges minus any
-    /// docked rails.
-    fn canvas_x_span(&self) -> (f64, f64) {
+    /// (left, right) from window edges minus any docked rails only —
+    /// ignores the embedded terminal pane. The base every span below
+    /// narrows further from.
+    fn canvas_full_x_span(&self) -> (f64, f64) {
         let (w, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let left_docked = self.dock.docked(Side::Left);
         let left = left_docked
@@ -7237,6 +7274,44 @@ impl App {
             .map(|&mid| self.docked_master_rect(mid, w, h).x0)
             .unwrap_or(w);
         (left, right.max(left))
+    }
+
+    /// The document-space rect currently visible in the canvas (between the
+    /// rails). Used to cull hit-testing to what the user can see.
+    /// Logical x-range of the canvas viewport — window edges minus any
+    /// docked rails, minus the embedded terminal pane's share when one is
+    /// open (see `terminal_rect`, which gets the rest of the span).
+    fn canvas_x_span(&self) -> (f64, f64) {
+        let (left, right) = self.canvas_full_x_span();
+        let right = if self.terminal_visible() {
+            right - (right - left).max(0.0) * self.terminal_split as f64
+        } else {
+            right
+        };
+        (left, right.max(left))
+    }
+
+    /// The embedded terminal pane's own screen rect (the rightmost slice
+    /// of `canvas_full_x_span`), computed unconditionally — i.e. what the
+    /// pane's rect *would* be if it were open right now, regardless of
+    /// whether it actually is. `open_terminal` needs this to size the PTY
+    /// before `self.terminal` is set; everyone else should use
+    /// `terminal_rect` instead.
+    fn terminal_pane_bounds(&self) -> Rect {
+        let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let (left, full_right) = self.canvas_full_x_span();
+        let doc_right = full_right - (full_right - left).max(0.0) * self.terminal_split as f64;
+        // Top-aligned with the document tab strip (`tab_bar_rect`), not
+        // `metric_chrome_top()` (below it) — so the terminal's own tab
+        // header sits at the same height as the document's, not a row
+        // lower next to the ruler.
+        Rect::new(doc_right.max(left), metric_app_bar_h() + metric_opt_bar_h(), full_right, h)
+    }
+
+    /// The embedded terminal pane's own screen rect, or `None` when the
+    /// pane is closed.
+    fn terminal_rect(&self) -> Option<Rect> {
+        self.terminal_visible().then(|| self.terminal_pane_bounds())
     }
 
     fn visible_doc_rect(&self) -> Rect {
@@ -8053,6 +8128,14 @@ impl App {
         } else {
             mode
         };
+        // The terminal/canvas divider — checked outside `over` (it sits
+        // right on the canvas_viewport's own edge, not inside it), and
+        // overrides everything else, including mid-drag.
+        let mode = if matches!(self.drag, Drag::TerminalSplit { .. }) || self.over_terminal_divider() {
+            CanvasCursor::EwResize
+        } else {
+            mode
+        };
         if mode != self.cursor_mode {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
@@ -8063,6 +8146,7 @@ impl App {
                     CanvasCursor::Crosshair => CursorIcon::Crosshair,
                     CanvasCursor::Grab => CursorIcon::Grab,
                     CanvasCursor::Grabbing => CursorIcon::Grabbing,
+                    CanvasCursor::EwResize => CursorIcon::EwResize,
                     // IBeam/PathType are custom-drawn now (see `is_drawn`)
                     // so the OS cursor stays hidden for them either way —
                     // no `CursorIcon::Text` arm needed.
@@ -8601,6 +8685,7 @@ impl ApplicationHandler for App {
         }
         self.drain_lod();
         self.trace_tick();
+        self.terminal_tick();
         if std::mem::take(&mut self.pending_export) {
             self.spawn_export_dialog(event_loop);
         }
@@ -8730,6 +8815,12 @@ impl ApplicationHandler for App {
         if !self.lod_inflight.is_empty() || self.image_trace.pending() {
             wake = merge(wake, Duration::from_millis(30));
         }
+        // An open terminal pane's PTY output arrives on a background
+        // thread with no wake channel either — poll it at a responsive
+        // typing cadence while the pane is open.
+        if self.terminal.is_some() {
+            wake = merge(wake, Duration::from_millis(16));
+        }
 
         event_loop.set_control_flow(match wake {
             Some(d) => ControlFlow::WaitUntil(Instant::now() + d),
@@ -8741,6 +8832,10 @@ impl ApplicationHandler for App {
     /// closed, ⌘Q / Exit, ⌘W of the last tab). Save the dock layout so
     /// the next launch comes back the way it was left.
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // A "closed" (hidden) terminal pane's shell is still alive in the
+        // background — actually quitting Amalith is the one time that
+        // has to end for real, not just visually hide again.
+        self.exit_terminal();
         self.save_layout();
     }
 
@@ -9009,6 +9104,7 @@ impl ApplicationHandler for App {
                     self.cmd_down = if cfg!(target_os = "macos") { m.state().super_key() } else { m.state().control_key() };
                     self.shift_down = m.state().shift_key();
                     self.alt_down = m.state().alt_key();
+                    self.ctrl_down = m.state().control_key();
                 }
                 if Some(id) == self.main_id {
                     // Toggling the temporary white-arrow gesture shows or

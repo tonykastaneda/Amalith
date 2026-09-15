@@ -48,6 +48,11 @@ pub(in crate::app) fn paint_main(
     marquee: Option<Rect>,
     width: f64,
     height: f64,
+    // The document canvas's own rect — `App::canvas_viewport()`, the same
+    // single source of truth real hit-testing uses. Passed in rather than
+    // recomputed here, so there's only ever one implementation of this
+    // math, not two that can quietly drift apart.
+    viewport: Rect,
     master_dock_preview: Option<(Side, usize)>,
     group_drop_preview: Option<&(u64, GroupDrop)>,
     panel_drop_preview: Option<&(u64, PanelDrop)>,
@@ -104,7 +109,11 @@ pub(in crate::app) fn paint_main(
     panel_scroll: &std::collections::HashMap<PanelId, f64>,
     cull_inset: f64,
     show_cull: bool,
-    rulers: bool,
+    // No longer used for viewport math here — `viewport` (above) already
+    // comes in ruler-inset via `App::canvas_viewport()`. Kept as a
+    // parameter since removing it would mean threading a `_` through
+    // every call site for no benefit.
+    _rulers: bool,
     // Rotate tool: the reference point (document space) to mark, if any.
     rotate_pivot: Option<Point>,
     // Ruler guides to draw: (orientation, doc coord, how to mark it).
@@ -147,6 +156,9 @@ pub(in crate::app) fn paint_main(
     image_trace: &crate::image_trace::Panel,
     trace_canvas: Option<&Document>,
     symbols_drop_hover: bool,
+    // The embedded terminal pane's paint args, or `None` when it's
+    // closed — see `App::terminal_paint_args`.
+    terminal_pane: Option<crate::terminal_paint::TerminalPaintArgs<'_>>,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -167,15 +179,11 @@ pub(in crate::app) fn paint_main(
         .last()
         .map(|&mid| docked_master_rect(dock, mid, width, height).x0)
         .unwrap_or(width);
-    // Full canvas region between the rails; the rulers (when on) sit in a
-    // strip along its top / left, and content is inset to match
-    // `App::canvas_viewport`.
-    let full = Rect::new(left_x, metric_chrome_top(), right_x.max(left_x), height);
-    let viewport = if rulers {
-        Rect::new(full.x0 + rulers::THICK, full.y0 + rulers::THICK, full.x1, full.y1)
-    } else {
-        full
-    };
+    // The embedded terminal pane (if open) takes the rightmost slice of
+    // that span — the document's own right edge is exactly its left edge.
+    // Still needed here (not from `viewport`) for `tab_bar_rect`/flyout
+    // positioning below, which span the full un-ruler-inset canvas width.
+    let right_x = terminal_pane.as_ref().map(|t| t.rect.x0).unwrap_or(right_x);
     canvas::paint(
         scene,
         trace_canvas.unwrap_or(doc),
@@ -203,6 +211,18 @@ pub(in crate::app) fn paint_main(
         show_grid,
         grid_spacing,
     );
+
+    if let Some(args) = &terminal_pane {
+        let term_rect = args.rect;
+        crate::terminal_paint::paint(scene, args, theme, text);
+        let divider = Rect::new(
+            term_rect.x0 - metric_rail_edge(),
+            term_rect.y0,
+            term_rect.x0,
+            term_rect.y1,
+        );
+        scene.fill(Fill::NonZero, ID, theme.splitter, None, &divider);
+    }
 
     if let Some(m) = marquee {
         scene.fill(Fill::NonZero, ID, theme.marquee_fill, None, &m);
@@ -582,6 +602,18 @@ pub(in crate::app) fn paint_main(
                 &Rect::new(whole.x1, tab_strip.y0 + ui_px(5.0), whole.x1 + 1.0, tab_strip.y1 - ui_px(5.0)),
             );
         }
+    }
+
+    // A terminal split makes it ambiguous at a glance which side keys go
+    // to — mirror its own focus border on the document side too, so
+    // "canvas is active" is just as visible as "terminal is active".
+    // Wraps the whole pane top-to-bottom, tab strip included, exactly
+    // like the terminal's own border wraps its header — not just the
+    // inner canvas. Drawn last (after the tab strip's own fill), so
+    // nothing painted afterward can ever eat into its edges.
+    if terminal_pane.as_ref().is_some_and(|t| !t.focused) {
+        let pane_rect = Rect::new(left_x, tab_strip.y0, right_x, height);
+        scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &pane_rect.inset(-1.0));
     }
 
     let ctx = panels::Ctx {

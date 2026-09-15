@@ -45,7 +45,7 @@ pub fn essentials_classic() -> Layout {
         m.layout = MasterLayout::Stack;
     }
     dock.dock_master(links, Side::Right, 1);
-    Layout::capture(&dock, false, false, false, None)
+    Layout::capture(&dock, false, false, false, None, None)
 }
 
 /// One user-saved workspace.

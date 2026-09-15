@@ -79,6 +79,17 @@ impl App {
                 self.sync_floating_window_height(master);
                 self.request_main_redraw();
             }
+            Drag::TerminalSplit { start_ratio, start_x } => {
+                let (start_ratio, start_x) = (*start_ratio, *start_x);
+                let (left, right) = self.canvas_full_x_span();
+                let total_w = (right - left).max(1.0);
+                let dx = (self.pointer.x - start_x) as f32;
+                // Divider moving right widens the document pane, so the
+                // terminal's own ratio shrinks — hence the minus sign.
+                let raw = start_ratio - dx / total_w as f32;
+                self.terminal_split = self.clamp_terminal_split(raw, total_w);
+                self.request_main_redraw();
+            }
             Drag::GroupContentResize { master, group, start_h, start_y } => {
                 let (master, group, start_h, start_y) = (*master, *group, *start_h, *start_y);
                 let dy = (self.pointer.y - start_y) as f32;
@@ -936,6 +947,7 @@ impl App {
         match std::mem::take(&mut self.drag) {
             Drag::None
             | Drag::MasterWidth { .. }
+            | Drag::TerminalSplit { .. }
             | Drag::GroupContentResize { .. }
             | Drag::PendingGroupDrag { .. }
             | Drag::PendingMasterMove { .. }

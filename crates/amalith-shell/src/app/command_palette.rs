@@ -45,6 +45,7 @@ impl App {
             ("Import SVG…", "File", MenuAction::ImportSvg),
             ("Place…", "File", MenuAction::Place),
             ("Add Scripts Folder…", "File", MenuAction::AddScriptsFolder),
+            ("Terminal", "File", MenuAction::OpenTerminal),
             ("Undo", "Edit", MenuAction::Undo),
             ("Redo", "Edit", MenuAction::Redo),
             ("Cut", "Edit", MenuAction::Cut),

@@ -387,9 +387,15 @@ impl NativeMenu {
                 (mi, p)
             })
             .collect();
+        let terminal_i = reg(
+            &mut items,
+            MenuItem::new("Terminal", true, None),
+            MenuAction::OpenTerminal,
+        );
+        let terminal_sep = sep();
         let scripts_sep = sep();
         let scripts_menu = {
-            let mut refs: Vec<&dyn muda::IsMenuItem> = vec![&add_scripts_i];
+            let mut refs: Vec<&dyn muda::IsMenuItem> = vec![&add_scripts_i, &terminal_sep, &terminal_i];
             if scripts.dir.is_some() {
                 refs.push(&reveal_scripts_i);
                 refs.push(&remove_scripts_i);

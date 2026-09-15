@@ -123,7 +123,7 @@ fn layout_geometry_and_saved_workspaces_do_not_compound_scale() {
         [30.0, 40.0, 264.0, 400.0],
     );
     dock.dock_master(id, Side::Right, 0);
-    let snapshot = Layout::capture(&dock, true, false, false, None);
+    let snapshot = Layout::capture(&dock, true, false, false, None, None);
     let theme = Theme::default();
     let baseline = layout::layout_master(
         dock.master(id).unwrap(),
@@ -164,7 +164,7 @@ fn layout_geometry_and_saved_workspaces_do_not_compound_scale() {
             close(a.x1, scaled.x1);
             close(a.y1, scaled.y1);
         }
-        let saved = Layout::capture(&dock, true, false, false, None);
+        let saved = Layout::capture(&dock, true, false, false, None, None);
         assert_eq!(saved.masters, snapshot.masters);
     }
 }
