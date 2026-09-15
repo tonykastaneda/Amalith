@@ -641,10 +641,12 @@ impl App {
                     KeyCode::KeyA if self.alt_down => self.select_all_artboard(),
                     KeyCode::KeyA => self.select_all(),
                     // File I/O: open, save, save-as, import SVG.
-                    // ⌘N always opens a new tab in the active pane (a
-                    // chooser tab — the user picks what goes in it, same
-                    // as any other pane; see `App::mux_new_tab`).
-                    KeyCode::KeyN => self.mux_new_tab(),
+                    // ⌘N jumps straight into creating a new document
+                    // (`App::mux_new_document`); ⌘T is the plain "new
+                    // blank tab" version — same chooser tab the pane's
+                    // own "+" button adds (`App::mux_new_tab`).
+                    KeyCode::KeyN => self.mux_new_document(),
+                    KeyCode::KeyT => self.mux_new_tab(),
                     // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
                     KeyCode::KeyO if self.shift_down => self.create_outlines(),
                     KeyCode::KeyO => self.open_document(),

@@ -582,7 +582,13 @@ enum MenuAction {
     /// save the layout on the way out.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     Quit,
+    /// ⌘N — jumps straight into creating a new document: adds a fresh
+    /// tab to the focused pane and opens the quick New Document overlay
+    /// over it. `NewTab` (⌘T) is the plain "give me a blank tab" version.
     New,
+    /// ⌘T — a fresh chooser tab in the focused pane, same as the pane's
+    /// own "+" button; the user picks what goes in it.
+    NewTab,
     /// File ▸ Create New Split ▸ Split Right — same action as prefix+D.
     SplitRight,
     /// File ▸ Create New Split ▸ Split Down — same action as prefix+⇧D.
@@ -4593,7 +4599,8 @@ impl App {
                 ));
                 self.request_main_redraw();
             }
-            MenuAction::New => self.mux_new_tab(),
+            MenuAction::New => self.mux_new_document(),
+            MenuAction::NewTab => self.mux_new_tab(),
             MenuAction::SplitRight => self.mux_split_right(),
             MenuAction::SplitDown => self.mux_split_down(),
             MenuAction::Open => self.open_document(),
@@ -9012,7 +9019,7 @@ impl ApplicationHandler for App {
             .map(|(w, h)| (w as f64, h as f64))
             .unwrap_or((1280.0, 800.0));
         let attrs = Window::default_attributes()
-            .with_title("Amalith Ver. Alpha")
+            .with_title("Amalith v.0.0.1")
             .with_window_icon(appicon::window_icon())
             .with_inner_size({
                 let (w, h) = crate::metrics::main_min_size();

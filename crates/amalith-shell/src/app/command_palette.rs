@@ -39,6 +39,7 @@ impl App {
 
         let menu: &[(&str, &str, MenuAction)] = &[
             ("New", "File", MenuAction::New),
+            ("New Tab", "File", MenuAction::NewTab),
             ("Split Right", "File", MenuAction::SplitRight),
             ("Split Down", "File", MenuAction::SplitDown),
             ("Close Active Tab", "File", MenuAction::Close),

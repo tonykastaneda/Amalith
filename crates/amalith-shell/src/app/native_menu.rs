@@ -97,6 +97,7 @@ impl NativeMenu {
         }
 
         let new_i = reg(&mut items, mk("New", sup, Code::KeyN), MenuAction::New);
+        let new_tab_i = reg(&mut items, mk("New Tab", sup, Code::KeyT), MenuAction::NewTab);
         let open_i = reg(&mut items, mk("Open…", sup, Code::KeyO), MenuAction::Open);
         // No native accelerator shown — the real shortcut is the
         // prefix+D / prefix+⇧D two-key sequence (Preferences ▸ Keyboard
@@ -437,7 +438,7 @@ impl NativeMenu {
         let file_sep4 = sep();
         let file_sep5 = sep();
         let file_sep6 = sep();
-        let mut file_items: Vec<&dyn muda::IsMenuItem> = vec![&new_i];
+        let mut file_items: Vec<&dyn muda::IsMenuItem> = vec![&new_i, &new_tab_i];
         if !hide_wip {
             file_items.push(&new_from_template_wip);
         }
