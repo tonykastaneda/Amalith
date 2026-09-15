@@ -124,6 +124,7 @@ pub fn key_char(code: KeyCode) -> Option<char> {
         Digit8 => '8', Digit9 => '9',
         Backslash => '\\',
         ArrowLeft => '←', ArrowRight => '→', ArrowUp => '↑', ArrowDown => '↓',
+        Tab => '⇥',
         _ => return None,
     })
 }
@@ -143,6 +144,7 @@ pub fn key_code(c: char) -> Option<KeyCode> {
         '8' => Digit8, '9' => Digit9,
         '\\' => Backslash,
         '←' => ArrowLeft, '→' => ArrowRight, '↑' => ArrowUp, '↓' => ArrowDown,
+        '⇥' => Tab,
         _ => return None,
     })
 }
@@ -193,10 +195,24 @@ pub enum PrefAction {
     LeadingIncrease,
     BaselineShiftUp,
     BaselineShiftDown,
+    /// Enters pane-prefix mode (⌘B by default) — the next key is one of
+    /// the prefix sub-commands below instead of a normal shortcut.
+    MuxPrefix,
+    /// Prefix sub-command: split the focused pane side by side.
+    MuxSplitRight,
+    /// Prefix sub-command: split the focused pane, stacked.
+    MuxSplitDown,
+    /// Prefix sub-command: move focus to the next pane.
+    MuxFocusNext,
+    /// Prefix sub-command: move focus to the previous pane.
+    MuxFocusPrev,
+    /// Prefix sub-command: close the active pane's active tab (same
+    /// action ⌘W always performs too — see `App::mux_close_active_tab`).
+    MuxCloseTab,
 }
 
 impl PrefAction {
-    pub const ALL: [PrefAction; 10] = [
+    pub const ALL: [PrefAction; 16] = [
         PrefAction::SwapPaints,
         PrefAction::DefaultPaints,
         PrefAction::Place,
@@ -207,7 +223,19 @@ impl PrefAction {
         PrefAction::LeadingIncrease,
         PrefAction::BaselineShiftUp,
         PrefAction::BaselineShiftDown,
+        // Kept last — `prefs.rs`'s Keyboard page renders everything from
+        // here on as its own "Pane Multiplexer" group (see `paint_keyboard`).
+        PrefAction::MuxPrefix,
+        PrefAction::MuxSplitRight,
+        PrefAction::MuxSplitDown,
+        PrefAction::MuxFocusNext,
+        PrefAction::MuxFocusPrev,
+        PrefAction::MuxCloseTab,
     ];
+    /// How many trailing entries of `ALL` are the pane-multiplexer group —
+    /// `paint_keyboard` splits its list on this instead of a hardcoded
+    /// index, so it can't drift out of sync with `ALL` above.
+    pub const MUX_GROUP_LEN: usize = 6;
 
     pub fn label(self) -> &'static str {
         match self {
@@ -221,6 +249,12 @@ impl PrefAction {
             PrefAction::LeadingIncrease => "Increase Leading",
             PrefAction::BaselineShiftUp => "Baseline Shift Up",
             PrefAction::BaselineShiftDown => "Baseline Shift Down",
+            PrefAction::MuxPrefix => "Pane Prefix Key",
+            PrefAction::MuxSplitRight => "Split Right",
+            PrefAction::MuxSplitDown => "Split Down",
+            PrefAction::MuxFocusNext => "Focus Next Pane",
+            PrefAction::MuxFocusPrev => "Focus Previous Pane",
+            PrefAction::MuxCloseTab => "Close Active Tab",
         }
     }
 
@@ -243,6 +277,24 @@ impl PrefAction {
             PrefAction::LeadingIncrease => KeyChord::with_alt(KeyCode::ArrowDown),
             PrefAction::BaselineShiftUp => KeyChord::with_shift_alt(KeyCode::ArrowUp),
             PrefAction::BaselineShiftDown => KeyChord::with_shift_alt(KeyCode::ArrowDown),
+            // Only ever read while `Multiplexer::prefix` is false — never
+            // collides with the sub-commands below despite sharing the
+            // same `action_keys` table (see `App::mux_key`).
+            PrefAction::MuxPrefix => KeyChord {
+                code: KeyCode::KeyB,
+                shift: false,
+                cmd: true,
+                alt: false,
+            },
+            // Only ever read while `Multiplexer::prefix` is true, so this
+            // plain "D" can't collide with `DefaultPaints`'s own plain
+            // "D" above — the two are never in scope on the same
+            // keystroke (see `App::mux_key`).
+            PrefAction::MuxSplitRight => KeyChord::plain(KeyCode::KeyD),
+            PrefAction::MuxSplitDown => KeyChord::with_shift(KeyCode::KeyD),
+            PrefAction::MuxFocusNext => KeyChord::plain(KeyCode::Tab),
+            PrefAction::MuxFocusPrev => KeyChord::with_shift(KeyCode::Tab),
+            PrefAction::MuxCloseTab => KeyChord::plain(KeyCode::KeyX),
         })
     }
 }
@@ -995,8 +1047,16 @@ impl Prefs {
         self.reset_keys = button(scene, tcx, theme, px, oy + metric_h() - ui_px(40.0), "Reset", false);
 
         let n_tools = Tool::ALL.len();
-        let n_acts = PrefAction::ALL.len();
-        let content_h = n_tools as f64 * ui_px(27.0) + ui_px(26.0) + n_acts as f64 * ui_px(27.0) + ui_px(6.0);
+        // `PrefAction::ALL`'s trailing `MUX_GROUP_LEN` entries render as
+        // their own "Pane Multiplexer" group, split out below — see the
+        // comment on `PrefAction::ALL` for why the split is index-based
+        // instead of duplicating a list of which actions belong where.
+        let n_general_acts = PrefAction::ALL.len() - PrefAction::MUX_GROUP_LEN;
+        let n_mux_acts = PrefAction::MUX_GROUP_LEN;
+        let content_h = n_tools as f64 * ui_px(27.0)
+            + ui_px(26.0) + n_general_acts as f64 * ui_px(27.0)
+            + ui_px(26.0) + n_mux_acts as f64 * ui_px(27.0)
+            + ui_px(6.0);
         let view = Rect::new(px - ui_px(6.0), oy + ui_px(128.0), px + row_w + ui_px(14.0), oy + metric_h() - ui_px(52.0));
         let sc = self.begin_scroll_list(scene, theme, view, content_h);
 
@@ -1016,7 +1076,22 @@ impl Prefs {
         y += ui_px(6.0);
         tcx.draw(scene, "Colours", 13.0, theme.text, px, y + ui_px(4.0));
         y += ui_px(20.0);
-        for i in 0..n_acts {
+        for i in 0..n_general_acts {
+            kb_row(
+                scene, tcx, theme, px, row_w, y,
+                PrefAction::ALL[i].label(),
+                self.working.action_keys[i],
+                recording,
+                BindTarget::Action(i),
+                view,
+                &mut self.bind_rows,
+            );
+            y += ui_px(27.0);
+        }
+        y += ui_px(6.0);
+        tcx.draw(scene, "Pane Multiplexer", 13.0, theme.text, px, y + ui_px(4.0));
+        y += ui_px(20.0);
+        for i in n_general_acts..PrefAction::ALL.len() {
             kb_row(
                 scene, tcx, theme, px, row_w, y,
                 PrefAction::ALL[i].label(),
@@ -1629,7 +1704,13 @@ mod scale_tests {
                 | PrefAction::LeadingDecrease
                 | PrefAction::LeadingIncrease
                 | PrefAction::BaselineShiftUp
-                | PrefAction::BaselineShiftDown => true,
+                | PrefAction::BaselineShiftDown
+                | PrefAction::MuxPrefix
+                | PrefAction::MuxSplitRight
+                | PrefAction::MuxSplitDown
+                | PrefAction::MuxFocusNext
+                | PrefAction::MuxFocusPrev
+                | PrefAction::MuxCloseTab => true,
             }
         }
         for a in PrefAction::ALL {

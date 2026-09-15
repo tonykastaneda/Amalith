@@ -41,6 +41,7 @@ mod offset_dialog;
 mod render;
 mod shape_dialog;
 mod terminal;
+mod multiplexer;
 mod thumbnails;
 mod width_tool;
 mod xform_dialog;
@@ -218,6 +219,24 @@ enum Drag {
     /// fine-grained into-group/new-group preview against every *other*
     /// Master keeps computing each move.
     DraggingPanel { panel: PanelId, master: u64, grab: Vec2 },
+    /// A press on a pane's own tab chip — same click-vs-drag threshold
+    /// distinction as `PendingPanelDrag`: released before the threshold,
+    /// it's a plain click (switch to that tab); past it, escalates to
+    /// `DraggingTab`. No floating window, unlike the panel system's own
+    /// drag — every tab must live in a pane, so the "drag" is just an
+    /// in-scene ghost and a highlighted drop target, resolved entirely
+    /// in `App`'s own data (see `App::mux_move_tab`).
+    PendingTabDrag {
+        pane: crate::multiplexer::PaneId,
+        tab_id: crate::multiplexer::TabId,
+        press: Point,
+    },
+    /// Live-dragging tab `tab_id` out of `from_pane`. `App::mux_tab_drop_preview`
+    /// tracks which pane (if any) it would land in if released now.
+    DraggingTab {
+        from_pane: crate::multiplexer::PaneId,
+        tab_id: crate::multiplexer::TabId,
+    },
     /// Dragging a Layers-panel row to restack / reparent the current
     /// selection. `body` is the panel's scrolled body rect (screen px) so
     /// the drop target can be recomputed as the pointer moves; the drag
@@ -564,6 +583,10 @@ enum MenuAction {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     Quit,
     New,
+    /// File ▸ Create New Split ▸ Split Right — same action as prefix+D.
+    SplitRight,
+    /// File ▸ Create New Split ▸ Split Down — same action as prefix+⇧D.
+    SplitDown,
     Open,
     Close,
     CloseAll,
@@ -871,6 +894,7 @@ struct PanelMenu {
 /// parked here and swapped in on a tab switch via
 /// [`App::take_active_doc`] / [`App::load_active_doc`].
 struct Doc {
+    id: ObjectId,
     editor: Editor,
     file_path: Option<std::path::PathBuf>,
     asset_store: amalith_io::AssetStore,
@@ -909,6 +933,7 @@ struct Doc {
 impl Doc {
     fn new(editor: Editor) -> Self {
         Self {
+            id: ObjectId::new(),
             editor,
             file_path: None,
             asset_store: amalith_io::AssetStore::new(),
@@ -1098,8 +1123,15 @@ struct App {
     /// placeholder while that document is the live one on `doc`.
     tabs: Vec<Doc>,
     active: usize,
-    /// The New Document modal, when open.
+    /// The New Document modal, when open. Superseded by `quick_newdoc` as
+    /// the default entry point (see its own doc comment) — kept, not
+    /// deleted, in case a full-featured dialog is wanted again later.
     newdoc: Option<newdoc::NewDocForm>,
+    /// The compact, command-palette-styled "New Document" overlay —
+    /// Name/Width/Height/Color Mode only (no bleed/raster/preview/art
+    /// gallery), drawn centered on whichever pane spawned it rather than
+    /// taking over the whole window. See `docs/canvas-panes.md`.
+    quick_newdoc: Option<multiplexer::QuickNewDoc>,
     /// The exact-size shape dialog (Rectangle / Ellipse / Polygon / Star),
     /// opened by a plain click with a primitive tool. Free-floating like
     /// the colour picker; never a dockable panel.
@@ -1227,6 +1259,7 @@ struct App {
     /// The embedded PTY terminal pane (File ▸ Scripts ▸ Terminal), when
     /// open. `None` = closed; no PTY/thread alive.
     terminal: Option<terminal::TerminalPane>,
+    mux: multiplexer::State,
     /// Terminal pane's share of the canvas width (0.0-1.0). Kept even
     /// while `terminal` is `None` so it's remembered across close/reopen
     /// and app restart.
@@ -1273,6 +1306,12 @@ struct App {
     /// Set on boot / new / open — fit the view to the artboards once the
     /// canvas viewport size is known.
     pending_fit: bool,
+    /// `true` until the user actually creates or opens a document — the
+    /// construction-time `doc`/`tabs[0]` are an internal placeholder, not
+    /// a real open document (the app boots straight into the chooser, see
+    /// `App::new`), so the tab strip shouldn't show them as one. Cleared
+    /// in `add_doc`, which every "new"/"open" path funnels through.
+    boot_empty: bool,
     /// Direction of the last scrubby-zoom move: `>= 0` = in (＋ cursor),
     /// `< 0` = out (－ cursor).
     zoom_sign: i8,
@@ -1413,6 +1452,11 @@ struct App {
     /// Live drop cue while dragging a panel over a Master's body — which
     /// Master, and exactly where (⇐ `updateDropTarget`'s panel branch).
     panel_drop_preview: Option<(u64, PanelDrop)>,
+    /// Live drop cue while dragging a tab (`Drag::DraggingTab`) — which
+    /// pane it would land in and at what tab index, if released now, or
+    /// `None` outside every pane (nowhere to land — no floating tabs, see
+    /// the module doc comment on `crate::multiplexer`).
+    mux_tab_drop_preview: Option<(crate::multiplexer::PaneId, usize)>,
     /// Live drop cue while dragging a whole Group over a Master's body.
     group_drop_preview: Option<(u64, GroupDrop)>,
     /// Live dock-edge/seam target while dragging a Master (⇐
@@ -1541,7 +1585,7 @@ impl App {
             terminal_split = saved.terminal_split.unwrap_or(terminal_split);
         }
         dock.ensure_next_id();
-        Self {
+        let mut app = Self {
             context: RenderContext::new(),
             export_renderer: None,
             hosts: HashMap::new(),
@@ -1561,6 +1605,7 @@ impl App {
             active: 0,
             // Boot into the Home screen; New Document opens from there.
             newdoc: None,
+            quick_newdoc: None,
             shape_dialog: None,
             shape_params: shapedialog::Params::default(),
             pending_shape_dialog: None,
@@ -1612,6 +1657,7 @@ impl App {
             },
             scripts: crate::scripts::load(),
             terminal: None,
+            mux: Default::default(),
             terminal_split,
             keymaps: crate::keymap::load(),
             prefs: None,
@@ -1630,6 +1676,7 @@ impl App {
             tool_flyout_press: None,
             tool_flyout: None,
             pending_fit: true,
+            boot_empty: true,
             zoom_sign: 1,
             stroke_popover: false,
             clipboard: None,
@@ -1686,6 +1733,7 @@ impl App {
             space_down: false,
             drag: Drag::None,
             panel_drop_preview: None,
+            mux_tab_drop_preview: None,
             group_drop_preview: None,
             master_dock_preview: None,
             pending_master_undock: None,
@@ -1717,7 +1765,17 @@ impl App {
             last_caret_drawn: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_menu: None,
-        }
+        };
+        // The fancy Home/Welcome screen is hidden, not deleted (its own
+        // code and fields are untouched) — the app boots straight into a
+        // single multiplexer pane showing the chooser instead, so every
+        // pane in the app (the first one included) offers the exact same
+        // "Create New Document / Open Terminal / recent docs" menu. See
+        // `docs/canvas-panes.md`. `mux_begin` itself absorbs `self.home`
+        // (same as pressing the prefix key while Home is still showing),
+        // so this needs no other change to `Home`'s own fields/logic.
+        app.mux_begin();
+        app
     }
 
     fn main_window(&self) -> Option<&Arc<Window>> {
@@ -2082,12 +2140,22 @@ impl App {
         self.sync_color_mode_menu();
     }
 
-    /// Open `doc` in a new tab and make it active.
+    /// Open `doc` in a new tab and make it active. The very first call
+    /// (`boot_empty`) instead replaces the construction-time placeholder
+    /// in place — there's no earlier real tab to keep around, so pushing
+    /// a second slot would leave a phantom "Untitled" tab the user never
+    /// created (see `boot_empty`'s doc comment).
     fn add_doc(&mut self, doc: Doc) {
-        self.tabs[self.active] = self.take_active_doc();
-        self.tabs.push(Doc::placeholder());
-        self.active = self.tabs.len() - 1;
+        self.mux_save_view();
+        if self.boot_empty {
+            self.boot_empty = false;
+        } else {
+            self.tabs[self.active] = self.take_active_doc();
+            self.tabs.push(Doc::placeholder());
+            self.active = self.tabs.len() - 1;
+        }
         self.load_active_doc(doc);
+        self.mux_bind_document();
         self.pending_fit = true;
         self.request_main_redraw();
     }
@@ -2095,13 +2163,18 @@ impl App {
     /// Switch the live document to tab `i`.
     fn switch_to(&mut self, i: usize) {
         self.close_symbol_name_dialog(false);
-        if i == self.active || i >= self.tabs.len() {
+        if i >= self.tabs.len() { return; }
+        if i == self.active {
+            self.mux_bind_document();
+            self.request_main_redraw();
             return;
         }
+        self.mux_save_view();
         self.tabs[self.active] = self.take_active_doc();
         let doc = std::mem::replace(&mut self.tabs[i], Doc::placeholder());
         self.active = i;
         self.load_active_doc(doc);
+        self.mux_bind_document();
         self.request_main_redraw();
     }
 
@@ -2114,7 +2187,7 @@ impl App {
         if self.tabs.len() == 1 {
             self.load_active_doc(Doc::placeholder());
             self.doc.selection.clear();
-            if self.settings.home_on_last_close {
+            if self.settings.home_on_last_close && !self.mux.model.enabled() {
                 self.home = home::Home::new(recent::load());
             }
             self.request_main_redraw();
@@ -4271,7 +4344,12 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Open the New Document modal (⌘N / File ▸ New).
+    /// Opens the old full-page New Document modal. No longer wired to any
+    /// menu/shortcut/chooser action — `open_quick_new_doc` (in
+    /// `app/multiplexer.rs`) is the default entry point now (see its own
+    /// doc comment). Kept, not deleted, in case a full-featured dialog is
+    /// wanted again later.
+    #[allow(dead_code)]
     fn open_new_doc(&mut self) {
         let mut form = newdoc::NewDocForm::default();
         // From Home there's no open document — Create should fill the parked
@@ -4397,17 +4475,16 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Build a fresh document from the modal's form and swap it in.
-    fn create_from_form(&mut self) {
-        let Some(form) = self.newdoc.as_mut() else {
-            return;
-        };
-        form.commit_focus();
+    /// Builds a fresh `Editor` from `form`'s settings — artboards tiled in
+    /// a row centred on the origin, one starter layer, history cleared so
+    /// ⌘Z can't undo past a document with no artboards at all. Shared by
+    /// the old full-page dialog (`create_from_form`) and the compact
+    /// "New Document" overlay (`App::create_from_quick_form`, in
+    /// `app/multiplexer.rs`). `Err` when width/height come out ≤ 0.
+    fn build_editor_from_form(form: &newdoc::NewDocForm) -> Result<Editor, String> {
         let (wpx, hpx) = (form.width_px(), form.height_px());
         if wpx <= 0.0 || hpx <= 0.0 {
-            self.doc.io_error = Some("Width and height must be greater than zero.".into());
-            self.request_main_redraw();
-            return;
+            return Err("Width and height must be greater than zero.".into());
         }
         let name = {
             let n = form.name.text();
@@ -4422,13 +4499,6 @@ impl App {
         let mut doc = amalith_core::Document::new(&name);
         doc.settings.default_unit = unit;
         doc.settings.color_mode = color_mode;
-        // A fresh CMYK document opens the Color panel on CMYK sliders,
-        // matching Illustrator — the panel itself stays free to switch
-        // afterward; this only seeds where a *new* document starts.
-        self.color_mode = match color_mode {
-            amalith_core::ColorMode::Cmyk => panels::ColorSpace::Cmyk,
-            amalith_core::ColorMode::Rgb => panels::ColorSpace::Rgb,
-        };
         doc.settings.raster_effects = raster;
         doc.settings.preview_mode = preview;
         doc.settings.bleed = amalith_core::Bleed {
@@ -4455,9 +4525,36 @@ impl App {
             name: "Layer 1".into(),
             index: None,
         });
-        // The starter artboards + layer are the baseline, not undo steps —
-        // otherwise ⌘Z walks back to a document with no artboards at all.
         editor.clear_history();
+        Ok(editor)
+    }
+
+    /// A fresh document's color mode also seeds the Color panel — matching
+    /// Illustrator, a new CMYK document opens the panel on CMYK sliders.
+    /// The panel itself stays free to switch afterward.
+    fn sync_color_panel_to(&mut self, color_mode: amalith_core::ColorMode) {
+        self.color_mode = match color_mode {
+            amalith_core::ColorMode::Cmyk => panels::ColorSpace::Cmyk,
+            amalith_core::ColorMode::Rgb => panels::ColorSpace::Rgb,
+        };
+    }
+
+    /// Build a fresh document from the modal's form and swap it in.
+    fn create_from_form(&mut self) {
+        let Some(form) = self.newdoc.as_mut() else {
+            return;
+        };
+        form.commit_focus();
+        let color_mode = form.color_mode;
+        let editor = match Self::build_editor_from_form(form) {
+            Ok(e) => e,
+            Err(msg) => {
+                self.doc.io_error = Some(msg);
+                self.request_main_redraw();
+                return;
+            }
+        };
+        self.sync_color_panel_to(color_mode);
 
         let boot = self.newdoc.as_ref().is_some_and(|f| f.boot);
         self.newdoc = None;
@@ -4466,6 +4563,7 @@ impl App {
         if boot {
             // No open document yet: fill the parked placeholder tab.
             self.load_active_doc(Doc::new(editor));
+            self.mux_bind_document();
             self.pending_fit = true;
             self.request_main_redraw();
         } else {
@@ -4495,9 +4593,14 @@ impl App {
                 ));
                 self.request_main_redraw();
             }
-            MenuAction::New => self.open_new_doc(),
+            MenuAction::New => self.mux_new_tab(),
+            MenuAction::SplitRight => self.mux_split_right(),
+            MenuAction::SplitDown => self.mux_split_down(),
             MenuAction::Open => self.open_document(),
-            MenuAction::Close => self.request_close_tab(self.active),
+            // Reuses the existing "Close" menu item/accelerator (⌘W) —
+            // always closes the active tab in the active pane now (same
+            // action prefix+X performs); see `App::mux_close_active_tab`.
+            MenuAction::Close => self.mux_close_active_tab(),
             MenuAction::CloseAll => self.request_close_all_tabs(),
             MenuAction::Revert => self.revert_document(),
             MenuAction::Save => self.save_document(false),
@@ -5244,9 +5347,53 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Pick an SVG file and import it into a brand-new document — the
+    /// pane chooser's "Import" card. Same shape as `import_from_home`,
+    /// but routes the result through `add_doc` so it adds a new tab
+    /// instead of clobbering whichever document is currently active —
+    /// safe to call from any pane, not just an empty boot.
+    fn import_svg_as_new_doc(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file() else {
+            return;
+        };
+        let svg = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(err) => {
+                self.doc.io_error = Some(format!("Import failed: {err}"));
+                self.request_main_redraw();
+                return;
+            }
+        };
+        let form = newdoc::NewDocForm::default();
+        let (wpx, hpx) = (form.width_px(), form.height_px());
+        let mut doc = amalith_core::Document::new("Untitled");
+        doc.settings.default_unit = form.unit;
+        doc.settings.color_mode = form.color_mode;
+        let mut editor = Editor::new(doc);
+        let _ = editor.execute(Command::CreateArtboard {
+            name: "Artboard 1".into(),
+            rect: amalith_core::Rect::new(-wpx / 2.0, -hpx / 2.0, wpx / 2.0, hpx / 2.0),
+            index: None,
+        });
+        let _ = editor.execute(Command::CreateLayer { name: "Layer 1".into(), index: None });
+        editor.clear_history();
+        match editor.copy_from_svg(&svg) {
+            Ok(()) => match editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
+                Ok(ids) => {
+                    let mut doc = Doc::new(editor);
+                    doc.selection = ids;
+                    self.add_doc(doc);
+                }
+                Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+            },
+            Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+        }
+        self.request_main_redraw();
+    }
+
     /// File ▸ Place… / ⌘⇧P — pick a PNG or JPEG and drop it at the view centre.
     pub(in crate::app) fn place_image_dialog(&mut self) {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -5459,7 +5606,7 @@ impl App {
 
     /// Drop a raster onto the document at the pointer.
     fn on_drop_file(&mut self, path: std::path::PathBuf) {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return;
         }
         // Try to decode anything we can read (PNG/JPEG, and on macOS HEIC
@@ -5527,7 +5674,7 @@ impl App {
         if drops.is_empty() {
             return;
         }
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return;
         }
         let fallback = self.doc_point(self.canvas_viewport().center());
@@ -7282,6 +7429,7 @@ impl App {
     /// docked rails, minus the embedded terminal pane's share when one is
     /// open (see `terminal_rect`, which gets the rest of the span).
     fn canvas_x_span(&self) -> (f64, f64) {
+        if let Some(r) = self.mux_document_rect() { return (r.x0, r.x1); }
         let (left, right) = self.canvas_full_x_span();
         let right = if self.terminal_visible() {
             right - (right - left).max(0.0) * self.terminal_split as f64
@@ -7298,6 +7446,7 @@ impl App {
     /// before `self.terminal` is set; everyone else should use
     /// `terminal_rect` instead.
     fn terminal_pane_bounds(&self) -> Rect {
+        if let Some(r) = self.mux_focused_rect() { return r; }
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, full_right) = self.canvas_full_x_span();
         let doc_right = full_right - (full_right - left).max(0.0) * self.terminal_split as f64;
@@ -7326,6 +7475,7 @@ impl App {
     /// The full canvas region between the rails, below the chrome —
     /// before any ruler inset. The ruler strips live in its top / left.
     fn canvas_region(&self) -> Rect {
+        if let Some(r) = self.mux_document_rect() { return r; }
         let (_, h) = self.main_logical_size().unwrap_or((1280.0, 800.0));
         let (left, right) = self.canvas_x_span();
         Rect::new(left, metric_chrome_top(), right, h)
@@ -7335,6 +7485,7 @@ impl App {
     /// by the ruler strips when they're on.
     fn canvas_viewport(&self) -> Rect {
         let r = self.canvas_region();
+        if r.width() <= 0.0 || r.height() <= 0.0 { return r; }
         let i = if self.rulers { rulers::THICK } else { 0.0 };
         Rect::new(r.x0 + i, r.y0 + i, r.x1, r.y1)
     }
@@ -7976,7 +8127,7 @@ impl App {
         let viewport = Rect::new(0.0, 0.0, vw, vh);
         let bounds = match dock_side {
             Some((side, _)) => {
-                let (left_x, right_x) = self.canvas_x_span();
+                let (left_x, right_x) = if self.mux.model.enabled() {self.canvas_full_x_span()} else {self.canvas_x_span()};
                 layout::docked_flyout_rect(row, side, (left_x, right_x), viewport)
             }
             None => layout::flyout_rect(row, viewport),
@@ -8429,7 +8580,7 @@ impl App {
         let theme = self.theme.clone();
         let bespoke = self.is_float_only(master);
         let h = if m.is_tools() {
-            layout::metric_header_h() + panels::tools::natural_height(width, self.settings.hide_wip_tools)
+            layout::metric_header_h() + ui_px(12.0) + panels::tools::natural_height(width, self.settings.hide_wip_tools)
         } else {
             layout::natural_height(&m, width, &theme, &mut |p| self.tab_width(p), bespoke)
         };
@@ -8685,6 +8836,7 @@ impl ApplicationHandler for App {
         }
         self.drain_lod();
         self.trace_tick();
+        self.mux_tick();
         self.terminal_tick();
         if std::mem::take(&mut self.pending_export) {
             self.spawn_export_dialog(event_loop);
@@ -8818,7 +8970,7 @@ impl ApplicationHandler for App {
         // An open terminal pane's PTY output arrives on a background
         // thread with no wake channel either — poll it at a responsive
         // typing cadence while the pane is open.
-        if self.terminal.is_some() {
+        if self.terminal.is_some() || !self.mux.terminals.is_empty() {
             wake = merge(wake, Duration::from_millis(16));
         }
 
@@ -8835,6 +8987,7 @@ impl ApplicationHandler for App {
         // A "closed" (hidden) terminal pane's shell is still alive in the
         // background — actually quitting Amalith is the one time that
         // has to end for real, not just visually hide again.
+        self.mux_exit_terminals();
         self.exit_terminal();
         self.save_layout();
     }

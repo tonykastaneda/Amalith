@@ -137,7 +137,7 @@ fn image_contain(scene: &mut Scene, img: &ImageData, dst: Rect) {
     image_into(scene, img, Rect::from_origin_size((cx, cy), (dw, dh)));
 }
 
-fn display_name(path: &Path) -> String {
+pub(crate) fn display_name(path: &Path) -> String {
     path.file_stem()
         .or_else(|| path.file_name())
         .map(|s| s.to_string_lossy().into_owned())

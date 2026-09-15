@@ -286,7 +286,7 @@ impl NewDocForm {
         }
     }
 
-    fn portrait(&self) -> bool {
+    pub(crate) fn portrait(&self) -> bool {
         parse(&self.height.text(), self.unit) >= parse(&self.width.text(), self.unit)
     }
 
@@ -330,22 +330,22 @@ fn fmt(v: f64) -> String {
 pub fn unit_label(u: Unit) -> &'static str {
     u.label()
 }
-const UNITS: [Unit; 5] = [Unit::Px, Unit::Pt, Unit::In, Unit::Mm, Unit::Cm];
-const COLORS: [ColorMode; 2] = [ColorMode::Cmyk, ColorMode::Rgb];
-const RASTERS: [RasterEffects; 3] = [
+pub(crate) const UNITS: [Unit; 5] = [Unit::Px, Unit::Pt, Unit::In, Unit::Mm, Unit::Cm];
+pub(crate) const COLORS: [ColorMode; 2] = [ColorMode::Cmyk, ColorMode::Rgb];
+pub(crate) const RASTERS: [RasterEffects; 3] = [
     RasterEffects::Screen72,
     RasterEffects::Medium150,
     RasterEffects::High300,
 ];
 const PREVIEWS: [PreviewMode; 3] = [PreviewMode::Default, PreviewMode::Pixel, PreviewMode::Overprint];
 
-fn color_label(c: ColorMode) -> &'static str {
+pub(crate) fn color_label(c: ColorMode) -> &'static str {
     match c {
         ColorMode::Cmyk => "CMYK Color",
         ColorMode::Rgb => "RGB Color",
     }
 }
-fn raster_label(r: RasterEffects) -> &'static str {
+pub(crate) fn raster_label(r: RasterEffects) -> &'static str {
     match r {
         RasterEffects::Screen72 => "Screen (72 ppi)",
         RasterEffects::Medium150 => "Medium (150 ppi)",
@@ -976,4 +976,3 @@ fn draw_check(
     }
     text.draw(scene, label, 12.0, theme.text_dim, box_.x1 + ui_px(8.0), r.y0 + ui_px(14.0));
 }
-

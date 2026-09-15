@@ -1097,7 +1097,7 @@ impl App {
     }
 
     pub(in crate::app) fn xform_field_at_pointer(&mut self) -> Option<panels::transform::XformField> {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return None;
         }
         if self.pointer_win == self.main_id
@@ -1117,7 +1117,7 @@ impl App {
 
     /// The Gradient-panel numeric under the pointer, for scroll-to-nudge.
     pub(in crate::app) fn gradient_field_at_pointer(&mut self) -> Option<panels::gradient::GradField> {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return None;
         }
         let kind = self.target_gradient().map(|(_, g)| g.kind);
@@ -1480,7 +1480,7 @@ impl App {
     }
 
     pub(in crate::app) fn align_spacing_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return false;
         }
         let Some(pbody) = self.active_panel_body_at_pointer(PanelKind::Align) else {
@@ -1597,7 +1597,7 @@ impl App {
     }
 
     pub(in crate::app) fn opacity_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return false;
         }
         if self.pointer_win == self.main_id
@@ -1664,7 +1664,7 @@ impl App {
     }
 
     pub(in crate::app) fn stroke_weight_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
             return false;
         }
         if self.pointer_win == self.main_id

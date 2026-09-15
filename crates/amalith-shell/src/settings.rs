@@ -261,6 +261,12 @@ pub fn action_name(a: PrefAction) -> &'static str {
         PrefAction::LeadingIncrease => "LeadingIncrease",
         PrefAction::BaselineShiftUp => "BaselineShiftUp",
         PrefAction::BaselineShiftDown => "BaselineShiftDown",
+        PrefAction::MuxPrefix => "MuxPrefix",
+        PrefAction::MuxSplitRight => "MuxSplitRight",
+        PrefAction::MuxSplitDown => "MuxSplitDown",
+        PrefAction::MuxFocusNext => "MuxFocusNext",
+        PrefAction::MuxFocusPrev => "MuxFocusPrev",
+        PrefAction::MuxCloseTab => "MuxCloseTab",
     }
 }
 

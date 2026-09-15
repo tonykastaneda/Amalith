@@ -67,6 +67,13 @@ pub fn content_rect(rect: Rect) -> Rect {
 /// duration of one frame.
 pub struct TerminalPaintArgs<'a> {
     pub rect: Rect,
+    /// Paint the pane's own tab-styled header (title/× within `rect`
+    /// itself)? `true` for the old standalone terminal split (where this
+    /// *is* the pane's only header); `false` when embedded as one tab of
+    /// a multiplexer pane, which already paints its own tab strip above
+    /// every tab it holds — a second header here would be redundant. See
+    /// `docs/canvas-panes.md`.
+    pub header: bool,
     pub focused: bool,
     pub term: &'a alacritty_terminal::Term<alacritty_terminal::event::VoidListener>,
     pub font: &'a vello::peniko::FontData,
@@ -139,42 +146,45 @@ fn indexed_rgb(idx: u8) -> Color {
 pub fn paint(scene: &mut Scene, args: &TerminalPaintArgs<'_>, theme: &Theme, text: &mut TextContext) {
     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.panel_bg, None, &args.rect);
 
-    let header = header_rect(args.rect);
-    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.app_bar, None, &header);
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        theme.border,
-        None,
-        &Rect::new(header.x0, header.y1 - 1.0, header.x1, header.y1),
-    );
-    // A single "tab" styled exactly like a document tab (`layout_tabs` in
-    // `app/mod.rs`) — same fill/underline/× treatment — so the terminal
-    // pane's header reads as the same kind of UI as the canvas's own tab
-    // strip instead of a bespoke toolbar.
-    let (whole, close) = tab_rect(text, args.rect);
-    if args.focused {
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &whole);
+    let content = if args.header {
+        let header = header_rect(args.rect);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.app_bar, None, &header);
         scene.fill(
             Fill::NonZero,
             Affine::IDENTITY,
-            theme.accent,
+            theme.border,
             None,
-            &Rect::new(whole.x0, whole.y1 - ui_px(2.0), whole.x1, whole.y1),
+            &Rect::new(header.x0, header.y1 - 1.0, header.x1, header.y1),
         );
-    }
-    let ink = if args.focused { theme.text } else { theme.text_dim };
-    let xc = close.center();
-    let mut xg = BezPath::new();
-    xg.move_to((xc.x - ui_px(4.0), xc.y - ui_px(4.0)));
-    xg.line_to((xc.x + ui_px(4.0), xc.y + ui_px(4.0)));
-    xg.move_to((xc.x + ui_px(4.0), xc.y - ui_px(4.0)));
-    xg.line_to((xc.x - ui_px(4.0), xc.y + ui_px(4.0)));
-    scene.stroke(&Stroke::new(ui_px(1.3)), Affine::IDENTITY, ink, None, &xg);
-    let baseline = header.y0 + header.height() * 0.5 + TERMINAL_FONT_SIZE as f64 * 0.34;
-    text.draw(scene, TAB_LABEL, 12.6, ink, close.x1 + ui_px(6.0), baseline);
-
-    let content = content_rect(args.rect);
+        // A single "tab" styled exactly like a document tab (`layout_tabs`
+        // in `app/mod.rs`) — same fill/underline/× treatment — so the
+        // terminal pane's header reads as the same kind of UI as the
+        // canvas's own tab strip instead of a bespoke toolbar.
+        let (whole, close) = tab_rect(text, args.rect);
+        if args.focused {
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &whole);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                theme.accent,
+                None,
+                &Rect::new(whole.x0, whole.y1 - ui_px(2.0), whole.x1, whole.y1),
+            );
+        }
+        let ink = if args.focused { theme.text } else { theme.text_dim };
+        let xc = close.center();
+        let mut xg = BezPath::new();
+        xg.move_to((xc.x - ui_px(4.0), xc.y - ui_px(4.0)));
+        xg.line_to((xc.x + ui_px(4.0), xc.y + ui_px(4.0)));
+        xg.move_to((xc.x + ui_px(4.0), xc.y - ui_px(4.0)));
+        xg.line_to((xc.x - ui_px(4.0), xc.y + ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.3)), Affine::IDENTITY, ink, None, &xg);
+        let baseline = header.y0 + header.height() * 0.5 + TERMINAL_FONT_SIZE as f64 * 0.34;
+        text.draw(scene, TAB_LABEL, 12.6, ink, close.x1 + ui_px(6.0), baseline);
+        content_rect(args.rect)
+    } else {
+        args.rect
+    };
 
     let Ok(font_ref) = skrifa::FontRef::from_index(args.font.data.as_ref(), args.font.index) else {
         return;

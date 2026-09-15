@@ -98,7 +98,12 @@ impl NativeMenu {
 
         let new_i = reg(&mut items, mk("New", sup, Code::KeyN), MenuAction::New);
         let open_i = reg(&mut items, mk("Open…", sup, Code::KeyO), MenuAction::Open);
-        let close_i = reg(&mut items, mk("Close", sup, Code::KeyW), MenuAction::Close);
+        // No native accelerator shown — the real shortcut is the
+        // prefix+D / prefix+⇧D two-key sequence (Preferences ▸ Keyboard
+        // ▸ Pane Multiplexer), not expressible as a single one.
+        let split_right_i = reg(&mut items, MenuItem::new("Split Right", true, None), MenuAction::SplitRight);
+        let split_down_i = reg(&mut items, MenuItem::new("Split Down", true, None), MenuAction::SplitDown);
+        let close_i = reg(&mut items, mk("Close Active Tab", sup, Code::KeyW), MenuAction::Close);
         let close_all_i = reg(&mut items, mk("Close All", sup_alt, Code::KeyW), MenuAction::CloseAll);
         let save_i = reg(&mut items, mk("Save", sup, Code::KeyS), MenuAction::Save);
         let save_as_i = reg(&mut items, mk("Save As…", sup_shift, Code::KeyS), MenuAction::SaveAs);
@@ -419,6 +424,8 @@ impl NativeMenu {
         let export_menu = Submenu::with_items("Export", true, &export_items).expect("export menu");
         let color_mode_menu = Submenu::with_items("Document Color Mode", true, &[&cmyk_i, &rgb_i])
             .expect("color mode menu");
+        let split_menu = Submenu::with_items("Create New Split", true, &[&split_right_i, &split_down_i])
+            .expect("split menu");
         let new_from_template_wip = wip("New from Template…");
         let package_wip = wip("Package…");
         let document_setup_wip = wip("Document Setup…");
@@ -435,6 +442,7 @@ impl NativeMenu {
             file_items.push(&new_from_template_wip);
         }
         file_items.push(&open_i);
+        file_items.push(&split_menu);
         file_items.push(&file_sep1);
         file_items.push(&close_i);
         file_items.push(&close_all_i);
@@ -465,7 +473,7 @@ impl NativeMenu {
         // Edit ▸ Paste in Front/Back — real backend (`paste_clipboard`,
         // same as the ⌘F/⌘B shortcuts already run).
         let paste_front_i = reg(&mut items, mk("Paste in Front", sup, Code::KeyF), MenuAction::PasteInFront);
-        let paste_back_i = reg(&mut items, mk("Paste in Back", sup, Code::KeyB), MenuAction::PasteInBack);
+        let paste_back_i = reg(&mut items, MenuItem::new("Paste in Back", true, None), MenuAction::PasteInBack);
         let paste_in_place_wip = wip("Paste in Place");
         let paste_all_artboards_wip = wip("Paste on All Artboards");
         let paste_without_format_wip = wip("Paste without Formatting");

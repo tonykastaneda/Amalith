@@ -159,6 +159,8 @@ pub(in crate::app) fn paint_main(
     // The embedded terminal pane's paint args, or `None` when it's
     // closed — see `App::terminal_paint_args`.
     terminal_pane: Option<crate::terminal_paint::TerminalPaintArgs<'_>>,
+    mux_back: &Scene,
+    mux_front: &Scene,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -184,6 +186,7 @@ pub(in crate::app) fn paint_main(
     // Still needed here (not from `viewport`) for `tab_bar_rect`/flyout
     // positioning below, which span the full un-ruler-inset canvas width.
     let right_x = terminal_pane.as_ref().map(|t| t.rect.x0).unwrap_or(right_x);
+    crate::multiplexer::append_overlay(scene, mux_back);
     canvas::paint(
         scene,
         trace_canvas.unwrap_or(doc),
@@ -616,6 +619,7 @@ pub(in crate::app) fn paint_main(
         scene.stroke(&Stroke::new(2.0), ID, theme.accent, None, &pane_rect.inset(-1.0));
     }
 
+    crate::multiplexer::append_overlay(scene, mux_front);
     let ctx = panels::Ctx {
         image_trace,
         theme,

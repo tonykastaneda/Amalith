@@ -30,6 +30,7 @@ impl App {
 
         self.warm_images();
         self.warm_symbol_thumbnails();
+        let (mux_back, mux_front) = self.mux_scenes();
         self.prune_isolation();
         let iso_root = self.isolation_root();
         let Some(host) = self.hosts.get_mut(&id) else {
@@ -505,7 +506,17 @@ impl App {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
         });
-        let tab_labels: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+        // The global document tab strip is retired now that every pane
+        // paints its own (see `app/multiplexer.rs`'s `mux_scenes`) —
+        // mux is permanently enabled (see `App::new`), so this is always
+        // empty; kept rather than deleted in case a non-mux fallback is
+        // ever wanted again. Also covers the earlier `boot_empty` case
+        // (nothing created/opened yet) for free.
+        let tab_labels: Vec<String> = if self.boot_empty || self.mux.model.enabled() {
+            Vec::new()
+        } else {
+            (0..self.tabs.len()).map(|i| self.tab_label(i)).collect()
+        };
         let active_tab = self.active;
         let blend_spine_hover = self
             .blend_spine_hover()
@@ -609,11 +620,12 @@ impl App {
         // could (and did) drift from this; passed in explicitly now so
         // there's only one implementation, not two kept in lockstep by hand.
         let canvas_viewport_now = self.canvas_viewport();
-        let terminal_visible = self.terminal_visible();
+        let terminal_visible = self.terminal_visible() && !self.mux.model.enabled();
         let terminal_rect_now = terminal_visible.then(|| self.terminal_pane_bounds());
         let terminal_pane_arg = self.terminal.as_ref().filter(|_| terminal_visible).map(|pane| {
             crate::terminal_paint::TerminalPaintArgs {
                 rect: terminal_rect_now.expect("terminal_rect_now is Some whenever terminal_visible"),
+                header: true,
                 focused: pane.focused,
                 term: &pane.term,
                 font: &pane.font,
@@ -737,6 +749,8 @@ impl App {
                 self.image_trace.canvas.as_ref(),
                 symbols_drop_hover,
                 terminal_pane_arg,
+                &mux_back,
+                &mux_front,
             ),
             Role::Floating(fid) => {
                 let exists = self.dock.master(fid).is_some();
@@ -1272,6 +1286,7 @@ impl App {
     /// is redrawn every frame.
     fn paint_rulers(&mut self) {
         let region = self.canvas_region();
+        if region.width() <= 0.0 || region.height() <= 0.0 { return; }
         let v = self.doc.view;
         // Ruler `0` sits at the active artboard's top-left (Illustrator
         // default): the artboard last worked in, else the first one, else

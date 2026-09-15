@@ -12,6 +12,7 @@ use super::super::{opt_bar_rect, App, metric_app_bar_h, metric_opt_bar_h};
 
 impl App {
     pub(in crate::app) fn on_pinch(&mut self, delta: f64) {
+        if self.mux.model.enabled() && !self.canvas_viewport().contains(self.pointer) {return;}
         self.doc.view.zoom_at(1.0 + delta, self.pointer);
         self.request_main_redraw();
     }
@@ -54,6 +55,11 @@ impl App {
                 p.page_scroll.wheel(dy);
                 self.request_main_redraw();
             }
+            return;
+        }
+        // The compact New Document overlay has no scrollable content —
+        // just swallow the wheel so it doesn't reach the pane underneath.
+        if self.quick_newdoc.is_some() {
             return;
         }
         // The New Document modal scrolls its content. Clamp against the
@@ -146,6 +152,8 @@ impl App {
                 return;
             }
         }
+        if self.mux_scroll(dy) {return;}
+        if self.mux.model.enabled() && !self.canvas_viewport().contains(self.pointer) { return; }
         if self.cmd_down {
             // ⌘ + scroll → zoom at the cursor. Wins over Transform-field
             // nudge so zoom still works with the pointer over the panel.

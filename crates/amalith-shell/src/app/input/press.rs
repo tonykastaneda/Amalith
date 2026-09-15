@@ -610,6 +610,21 @@ impl App {
                     return;
                 }
 
+                // The compact New Document overlay is modal within its
+                // pane — a click outside the card closes it (matching a
+                // command-palette-style overlay), one inside routes to
+                // `quick_newdoc_press`.
+                if self.quick_newdoc.is_some() {
+                    let inside = self.quick_newdoc_hit_bounds().is_some_and(|c| c.contains(self.pointer));
+                    if inside {
+                        self.quick_newdoc_press();
+                    } else {
+                        self.quick_newdoc = None;
+                        self.request_main_redraw();
+                    }
+                    return;
+                }
+
                 // The New Document modal is, well, modal.
                 if let Some(form) = &self.newdoc {
                     let lay = newdoc::layout(Rect::new(0.0, 0.0, w, h), form.scroll);
@@ -641,7 +656,7 @@ impl App {
                         .as_mut()
                         .map(|hm| hm.on_press(self.pointer.to_vec2(), double));
                     match hit {
-                        Some(home::Hit::NewDocument) => self.open_new_doc(),
+                        Some(home::Hit::NewDocument) => self.open_quick_new_doc(),
                         Some(home::Hit::Youtube) => about::open_url(home::YOUTUBE_URL),
                         Some(home::Hit::News) => about::open_url(home::NEWS_URL),
                         Some(home::Hit::Docs) => about::open_url(home::DOCS_URL),
@@ -752,13 +767,28 @@ impl App {
 
                 // The document-tab strip (only across the canvas x-span —
                 // the rails' own tab strips share this y band and must
-                // still be reachable for panel tear-off).
-                {
+                // still be reachable for panel tear-off). Retired while
+                // mux is enabled (always, post-boot) — every pane paints
+                // its own tab strip in this exact band now instead (see
+                // `app/multiplexer.rs`'s `mux_press`), so this whole
+                // block must not even run then: it used to swallow the
+                // click unconditionally (`return` at the bottom) even
+                // when nothing in its own now-always-empty `labels`
+                // matched, silently eating every per-pane tab-strip
+                // click before `mux_press` ever saw it.
+                if !self.mux.model.enabled() {
                     let (left_x, right_x) = self.canvas_x_span();
                     let strip = tab_bar_rect(left_x, right_x);
                     if self.picker.is_none() && strip.contains(self.pointer) {
-                        let labels: Vec<String> =
-                            (0..self.tabs.len()).map(|i| self.tab_label(i)).collect();
+                        // Keep in lockstep with `render/mod.rs`'s own
+                        // guard — the global strip is retired while mux
+                        // is enabled (always, post-boot; see there), so
+                        // nothing painted there should be clickable either.
+                        let labels: Vec<String> = if self.boot_empty || self.mux.model.enabled() {
+                            Vec::new()
+                        } else {
+                            (0..self.tabs.len()).map(|i| self.tab_label(i)).collect()
+                        };
                         for (i, (whole, close)) in
                             layout_tabs(&mut self.text, &labels, strip).into_iter().enumerate()
                         {
@@ -846,6 +876,7 @@ impl App {
                         return;
                     }
                 }
+                if self.mux_press() { return; }
                 if let Some(term_rect) = self.terminal_rect() {
                     let edge_rect = Rect::new(
                         term_rect.x0 - metric_rail_edge(),
@@ -1747,6 +1778,13 @@ impl App {
                     (sz.height as f64 / scale).max(1.0),
                 );
                 let rect = Rect::new(0.0, 0.0, wl, hl);
+                let frame = self.build_master_frame(fid, rect);
+                // Header controls and the Tools grip take priority over the
+                // generous edge-resize hit zones on narrow floating panels.
+                if frame.header.contains(self.pointer) {
+                    self.handle_master_press(event_loop, id, fid, &frame, double);
+                    return;
+                }
                 // A floating Master's own left/right edge resizes it too
                 // (it's the same width control a docked one has, just
                 // drawn at the window's own edge instead of the rail's

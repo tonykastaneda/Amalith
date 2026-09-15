@@ -291,8 +291,13 @@ impl App {
             self.export_key(&event);
             return;
         }
-        // The New Document modal, then an inline rename, each
-        // swallow all keyboard input while active.
+        // The compact New Document overlay, the old New Document modal,
+        // then an inline rename, each swallow all keyboard input while
+        // active.
+        if self.quick_newdoc.is_some() {
+            self.quick_newdoc_key(&event);
+            return;
+        }
         if self.newdoc.is_some() {
             self.newdoc_key(&event);
             return;
@@ -304,7 +309,7 @@ impl App {
         }
         // The Home screen swallows tool keys, but lets ⌘-shortcuts
         // (⌘N, ⌘O, …) through to their handlers below.
-        if self.home.is_some() && !self.cmd_down {
+        if self.home.is_some() && !self.cmd_down && !self.mux.model.prefix {
             return;
         }
         // An open font dropdown takes keys to type-to-filter.
@@ -399,6 +404,7 @@ impl App {
         if self.stroke_flyout_edit.is_some() && self.stroke_flyout_key(&event) {
             return;
         }
+        if self.mux_key(&event) { return; }
         // The terminal pane gets first crack at every key while focused —
         // including control characters and Escape (a real PTY needs both,
         // e.g. for vim), so this deliberately does NOT reuse the
@@ -611,7 +617,7 @@ impl App {
                     // clipboard for SVG (paste from Illustrator etc.).
                     KeyCode::KeyV => self.paste_clipboard(PastePlace::Plain),
                     KeyCode::KeyF => self.paste_clipboard(PastePlace::InFront),
-                    KeyCode::KeyB => self.paste_clipboard(PastePlace::Behind),
+
                     // ⌘⇧D — View ▸ Show Transparency Grid; plain ⌘D is
                     // Transform Again, below.
                     KeyCode::KeyD if self.shift_down => self.toggle_transparency_grid(),
@@ -635,7 +641,10 @@ impl App {
                     KeyCode::KeyA if self.alt_down => self.select_all_artboard(),
                     KeyCode::KeyA => self.select_all(),
                     // File I/O: open, save, save-as, import SVG.
-                    KeyCode::KeyN => self.open_new_doc(),
+                    // ⌘N always opens a new tab in the active pane (a
+                    // chooser tab — the user picks what goes in it, same
+                    // as any other pane; see `App::mux_new_tab`).
+                    KeyCode::KeyN => self.mux_new_tab(),
                     // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
                     KeyCode::KeyO if self.shift_down => self.create_outlines(),
                     KeyCode::KeyO => self.open_document(),
@@ -643,7 +652,10 @@ impl App {
                     KeyCode::KeyI if self.shift_down => self.import_svg(),
                     // ⌘⌥E — Export for Screens.
                     KeyCode::KeyE if self.alt_down => self.request_export_dialog(),
-                    KeyCode::KeyW => self.request_close_tab(self.active),
+                    // ⌘W always closes the active tab in the active pane
+                    // (same action prefix+X performs) — see
+                    // `App::mux_close_active_tab`.
+                    KeyCode::KeyW => self.mux_close_active_tab(),
                     // ⌘R — show / hide the canvas rulers.
                     KeyCode::KeyR if !self.shift_down => {
                         self.rulers = !self.rulers;
@@ -837,6 +849,16 @@ impl App {
             }),
             prefs::PrefAction::BaselineShiftUp => self.edit_text_style(|s| s.baseline_shift += 2.0),
             prefs::PrefAction::BaselineShiftDown => self.edit_text_style(|s| s.baseline_shift -= 2.0),
+            // Never reaches here: only meaningful while `Multiplexer::prefix`
+            // is entered/active, which `App::mux_key` intercepts and
+            // dispatches directly, before the general `action_keys` scan
+            // that leads to `run_pref_action` ever runs.
+            prefs::PrefAction::MuxPrefix
+            | prefs::PrefAction::MuxSplitRight
+            | prefs::PrefAction::MuxSplitDown
+            | prefs::PrefAction::MuxFocusNext
+            | prefs::PrefAction::MuxFocusPrev
+            | prefs::PrefAction::MuxCloseTab => {}
         }
     }
 }

@@ -117,15 +117,10 @@ fn resolve_terminal_font(text: &mut TextContext) -> Option<(vello::peniko::FontD
 
 impl App {
     /// File ▸ Scripts ▸ Terminal — a single toggle. Spawns a shell if
-    /// none exists yet, re-shows one that's alive-but-hidden, or hides a
-    /// currently-shown one (never kills it — that's the header's own
-    /// "Exit" button).
+    /// File ▸ Scripts ▸ Terminal — starts (or resumes) a terminal tab in
+    /// the focused pane. See `App::open_mux_terminal`.
     pub(in crate::app) fn toggle_terminal(&mut self) {
-        match &self.terminal {
-            None => self.open_terminal(),
-            Some(pane) if !pane.visible => self.show_terminal(),
-            Some(_) => self.hide_terminal(),
-        }
+        self.open_mux_terminal();
     }
 
     /// Whether the pane is currently shown (PTY alive *and* not hidden) —
@@ -136,7 +131,7 @@ impl App {
         self.terminal.as_ref().is_some_and(|t| t.visible)
     }
 
-    fn open_terminal(&mut self) {
+    pub(super) fn open_terminal(&mut self) {
         let Some((font, cell_w, cell_h, ascent)) = resolve_terminal_font(&mut self.text) else {
             return;
         };
@@ -212,28 +207,6 @@ impl App {
             cell_h,
             ascent,
         });
-        self.request_main_redraw();
-    }
-
-    /// Header's × ("Close"): hides the pane, canvas goes back to full
-    /// width, but the shell keeps running in the background — reopening
-    /// (menu/⌘K) reconnects to it exactly where it was left, same as
-    /// every other docked panel's show/hide toggle. Only `exit_terminal`
-    /// or quitting Amalith actually ends the shell.
-    fn hide_terminal(&mut self) {
-        if let Some(pane) = &mut self.terminal {
-            pane.visible = false;
-            pane.focused = false;
-        }
-        self.request_main_redraw();
-    }
-
-    /// Re-shows a hidden-but-still-running pane.
-    fn show_terminal(&mut self) {
-        if let Some(pane) = &mut self.terminal {
-            pane.visible = true;
-            pane.focused = true;
-        }
         self.request_main_redraw();
     }
 
@@ -323,6 +296,7 @@ impl App {
     /// grab zone — drives the resize cursor in `update_canvas_cursor`, and
     /// mirrors the same `edge_rect` the press handler hit-tests against.
     pub(in crate::app) fn over_terminal_divider(&self) -> bool {
+        if self.mux.model.enabled() { return false; }
         let Some(term_rect) = self.terminal_rect() else { return false };
         let edge_rect = Rect::new(term_rect.x0 - metric_rail_edge(), term_rect.y0, term_rect.x0, term_rect.y1);
         edge_rect.inflate(metric_grab_slop() + 1.0, 0.0).contains(self.pointer)
@@ -343,4 +317,17 @@ impl App {
         }
         ratio.clamp(min_terminal_ratio, max_terminal_ratio)
     }
+}
+
+impl TerminalPane {
+    pub(super) fn tick_and_resize(&mut self, bounds: Rect) {
+        while let Ok(bytes) = self.rx.try_recv() { self.processor.advance(&mut self.term, &bytes); }
+        let columns = (bounds.width() / self.cell_w).floor().max(1.) as usize;
+        let lines = ((bounds.height() - crate::terminal_paint::header_rect(bounds).height()) / self.cell_h).floor().max(1.) as usize;
+        if columns != self.term.columns() || lines != self.term.screen_lines() {
+            self.term.resize(TermDims {columns,lines});
+            let _ = self.master.resize(PtySize {rows:lines as u16,cols:columns as u16,pixel_width:0,pixel_height:0});
+        }
+    }
+    pub(super) fn terminate(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); }
 }

@@ -75,6 +75,21 @@ pub fn paint_master(
             master.layout == MasterLayout::Tabs
         };
         paint_chevrons(scene, frame.chevron, theme.text_dim, chevron_state);
+        if master.is_tools() {
+            // A Tools master has no groups (⇐ `Master::new`'s `Vec::new()`
+            // for `MasterKind::Tools`), so it never gets `paint_group_handle`'s
+            // own grab pill — this is its stand-in, at the same spot
+            // (bottom of the header) and same accent-colored pill style,
+            // so every panel's grab handle reads the same regardless of
+            // kind, instead of a plain gray double-line that doesn't pick
+            // up the theme like every other one does.
+            let c = frame.header.center();
+            let y = frame.header.y1 - ui_px(6.0);
+            let w = ui_px(20.0).min(frame.header.width() * 0.5);
+            let h = 2.5;
+            let pill = Rect::new(c.x - w * 0.5, y - h * 0.5, c.x + w * 0.5, y + h * 0.5).to_rounded_rect(h * 0.5);
+            scene.fill(Fill::NonZero, ID, theme.accent, None, &pill);
+        }
         scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.border, None, &frame.header);
     }
 

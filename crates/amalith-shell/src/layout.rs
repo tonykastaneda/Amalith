@@ -170,10 +170,12 @@ pub fn layout_master(
     bespoke: bool,
     fill_last: bool,
 ) -> MasterFrame {
-    let header_h = if bespoke { 0.0 } else { metric_header_h() };
+    let header_h = if bespoke { 0.0 } else { metric_header_h() + if master.is_tools() { ui_px(12.0) } else { 0.0 } };
     let header = Rect::new(bounds.x0, bounds.y0, bounds.x1, (bounds.y0 + header_h).min(bounds.y1));
-    let close = Rect::new(header.x0, header.y0, header.x0 + ui_px(26.0), header.y1);
-    let chevron = Rect::new(header.x1 - ui_px(26.0), header.y0, header.x1, header.y1);
+    let control_w = ui_px(26.0).min(header.width() * 0.5);
+    let control_bottom = if master.is_tools() { (header.y0 + metric_header_h()).min(header.y1) } else { header.y1 };
+    let close = Rect::new(header.x0, header.y0, header.x0 + control_w, control_bottom);
+    let chevron = Rect::new(header.x1 - control_w, header.y0, header.x1, control_bottom);
     let body = Rect::new(bounds.x0, header.y1, bounds.x1, bounds.y1);
     let compact = bounds.width() < metric_compact_breakpoint();
 
@@ -535,6 +537,21 @@ mod tests {
             dock: None,
             rect: [0.0, 0.0, 280.0, 400.0],
             scroll: 0.0,
+        }
+    }
+
+    #[test]
+    fn narrow_tools_header_has_a_drag_grip_outside_its_buttons() {
+        let mut dock = crate::dock::DockModel::new();
+        let id = dock.spawn_tools_master([0., 0., 40., 500.]);
+        for width in [40., 56., 80.] {
+            let frame = layout_master(dock.master(id).unwrap(), Rect::new(0., 0., width, 500.), &theme(), &mut w80, false, true);
+            let grip = Point::new(frame.header.center().x, frame.header.y1 - ui_px(6.));
+            assert!(frame.header.contains(grip));
+            assert!(!frame.close.contains(grip));
+            assert!(!frame.chevron.contains(grip));
+            assert!(frame.close.x1 <= frame.chevron.x0);
+            assert_eq!(frame.body.y0, frame.header.y1);
         }
     }
 

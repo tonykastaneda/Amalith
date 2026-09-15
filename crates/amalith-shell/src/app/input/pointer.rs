@@ -23,11 +23,13 @@ impl App {
             return;
         }
         // Home screen: hovering a tile / Open / Import highlights it.
-        if let Some(hm) = &mut self.home {
-            if hm.on_move(self.pointer.to_vec2()) {
-                self.request_main_redraw();
+        if self.pointer_win == self.main_id && matches!(self.drag, Drag::None) {
+            if let Some(hm) = &mut self.home {
+                if hm.on_move(self.pointer.to_vec2()) {
+                    self.request_main_redraw();
+                }
+                return;
             }
-            return;
         }
         self.update_canvas_cursor();
         self.refresh_tooltip();
@@ -808,7 +810,63 @@ impl App {
                     }
                 }
             }
+            Drag::PendingTabDrag { pane, tab_id, press } => {
+                if (self.pointer - *press).hypot() > metric_drag_threshold() {
+                    self.drag = Drag::DraggingTab { from_pane: *pane, tab_id: *tab_id };
+                }
+            }
             _ => {}
+        }
+        // Live drop-target preview while dragging a tab — no OS window
+        // involved (unlike the panel system's own drag), so the ghost
+        // and highlight are just painted straight into the scene every
+        // frame from wherever `self.pointer` and this preview land.
+        if let Drag::DraggingTab { from_pane, tab_id } = self.drag {
+            let hovered = self
+                .mux
+                .model
+                .layout(self.mux_area())
+                .into_iter()
+                .find(|(_, r)| r.contains(self.pointer))
+                .map(|(p, r)| (p.id, r));
+            let next = hovered.map(|(id, r)| {
+                let raw = self.mux_tab_drop_index(id, r);
+                // `mux_tab_drop_index` reads the chip layout as it
+                // currently is, dragged tab included — when hovering the
+                // pane the tab is being dragged *from*, that still counts
+                // it as an item, so a raw index past it needs pulling
+                // back by one to land on the position it'll actually
+                // occupy once it's removed from ahead of that point (⇐
+                // `Multiplexer::reorder_tab`'s "final index in the
+                // resulting same-length list" contract).
+                let idx = if id == from_pane {
+                    let from_idx = self
+                        .mux
+                        .model
+                        .pane(from_pane)
+                        .and_then(|p| p.tabs.iter().position(|t| t.id == tab_id))
+                        .unwrap_or(raw);
+                    if raw > from_idx { raw - 1 } else { raw }
+                } else {
+                    raw
+                };
+                (id, idx)
+            });
+            if next != self.mux_tab_drop_preview {
+                self.mux_tab_drop_preview = next;
+            }
+            self.request_main_redraw();
+        }
+        // Hover feedback for the chooser's action cards, its recent-
+        // documents rows, and each pane's own tab-strip "+" button all
+        // live in paint (`mux_scenes` reads `self.pointer` fresh every
+        // frame) — nothing else marks a frame dirty for a plain hover,
+        // so without this those highlights never actually appear except
+        // by accident, whenever some unrelated redraw happens to land.
+        // Cheap to redraw on every move here: GPU-rendered, and only
+        // while the pointer is actually over the canvas area.
+        else if self.mux.model.enabled() && self.mux_area().contains(self.pointer) {
+            self.request_main_redraw();
         }
 
         // Move a floating Master by locking it to the cursor: the cursor's
@@ -1632,6 +1690,19 @@ impl App {
                     self.doc.anchor_sel.clear();
                 }
                 self.marquee = None;
+                self.request_main_redraw();
+            }
+            // Released before the drag threshold: a plain click — switch
+            // to that tab (⇐ `App::mux_press`'s deferred chip click).
+            Drag::PendingTabDrag { pane, tab_id, .. } => {
+                if let Some(idx) = self.mux.model.pane(pane).and_then(|p| p.tabs.iter().position(|t| t.id == tab_id)) {
+                    self.mux_switch_tab(pane, idx);
+                }
+            }
+            Drag::DraggingTab { from_pane, tab_id } => {
+                if let Some((target, idx)) = self.mux_tab_drop_preview.take() {
+                    self.mux_move_tab(from_pane, tab_id, target, idx);
+                }
                 self.request_main_redraw();
             }
             // Released before the drag threshold: a plain click. A Tabs

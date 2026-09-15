@@ -91,3 +91,5 @@ pub use layout::{GroupArea, GroupDrop, MasterFrame, PanelDrop, PanelRow, TabRect
 pub use theme::Theme;
 
 pub mod window_dpi;
+
+pub mod multiplexer;
