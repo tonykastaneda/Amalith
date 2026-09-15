@@ -1,0 +1,23 @@
+[package]
+name = "amalith-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless ExtendScript compatibility shim: runs Illustrator .jsx automation scripts against Amalith's document engine."
+
+[dependencies]
+amalith-core = { path = "../amalith-core" }
+amalith-commands = { path = "../amalith-commands" }
+amalith-io = { path = "../amalith-io" }
+boa_engine = "0.22"
+boa_gc = "0.22"
+kurbo.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+# Headless glyph shaping/outlining for TextFrame.createOutline() — pinned to
+# match amalith-shell's versions so ported outline code needs no changes.
+parley = { version = "0.11", features = ["system"] }
+skrifa = "0.44"
+
+[dev-dependencies]
+tempfile = "3"
