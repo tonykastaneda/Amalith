@@ -246,54 +246,90 @@ fn paint_chooser_section_header(scene: &mut Scene, text: &mut TextContext, theme
     );
 }
 
-fn icon_plus(scene: &mut Scene, c: Point, radius: f64, color: Color) {
-    let s = Stroke::new(ui_px(2.0));
-    scene.stroke(&s, Affine::IDENTITY, color, None, &vello::kurbo::Line::new((c.x - radius, c.y), (c.x + radius, c.y)));
-    scene.stroke(&s, Affine::IDENTITY, color, None, &vello::kurbo::Line::new((c.x, c.y - radius), (c.x, c.y + radius)));
+/// The chooser uses a deliberately spare, unboxed glyph set. These actions
+/// sit in a launcher list, so enclosing every mark in a document or terminal
+/// outline made the left edge visually heavy.
+const CHOOSER_ICON_STROKE: f64 = 1.75;
+
+fn stroke_icon(scene: &mut Scene, color: Color, width: f64, shape: &impl vello::kurbo::Shape) {
+    scene.stroke(
+        &Stroke::new(ui_px(width))
+            .with_caps(vello::kurbo::Cap::Round)
+            .with_join(vello::kurbo::Join::Round),
+        Affine::IDENTITY,
+        color,
+        None,
+        shape,
+    );
 }
+
+/// Compact bare plus used by the pane tab-strip and the new-document action.
+fn icon_plus(scene: &mut Scene, c: Point, radius: f64, color: Color) {
+    stroke_icon(
+        scene,
+        color,
+        CHOOSER_ICON_STROKE,
+        &vello::kurbo::Line::new((c.x - radius, c.y), (c.x + radius, c.y)),
+    );
+    stroke_icon(
+        scene,
+        color,
+        CHOOSER_ICON_STROKE,
+        &vello::kurbo::Line::new((c.x, c.y - radius), (c.x, c.y + radius)),
+    );
+}
+
 fn icon_terminal(scene: &mut Scene, box_: Rect, color: Color) {
-    scene.stroke(&Stroke::new(ui_px(1.6)), Affine::IDENTITY, color, None, &box_.to_rounded_rect(ui_px(3.0)));
-    let (cx, cy) = (box_.x0 + box_.width() * 0.3, box_.center().y);
-    let a = box_.height() * 0.17;
+    let frame = Rect::new(
+        box_.x0 + box_.width() * 0.06,
+        box_.y0 + box_.height() * 0.11,
+        box_.x1 - box_.width() * 0.06,
+        box_.y1 - box_.height() * 0.11,
+    );
+    stroke_icon(scene, color, CHOOSER_ICON_STROKE, &frame.to_rounded_rect(ui_px(2.5)));
+    let divider_y = frame.y0 + frame.height() * 0.29;
+    stroke_icon(
+        scene,
+        color,
+        CHOOSER_ICON_STROKE,
+        &vello::kurbo::Line::new((frame.x0 + ui_px(1.9), divider_y), (frame.x1 - ui_px(1.9), divider_y)),
+    );
+    let (cx, cy) = (frame.x0 + frame.width() * 0.34, frame.y0 + frame.height() * 0.65);
+    let a = frame.height() * 0.14;
     let mut chevron = BezPath::new();
     chevron.move_to((cx - a, cy - a));
     chevron.line_to((cx + a, cy));
     chevron.line_to((cx - a, cy + a));
-    scene.stroke(&Stroke::new(ui_px(1.8)), Affine::IDENTITY, color, None, &chevron);
-    let uy = cy + a * 0.9;
-    scene.stroke(
-        &Stroke::new(ui_px(1.8)), Affine::IDENTITY, color, None,
-        &vello::kurbo::Line::new((cx + a * 0.5, uy), (cx + a * 1.8, uy)),
+    stroke_icon(scene, color, CHOOSER_ICON_STROKE, &chevron);
+    let uy = cy + a * 1.15;
+    stroke_icon(
+        scene,
+        color,
+        CHOOSER_ICON_STROKE,
+        &vello::kurbo::Line::new((cx + a * 0.85, uy), (cx + a * 2.75, uy)),
     );
 }
 fn icon_import(scene: &mut Scene, box_: Rect, color: Color) {
-    let fold = box_.width().min(box_.height()) * 0.3;
-    let mut page = BezPath::new();
-    page.move_to((box_.x0, box_.y0));
-    page.line_to((box_.x1 - fold, box_.y0));
-    page.line_to((box_.x1, box_.y0 + fold));
-    page.line_to((box_.x1, box_.y1));
-    page.line_to((box_.x0, box_.y1));
-    page.close_path();
-    scene.stroke(&Stroke::new(ui_px(1.6)), Affine::IDENTITY, color, None, &page);
-    let mut corner = BezPath::new();
-    corner.move_to((box_.x1 - fold, box_.y0));
-    corner.line_to((box_.x1 - fold, box_.y0 + fold));
-    corner.line_to((box_.x1, box_.y0 + fold));
-    scene.stroke(&Stroke::new(ui_px(1.2)), Affine::IDENTITY, color, None, &corner);
-    let cx = box_.x0 + box_.width() * 0.38;
-    let (ay0, ay1) = (box_.y0 + box_.height() * 0.38, box_.y1 - box_.height() * 0.2);
-    let arm = box_.width() * 0.12;
+    let cx = box_.center().x;
+    let (ay0, ay1) = (box_.y0 + box_.height() * 0.13, box_.y0 + box_.height() * 0.58);
+    let arm = box_.width() * 0.17;
     let mut arrow = BezPath::new();
     arrow.move_to((cx, ay0));
     arrow.line_to((cx, ay1));
     arrow.move_to((cx - arm, ay1 - arm));
     arrow.line_to((cx, ay1));
     arrow.line_to((cx + arm, ay1 - arm));
-    scene.stroke(&Stroke::new(ui_px(1.6)), Affine::IDENTITY, color, None, &arrow);
+    stroke_icon(scene, color, CHOOSER_ICON_STROKE, &arrow);
+    let tray_y = box_.y1 - box_.height() * 0.14;
+    let tray_half = box_.width() * 0.36;
+    let tray_rise = box_.height() * 0.16;
+    let mut tray = BezPath::new();
+    tray.move_to((cx - tray_half, tray_y - tray_rise));
+    tray.line_to((cx - tray_half, tray_y));
+    tray.line_to((cx + tray_half, tray_y));
+    tray.line_to((cx + tray_half, tray_y - tray_rise));
+    stroke_icon(scene, color, CHOOSER_ICON_STROKE, &tray);
 }
-/// Paints one action card: border, icon, label. `kind` selects the icon
-/// (0 = New Document, 1 = Terminal, 2 = Import).
 /// Paints one "GET STARTED" action row: icon, label, hover highlight —
 /// a plain list row, not a bordered box (see the module doc comment for
 /// why). `kind` selects the icon (0 = New Document, 1 = Terminal,
