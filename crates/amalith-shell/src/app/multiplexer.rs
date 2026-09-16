@@ -5,7 +5,7 @@
 //! `crate::multiplexer` for the tree-level invariants (a pane always has
 //! at least one tab; closing the last one is the only way a pane closes).
 use super::*;
-use crate::multiplexer::{Multiplexer, PaneId, TabContent};
+use crate::multiplexer::{Multiplexer, PaneId, Splitter, TabContent};
 
 #[derive(Default)]
 pub(super) struct State {
@@ -1277,9 +1277,31 @@ impl App {
         }
         self.mux.model.enabled() && on_chooser
     }
+    /// The splitter (if any) under the pointer right now — checked ahead
+    /// of pane content on press, and every frame for the resize-cursor
+    /// hover in `App::update_canvas_cursor`.
+    pub(in crate::app) fn mux_splitter_at(&self, p: Point) -> Option<Splitter> {
+        if !self.mux.model.enabled() {
+            return None;
+        }
+        self.mux
+            .model
+            .splitters(self.mux_area())
+            .into_iter()
+            .find(|s| s.rect.contains(p))
+    }
     pub(super) fn mux_press(&mut self) -> bool {
         if !self.mux.model.enabled() {
             return false;
+        }
+        if let Some(s) = self.mux_splitter_at(self.pointer) {
+            self.drag = Drag::MuxSplitDrag {
+                left_leaf: s.left_leaf,
+                right_leaf: s.right_leaf,
+                axis: s.axis,
+                bounding: s.bounding,
+            };
+            return true;
         }
         let Some((pane, r)) = self
             .mux
@@ -1686,6 +1708,22 @@ impl App {
                         &r.inset(-1.),
                     );
                 }
+            }
+            // A thin line in each split's gap — otherwise the resize
+            // drag (`App::mux_press`/`mux_splitter_at`) has no visible
+            // affordance at all.
+            for s in self.mux.model.splitters(area) {
+                let line = match s.axis {
+                    crate::multiplexer::Axis::Horizontal => {
+                        let cx = s.rect.center().x;
+                        Rect::new(cx - 0.5, s.rect.y0, cx + 0.5, s.rect.y1)
+                    }
+                    crate::multiplexer::Axis::Vertical => {
+                        let cy = s.rect.center().y;
+                        Rect::new(s.rect.x0, cy - 0.5, s.rect.x1, cy + 0.5)
+                    }
+                };
+                front.fill(Fill::NonZero, Affine::IDENTITY, self.theme.splitter, None, &line);
             }
         }
         if self.mux.model.enabled() || self.mux.model.prefix {

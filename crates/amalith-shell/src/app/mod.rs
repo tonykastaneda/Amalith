@@ -176,6 +176,17 @@ enum Drag {
         start_ratio: f32,
         start_x: f64,
     },
+    /// Dragging the gap between two multiplexer panes — the split it
+    /// belongs to is relocated each move via `left_leaf`/`right_leaf`
+    /// (see `Multiplexer::set_split_ratio`) rather than a path into the
+    /// tree, since nothing else about the tree changes during a plain
+    /// resize.
+    MuxSplitDrag {
+        left_leaf: crate::multiplexer::PaneId,
+        right_leaf: crate::multiplexer::PaneId,
+        axis: crate::multiplexer::Axis,
+        bounding: Rect,
+    },
     /// Pressed a Master's header (not its close/chevron); a drag moves the
     /// whole Master, undocking it first if it was docked (⇐ the
     /// `onPointerMove` master branch's "undock once moved" step). A plain
@@ -1044,8 +1055,12 @@ enum CanvasCursor {
     /// "Fit to text" — hovering an area-text box's auto-fit tab (an
     /// up-arrow-to-bar glyph).
     FitUp,
-    /// Real OS resize cursor — hovering the terminal/canvas divider.
+    /// Real OS resize cursor — hovering the terminal/canvas divider, or a
+    /// Horizontal-axis (side-by-side) multiplexer pane splitter.
     EwResize,
+    /// Real OS resize cursor — hovering a Vertical-axis (stacked)
+    /// multiplexer pane splitter.
+    NsResize,
 }
 
 impl CanvasCursor {
@@ -8357,6 +8372,22 @@ impl App {
         } else {
             mode
         };
+        // A multiplexer pane splitter — same reasoning: checked outside
+        // `over` (it sits in the gap between panes, not inside either
+        // one) and wins over anything else, mid-drag or just hovering.
+        let mode = match &self.drag {
+            Drag::MuxSplitDrag { axis, .. } => match axis {
+                crate::multiplexer::Axis::Horizontal => CanvasCursor::EwResize,
+                crate::multiplexer::Axis::Vertical => CanvasCursor::NsResize,
+            },
+            _ => match self.mux_splitter_at(self.pointer) {
+                Some(s) => match s.axis {
+                    crate::multiplexer::Axis::Horizontal => CanvasCursor::EwResize,
+                    crate::multiplexer::Axis::Vertical => CanvasCursor::NsResize,
+                },
+                None => mode,
+            },
+        };
         if mode != self.cursor_mode {
             self.cursor_mode = mode;
             if let Some(w) = self.main_window() {
@@ -8368,6 +8399,7 @@ impl App {
                     CanvasCursor::Grab => CursorIcon::Grab,
                     CanvasCursor::Grabbing => CursorIcon::Grabbing,
                     CanvasCursor::EwResize => CursorIcon::EwResize,
+                    CanvasCursor::NsResize => CursorIcon::NsResize,
                     // IBeam/PathType are custom-drawn now (see `is_drawn`)
                     // so the OS cursor stays hidden for them either way —
                     // no `CursorIcon::Text` arm needed.

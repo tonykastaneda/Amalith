@@ -92,6 +92,26 @@ impl App {
                 self.terminal_split = self.clamp_terminal_split(raw, total_w);
                 self.request_main_redraw();
             }
+            Drag::MuxSplitDrag { left_leaf, right_leaf, axis, bounding } => {
+                let (left_leaf, right_leaf, axis, bounding) = (*left_leaf, *right_leaf, *axis, *bounding);
+                let ratio = match axis {
+                    crate::multiplexer::Axis::Horizontal => {
+                        (self.pointer.x - bounding.x0) / bounding.width().max(1.0)
+                    }
+                    crate::multiplexer::Axis::Vertical => {
+                        (self.pointer.y - bounding.y0) / bounding.height().max(1.0)
+                    }
+                };
+                // `bounding` is fixed for the whole drag — if the split
+                // it described no longer exists (the tree changed shape
+                // some other way mid-drag, e.g. a tab closed the pane
+                // out from under it), just end the drag rather than
+                // silently doing nothing every move.
+                if !self.mux.model.set_split_ratio(left_leaf, right_leaf, ratio) {
+                    self.drag = Drag::None;
+                }
+                self.request_main_redraw();
+            }
             Drag::GroupContentResize { master, group, start_h, start_y } => {
                 let (master, group, start_h, start_y) = (*master, *group, *start_h, *start_y);
                 let dy = (self.pointer.y - start_y) as f32;
@@ -1006,6 +1026,7 @@ impl App {
             Drag::None
             | Drag::MasterWidth { .. }
             | Drag::TerminalSplit { .. }
+            | Drag::MuxSplitDrag { .. }
             | Drag::GroupContentResize { .. }
             | Drag::PendingGroupDrag { .. }
             | Drag::PendingMasterMove { .. }

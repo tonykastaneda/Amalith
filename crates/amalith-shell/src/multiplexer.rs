@@ -68,6 +68,31 @@ pub enum Axis {
     Vertical,
 }
 
+/// The divider between a `Split` node's two sides — returned by
+/// `Multiplexer::splitters` for hit-testing/dragging; see
+/// `Multiplexer::set_split_ratio` for how a drag applies back.
+#[derive(Clone, Copy, Debug)]
+pub struct Splitter {
+    /// Hit-test/cursor region — wider than the visual gap for an easier
+    /// grab target.
+    pub rect: Rect,
+    pub axis: Axis,
+    /// The full rect this split divides, before its ratio carves it into
+    /// two — a live drag recomputes `ratio` as the pointer's fraction
+    /// across this rect along `axis`.
+    pub bounding: Rect,
+    /// A pane id from each side, stable for as long as the tree shape
+    /// doesn't change — how `set_split_ratio` relocates this exact split
+    /// after the drag that captured it started.
+    pub(crate) left_leaf: PaneId,
+    pub(crate) right_leaf: PaneId,
+}
+
+/// A split's ratio never reaches 0/1 — either side would otherwise be
+/// squeezed to nothing (or negative, past `layout`'s 4px gap).
+const SPLIT_RATIO_MIN: f64 = 0.08;
+const SPLIT_RATIO_MAX: f64 = 1.0 - SPLIT_RATIO_MIN;
+
 #[derive(Clone, Debug)]
 enum Node {
     Leaf(Pane),
@@ -138,6 +163,48 @@ impl Node {
             },
         }
     }
+    /// Same tree walk as `layout`, but collecting each `Split`'s divider
+    /// instead of each `Leaf`'s pane rect. A separate method (rather than
+    /// widening `layout`'s own signature) since that one has many call
+    /// sites that have no use for splitter geometry.
+    fn splitters(&self, r: Rect, out: &mut Vec<Splitter>) {
+        match self {
+            Self::Leaf(_) => {}
+            Self::Split { axis, ratio, left, right } => {
+                // Wider than the 4px visual gap `layout` leaves — a
+                // comfortable grab target without changing how the gap
+                // itself looks.
+                const GRAB: f64 = 4.0;
+                let (hit, l_rect, r_rect) = match axis {
+                    Axis::Horizontal => {
+                        let x = r.x0 + r.width() * ratio;
+                        (
+                            Rect::new(x - GRAB, r.y0, x + GRAB, r.y1),
+                            Rect::new(r.x0, r.y0, x - 2., r.y1),
+                            Rect::new(x + 2., r.y0, r.x1, r.y1),
+                        )
+                    }
+                    Axis::Vertical => {
+                        let y = r.y0 + r.height() * ratio;
+                        (
+                            Rect::new(r.x0, y - GRAB, r.x1, y + GRAB),
+                            Rect::new(r.x0, r.y0, r.x1, y - 2.),
+                            Rect::new(r.x0, y + 2., r.x1, r.y1),
+                        )
+                    }
+                };
+                out.push(Splitter {
+                    rect: hit,
+                    axis: *axis,
+                    bounding: r,
+                    left_leaf: left.first_leaf(),
+                    right_leaf: right.first_leaf(),
+                });
+                left.splitters(l_rect, out);
+                right.splitters(r_rect, out);
+            },
+        }
+    }
     fn split(&mut self, id: PaneId, axis: Axis, new: Pane) -> bool {
         match self {
             Self::Leaf(p) if p.id == id => {
@@ -151,6 +218,24 @@ impl Node {
             }
             Self::Split { left, right, .. } => left.split(id, axis, new.clone()) || right.split(id, axis, new),
             _ => false,
+        }
+    }
+    /// Finds the `Split` whose two sides' first leaves are exactly
+    /// `(left_leaf, right_leaf)` — how a live splitter drag (which only
+    /// ever captures those two ids, not a path into the tree) relocates
+    /// the node it started on — and sets its ratio.
+    fn set_ratio(&mut self, left_leaf: PaneId, right_leaf: PaneId, ratio: f64) -> bool {
+        match self {
+            Self::Leaf(_) => false,
+            Self::Split { ratio: r, left, right, .. }
+                if left.first_leaf() == left_leaf && right.first_leaf() == right_leaf =>
+            {
+                *r = ratio.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX);
+                true
+            }
+            Self::Split { left, right, .. } => {
+                left.set_ratio(left_leaf, right_leaf, ratio) || right.set_ratio(left_leaf, right_leaf, ratio)
+            }
         }
     }
     /// First (leftmost/topmost) leaf under this node — used to pick a
@@ -230,6 +315,27 @@ impl Multiplexer {
             root.layout(r, &mut out);
         }
         out
+    }
+    /// Every splitter in the tree, for hit-testing/dragging (⌘-drag isn't
+    /// involved — this is a plain click-drag on the gap between panes).
+    pub fn splitters(&self, r: Rect) -> Vec<Splitter> {
+        let mut out = Vec::new();
+        if let Some(root) = &self.root {
+            root.splitters(r, &mut out);
+        }
+        out
+    }
+    /// Applies a live splitter drag: `left_leaf`/`right_leaf` and `ratio`
+    /// come from the `Splitter` the drag started on (see
+    /// `App::mux_splitter_at`) — `ratio` recomputed each move from the
+    /// current pointer position over `Splitter::bounding`, not carried
+    /// forward from the previous call. `false` if the tree changed shape
+    /// since the drag started (that split no longer exists) and the drag
+    /// should just end.
+    pub fn set_split_ratio(&mut self, left_leaf: PaneId, right_leaf: PaneId, ratio: f64) -> bool {
+        self.root
+            .as_mut()
+            .is_some_and(|root| root.set_ratio(left_leaf, right_leaf, ratio))
     }
     /// Splits the focused pane along `axis`; the new pane gets one fresh
     /// chooser tab and becomes focused.
@@ -432,6 +538,35 @@ mod tests {
         assert_eq!(panes[0].1.width(), 1000.);
         assert_eq!(panes[0].1.height(), 298.);
         assert_eq!(panes[1].1.y0, 302.);
+    }
+
+    #[test]
+    fn splitter_ratio_drag_reflows_pane_layout() {
+        let doc = ObjectId::new();
+        let mut m = Multiplexer::default();
+        m.start(doc, CanvasView::default());
+        m.split(Axis::Horizontal).unwrap();
+        let area = Rect::new(0., 0., 1000., 600.);
+        let splitters = m.splitters(area);
+        assert_eq!(splitters.len(), 1);
+        let s = splitters[0];
+        assert_eq!(s.axis, Axis::Horizontal);
+        // Default 0.5 ratio: the hit region straddles the midpoint.
+        assert!(s.rect.x0 < 500. && s.rect.x1 > 500.);
+
+        assert!(m.set_split_ratio(s.left_leaf, s.right_leaf, 0.25));
+        let panes = m.layout(area);
+        let left = panes.iter().find(|(p, _)| p.id == s.left_leaf).unwrap().1;
+        assert_eq!(left.width(), 1000. * 0.25 - 2.);
+
+        // Out-of-range attempts clamp rather than squeeze a pane away.
+        assert!(m.set_split_ratio(s.left_leaf, s.right_leaf, -1.0));
+        let panes = m.layout(area);
+        let left = panes.iter().find(|(p, _)| p.id == s.left_leaf).unwrap().1;
+        assert!(left.width() > 0.);
+
+        // A pane id pair that was never a real split is simply ignored.
+        assert!(!m.set_split_ratio(999, 998, 0.5));
     }
 
     #[test]
