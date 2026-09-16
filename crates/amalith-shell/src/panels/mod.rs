@@ -915,6 +915,7 @@ pub fn paint_scrollbar(scene: &mut Scene, body: Rect, id: PanelId, scroll: f64, 
 /// Hover text for the control at `local` in panel `id`'s body, if any.
 pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
     match id.0 {
+        PanelKind::RecolorDlg => ctx.recolor_dialog.and_then(|d| crate::recolordlg::tip(d, body, local)),
         PanelKind::Tools => tools::tip(body, local, ctx),
         PanelKind::Color => color::tip(body, local, ctx).map(str::to_string),
         PanelKind::Gradient => gradient::tip(body, local, ctx).map(str::to_string),
