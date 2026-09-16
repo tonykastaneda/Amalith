@@ -64,6 +64,7 @@ pub enum PanelKind {
     Offsetdlg,
     SymbolNameDlg,
     LayerOptionsDlg,
+    RecolorDlg,
     AreaTypeDlg,
     Unknown(&'static str),
 }
@@ -72,7 +73,7 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 31] = [
+    pub const ALL: [PanelKind; 32] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
@@ -103,6 +104,7 @@ impl PanelKind {
         PanelKind::Offsetdlg,
         PanelKind::SymbolNameDlg,
         PanelKind::LayerOptionsDlg,
+        PanelKind::RecolorDlg,
         PanelKind::AreaTypeDlg,
     ];
 
@@ -143,6 +145,7 @@ impl PanelKind {
             PanelKind::Offsetdlg => "offsetdlg",
             PanelKind::SymbolNameDlg => "symbolnamedlg",
             PanelKind::LayerOptionsDlg => "layeroptionsdlg",
+            PanelKind::RecolorDlg => "recolordlg",
             PanelKind::AreaTypeDlg => "areatypedlg",
             PanelKind::Unknown(s) => s,
         }
@@ -183,6 +186,7 @@ impl PanelKind {
             "offsetdlg" => PanelKind::Offsetdlg,
             "symbolnamedlg" => PanelKind::SymbolNameDlg,
             "layeroptionsdlg" => PanelKind::LayerOptionsDlg,
+            "recolordlg" => PanelKind::RecolorDlg,
             "areatypedlg" => PanelKind::AreaTypeDlg,
             other => PanelKind::Unknown(Box::leak(other.to_string().into_boxed_str())),
         }
@@ -221,6 +225,7 @@ impl PanelKind {
             PanelKind::Offsetdlg => "Offset Path",
             PanelKind::SymbolNameDlg => "New Symbol",
             PanelKind::LayerOptionsDlg => "Layer Options",
+            PanelKind::RecolorDlg => "Recolor Artwork",
             PanelKind::AreaTypeDlg => "Area Type Options",
             PanelKind::Unknown(s) => s,
         }
@@ -895,11 +900,12 @@ mod tests {
                 | PanelKind::Offsetdlg
                 | PanelKind::SymbolNameDlg
                 | PanelKind::LayerOptionsDlg
+                | PanelKind::RecolorDlg
                 | PanelKind::AreaTypeDlg => true,
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 31);
+        assert_eq!(PanelKind::ALL.len(), 32);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }
@@ -920,7 +926,7 @@ mod tests {
         for k in PanelKind::ALL {
             assert_eq!(PanelKind::from_id_str(k.id_str()), k);
         }
-        let expected: [(PanelKind, &str); 30] = [
+        let expected: [(PanelKind, &str); 31] = [
             (PanelKind::Tools, "tools"),
             (PanelKind::Layers, "layers"),
             (PanelKind::Links, "links"),
@@ -950,6 +956,7 @@ mod tests {
             (PanelKind::Offsetdlg, "offsetdlg"),
             (PanelKind::SymbolNameDlg, "symbolnamedlg"),
             (PanelKind::LayerOptionsDlg, "layeroptionsdlg"),
+            (PanelKind::RecolorDlg, "recolordlg"),
             (PanelKind::AreaTypeDlg, "areatypedlg"),
         ];
         for (kind, literal) in expected {

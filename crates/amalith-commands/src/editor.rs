@@ -1885,6 +1885,7 @@ impl Editor {
                 )?);
                 edits
             }
+            Command::RecolorArtwork { objects, colors } => crate::recolor::compile(&self.document, &objects, &colors)?,
             Command::SetAppearanceItems { object, items } => {
                 self.document
                     .object(object)

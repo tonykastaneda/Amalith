@@ -36,6 +36,7 @@ mod area_type_dialog;
 mod image_trace;
 mod symbol_name_dialog;
 mod layer_dialog;
+mod recolor_dialog;
 mod effect_dialog;
 mod offset_dialog;
 mod render;
@@ -136,14 +137,14 @@ enum ResizeEdge {
 }
 
 
-/// One rendered window: surface, its device's vello renderer, the winit
-/// handle, and what it shows.
+/// One rendered window. GPU renderers are shared per device on `App`.
 struct WindowHost {
     dpi: crate::window_dpi::WindowDpi,
     surface: RenderSurface<'static>,
-    renderer: Renderer,
     window: Arc<Window>,
     role: Role,
+    /// Retry initial presentation for each window, including later dialogs.
+    first_frame_done: bool,
 }
 
 /// What the pointer is currently doing.
@@ -589,6 +590,7 @@ enum MenuAction {
     /// ⌘T — a fresh chooser tab in the focused pane, same as the pane's
     /// own "+" button; the user picks what goes in it.
     NewTab,
+    RecolorArtwork,
     /// File ▸ Create New Split ▸ Split Right — same action as prefix+D.
     SplitRight,
     /// File ▸ Create New Split ▸ Split Down — same action as prefix+⇧D.
@@ -1097,6 +1099,9 @@ struct LastTransform {
 struct App {
     image_trace: image_trace::TraceState,
     context: RenderContext,
+    /// Redraws run sequentially on the event loop. Reuse compiled shaders
+    /// and GPU caches across windows instead of rebuilding them per dialog.
+    window_renderers: HashMap<usize, Renderer>,
     /// A headless vello renderer, made on first use by Export for Screens.
     export_renderer: Option<Renderer>,
     hosts: HashMap<WindowId, WindowHost>,
@@ -1179,6 +1184,9 @@ struct App {
     pending_symbol_name_dialog: bool,
     /// The Layer Options dialog, opened by double-clicking a layer's color swatch.
     layer_dialog: Option<layerdlg::LayerOptionsDialog>,
+    recolor_dialog: Option<crate::recolordlg::RecolorDialog>,
+    pending_recolor: bool,
+    recolor_picker: Option<usize>,
     /// The Area Type Options dialog, opened from Type ▸ Area Type
     /// Options… for a single selected Area Type frame. Free-floating like
     /// the color picker; never dockable, never in the Window menu.
@@ -1557,11 +1565,6 @@ struct App {
     /// frames-per-second estimate for the debug counter.
     last_frame: Option<Instant>,
     fps: f32,
-    /// Set once the first frame has actually presented. Until then
-    /// `about_to_wait` keeps nudging a redraw (and holds `ControlFlow::
-    /// Poll`) so a dropped initial `RedrawRequested` can't leave the
-    /// window blank. After it, rendering is strictly on demand.
-    first_frame_done: bool,
     /// Caret blink phase as of the last painted frame. `about_to_wait`
     /// asks for a new frame only when this would flip — edge-triggered, so
     /// an open text edit costs ~2 repaints/sec, not a continuous loop.
@@ -1598,6 +1601,7 @@ impl App {
         dock.ensure_next_id();
         let mut app = Self {
             context: RenderContext::new(),
+            window_renderers: HashMap::new(),
             export_renderer: None,
             hosts: HashMap::new(),
             main_id: None,
@@ -1632,6 +1636,9 @@ impl App {
             pending_symbol_name_dialog: false,
             layer_dialog: None,
             pending_layer_dialog: None,
+            recolor_dialog: None,
+            pending_recolor: false,
+            recolor_picker: None,
             area_type_dialog: None,
             pending_area_type_dialog: false,
             pending_blend_dialog: None,
@@ -1772,7 +1779,6 @@ impl App {
             palette_kinds: Vec::new(),
             last_frame: None,
             fps: 0.0,
-            first_frame_done: false,
             last_caret_drawn: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_menu: None,
@@ -2467,7 +2473,17 @@ impl App {
     /// first. Also drops a leftover docked / floating picker panel so OK
     /// and Cancel always take the window with them.
     fn dismiss_picker(&mut self, apply: bool) {
-        if apply {
+        let recolor = self.recolor_picker.take();
+        if let Some(index) = recolor {
+            if apply {
+                if let (Some(pk), Some(d)) = (self.picker, self.recolor_dialog.as_mut()) {
+                    let a = d.replacement[index].a;
+                    d.replacement[index] = amalith_core::Color { a, ..pk.color() };
+                    d.refresh();
+                }
+            }
+        }
+        if apply && recolor.is_none() {
             if self.picker_artboard {
                 if let (Some(pk), Some(id)) = (self.picker, self.doc.selected_artboard) {
                     let _ = self.doc.editor.execute(Command::SetArtboardFill {
@@ -4585,6 +4601,7 @@ impl App {
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
+        if self.recolor_dialog.is_some() { return; }
         match action {
             // Quit is dispatched in `about_to_wait`, which holds the event
             // loop; it never reaches here.
@@ -4606,6 +4623,7 @@ impl App {
             }
             MenuAction::New => self.mux_new_document(),
             MenuAction::NewTab => self.mux_new_tab(),
+            MenuAction::RecolorArtwork => self.pending_recolor = true,
             MenuAction::SplitRight => self.mux_split_right(),
             MenuAction::SplitDown => self.mux_split_down(),
             MenuAction::Open => self.open_document(),
@@ -7639,6 +7657,7 @@ impl App {
             symbol_name_dialog: None,
             layer_dialog: None,
             area_type_dialog: None,
+            recolor_dialog: None,
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             appearance_items: Vec::new(),
@@ -7715,6 +7734,7 @@ impl App {
             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, false)),
             symbol_name_dialog: self.symbol_name_dialog.as_ref(),
             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
+            recolor_dialog: self.recolor_dialog.as_ref(),
             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
@@ -7893,6 +7913,8 @@ impl App {
     /// The × on a panel tab. In a rail: remove the panel. In a floating
     /// window: close that window (drop its panels — no redock).
     fn close_panel_tab(&mut self, pid: PanelId, floating: Option<u64>) {
+        if pid.0 == PanelKind::RecolorDlg { self.close_recolor_dialog(false); return; }
+        if pid.0 == PanelKind::Picker && self.recolor_picker.is_some() { self.dismiss_picker(false); return; }
         self.stack_flyout = None;
         if pid.0 == PanelKind::SymbolNameDlg { self.symbol_name_dialog = None; self.pending_symbol_name_dialog = false; }
         if pid.0 == PanelKind::Picker {
@@ -8650,7 +8672,7 @@ impl App {
             wgpu::PresentMode::AutoVsync,
         ))
         .expect("create surface");
-        let renderer = Renderer::new(
+        self.window_renderers.entry(surface.dev_id).or_insert_with(|| Renderer::new(
             &self.context.devices[surface.dev_id].device,
             RendererOptions {
                 use_cpu: false,
@@ -8659,13 +8681,13 @@ impl App {
                 pipeline_cache: None,
             },
         )
-        .expect("create renderer");
+        .expect("create renderer"));
         WindowHost {
             dpi: crate::window_dpi::WindowDpi::new(window.scale_factor()),
             surface,
-            renderer,
             window,
             role,
+            first_frame_done: false,
         }
     }
 
@@ -8845,7 +8867,7 @@ impl ApplicationHandler for App {
     /// Does the housekeeping that has no event behind it (native-menu
     /// clicks, macOS drops, finished image decodes, view-fit), then sets
     /// `ControlFlow`: `Wait` when the app is idle, `WaitUntil` when
-    /// something is mid-animation, `Poll` only until the first frame lands.
+    /// something is mid-animation or a new window needs its first frame.
     /// Rendering itself is on demand — see [`App::request_main_redraw`].
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Cheap per-tick safety net: a Master must never sit empty,
@@ -8903,6 +8925,8 @@ impl ApplicationHandler for App {
             }
         }
         if std::mem::take(&mut self.pending_symbol_name_dialog) { self.spawn_symbol_name_dialog(event_loop); }
+        if std::mem::take(&mut self.pending_recolor) { self.spawn_recolor_dialog(event_loop); }
+        if self.recolor_picker.is_some() && self.picker.is_some() && !self.dock.contains(PanelId(PanelKind::Picker)) { self.spawn_picker_window(event_loop); }
         if let Some(id) = self.pending_layer_dialog.take() {
             self.spawn_layer_dialog(event_loop, id);
         }
@@ -8947,11 +8971,17 @@ impl ApplicationHandler for App {
         //
         // Until the first frame has presented, keep pumping: a dropped
         // initial `RedrawRequested` otherwise leaves the window blank.
-        if !self.first_frame_done {
-            for host in self.hosts.values() {
+        let mut awaiting_first_frame = false;
+        for host in self.hosts.values() {
+            if !host.first_frame_done && host.window.is_minimized() != Some(true) {
                 host.window.request_redraw();
+                awaiting_first_frame = true;
             }
-            event_loop.set_control_flow(ControlFlow::Poll);
+        }
+        if awaiting_first_frame {
+            // Retry each new window independently, without busy-spinning
+            // if a surface is temporarily unavailable.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(16)));
             return;
         }
 
@@ -9149,6 +9179,12 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CloseRequested => {
+                if self.hosts.get(&id).is_some_and(|h| matches!(h.role, Role::Floating(fid) if self.dock.floating_id_of(PanelId(PanelKind::RecolorDlg)) == Some(fid))) {
+                    self.close_recolor_dialog(false); return;
+                }
+                if self.recolor_picker.is_some() && self.hosts.get(&id).is_some_and(|h| matches!(h.role, Role::Floating(fid) if self.dock.floating_id_of(PanelId(PanelKind::Picker)) == Some(fid))) {
+                    self.dismiss_picker(false); return;
+                }
                 if self.hosts.get(&id).is_some_and(|h| matches!(h.role, Role::Floating(fid) if self.dock.floating_id_of(PanelId(PanelKind::SymbolNameDlg)) == Some(fid))) {
                     self.close_symbol_name_dialog(false);
                     return;
@@ -9280,8 +9316,8 @@ impl ApplicationHandler for App {
                 state: ElementState::Pressed,
                 button: MouseButton::Right,
                 ..
-            } if Some(id) == self.main_id => self.on_right_press(),
-            WindowEvent::Ime(ime) if Some(id) == self.main_id => {
+            } if Some(id) == self.main_id && self.recolor_dialog.is_none() => self.on_right_press(),
+            WindowEvent::Ime(ime) if Some(id) == self.main_id && self.recolor_dialog.is_none() => {
                 if let Some(te) = &mut self.text_edit {
                     te.ime(&ime, &mut self.text);
                     self.text_blink = Instant::now();
@@ -9346,6 +9382,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::KeyboardInput { event, .. }
                 if Some(id) == self.main_id
+                    || self.recolor_dialog.is_some()
                     || self.picker.is_some()
                     || self.shape_dialog.is_some()
                     || self.export.is_some()

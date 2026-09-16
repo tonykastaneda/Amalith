@@ -681,6 +681,7 @@ pub(in crate::app) fn paint_main(
         effect_dialog: None,
         symbol_name_dialog: None,
         layer_dialog: None,
+        recolor_dialog: None,
         area_type_dialog: None,
         gradient: gradient.clone(),
         gradient_edit,

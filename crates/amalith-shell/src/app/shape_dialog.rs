@@ -25,6 +25,7 @@ impl App {
     /// and never shows in the Window menu — the colour picker or a shape
     /// dialog.
     pub(in crate::app) fn is_float_only(&self, fid: u64) -> bool {
+        if self.dock.floating_id_of(PanelId(PanelKind::RecolorDlg)) == Some(fid) { return true; }
         if self.dock.floating_id_of(PanelId(PanelKind::SymbolNameDlg)) == Some(fid) { return true; }
         if self.dock.floating_id_of(PanelId(PanelKind::Picker)) == Some(fid) {
             return true;

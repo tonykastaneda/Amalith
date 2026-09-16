@@ -1468,7 +1468,7 @@ impl App {
                                 view.pan += body(r).origin().to_vec2();
                                 canvas::paint(
                                     &mut back,
-                                    doc.editor.document(),
+                                    self.recolor_dialog.as_ref().filter(|d| d.preview && d.document == doc.id && d.revision == doc.editor.revision()).map_or(doc.editor.document(), |d| &d.rendered),
                                     &view,
                                     body(r),
                                     &self.theme,

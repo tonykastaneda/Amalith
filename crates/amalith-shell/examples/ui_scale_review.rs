@@ -23,7 +23,27 @@ fn main() {
     theme.set_ui_scale(scale);
     let panel_gallery = std::env::args().nth(3).as_deref() == Some("panels");
     let trace_gallery = std::env::args().nth(3).as_deref() == Some("trace");
-    if trace_gallery {
+    let recolor_gallery = std::env::args().nth(3).as_deref() == Some("recolor");
+    if recolor_gallery {
+        use amalith_core::{Color as ArtColor, Document, Layer, LayerId, Object, ObjectId, ObjectParent, Paint};
+        use amalith_shell::recolordlg;
+        use vello::{kurbo::{Rect, Affine}, peniko::Fill};
+        let mut doc = Document::new("Recolor review");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Artwork"), 0);
+        let mut ids = Vec::new();
+        for (i, c) in [ArtColor::rgb(0.22,0.43,0.7), ArtColor::rgb(0.14,0.14,0.14), ArtColor::rgb(0.33,0.33,0.33), ArtColor::rgb(0.9,0.65,0.18), ArtColor::rgb(1.,1.,1.)].into_iter().enumerate() {
+            let id = ObjectId::new();
+            let mut object = Object::rectangle(id, ObjectParent::Layer(layer), amalith_core::Rect::new(0.,0.,10.,10.));
+            object.appearance.set_fill(Paint::Solid(c));
+            doc.insert_object(object, i).unwrap();
+            ids.push(id);
+        }
+        let d = recolordlg::RecolorDialog::open(ObjectId::new(), 0, doc, ids).unwrap();
+        let body = Rect::new(0., 0., recolordlg::width(), recolordlg::height());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.panel_bg, None, &body);
+        recolordlg::paint(&mut scene, &mut tcx, &theme, body, &d);
+    } else if trace_gallery {
         use amalith_shell::{image_trace,convert};
         use vello::{kurbo::{Rect,Affine},peniko::{Fill,ImageData,ImageFormat,ImageAlphaType,Blob}};
         let img=image::RgbaImage::from_fn(128,128,|x,y| {
@@ -115,6 +135,7 @@ fn main() {
             effect_dialog: None,
             symbol_name_dialog: None,
             layer_dialog: None,
+            recolor_dialog: None,
             area_type_dialog: None,
             gradient: None,
             gradient_edit: None,
@@ -184,7 +205,7 @@ fn main() {
     let dev = &context.devices[index];
     let mut renderer =
         vello::Renderer::new(&dev.device, vello::RendererOptions::default()).unwrap();
-    let (width, height) = if trace_gallery { ((1100.*scale) as u32,(760.*scale) as u32) } else if panel_gallery {
+    let (width, height) = if recolor_gallery { ((520.*scale) as u32, (530.*scale) as u32) } else if trace_gallery { ((1100.*scale) as u32,(760.*scale) as u32) } else if panel_gallery {
         (2200, 2300)
     } else {
         (1800, 1600)

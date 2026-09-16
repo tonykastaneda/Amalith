@@ -18,6 +18,7 @@ impl App {
     }
 
     pub(in crate::app) fn on_wheel(&mut self, delta: MouseScrollDelta, scale: f64) {
+        if self.recolor_dialog.is_some() { return; }
         let (dx, dy) = match delta {
             // Line-based (mouse wheel): each notch ≈ 30 logical px.
             MouseScrollDelta::LineDelta(x, y) => (x as f64 * 30.0, y as f64 * 30.0),

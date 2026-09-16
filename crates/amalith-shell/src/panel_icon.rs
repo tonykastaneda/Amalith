@@ -69,6 +69,7 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         | PanelKind::Offsetdlg
         | PanelKind::SymbolNameDlg
         | PanelKind::LayerOptionsDlg
+        | PanelKind::RecolorDlg
         | PanelKind::AreaTypeDlg => GENERIC,
         // Unrecognized panel id (an old/future/typo'd string round-tripped
         // from a saved layout).

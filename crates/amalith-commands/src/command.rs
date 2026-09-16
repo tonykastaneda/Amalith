@@ -485,6 +485,11 @@ pub enum Command {
         object: ObjectId,
         items: Vec<AppearanceItem>,
     },
+    /// Reassign selection colors, including nested appearance paints and gradient stops.
+    RecolorArtwork {
+        objects: Vec<ObjectId>,
+        colors: Vec<(Color, Color)>,
+    },
     /// Sets every listed object's fill paint, one undo group.
     SetFill {
         objects: Vec<ObjectId>,

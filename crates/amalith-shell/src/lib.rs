@@ -61,6 +61,7 @@ pub mod panels;
 pub mod pathtext;
 pub mod pdfexport;
 pub mod picker;
+pub mod recolordlg;
 pub mod prefs;
 pub mod recent;
 pub mod rulers;

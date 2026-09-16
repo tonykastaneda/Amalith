@@ -28,9 +28,14 @@ impl App {
         }
         self.last_frame = Some(now);
 
-        self.warm_images();
-        self.warm_symbol_thumbnails();
-        let (mux_back, mux_front) = self.mux_scenes();
+        let Some(role) = self.hosts.get(&id).map(|host| host.role) else { return };
+        let (mux_back, mux_front) = if matches!(role, Role::Main) {
+            self.warm_images();
+            self.warm_symbol_thumbnails();
+            self.mux_scenes()
+        } else {
+            (Scene::new(), Scene::new())
+        };
         self.prune_isolation();
         let iso_root = self.isolation_root();
         let Some(host) = self.hosts.get_mut(&id) else {
@@ -746,7 +751,7 @@ impl App {
                 &self.symbol_thumbnails,
                 &self.symbol_tiles,
                 &self.image_trace.panel,
-                self.image_trace.canvas.as_ref(),
+                self.recolor_dialog.as_ref().filter(|d| d.preview && d.document == self.doc.id && d.revision == self.doc.editor.revision()).map(|d| &d.rendered).or(self.image_trace.canvas.as_ref()),
                 symbols_drop_hover,
                 terminal_pane_arg,
                 &mux_back,
@@ -846,6 +851,7 @@ impl App {
                             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                             symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                            recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
                             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
@@ -936,6 +942,7 @@ impl App {
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                                 symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                                 layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
@@ -1031,6 +1038,7 @@ impl App {
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                                 symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                                 layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
                                 gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
@@ -1239,7 +1247,7 @@ impl App {
                 | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                 _ => return,
             };
-            host.renderer
+            self.window_renderers.get_mut(&host.surface.dev_id).expect("window renderer")
                 .render_to_texture(
                     &device.device,
                     &device.queue,
@@ -1276,7 +1284,7 @@ impl App {
         // the two bits it needs to decide whether to wake us again: the
         // first frame is now guaranteed, and the caret-blink phase this
         // frame showed.
-        self.first_frame_done = true;
+        self.hosts.get_mut(&id).unwrap().first_frame_done = true;
         self.last_caret_drawn = self.text_blink_on();
     }
 

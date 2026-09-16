@@ -223,6 +223,7 @@ pub struct Ctx<'a> {
     pub effect_dialog: Option<(&'a crate::effectdlg::EffectDialog, bool)>,
     pub symbol_name_dialog: Option<&'a crate::symbol_name_dialog::SymbolNameDialog>,
     pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
+    pub recolor_dialog: Option<&'a crate::recolordlg::RecolorDialog>,
     /// The Area Type Options dialog + caret-blink phase, when the
     /// `areatypedlg` float-only panel is being drawn / hit-tested.
     pub area_type_dialog: Option<(&'a crate::areatypedlg::AreaTypeDialog, bool)>,
@@ -331,6 +332,7 @@ pub enum Action {
     PickerHue(f32),
     PickerCancel,
     PickerOk,
+    Recolor(crate::recolordlg::Hit),
     /// Exact-size shape dialog.
     ShapeField(usize),
     ShapeStep(usize, i32),
@@ -687,6 +689,9 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
             }
         }
         PanelKind::SymbolNameDlg => { if let Some(dlg) = ctx.symbol_name_dialog { crate::symbol_name_dialog::paint(scene, dlg, body, ctx.theme, text); } }
+        PanelKind::RecolorDlg => {
+            if let Some(d) = ctx.recolor_dialog { crate::recolordlg::paint(scene, text, ctx.theme, body, d); }
+        }
         PanelKind::LayerOptionsDlg => {
             if let Some((dlg, caret)) = ctx.layer_dialog {
                 crate::layerdlg::paint(scene, dlg, body, ctx.theme, text, caret);
@@ -764,6 +769,7 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             (None, None) => Action::None,
         },
         PanelKind::SymbolNameDlg => crate::symbol_name_dialog::hit(body, local).map_or(Action::None, Action::SymbolNameDialogHit),
+        PanelKind::RecolorDlg => ctx.recolor_dialog.and_then(|d| crate::recolordlg::hit(d, body, local)).map_or(Action::None, Action::Recolor),
         PanelKind::LayerOptionsDlg => match ctx.layer_dialog {
             Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
             None => Action::None,
@@ -816,6 +822,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
         PanelKind::SymbolNameDlg => crate::symbol_name_dialog::height(),
         PanelKind::LayerOptionsDlg => crate::layerdlg::body_height(),
+        PanelKind::RecolorDlg => crate::recolordlg::height(),
         PanelKind::AreaTypeDlg => crate::areatypedlg::body_height(),
         PanelKind::ShapedlgRect
         | PanelKind::ShapedlgRound

@@ -34,6 +34,7 @@ mod eraser;
 mod editor;
 mod error;
 mod history;
+pub mod recolor;
 mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};

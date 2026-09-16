@@ -484,7 +484,8 @@ impl NativeMenu {
         let paste_without_format_wip = wip("Paste without Formatting");
         let find_replace_wip = wip("Find and Replace…");
         let spelling_wip = wip("Spelling");
-        let edit_colors_wip = wip("Edit Colors");
+        let recolor = reg(&mut items, MenuItem::new("Recolor Artwork…", true, None), MenuAction::RecolorArtwork);
+        let edit_colors = Submenu::with_items("Edit Colors", true, &[&recolor]).expect("edit colors menu");
         let color_settings_wip = wip("Color Settings…");
         let keyboard_shortcuts_wip = wip("Keyboard Shortcuts…");
         let edit_sep1 = sep();
@@ -502,7 +503,9 @@ impl NativeMenu {
             edit_items.push(&edit_sep2);
             edit_items.push(&find_replace_wip);
             edit_items.push(&spelling_wip);
-            edit_items.push(&edit_colors_wip);
+        }
+        edit_items.push(&edit_colors);
+        if !hide_wip {
             edit_items.push(&color_settings_wip);
             edit_items.push(&keyboard_shortcuts_wip);
         }

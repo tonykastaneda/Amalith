@@ -197,6 +197,7 @@ impl App {
             }
             panels::Action::PickerCancel => self.dismiss_picker(false),
             panels::Action::PickerOk => self.dismiss_picker(true),
+            panels::Action::Recolor(hit) => self.recolor_action(hit),
             panels::Action::ShapeField(i) => {
                 if let Some(d) = self.shape_dialog.as_mut() {
                     d.focus_field(i);

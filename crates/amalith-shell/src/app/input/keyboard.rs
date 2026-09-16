@@ -31,6 +31,20 @@ impl App {
             }
             return;
         }
+        if self.recolor_dialog.is_some() {
+            if self.recolor_picker.is_some() {
+                if event.state.is_pressed() {
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Escape) => self.dismiss_picker(false),
+                        PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => self.dismiss_picker(true),
+                        _ => {}
+                    }
+                }
+            } else {
+                self.recolor_key(&event);
+            }
+            return;
+        }
         if self.symbol_name_dialog.is_some() { self.symbol_name_dialog_key(&event); return; }
         if self.trace_key(&event) { return; }
         // The command palette (⌘K) swallows every key while open.

@@ -38,6 +38,7 @@ impl App {
         }
 
         let menu: &[(&str, &str, MenuAction)] = &[
+            ("Recolor Artwork", "Edit", MenuAction::RecolorArtwork),
             ("New", "File", MenuAction::New),
             ("New Tab", "File", MenuAction::NewTab),
             ("Split Right", "File", MenuAction::SplitRight),
