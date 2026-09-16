@@ -300,7 +300,11 @@ fn icon_import(scene: &mut Scene, box_: Rect, color: Color) {
 /// 2 = Import).
 fn paint_chooser_action_row(scene: &mut Scene, text: &mut TextContext, theme: &Theme, r: Rect, label: &str, kind: usize, hover: bool) {
     if hover {
-        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_active, None, &r.to_rounded_rect(ui_px(4.0)));
+        // A translucent light overlay rather than `theme.strip_active`
+        // (an opaque near-match for the pane's own background, so it
+        // barely showed at all) — reads as a clear full-width bar
+        // regardless of exactly what's painted underneath.
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.text.with_alpha(0.09), None, &r.to_rounded_rect(ui_px(6.0)));
     }
     let ink = if hover { theme.text } else { theme.text_dim };
     let icon_c = Point::new(r.x0 + ui_px(14.0), r.center().y);
@@ -1498,15 +1502,28 @@ impl App {
                         let (col_x0, col_x1) = chooser_col_x(r);
                         let ahy = chooser_actions_header_y(r, n_open, n_recent, scroll);
                         paint_chooser_section_header(&mut back, &mut self.text, &self.theme, col_x0, col_x1, ahy, "GET STARTED");
-                        const ACTIONS: [(&str, usize); CHOOSER_ACTIONS] = [
-                            ("Create a new Document", 0),
-                            ("Start a shell in this pane", 1),
-                            ("Import", 2),
+                        // Legends, not remappable bindings — each is the
+                        // existing global shortcut for the same action
+                        // (⌘N/⌘O), or the new one just added for it (⌘J,
+                        // Terminal previously had none).
+                        const ACTIONS: [(&str, usize, &str); CHOOSER_ACTIONS] = [
+                            ("Create a new Document", 0, "⌘N"),
+                            ("Start a shell in this pane", 1, "⌘J"),
+                            ("Import", 2, "⌘O"),
                         ];
-                        for (i, (label, kind)) in ACTIONS.iter().enumerate() {
+                        for (i, (label, kind, hint)) in ACTIONS.iter().enumerate() {
                             let ar = chooser_action_row(r, i, n_open, n_recent, scroll);
                             let hover = ar.contains(self.pointer);
                             paint_chooser_action_row(&mut back, &mut self.text, &self.theme, ar, label, *kind, hover);
+                            let hw = self.text.measure(hint, 11.5);
+                            self.text.draw(
+                                &mut back,
+                                hint,
+                                11.5,
+                                self.theme.text_dim,
+                                ar.x1 - hw - ui_px(10.0),
+                                ar.center().y + ui_px(4.0),
+                            );
                         }
 
                         // ⌘-digit hints run continuously across both
@@ -1648,41 +1665,80 @@ impl App {
             // Built from the live (possibly user-rebound) chords, not a
             // hardcoded string, so it can't go stale against Preferences
             // ▸ Keyboard ▸ Pane Multiplexer.
-            let chord = |act: prefs::PrefAction| {
+            let key_of = |act: prefs::PrefAction| {
                 prefs::PrefAction::ALL
                     .iter()
                     .position(|a| *a == act)
                     .and_then(|i| self.settings.action_keys[i])
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "—".to_string())
             };
-            let text = if self.mux.model.prefix {
-                format!(
-                    "PREFIX   {}  Split Right   {}  Split Down   {} / {}  Focus pane   {}  Close tab   Esc  Cancel",
-                    chord(prefs::PrefAction::MuxSplitRight),
-                    chord(prefs::PrefAction::MuxSplitDown),
-                    chord(prefs::PrefAction::MuxFocusPrev),
-                    chord(prefs::PrefAction::MuxFocusNext),
-                    chord(prefs::PrefAction::MuxCloseTab),
-                )
+            // Lowercase, spelled-out form ("shift+d", not "Shift+D") to
+            // match the rest of the bar's lowercase key labels.
+            let label = |act: prefs::PrefAction| -> String {
+                let Some(c) = key_of(act) else {
+                    return "—".to_string();
+                };
+                let mut s = String::new();
+                if c.cmd {
+                    s.push_str("cmd+");
+                }
+                if c.alt {
+                    s.push_str("opt+");
+                }
+                if c.shift {
+                    s.push_str("shift+");
+                }
+                s.push(prefs::key_char(c.code).unwrap_or('?').to_ascii_lowercase());
+                s
+            };
+            let text_size: f32 = 12.0;
+            let cy = bar.center().y + ui_px(4.0);
+            if self.mux.model.prefix {
+                // A pointed "flag" badge, not a plain rect — reads as a
+                // mode indicator (this is a whole extra input mode, not
+                // just a hint) rather than another label in the row.
+                let badge_h = ui_px(20.0);
+                let badge_y0 = bar.center().y - badge_h / 2.0;
+                let pad = ui_px(10.0);
+                let point = ui_px(8.0);
+                let word = "PREFIX";
+                let tw = self.text.measure(word, text_size);
+                let badge_x0 = bar.x0 + ui_px(10.0);
+                let badge_x1 = badge_x0 + pad + tw + pad + point;
+                let mut flag = BezPath::new();
+                flag.move_to((badge_x0, badge_y0));
+                flag.line_to((badge_x1 - point, badge_y0));
+                flag.line_to((badge_x1, badge_y0 + badge_h / 2.0));
+                flag.line_to((badge_x1 - point, badge_y0 + badge_h));
+                flag.line_to((badge_x0, badge_y0 + badge_h));
+                flag.close_path();
+                front.fill(Fill::NonZero, Affine::IDENTITY, self.theme.accent, None, &flag);
+                self.text.draw(&mut front, word, text_size, self.theme.on_accent, badge_x0 + pad, cy);
+
+                // Resolved up front (and out of `label`'s borrow of
+                // `self.settings`) so the draw loop below can borrow
+                // `self.text` mutably.
+                let items = [
+                    (label(prefs::PrefAction::MuxSplitRight), "split right"),
+                    (label(prefs::PrefAction::MuxSplitDown), "split down"),
+                    (label(prefs::PrefAction::MuxFocusPrev), "focus pane left"),
+                    (label(prefs::PrefAction::MuxFocusNext), "focus pane right"),
+                    (label(prefs::PrefAction::MuxCloseTab), "close tab"),
+                    ("esc".to_string(), "cancel"),
+                ];
+                let mut x = badge_x1 - point + ui_px(24.0);
+                for (key, desc) in items {
+                    self.text.draw(&mut front, &key, text_size, self.theme.accent, x, cy);
+                    x += self.text.measure(&key, text_size) + ui_px(6.0);
+                    self.text.draw(&mut front, desc, text_size, self.theme.text_dim, x, cy);
+                    x += self.text.measure(desc, text_size) + ui_px(24.0);
+                }
             } else {
-                format!(
-                    "{}  Pane commands     Click a pane to focus",
-                    chord(prefs::PrefAction::MuxPrefix),
-                )
-            };
-            self.text.draw(
-                &mut front,
-                &text,
-                12.,
-                if self.mux.model.prefix {
-                    self.theme.accent
-                } else {
-                    self.theme.text_dim
-                },
-                bar.x0 + ui_px(10.),
-                bar.y0 + ui_px(19.),
-            );
+                let text = format!(
+                    "{}  pane commands     click a pane to focus",
+                    label(prefs::PrefAction::MuxPrefix),
+                );
+                self.text.draw(&mut front, &text, text_size, self.theme.text_dim, bar.x0 + ui_px(10.), cy);
+            }
         }
         if self.quick_newdoc.is_some() {
             let caret = self.text_blink_on();

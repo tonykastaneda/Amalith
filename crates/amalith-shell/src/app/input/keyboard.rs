@@ -650,6 +650,11 @@ impl App {
                     // ⌘⇧O — Type ▸ Create Outlines; plain ⌘O opens a file.
                     KeyCode::KeyO if self.shift_down => self.create_outlines(),
                     KeyCode::KeyO => self.open_document(),
+                    // ⌘J — starts a terminal in the focused pane (same as
+                    // the chooser's "Start a shell in this pane" row /
+                    // File ▸ Scripts ▸ Terminal); previously had no
+                    // shortcut of its own.
+                    KeyCode::KeyJ => self.open_mux_terminal(),
                     KeyCode::KeyS => self.save_document(self.shift_down),
                     KeyCode::KeyI if self.shift_down => self.import_svg(),
                     // ⌘⌥E — Export for Screens.

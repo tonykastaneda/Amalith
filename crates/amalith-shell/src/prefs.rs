@@ -123,6 +123,7 @@ pub fn key_char(code: KeyCode) -> Option<char> {
         Digit4 => '4', Digit5 => '5', Digit6 => '6', Digit7 => '7',
         Digit8 => '8', Digit9 => '9',
         Backslash => '\\',
+        BracketLeft => '[', BracketRight => ']',
         ArrowLeft => '←', ArrowRight => '→', ArrowUp => '↑', ArrowDown => '↓',
         Tab => '⇥',
         _ => return None,
@@ -143,6 +144,7 @@ pub fn key_code(c: char) -> Option<KeyCode> {
         '4' => Digit4, '5' => Digit5, '6' => Digit6, '7' => Digit7,
         '8' => Digit8, '9' => Digit9,
         '\\' => Backslash,
+        '[' => BracketLeft, ']' => BracketRight,
         '←' => ArrowLeft, '→' => ArrowRight, '↑' => ArrowUp, '↓' => ArrowDown,
         '⇥' => Tab,
         _ => return None,
@@ -292,8 +294,8 @@ impl PrefAction {
             // keystroke (see `App::mux_key`).
             PrefAction::MuxSplitRight => KeyChord::plain(KeyCode::KeyD),
             PrefAction::MuxSplitDown => KeyChord::with_shift(KeyCode::KeyD),
-            PrefAction::MuxFocusNext => KeyChord::plain(KeyCode::Tab),
-            PrefAction::MuxFocusPrev => KeyChord::with_shift(KeyCode::Tab),
+            PrefAction::MuxFocusNext => KeyChord::plain(KeyCode::BracketRight),
+            PrefAction::MuxFocusPrev => KeyChord::plain(KeyCode::BracketLeft),
             PrefAction::MuxCloseTab => KeyChord::plain(KeyCode::KeyX),
         })
     }
