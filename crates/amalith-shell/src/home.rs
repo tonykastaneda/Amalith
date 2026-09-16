@@ -503,8 +503,11 @@ impl Home {
         let btn_gap = ui_px(12.0);
         let btn_y = area_bottom + (metric_toolbar_h() - btn_h) / 2.0;
         let open_rect = Rect::new(area_right - ui_px(104.0), btn_y, area_right, btn_y + btn_h);
+        // Wider than a plain "Import…" needed — "Open/Import…" is the
+        // longer label now that this button opens any file type, not
+        // just SVG (see `App::import_from_home`).
         let import_rect = Rect::new(
-            open_rect.x0 - btn_gap - ui_px(92.0),
+            open_rect.x0 - btn_gap - ui_px(148.0),
             btn_y,
             open_rect.x0 - btn_gap,
             btn_y + btn_h,
@@ -515,7 +518,7 @@ impl Home {
         // two bars actually match — Open only turns "primary" (solid
         // accent) once a file is selected; until then it reads as a
         // second Cancel-style outline, same as Import.
-        crate::widgets::button(scene, tcx, theme, import_rect, "Import…", false);
+        crate::widgets::button(scene, tcx, theme, import_rect, "Open/Import…", false);
         crate::widgets::button(scene, tcx, theme, open_rect, "Open", self.selected.is_some());
     }
 }

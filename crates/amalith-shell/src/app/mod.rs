@@ -5224,33 +5224,93 @@ impl App {
     /// ⌘O — pick a `.amalith` or `.ai` file and load it, replacing the
     /// document.
     fn open_document(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Amalith document", &["amalith"])
-            .add_filter("Illustrator document", &["ai"])
-            .pick_file()
-        else {
+        // No type filter at all — not even one covering every extension
+        // this app understands. macOS's file-type greying isn't a plain
+        // extension-string match: two `.ai` files in the same folder can
+        // differ in whether the picker greys them out, seemingly based
+        // on metadata from whatever tool originally wrote the file (an
+        // Illustrator-saved `.ai` vs. one produced by some other export
+        // pipeline), not their extension. There's no filter string that
+        // reliably covers every real-world file with the right
+        // extension, so don't restrict selection at all — `open_path`
+        // below already decides how to import purely from the
+        // extension, after the pick.
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
         };
         self.open_path(&path);
     }
 
-    /// Load `path` into a tab (filling the Home placeholder if we're on Home,
-    /// otherwise a new tab) and record it in the recent list. An `.ai`
-    /// file reads its PDF-compatible layer (see `amalith_io::import_ai`)
-    /// rather than the native `.amalith` container.
-    fn open_path(&mut self, path: &std::path::Path) {
-        let is_ai = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("ai"));
-        let result: Result<(Document, amalith_io::AssetStore), String> = if is_ai {
-            std::fs::read(path)
+    /// Builds a fresh `Document` from `svg`'s content — an artboard sized
+    /// like a default New Document, one layer, and the SVG's shapes
+    /// pasted in at the origin. Shared by every "open/import an SVG as
+    /// its own document" entry point (⌘O, the Home screen's Import
+    /// button, and the pane chooser's Import card).
+    fn document_from_svg(svg: &str) -> Result<Document, String> {
+        let form = newdoc::NewDocForm::default();
+        let (wpx, hpx) = (form.width_px(), form.height_px());
+        let mut doc = amalith_core::Document::new("Untitled");
+        doc.settings.default_unit = form.unit;
+        doc.settings.color_mode = form.color_mode;
+        let mut editor = Editor::new(doc);
+        editor
+            .execute(Command::CreateArtboard {
+                name: "Artboard 1".into(),
+                rect: amalith_core::Rect::new(-wpx / 2.0, -hpx / 2.0, wpx / 2.0, hpx / 2.0),
+                index: None,
+            })
+            .map_err(|e| e.to_string())?;
+        editor
+            .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
+            .map_err(|e| e.to_string())?;
+        editor.clear_history();
+        editor.copy_from_svg(svg).map_err(|e| e.to_string())?;
+        editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top).map_err(|e| e.to_string())?;
+        Ok(editor.document().clone())
+    }
+
+    /// Reads `path` into a `(Document, AssetStore)` purely from its
+    /// extension — `.ai`/`.pdf` share the PDF-compatible-layer parser
+    /// (see `amalith_io::import_ai`; every `.ai` file already *is* a PDF
+    /// at that layer, and the Illustrator-specific `ai_private_data`
+    /// symbol-recovery bonus it also tries is a no-op for a PDF with no
+    /// such stream, not an error), `.svg`/`.eps`/`.dxf`/`.plt` each build
+    /// a fresh `Document` from a best-effort import, anything else is
+    /// read as the native `.amalith` container. Shared by `open_path`
+    /// (File ▸ Open) and the pane chooser's Open/Import card — both are
+    /// "pick any file, figure out what it is" entry points, just landing
+    /// differently once loaded.
+    fn document_from_path(path: &std::path::Path) -> Result<(Document, amalith_io::AssetStore), String> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        match ext.as_str() {
+            "ai" | "pdf" => std::fs::read(path)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| amalith_io::import_ai(&bytes).map_err(|e| e.to_string()))
-        } else {
-            amalith_io::load(path).map_err(|e| e.to_string())
-        };
-        match result {
+                .and_then(|bytes| amalith_io::import_ai(&bytes).map_err(|e| e.to_string())),
+            "svg" => std::fs::read_to_string(path)
+                .map_err(|e| e.to_string())
+                .and_then(|svg| Self::document_from_svg(&svg))
+                .map(|doc| (doc, amalith_io::AssetStore::new())),
+            "eps" => std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| amalith_io::import_eps(&bytes).map_err(|e| e.to_string()))
+                .map(|doc| (doc, amalith_io::AssetStore::new())),
+            "dxf" => std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| amalith_io::import_dxf(&bytes).map_err(|e| e.to_string()))
+                .map(|doc| (doc, amalith_io::AssetStore::new())),
+            "plt" => std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| amalith_io::import_plt(&bytes).map_err(|e| e.to_string()))
+                .map(|doc| (doc, amalith_io::AssetStore::new())),
+            _ => amalith_io::load(path).map_err(|e| e.to_string()),
+        }
+    }
+
+    /// Load `path` into a tab (filling the Home placeholder if we're on
+    /// Home, otherwise a new tab) and record it in the recent list — see
+    /// `document_from_path` for how `path` itself gets read.
+    fn open_path(&mut self, path: &std::path::Path) {
+        match Self::document_from_path(path) {
             Ok((document, assets)) => {
                 let mut doc = Doc::new(Editor::new(document));
                 doc.asset_store = assets;
@@ -5346,92 +5406,51 @@ impl App {
     /// The Home screen's Import button: there's no open document to paste
     /// into yet, so this starts one (default size, like New Document with
     /// its dialog skipped) and imports the picked SVG's shapes into it.
+    /// The Home screen's "Open/Import…" button. No type filter, same
+    /// reasoning as `open_document`/`open_or_import_as_new_doc` — used
+    /// to be SVG-only under a plain "Import…" label.
     fn import_from_home(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("SVG", &["svg"])
-            .pick_file()
-        else {
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
         };
-        let svg = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(err) => {
-                self.doc.io_error = Some(format!("Import failed: {err}"));
-                self.request_main_redraw();
-                return;
+        match Self::document_from_path(&path) {
+            Ok((document, assets)) => {
+                self.home = None;
+                let mut doc = Doc::new(Editor::new(document));
+                doc.asset_store = assets;
+                doc.file_path = Some(path.clone());
+                self.load_active_doc(doc);
+                self.pending_fit = true;
+                recent::push(&path);
             }
-        };
-
-        let form = newdoc::NewDocForm::default();
-        let (wpx, hpx) = (form.width_px(), form.height_px());
-        let mut doc = amalith_core::Document::new("Untitled");
-        doc.settings.default_unit = form.unit;
-        doc.settings.color_mode = form.color_mode;
-        let mut editor = Editor::new(doc);
-        let _ = editor.execute(Command::CreateArtboard {
-            name: "Artboard 1".into(),
-            rect: amalith_core::Rect::new(-wpx / 2.0, -hpx / 2.0, wpx / 2.0, hpx / 2.0),
-            index: None,
-        });
-        let _ = editor.execute(Command::CreateLayer { name: "Layer 1".into(), index: None });
-        editor.clear_history();
-
-        match editor.copy_from_svg(&svg) {
-            Ok(()) => match editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
-                Ok(ids) => {
-                    self.home = None;
-                    let mut doc = Doc::new(editor);
-                    doc.selection = ids;
-                    self.load_active_doc(doc);
-                    self.pending_fit = true;
-                }
-                Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
-            },
-            Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+            Err(err) => self.doc.io_error = Some(format!("Open failed: {err}")),
         }
         self.request_main_redraw();
     }
 
-    /// Pick an SVG file and import it into a brand-new document — the
-    /// pane chooser's "Import" card. Same shape as `import_from_home`,
-    /// but routes the result through `add_doc` so it adds a new tab
-    /// instead of clobbering whichever document is currently active —
-    /// safe to call from any pane, not just an empty boot.
-    fn import_svg_as_new_doc(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file() else {
+    /// Pick any file this app can open and load it into a brand-new
+    /// document — the pane chooser's "Open/Import" card. No type filter,
+    /// same reasoning as `open_document`'s own picker (see its comment):
+    /// a filter string can't reliably cover every real-world file with
+    /// the right extension. Used to be SVG-only under a plain "Import"
+    /// label, which was actively misleading once it silently rejected
+    /// everything else — same bug `open_document`'s Format dropdown hit.
+    /// Routes the result through `add_doc` (a new tab) rather than
+    /// `open_path`'s Home-aware placement, since this is only ever
+    /// reachable from an already-open pane, never Home itself.
+    fn open_or_import_as_new_doc(&mut self) {
+        let Some(path) = rfd::FileDialog::new().pick_file() else {
             return;
         };
-        let svg = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(err) => {
-                self.doc.io_error = Some(format!("Import failed: {err}"));
-                self.request_main_redraw();
-                return;
+        match Self::document_from_path(&path) {
+            Ok((document, assets)) => {
+                let mut doc = Doc::new(Editor::new(document));
+                doc.asset_store = assets;
+                doc.file_path = Some(path.clone());
+                self.add_doc(doc);
+                recent::push(&path);
             }
-        };
-        let form = newdoc::NewDocForm::default();
-        let (wpx, hpx) = (form.width_px(), form.height_px());
-        let mut doc = amalith_core::Document::new("Untitled");
-        doc.settings.default_unit = form.unit;
-        doc.settings.color_mode = form.color_mode;
-        let mut editor = Editor::new(doc);
-        let _ = editor.execute(Command::CreateArtboard {
-            name: "Artboard 1".into(),
-            rect: amalith_core::Rect::new(-wpx / 2.0, -hpx / 2.0, wpx / 2.0, hpx / 2.0),
-            index: None,
-        });
-        let _ = editor.execute(Command::CreateLayer { name: "Layer 1".into(), index: None });
-        editor.clear_history();
-        match editor.copy_from_svg(&svg) {
-            Ok(()) => match editor.paste(amalith_core::Vec2::ZERO, PasteStack::Top) {
-                Ok(ids) => {
-                    let mut doc = Doc::new(editor);
-                    doc.selection = ids;
-                    self.add_doc(doc);
-                }
-                Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
-            },
-            Err(err) => self.doc.io_error = Some(format!("Import failed: {err}")),
+            Err(err) => self.doc.io_error = Some(format!("Open failed: {err}")),
         }
         self.request_main_redraw();
     }
@@ -7672,7 +7691,7 @@ impl App {
             symbol_name_dialog: None,
             layer_dialog: None,
             area_type_dialog: None,
-            recolor_dialog: None,
+            recolor_dialog: self.recolor_dialog.as_ref(),
             gradient: self.gradient_ctx(),
             gradient_edit: self.gradient_edit.as_ref().map(|(f, s, _)| (*f, s.as_str())),
             appearance_items: Vec::new(),

@@ -1359,7 +1359,7 @@ impl App {
                 } else if chooser_action_row(r, 1, n_open, n_recent, scroll).contains(self.pointer) {
                     self.open_mux_terminal();
                 } else if chooser_action_row(r, 2, n_open, n_recent, scroll).contains(self.pointer) {
-                    self.import_svg_as_new_doc();
+                    self.open_or_import_as_new_doc();
                 } else {
                     let mut hit = None;
                     for (i, (_, pick)) in open_docs.iter().enumerate() {
@@ -1567,7 +1567,7 @@ impl App {
                         const ACTIONS: [(&str, usize, &str); CHOOSER_ACTIONS] = [
                             ("Create a new Document", 0, "⌘N"),
                             ("Start a shell in this pane", 1, "⌘J"),
-                            ("Import", 2, "⌘O"),
+                            ("Open/Import", 2, "⌘O"),
                         ];
                         for (i, (label, kind, hint)) in ACTIONS.iter().enumerate() {
                             let ar = chooser_action_row(r, i, n_open, n_recent, scroll);

@@ -225,6 +225,9 @@ impl App {
                 }
                 Format::Svg => self.export_svg_file(ab_rect, src, &path),
                 Format::Pdf => self.export_pdf_file(src, ab_fill, &path),
+                Format::Eps => self.export_geometry_file(src, &path, |doc, ids| amalith_io::export_eps(doc, ids)),
+                Format::Dxf => self.export_geometry_file(src, &path, |doc, ids| amalith_io::export_dxf(doc, ids)),
+                Format::Plt => self.export_geometry_file(src, &path, |doc, ids| amalith_io::export_plt(doc, ids)),
             };
             match result {
                 Ok(()) => written += 1,
@@ -306,6 +309,30 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Shared tail for EPS/DXF/PLT: unlike SVG/PDF, these have no page
+    /// framing of their own (`export_eps`/`export_dxf`/`export_plt` each
+    /// tight-crop to whatever geometry they're given instead), so there's
+    /// no `reframe`-equivalent step needed — just gather the same
+    /// artboard-overlapping top-level ids `export_svg_file`/
+    /// `export_pdf_file` do and hand them to whichever writer `write` is.
+    fn export_geometry_file(
+        &self,
+        src: amalith_core::Rect,
+        path: &std::path::Path,
+        write: impl Fn(&amalith_core::Document, &[amalith_core::ObjectId]) -> Option<String>,
+    ) -> std::io::Result<()> {
+        let doc = self.doc.editor.document();
+        let ids: Vec<amalith_core::ObjectId> = doc
+            .layers()
+            .iter()
+            .filter(|l| l.visible)
+            .flat_map(|l| l.children.iter().copied())
+            .filter(|&id| doc.bounds_of(id).is_some_and(|b| rects_overlap(b, src)))
+            .collect();
+        let text = write(doc, &ids).ok_or_else(|| io_err("no exportable content on this artboard"))?;
+        std::fs::write(path, text)
     }
 
     fn export_svg_file(

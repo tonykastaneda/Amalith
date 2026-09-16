@@ -17,14 +17,20 @@ mod ai;
 mod ai_private_data;
 mod assets;
 mod container;
+mod dxf;
+mod eps;
 mod error;
 mod manifest;
+mod plt;
 mod svg;
 
 pub use ai::{import_ai, AiError};
 pub use assets::AssetStore;
 pub use container::{load, save};
+pub use dxf::{export_dxf, import_dxf, DxfError};
+pub use eps::{export_eps, import_eps, EpsError};
 pub use error::IoError;
+pub use plt::{export_plt, import_plt, PltError};
 pub use svg::{export_svg, import_svg, ImportedSvg, SvgError};
 
 #[cfg(test)]

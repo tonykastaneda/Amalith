@@ -9,10 +9,14 @@ pub enum Format {
     Jpg,
     Svg,
     Pdf,
+    Eps,
+    Dxf,
+    Plt,
 }
 
 impl Format {
-    pub const ALL: [Format; 4] = [Format::Png, Format::Jpg, Format::Svg, Format::Pdf];
+    pub const ALL: [Format; 7] =
+        [Format::Png, Format::Jpg, Format::Svg, Format::Pdf, Format::Eps, Format::Dxf, Format::Plt];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -20,6 +24,9 @@ impl Format {
             Format::Jpg => "JPG",
             Format::Svg => "SVG",
             Format::Pdf => "PDF",
+            Format::Eps => "EPS",
+            Format::Dxf => "DXF",
+            Format::Plt => "PLT",
         }
     }
 
@@ -29,12 +36,15 @@ impl Format {
             Format::Jpg => "jpg",
             Format::Svg => "svg",
             Format::Pdf => "pdf",
+            Format::Eps => "eps",
+            Format::Dxf => "dxf",
+            Format::Plt => "plt",
         }
     }
 
     /// Vector formats ignore the scale factor.
     pub fn is_vector(self) -> bool {
-        matches!(self, Format::Svg | Format::Pdf)
+        !matches!(self, Format::Png | Format::Jpg)
     }
 }
 
