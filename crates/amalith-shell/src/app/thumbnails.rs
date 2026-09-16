@@ -41,7 +41,8 @@ impl App {
         let doc: Document = if is_ai {
             std::fs::read(path)
                 .ok()
-                .and_then(|b| amalith_io::import_ai(&b).ok())?
+                .and_then(|b| amalith_io::import_ai(&b).ok())
+                .map(|(doc, _assets)| doc)?
         } else {
             amalith_io::load(path).ok()?.0
         };

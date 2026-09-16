@@ -5208,7 +5208,6 @@ impl App {
             std::fs::read(path)
                 .map_err(|e| e.to_string())
                 .and_then(|bytes| amalith_io::import_ai(&bytes).map_err(|e| e.to_string()))
-                .map(|doc| (doc, amalith_io::AssetStore::new()))
         } else {
             amalith_io::load(path).map_err(|e| e.to_string())
         };

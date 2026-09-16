@@ -14,6 +14,7 @@
 //! See `manifest.rs` for the on-disk schema and `container.rs` for the
 //! save/load implementation.
 mod ai;
+mod ai_private_data;
 mod assets;
 mod container;
 mod error;
