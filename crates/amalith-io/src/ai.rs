@@ -140,7 +140,7 @@ pub fn import_ai(bytes: &[u8]) -> Result<(Document, AssetStore), AiError> {
             assets.insert(container_path.clone(), bytes);
             document.add_asset(Asset::embedded(asset_id, "Image", AssetKind::Image, container_path));
         }
-        let (out, events) = apply_clips(&mut document, layer_id, out, clip_events, events);
+        let (out, events) = apply_clips(&mut document, layer_id, out, clip_events, events, artboard_rect);
 
         // HIGHLY EXPERIMENTAL: see the module doc and `ai_private_data.rs`.
         // `confirmed` is `None` the moment anything about this looks
@@ -202,6 +202,7 @@ fn apply_clips(
     out: Vec<Recovered>,
     clip_events: Vec<ClipEvent>,
     events: Vec<DoEvent>,
+    artboard_rect: Rect,
 ) -> (Vec<Recovered>, Vec<DoEvent>) {
     if clip_events.is_empty() {
         return (out, events);
@@ -213,6 +214,18 @@ fn apply_clips(
             // A clip was established but nothing was painted under it
             // before the matching `Q` — nothing to group, so there's
             // nothing to do here.
+            continue;
+        }
+        // Illustrator (like most PDF writers) routinely wraps an entire
+        // page's content in a clip matching the page/artboard rect
+        // itself, purely so nothing bleeds past the page edge — boilerplate
+        // from the output format's own mechanics, not a real, user-made
+        // clipping mask (Illustrator's own Layers panel never shows this
+        // as a clip group). Recovering it as one would wrap the *whole*
+        // imported document in a single meaningless clip group — reported
+        // as "the entire thing wrapped in a clipping mask". Skip it: treat
+        // the range as if it were never clipped at all.
+        if clip_covers_rect(&clip.mask, artboard_rect) {
             continue;
         }
         let group_id = ObjectId::new();
@@ -272,6 +285,18 @@ fn apply_clips(
         .collect();
 
     (new_out, new_events)
+}
+
+/// Whether `mask`'s bounds cover all of `rect` (with a small tolerance
+/// for floating-point noise) — the signature of a page/artboard-bounding
+/// "don't bleed past the edge" clip rather than a real, deliberately
+/// smaller user-made clipping mask. Also true, harmlessly, for a mask
+/// that's larger than the artboard: clipping to something bigger than
+/// what's visible changes nothing observable.
+fn clip_covers_rect(mask: &PathData, rect: Rect) -> bool {
+    const TOL: f64 = 1.0;
+    let b = mask.local_bounds();
+    b.x0 <= rect.x0 + TOL && b.y0 <= rect.y0 + TOL && b.x1 >= rect.x1 - TOL && b.y1 >= rect.y1 - TOL
 }
 
 /// HIGHLY EXPERIMENTAL. Cross-checks the private-data stream's ordered
@@ -1212,15 +1237,13 @@ mod tests {
 
     /// Builds a minimal, valid, from-scratch PDF (no `.ai`-specific
     /// wrapping needed — the importer only reads the PDF-compatible
-    /// layer, so a plain PDF exercises it identically) whose single
-    /// page's content stream clips one filled rectangle to a smaller
-    /// one: `q 0 0 50 50 re W n 1 0 0 rg 0 0 100 100 re f Q`.
-    fn pdf_with_one_clipped_rect() -> Vec<u8> {
+    /// layer, so a plain PDF exercises it identically) with `content` as
+    /// its single page's content stream, on a 100x100 `MediaBox`.
+    fn pdf_with_content(content: &[u8]) -> Vec<u8> {
         use lopdf::{dictionary, Document as PdfDoc, Stream};
 
         let mut doc = PdfDoc::with_version("1.5");
-        let content = b"q\n0 0 50 50 re\nW n\n1 0 0 rg\n0 0 100 100 re\nf\nQ".to_vec();
-        let content_id = doc.add_object(Stream::new(dictionary! {}, content));
+        let content_id = doc.add_object(Stream::new(dictionary! {}, content.to_vec()));
         let resources_id = doc.add_object(dictionary! {});
         let page_id = doc.add_object(dictionary! {
             "Type" => "Page",
@@ -1247,7 +1270,10 @@ mod tests {
 
     #[test]
     fn clipped_rect_becomes_a_clip_group_not_two_flat_objects() {
-        let bytes = pdf_with_one_clipped_rect();
+        // `q 0 0 50 50 re W n 1 0 0 rg 0 0 100 100 re f Q` — clips a
+        // filled rect to a genuinely smaller one, so this really is a
+        // deliberate clip, not a page-bounding one.
+        let bytes = pdf_with_content(b"q\n0 0 50 50 re\nW n\n1 0 0 rg\n0 0 100 100 re\nf\nQ");
         let (doc, _assets) = import_ai(&bytes).unwrap();
 
         let top_level: Vec<_> = doc.objects().filter(|o| matches!(o.parent, ObjectParent::Layer(_))).collect();
@@ -1272,6 +1298,42 @@ mod tests {
             "the filled rect's red fill should have survived being grouped: {:?}",
             content_obj.appearance.items
         );
+    }
+
+    /// Regression test for "the entire thing wrapped in a clipping mask"
+    /// — Illustrator-style boilerplate clipping the whole page to its
+    /// own `MediaBox` (exactly matching it here, `0 0 100 100`, same as
+    /// `pdf_with_content`'s fixed page size) must not produce a clip
+    /// group at all; the content should land as a plain top-level object.
+    #[test]
+    fn a_clip_matching_the_whole_page_is_not_recovered_as_a_clip_group() {
+        let bytes = pdf_with_content(b"q\n0 0 100 100 re\nW n\n1 0 0 rg\n10 10 20 20 re\nf\nQ");
+        let (doc, _assets) = import_ai(&bytes).unwrap();
+
+        let top_level: Vec<_> = doc.objects().filter(|o| matches!(o.parent, ObjectParent::Layer(_))).collect();
+        assert_eq!(top_level.len(), 1, "expected exactly one top-level object (the rect, no wrapping group), got {top_level:?}");
+        assert!(
+            matches!(top_level[0].kind, ObjectKind::Path(_)),
+            "expected a plain Path, not a clip Group: {:?}",
+            top_level[0].kind
+        );
+        assert!(matches!(
+            &top_level[0].appearance.items[0],
+            AppearanceItem::Fill { paint: Paint::Solid(c), .. } if c.r > 0.9 && c.g < 0.1
+        ));
+    }
+
+    /// A clip mask *larger* than the page (a generous bleed box some
+    /// writers emit) is just as meaningless to keep as an exact match —
+    /// clipping to something bigger than what's visible changes nothing.
+    #[test]
+    fn a_clip_larger_than_the_page_is_also_not_recovered_as_a_clip_group() {
+        let bytes = pdf_with_content(b"q\n-50 -50 200 200 re\nW n\n1 0 0 rg\n10 10 20 20 re\nf\nQ");
+        let (doc, _assets) = import_ai(&bytes).unwrap();
+
+        let top_level: Vec<_> = doc.objects().filter(|o| matches!(o.parent, ObjectParent::Layer(_))).collect();
+        assert_eq!(top_level.len(), 1, "expected exactly one top-level object (the rect, no wrapping group), got {top_level:?}");
+        assert!(matches!(top_level[0].kind, ObjectKind::Path(_)));
     }
 }
 
