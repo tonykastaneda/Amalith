@@ -721,6 +721,11 @@ enum MenuAction {
     OpenTerminal,
     /// Windows menu: show/hide the panel with this id.
     TogglePanel(PanelKind),
+    /// Windows menu: show/hide the Tools palette — the `Master`-based
+    /// equivalent of `TogglePanel`, kept separate since the one true
+    /// Tools palette is a `MasterKind::Tools` master, not a `PanelKind`
+    /// (see `WINDOW_PANELS`'s doc comment for why it isn't one of those).
+    ToggleTools,
     /// Windows ▸ Workspace: switch to the named workspace.
     PickWorkspace(String),
     /// Windows ▸ Workspace ▸ Reset <name>.
@@ -4696,6 +4701,7 @@ impl App {
             MenuAction::SelectNextBelow => self.select_next_z(-1),
             MenuAction::SelectSame(kind) => self.select_same(kind),
             MenuAction::TogglePanel(id) => self.toggle_panel(id),
+            MenuAction::ToggleTools => self.toggle_tools_master(),
             MenuAction::PickWorkspace(name) => self.apply_workspace(&name),
             MenuAction::ResetWorkspace => {
                 let active = self.workspaces.active.clone();
@@ -5896,11 +5902,26 @@ impl App {
         }
     }
 
-    /// Push `settings.accent` into the live theme (and its derived tokens).
-    fn apply_theme_accent(&mut self) {
-        let [r, g, b] = self.settings.accent;
-        self.theme
-            .set_accent(vello::peniko::Color::from_rgb8(r, g, b));
+    /// Rebuild the live theme from `settings.color_scheme` — accent
+    /// included, since `ColorScheme` owns that too now (see its doc
+    /// comment in theme.rs).
+    fn apply_color_scheme(&mut self) {
+        self.preview_color_scheme(self.settings.color_scheme);
+    }
+
+    /// Live-preview `scheme` without touching `settings` — used both by
+    /// `apply_color_scheme` (the confirmed setting) and by Preferences'
+    /// "Default Themes" dropdown while it's still open, so picking an
+    /// entry reskins the app immediately instead of waiting for OK
+    /// (reverted on Cancel by re-calling `apply_color_scheme`, which
+    /// re-derives from the still-unchanged `settings.color_scheme`).
+    fn preview_color_scheme(&mut self, scheme: crate::theme::ColorScheme) {
+        self.theme = crate::theme::Theme::for_scheme(scheme);
+        // `for_scheme` returns unscaled base metrics (same as
+        // `Theme::default()`) — reapply the live UI scale so a scheme
+        // switch never visibly resets tab-strip/panel sizing back to
+        // 100% until the next `apply_ui_scale` call happens to run.
+        self.theme.set_ui_scale(self.settings.ui_scale);
         self.request_main_redraw();
     }
 
@@ -8023,6 +8044,27 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Windows menu: show the Tools palette (docked back at its default
+    /// spot) if hidden, or remove it if shown — same shape as
+    /// `toggle_panel`, but for the one `MasterKind::Tools` master rather
+    /// than a `PanelKind`. Always re-docks at `Side::Left` rather than
+    /// restoring wherever it was before closing, same simplification
+    /// `toggle_panel` already makes for panels it re-shows.
+    fn toggle_tools_master(&mut self) {
+        self.stack_flyout = None;
+        if let Some(id) = self.dock.masters.iter().find(|m| m.is_tools()).map(|m| m.id) {
+            self.close_master(id);
+        } else {
+            let id = self.dock.spawn_tools_master([40.0, 40.0, 80.0, 400.0]);
+            self.dock.dock_master(id, Side::Left, 0);
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            if let Some(m) = &self.native_menu {
+                m.sync_window(&self.dock);
+            }
+            self.request_main_redraw();
+        }
+    }
+
     /// The Master's own chevron: toggles a Normal master between Stack and
     /// Tabs display, or a Tools master's grid density — see
     /// `MasterLayout`/`ToolsDensity`.
@@ -9002,7 +9044,7 @@ impl ApplicationHandler for App {
         if self.main_id.is_some() {
             return;
         }
-        self.apply_theme_accent();
+        self.apply_color_scheme();
         self.apply_ui_scale();
         self.apply_handle_size();
         if self.font_families.is_empty() {
@@ -9693,7 +9735,13 @@ fn layout_tabs(text: &mut TextContext, labels: &[String], strip: Rect) -> Vec<(R
 /// The panels the Panels menu lists, alphabetical like Illustrator. A
 /// deliberate subset of `PanelKind::ALL` — excludes the color picker and
 /// every float-only dialog panel, which never belong in this menu.
-const WINDOW_PANELS: [PanelKind; 15] = [
+/// `PanelKind::Tools` is also deliberately excluded: it's a real, paintable
+/// panel kind (`panels::tools`), but the one true Tools palette is always
+/// the dedicated `MasterKind::Tools` master `spawn_tools_master` creates —
+/// letting this list dock a *second*, ordinary copy of it (with its own
+/// tab strip and the wider generic-master min-width, not `TOOLS_MIN_W`)
+/// is how you end up with what looks like two different Tools panels.
+const WINDOW_PANELS: [PanelKind; 14] = [
     PanelKind::Align,
     PanelKind::Appearance,
     PanelKind::Artboards,
@@ -9707,7 +9755,6 @@ const WINDOW_PANELS: [PanelKind; 15] = [
     PanelKind::Pathfinder,
     PanelKind::Swatches,
     PanelKind::Symbols,
-    PanelKind::Tools,
     PanelKind::Transform,
 ];
 

@@ -15,7 +15,7 @@ use vello::Scene;
 use winit::keyboard::KeyCode;
 
 use crate::text::TextContext;
-use crate::theme::Theme;
+use crate::theme::{ColorScheme, Theme};
 use crate::tool::Tool;
 
 /// A tool / command shortcut: a letter/digit/arrow key, optionally with
@@ -329,8 +329,9 @@ pub struct Settings {
     pub show_tooltips: bool,
     /// Show the Home screen when the last document tab closes.
     pub home_on_last_close: bool,
-    /// App accent colour, sRGB. Feeds [`crate::theme::Theme::set_accent`].
-    pub accent: [u8; 3],
+    /// Which named [`ColorScheme`] the whole app is reskinned from,
+    /// accent color included — see the type's own doc comment.
+    pub color_scheme: ColorScheme,
     /// Tool shortcut per [`Tool::ALL`] position.
     pub tool_keys: [Option<KeyChord>; Tool::ALL.len()],
     /// Command shortcut per [`PrefAction::ALL`] position.
@@ -412,7 +413,7 @@ impl Default for Settings {
             nudge_step: 1.0,
             show_tooltips: true,
             home_on_last_close: true,
-            accent: ACCENTS[0].1,
+            color_scheme: ColorScheme::default(),
             tool_keys: Settings::default_tool_keys(),
             action_keys: Settings::default_action_keys(),
             show_fps: true,
@@ -440,16 +441,6 @@ impl Default for Settings {
         }
     }
 }
-
-/// Selectable accent presets (label, sRGB). The first is the default.
-pub const ACCENTS: [(&str, [u8; 3]); 6] = [
-    ("Blue", [0x3b, 0x9b, 0xff]),
-    ("Gold", [0xf4, 0xbe, 0x18]),
-    ("Green", [0x4c, 0xb7, 0x6b]),
-    ("Red", [0xe0, 0x50, 0x50]),
-    ("Violet", [0x9b, 0x6c, 0xf0]),
-    ("Graphite", [0x9a, 0x9a, 0x9a]),
-];
 
 pub const CATEGORIES: [&str; 5] = ["General", "Smart Guides", "Keyboard", "Scripts", "Debug"];
 
@@ -490,7 +481,11 @@ pub struct Prefs {
     sg_angle_steppers: Vec<(Rect, Rect)>,
     sg_angle_fields: Vec<Rect>,
     pub sg_angle_edit: Option<(usize, crate::text_field::TextField)>,
-    accent_swatches: Vec<(Rect, [u8; 3])>,
+    /// General page: the "Default Themes" dropdown trigger chip and,
+    /// while open, one row per `ColorScheme::ALL` entry.
+    pub scheme_menu_open: bool,
+    scheme_trigger: Rect,
+    scheme_items: Vec<(Rect, ColorScheme)>,
     scale_buttons: Vec<(Rect, f64)>,
     handle_size_buttons: Vec<(Rect, crate::handle_scale::HandleSize)>,
     /// Keyboard page: (row rect, which binding it edits).
@@ -529,7 +524,8 @@ pub enum Hit {
     SetCullInset(f64),
     ToggleHideWip,
     ToggleHideWipTools,
-    SetAccent([u8; 3]),
+    ToggleSchemeMenu,
+    SetColorScheme(ColorScheme),
     SetUiScale(f64),
     SetHandleSize(crate::handle_scale::HandleSize),
     /// Smart Guides page: toggle sub-feature `i` (index into the page's
@@ -605,7 +601,9 @@ impl Prefs {
             sg_angle_steppers: Vec::new(),
             sg_angle_fields: Vec::new(),
             sg_angle_edit: None,
-            accent_swatches: Vec::new(),
+            scheme_menu_open: false,
+            scheme_trigger: Rect::ZERO,
+            scheme_items: Vec::new(),
             scale_buttons: Vec::new(),
             handle_size_buttons: Vec::new(),
             bind_rows: Vec::new(),
@@ -658,6 +656,17 @@ impl Prefs {
             if r.contains(p) {
                 return Hit::PickPreset(i);
             }
+        }
+        // Same reasoning for the Default Themes dropdown — it's painted
+        // last, so it must be hit-tested first, ahead of whatever
+        // General-page rows it visually overlaps.
+        for (r, scheme) in &self.scheme_items {
+            if r.contains(p) {
+                return Hit::SetColorScheme(*scheme);
+            }
+        }
+        if self.scheme_trigger.contains(p) {
+            return Hit::ToggleSchemeMenu;
         }
         for (i, r) in self.cat_rows.iter().enumerate() {
             if r.contains(p) {
@@ -731,11 +740,6 @@ impl Prefs {
         }
         for (r, size) in &self.handle_size_buttons {
             if r.contains(p) { return Hit::SetHandleSize(*size); }
-        }
-        for (r, rgb) in &self.accent_swatches {
-            if r.contains(p) {
-                return Hit::SetAccent(*rgb);
-            }
         }
         for (r, t) in &self.bind_rows {
             if r.contains(p) {
@@ -817,7 +821,8 @@ impl Prefs {
         let px = ox + metric_sidebar_w() + metric_pad();
 
         // Rects from the page that isn't shown must not stay hittable.
-        self.accent_swatches.clear();
+        self.scheme_trigger = Rect::ZERO;
+        self.scheme_items.clear();
         self.scale_buttons.clear();
         self.handle_size_buttons.clear();
         self.bind_rows.clear();
@@ -934,30 +939,18 @@ impl Prefs {
         );
         cy += ui_px(40.0);
 
-        // Accent colour swatches.
-        tcx.draw(scene, "Accent Color", 12.0, theme.text_dim, px, cy + ui_px(12.0));
-        let mut sx = px + ui_px(170.0);
-        for (_, rgb) in ACCENTS {
-            let sw = Rect::new(sx, cy, sx + ui_px(20.0), cy + ui_px(20.0));
-            scene.fill(
-                Fill::NonZero,
-                Affine::IDENTITY,
-                Color::from_rgb8(rgb[0], rgb[1], rgb[2]),
-                None,
-                &sw.to_rounded_rect(ui_px(4.0)),
-            );
-            if rgb == self.working.accent {
-                scene.stroke(
-                    &Stroke::new(ui_px(2.0)),
-                    Affine::IDENTITY,
-                    theme.text,
-                    None,
-                    &sw.inflate(ui_px(2.5), ui_px(2.5)).to_rounded_rect(ui_px(6.0)),
-                );
-            }
-            self.accent_swatches.push((sw, rgb));
-            sx += ui_px(30.0);
-        }
+        // Default Themes — reskins the whole app at once, accent
+        // included (see theme.rs's module doc comment for what stays
+        // fixed regardless: artboard paper and per-layer contour
+        // colors). A dropdown, not a button row, since this list is
+        // meant to grow (custom/imported schemes later).
+        tcx.draw(scene, "Default Themes", 12.0, theme.text_dim, px, cy + ui_px(18.0));
+        let chip = Rect::new(px + ui_px(170.0), cy, px + ui_px(170.0) + ui_px(160.0), cy + ui_px(26.0));
+        scene.fill(Fill::NonZero, Affine::IDENTITY, theme.bg, None, &chip.to_rounded_rect(ui_px(4.0)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.border, None, &chip.to_rounded_rect(ui_px(4.0)));
+        tcx.draw(scene, self.working.color_scheme.label(), 12.0, theme.text, chip.x0 + ui_px(10.0), chip.center().y + ui_px(4.0));
+        tri(scene, Point::new(chip.x1 - ui_px(14.0), chip.center().y), false, theme.text_dim);
+        self.scheme_trigger = chip;
 
         cy += ui_px(42.0);
         tcx.draw(scene, "UI Scale", 12.0, theme.text_dim, px, cy + ui_px(16.0));
@@ -986,6 +979,39 @@ impl Prefs {
         let by = oy + metric_h() - ui_px(40.0);
         self.ok = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(76.0), by, "OK", true);
         self.cancel = button(scene, tcx, theme, ox + metric_w() - metric_pad() - ui_px(174.0), by, "Cancel", false);
+
+        // Default Themes dropdown, painted last so it sits over
+        // everything below the chip (mirrors the Keyboard page's own
+        // Preset dropdown). Capped to the space actually left in the
+        // card and scrolled (15 entries won't fit uncapped) — an
+        // uncapped list previously drew rows past the card's own
+        // bounds, which `on_press`'s `!self.card().contains(p)` early
+        // return then silently ate as a backdrop click.
+        if self.scheme_menu_open {
+            let t = self.scheme_trigger;
+            let content_h = ColorScheme::ALL.len() as f64 * ui_px(24.0);
+            let avail = (oy + metric_h() - ui_px(48.0)) - (t.y1 + ui_px(2.0));
+            let list_h = content_h.min(avail.max(ui_px(24.0)));
+            let view = Rect::new(t.x0, t.y1 + ui_px(2.0), t.x1, t.y1 + ui_px(2.0) + list_h);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, theme.strip_bg, None, &view.to_rounded_rect(ui_px(4.0)));
+            scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.accent, None, &view.to_rounded_rect(ui_px(4.0)));
+            let sc = self.begin_scroll_list(scene, theme, view, content_h);
+            for (i, scheme) in ColorScheme::ALL.into_iter().enumerate() {
+                let ry0 = view.y0 + i as f64 * ui_px(24.0) - sc;
+                let r = Rect::new(view.x0, ry0, view.x1, ry0 + ui_px(24.0));
+                if r.y1 < view.y0 || r.y0 > view.y1 {
+                    continue;
+                }
+                if scheme == self.working.color_scheme {
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent.with_alpha(0.18), None, &r);
+                }
+                tcx.draw(scene, scheme.label(), 12.0, theme.text, r.x0 + ui_px(10.0), r.y0 + ui_px(16.0));
+                // Clamped to `view` so a row scrolled only partway out
+                // isn't hittable past where it's actually visible.
+                self.scheme_items.push((r.intersect(view), scheme));
+            }
+            scene.pop_layer();
+        }
     }
 
     /// The Keyboard page — one row per tool with its current shortcut.

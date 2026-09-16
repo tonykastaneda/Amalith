@@ -51,7 +51,11 @@ impl App {
         // upper bound is re-clamped in `paint` from the real content
         // height, so a one-frame overshoot self-corrects (no freeze).
         if let Some(p) = &mut self.prefs {
-            if matches!(p.category, 1 | 2) {
+            // General's own use of `page_scroll` is the "Default Themes"
+            // dropdown, live only while it's open — gated separately so
+            // wheeling over the rest of General (which has nothing to
+            // scroll) doesn't touch it.
+            if matches!(p.category, 1 | 2) || (p.category == 0 && p.scheme_menu_open) {
                 p.page_scroll.wheel(dy);
                 self.request_main_redraw();
             }

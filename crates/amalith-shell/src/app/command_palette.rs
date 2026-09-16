@@ -132,6 +132,14 @@ impl App {
                 PaletteKind::Menu(MenuAction::TogglePanel(id)),
             );
         }
+        // Not one of `WINDOW_PANELS` — the Tools palette is a
+        // `MasterKind::Tools` master, not a `PanelKind`.
+        let tools_on = self.dock.masters.iter().any(Master::is_tools);
+        add(
+            format!("{} Tools Panel", if tools_on { "Hide" } else { "Show" }),
+            "Panel",
+            PaletteKind::Menu(MenuAction::ToggleTools),
+        );
 
         for (i, name) in prefs::CATEGORIES.iter().enumerate() {
             add(format!("Preferences: {name}"), "App", PaletteKind::Prefs(i));

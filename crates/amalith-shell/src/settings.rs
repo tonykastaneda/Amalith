@@ -82,9 +82,9 @@ fn parse(text: &str) -> Settings {
             }
             "hide_wip_menu_items" => s.hide_wip_menu_items = v == "true",
             "hide_wip_tools" => s.hide_wip_tools = v == "true",
-            "accent" => {
-                if let Some(rgb) = parse_hex(v) {
-                    s.accent = rgb;
+            "color_scheme" => {
+                if let Some(scheme) = crate::theme::ColorScheme::from_id_str(v) {
+                    s.color_scheme = scheme;
                 }
             }
             "handle_size" => {
@@ -162,7 +162,8 @@ pub fn save(s: &Settings) {
 
 fn serialize(s: &Settings) -> String {
     let mut body = format!(
-        "ui_scale = {}\nnudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\naccent = {:02x}{:02x}{:02x}\n\
+        "ui_scale = {}\nnudge_step = {}\nshow_tooltips = {}\nhome_on_last_close = {}\n\
+         color_scheme = {}\n\
          show_fps = {}\nshow_cull_outline = {}\ncull_inset = {}\nhide_wip_menu_items = {}\nhide_wip_tools = {}\nhandle_size = {}\n\
          smart_guides_enabled = {}\nsg_alignment_guides = {}\nsg_anchor_path_labels = {}\n\
          sg_object_highlighting = {}\nsg_measurement_labels = {}\nsg_construction_guides = {}\n\
@@ -172,9 +173,7 @@ fn serialize(s: &Settings) -> String {
         s.nudge_step,
         s.show_tooltips,
         s.home_on_last_close,
-        s.accent[0],
-        s.accent[1],
-        s.accent[2],
+        s.color_scheme.id_str(),
         s.show_fps,
         s.show_cull_outline,
         s.cull_inset,
@@ -270,18 +269,6 @@ pub fn action_name(a: PrefAction) -> &'static str {
     }
 }
 
-fn parse_hex(v: &str) -> Option<[u8; 3]> {
-    let v = v.trim_start_matches('#');
-    if v.len() != 6 {
-        return None;
-    }
-    Some([
-        u8::from_str_radix(&v[0..2], 16).ok()?,
-        u8::from_str_radix(&v[2..4], 16).ok()?,
-        u8::from_str_radix(&v[4..6], 16).ok()?,
-    ])
-}
-
 #[cfg(test)]
 mod scale_tests {
     use super::*;
@@ -321,7 +308,7 @@ mod scale_tests {
             nudge_step: 7.5,
             show_tooltips: false,
             home_on_last_close: false,
-            accent: [0x11, 0x22, 0x33],
+            color_scheme: crate::theme::ColorScheme::Dracula,
             tool_keys: [Some(sentinel); Tool::ALL.len()],
             action_keys: [Some(sentinel); PrefAction::ALL.len()],
             show_fps: false,
@@ -354,7 +341,7 @@ mod scale_tests {
             nudge_step,
             show_tooltips,
             home_on_last_close,
-            accent,
+            color_scheme,
             tool_keys,
             action_keys,
             show_fps,
@@ -384,7 +371,7 @@ mod scale_tests {
         assert_eq!(nudge_step, original.nudge_step, "nudge_step did not round-trip");
         assert_eq!(show_tooltips, original.show_tooltips, "show_tooltips did not round-trip");
         assert_eq!(home_on_last_close, original.home_on_last_close, "home_on_last_close did not round-trip");
-        assert_eq!(accent, original.accent, "accent did not round-trip");
+        assert!(color_scheme == original.color_scheme, "color_scheme did not round-trip");
         assert!(tool_keys == original.tool_keys, "tool_keys did not round-trip");
         assert!(action_keys == original.action_keys, "action_keys did not round-trip");
         assert_eq!(show_fps, original.show_fps, "show_fps did not round-trip");

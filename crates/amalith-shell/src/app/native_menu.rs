@@ -16,6 +16,10 @@ pub(in crate::app) struct NativeMenu {
     /// Windows-menu checkmarks, keyed by panel id, updated as panels
     /// open/close.
     window_checks: Vec<(PanelKind, muda::CheckMenuItem)>,
+    /// Windows ▸ Tools checkmark — the Tools palette is a `MasterKind::
+    /// Tools` master, not a `PanelKind`, so it isn't one of `window_checks`
+    /// (see `WINDOW_PANELS`'s doc comment for why).
+    tools_check: muda::CheckMenuItem,
     /// View ▸ Guides checkmarks — (show-guides, lock-guides).
     guide_checks: (muda::CheckMenuItem, muda::CheckMenuItem),
     /// File ▸ Document Color Mode checkmarks — (CMYK, RGB).
@@ -1205,6 +1209,15 @@ impl NativeMenu {
                 (*kind, mi)
             })
             .collect();
+        // Not one of `window_checks` — the Tools palette is a
+        // `MasterKind::Tools` master, not a `PanelKind` (see
+        // `WINDOW_PANELS`'s doc comment) — registered separately but
+        // placed in the same alphabetical run below.
+        let tools_check = reg(
+            &mut items,
+            CheckMenuItem::new("Tools", true, false, None),
+            MenuAction::ToggleTools,
+        );
         let new_window_wip = wip("New Window");
         let window_arrange_wip = wip("Arrange");
         let find_extensions_wip = wip("Find Extensions on Exchange…");
@@ -1240,7 +1253,16 @@ impl NativeMenu {
             window_refs.push(&toolbars_wip);
         }
         window_refs.push(&windows_sep);
-        window_refs.extend(window_checks.iter().map(|(_, i)| i as &dyn muda::IsMenuItem));
+        // `window_checks` is alphabetical (mirrors `WINDOW_PANELS`); Tools
+        // slots in at its own alphabetical spot, between Symbols and
+        // Transform, rather than tacking on at the end.
+        let tools_pos = window_checks
+            .iter()
+            .position(|(k, _)| k.label() > "Tools")
+            .unwrap_or(window_checks.len());
+        window_refs.extend(window_checks[..tools_pos].iter().map(|(_, i)| i as &dyn muda::IsMenuItem));
+        window_refs.push(&tools_check);
+        window_refs.extend(window_checks[tools_pos..].iter().map(|(_, i)| i as &dyn muda::IsMenuItem));
         if !hide_wip {
             window_refs.push(&win_sep3);
             window_refs.push(&brush_libraries_wip);
@@ -1308,6 +1330,7 @@ impl NativeMenu {
         Self {
             items,
             window_checks,
+            tools_check,
             guide_checks: (guides_show_i, guides_lock_i),
             color_mode_checks: (cmyk_i, rgb_i),
             outline_check: outline_i,
@@ -1386,6 +1409,7 @@ impl NativeMenu {
         for (id, item) in &self.window_checks {
             item.set_checked(dock.contains(PanelId(*id)));
         }
+        self.tools_check.set_checked(dock.masters.iter().any(Master::is_tools));
     }
 
     /// Match the View ▸ Guides checkmarks to the live toggles.

@@ -313,14 +313,22 @@ impl App {
             self.prefs.as_mut().unwrap().commit_sg_angle();
             let hit = self.prefs.as_mut().unwrap().on_press(self.pointer);
             match hit {
-                prefs::Hit::Backdrop | prefs::Hit::Cancel => self.prefs = None,
+                prefs::Hit::Backdrop | prefs::Hit::Cancel => {
+                    // A theme may have been live-previewed (see
+                    // `Hit::SetColorScheme` below) without ever being
+                    // confirmed — revert to the still-unchanged
+                    // persisted setting rather than leaving the preview
+                    // applied.
+                    self.apply_color_scheme();
+                    self.prefs = None;
+                }
                 prefs::Hit::Ok => {
                     let mut p = self.prefs.take().unwrap();
                     p.commit_naming();
                     self.settings = p.working;
                     self.scripts = p.working_scripts;
                     self.keymaps = p.working_keymaps;
-                    self.apply_theme_accent();
+                    self.apply_color_scheme();
                     self.apply_ui_scale();
                     self.apply_handle_size();
                     panels::tools::set_hide_wip(self.settings.hide_wip_tools);
@@ -380,10 +388,24 @@ impl App {
                 prefs::Hit::SetHandleSize(size) => {
                     if let Some(p) = &mut self.prefs { p.working.handle_size = size; }
                 }
-                prefs::Hit::SetAccent(rgb) => {
+                prefs::Hit::ToggleSchemeMenu => {
                     if let Some(p) = &mut self.prefs {
-                        p.working.accent = rgb;
+                        p.scheme_menu_open = !p.scheme_menu_open;
+                        if p.scheme_menu_open {
+                            // `page_scroll` is shared with the Keyboard
+                            // / Scripts pages — start fresh rather than
+                            // opening mid-scrolled from whatever offset
+                            // one of those left behind.
+                            p.page_scroll.set_offset(0.0);
+                        }
                     }
+                }
+                prefs::Hit::SetColorScheme(scheme) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.working.color_scheme = scheme;
+                        p.scheme_menu_open = false;
+                    }
+                    self.preview_color_scheme(scheme);
                 }
                 prefs::Hit::StartRecording(t) => {
                     if let Some(p) = &mut self.prefs {
@@ -488,6 +510,7 @@ impl App {
                 prefs::Hit::None => {
                     if let Some(p) = &mut self.prefs {
                         p.preset_menu_open = false;
+                        p.scheme_menu_open = false;
                     }
                 }
             }
