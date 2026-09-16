@@ -234,7 +234,26 @@ impl Editor {
     /// Ungroup { .. })` is equivalent but only surfaces one freed child's
     /// id.
     pub fn ungroup(&mut self, ids: &[ObjectId]) -> Result<Vec<ObjectId>, CommandError> {
-        let (edits, freed_ids) = self.compile_ungroup(ids)?;
+        // A clipping-mask group only comes apart through the explicit
+        // `Command::ClipRelease` action (right-click "Release Clipping
+        // Mask" / Object ▸ Clipping Mask ▸ Release) — plain Ungroup skips
+        // any clip groups in `ids` rather than dissolving them, so
+        // ⌘⇧G can't be used as a backdoor around that explicit release.
+        // `compile_ungroup` itself stays clip-agnostic: `ClipRelease`
+        // reuses it on a group that's still a clip group at compile time
+        // (its own `Edit::SetClip` hasn't been applied yet), so the
+        // filtering has to live here, not there.
+        let ids: Vec<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|&id| {
+                !matches!(
+                    self.document.object(id).map(|o| &o.kind),
+                    Some(ObjectKind::Group(g)) if g.clip.is_some()
+                )
+            })
+            .collect();
+        let (edits, freed_ids) = self.compile_ungroup(&ids)?;
         let mut inverses = Vec::with_capacity(edits.len());
         for edit in edits {
             let (inverse, _created) = edit::apply(edit, &mut self.document)?;

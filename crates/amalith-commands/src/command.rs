@@ -370,7 +370,11 @@ pub enum Command {
     /// position, scale, and rotation survive. Errors if any id isn't a
     /// group. Group descendants that are themselves groups are left
     /// alone â this dissolves exactly the groups named, not everything
-    /// nested inside them.
+    /// nested inside them. Any id in `ids` that's a clip group (see
+    /// `amalith_core::object::GroupData::clip`) is silently skipped
+    /// rather than dissolved — releasing a clip group is
+    /// [`Command::ClipRelease`]'s job alone, so a plain Ungroup (e.g.
+    /// ⌘⇧G) can't be used as a backdoor around that explicit action.
     Ungroup {
         ids: Vec<ObjectId>,
     },

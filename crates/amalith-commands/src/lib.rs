@@ -2567,6 +2567,72 @@ mod tests {
         );
     }
 
+    /// Regression test: plain Ungroup (⌘⇧G) must never dissolve a
+    /// clipping-mask group — only `Command::ClipRelease` (right-click
+    /// "Release Clipping Mask" / Object ▸ Clipping Mask ▸ Release) may do
+    /// that, so it can't be used as a backdoor around the explicit
+    /// release action.
+    #[test]
+    fn ungroup_skips_clip_groups_instead_of_dissolving_them() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor
+            .execute(Command::CreateLayer {
+                name: "Layer 1".into(),
+                index: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let create = |editor: &mut Editor, rect: Rect| {
+            let CommandOutcome::Object(id) = editor
+                .execute(Command::CreateRect { layer, rect, name: None })
+                .unwrap()
+            else {
+                panic!()
+            };
+            id
+        };
+        let mask = create(&mut editor, Rect::new(0.0, 0.0, 10.0, 10.0));
+        let content = create(&mut editor, Rect::new(0.0, 0.0, 20.0, 20.0));
+        let plain_a = create(&mut editor, Rect::new(30.0, 0.0, 40.0, 10.0));
+        let plain_b = create(&mut editor, Rect::new(40.0, 0.0, 50.0, 10.0));
+
+        let CommandOutcome::Object(clip_group) = editor
+            .execute(Command::ClipMake {
+                objects: vec![mask, content],
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let CommandOutcome::Object(plain_group) = editor
+            .execute(Command::Group {
+                ids: vec![plain_a, plain_b],
+                name: None,
+            })
+            .unwrap()
+        else {
+            panic!()
+        };
+
+        // A clip group alone: nothing to ungroup, so this errors exactly
+        // like the empty-list case rather than dissolving it.
+        assert_eq!(
+            editor.ungroup(&[clip_group]).unwrap_err(),
+            CommandError::NothingToUngroup
+        );
+        assert!(editor.document().object(clip_group).is_some());
+
+        // Mixed with a plain group: the plain group ungroups normally,
+        // the clip group is left completely untouched.
+        let freed = editor.ungroup(&[clip_group, plain_group]).unwrap();
+        assert_eq!(freed, vec![plain_a, plain_b]);
+        assert!(editor.document().object(clip_group).is_some());
+        assert!(editor.document().object(plain_group).is_none());
+    }
+
     #[test]
     fn new_rect_defaults_to_a_visible_fill_and_stroke() {
         let mut editor = new_editor();
