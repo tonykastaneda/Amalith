@@ -949,6 +949,19 @@ pub(in crate::app) fn paint_main(
                     &Line::new((c.x, c.y - a), (c.x, c.y + a)));
             }
         }
+        // A small diagonal-line badge when a click would resume drawing an
+        // existing open path from the endpoint under the pointer.
+        if tool == Tool::Pen && hint == PenHint::Resume {
+            use vello::kurbo::{Line, Stroke};
+            let c = vello::kurbo::Point::new(x0 + sz * 0.78, y0 + sz * 0.30);
+            let a = 4.0;
+            let ink = crate::icons::CURSOR_INK;
+            let halo = vello::peniko::Color::WHITE;
+            for (col, w) in [(halo, 4.0), (ink, 2.0)] {
+                scene.stroke(&Stroke::new(w), Affine::IDENTITY, col, None,
+                    &Line::new((c.x - a, c.y + a), (c.x + a, c.y - a)));
+            }
+        }
     }
     if let Some(plus) = zoom_cursor {
         icons::draw_magnifier(scene, pointer, plus);

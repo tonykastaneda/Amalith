@@ -160,6 +160,20 @@ pub struct AnchorView<'a> {
     /// The anchor the pointer is over, drawn enlarged as a "you'll edit
     /// this one" affordance.
     pub hover: Option<(ObjectId, usize)>,
+    /// The Pen tool, not currently drawing, is hovering a free endpoint of
+    /// some *other* open path (not necessarily in `paths` — Illustrator's
+    /// own Pen offers to continue any open path, selected or not) that a
+    /// click would resume. Drawn as its own hollow, swollen marker even
+    /// when its object's other anchors aren't otherwise shown, so the
+    /// endpoint the "continue this path" cursor is about to grab reads as
+    /// clickable rather than looking like plain empty canvas.
+    pub pen_resume_hover: Option<(ObjectId, usize)>,
+    /// A path the Pen tool is actively resuming (`App::pen_resume`,
+    /// already in `paths`) — every one of its anchors draws in the same
+    /// hollow/white style as an unselected-but-shown anchor below,
+    /// regardless of `selected`, since resuming doesn't add it to the
+    /// real selection the way `commit_pen` eventually will.
+    pub pen_resume_object: Option<ObjectId>,
 }
 
 /// One placed anchor of an in-progress Pen path, in document space.
@@ -178,8 +192,22 @@ pub struct PenAnchor {
 pub struct PenPreview<'a> {
     pub anchors: &'a [PenAnchor],
     pub hover: Point,
-    /// The cursor is close enough to the first anchor to close the path.
-    pub near_close: bool,
+    /// Where closing right now would connect back to, document space —
+    /// `None` if the cursor isn't close enough. For a plain new path this
+    /// is always `anchors[0].point`, but for one resumed from an existing
+    /// open path's free endpoint (`App::pen_resume`) it can instead be
+    /// that *other*, still-untouched end of the original subpath — a
+    /// point that isn't itself a member of `anchors` at all, so the
+    /// closing edge has to be drawn explicitly to it rather than via
+    /// `BezPath::close_path()`, which always wraps back to this preview's
+    /// own first anchor.
+    pub close_target: Option<Point>,
+    /// Whether this session was resumed rather than started fresh — when
+    /// so, `close_target` (if `Some`) lives outside `anchors` entirely
+    /// (see its own doc comment), so `anchors[0]` shouldn't get the
+    /// "you're about to land here" square swell the plain new-path case
+    /// gives it.
+    pub resuming: bool,
     /// The appearance a commit would give the path — drawn live under the
     /// blue guide so the path looks finished before you end it.
     pub fill: Option<Color>,
@@ -672,8 +700,21 @@ pub fn paint(
                 seg(&mut solid, prev, a);
                 prev = a;
             }
-            if pen.near_close {
-                solid.close_path();
+            if let Some(target) = pen.close_target {
+                // Closes back to the seed for a plain new path, but to
+                // the resumed path's own other end for one resumed —
+                // drawn explicitly to that point since it isn't
+                // `anchors[0]` in the resumed case (see
+                // `PenPreview::close_target`'s own doc comment), rather
+                // than via `BezPath::close_path()`, which only ever wraps
+                // back to this preview's own first anchor.
+                let close_anchor = PenAnchor {
+                    point: target,
+                    handle_in: None,
+                    handle_out: None,
+                    mode: amalith_core::HandleMode::Corner,
+                };
+                seg(&mut solid, prev, &close_anchor);
             }
             if let Some(c) = pen.fill {
                 scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &solid);
@@ -691,7 +732,7 @@ pub fn paint(
             // The blue guide adds the rubber-band segment out to the
             // cursor — a hairline, never the object's stroke weight.
             let mut guide = solid.clone();
-            if !pen.near_close {
+            if pen.close_target.is_none() {
                 let cursor = PenAnchor {
                     point: pen.hover,
                     handle_in: None,
@@ -703,6 +744,7 @@ pub fn paint(
             scene.stroke(&Stroke::new(1.5), Affine::IDENTITY, theme.accent, None, &guide);
 
             let white = Color::from_rgb8(0xff, 0xff, 0xff);
+            let hm = crate::handle_scale::multiplier();
             // Handle sticks + round handle dots.
             for a in pen.anchors {
                 let ps = vt * a.point;
@@ -715,15 +757,15 @@ pub fn paint(
                         None,
                         &Line::new(ps, hs),
                     );
-                    let dot = Circle::new(hs, 3.0);
+                    let dot = Circle::new(hs, 3.0 * hm);
                     scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &dot);
                     scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &dot);
                 }
             }
             // Square anchor markers.
             for (i, a) in pen.anchors.iter().enumerate() {
-                let hot = i == 0 && pen.near_close;
-                let sz = if hot { 9.0 } else { 6.0 };
+                let hot = i == 0 && pen.close_target.is_some() && !pen.resuming;
+                let sz = (if hot { 9.0 } else { 6.0 }) * hm;
                 let sq = Rect::from_center_size(vt * a.point, (sz, sz));
                 scene.fill(
                     Fill::NonZero,
@@ -734,6 +776,11 @@ pub fn paint(
                 );
                 scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &sq);
             }
+            // The resumed path's own other end (the actual close target)
+            // is one of that object's real anchors, so it already gets
+            // its own marker for free from `AnchorView::pen_resume_object`
+            // — every anchor of a resumed path is shown, not just this
+            // one and the seed.
         }
     }
 
@@ -1229,6 +1276,7 @@ pub fn paint(
 
         let hdrag = drag.and_then(|d| d.handle);
         let white = Color::from_rgb8(0xff, 0xff, 0xff);
+        let hm = crate::handle_scale::multiplier();
 
         // Outline every selected path, deformed live by an anchor drag or a
         // handle drag in progress. Hard safety filter: never draw this for
@@ -1282,7 +1330,7 @@ pub fn paint(
                     ));
                     scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, theme.accent, None,
                         &vello::kurbo::Line::new(ap, hp));
-                    let dot = vello::kurbo::Circle::new(hp, 3.0);
+                    let dot = vello::kurbo::Circle::new(hp, 3.0 * hm);
                     scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &dot);
                     scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &dot);
                 }
@@ -1292,8 +1340,13 @@ pub fn paint(
         // Anchor markers. When some of a path's anchors are individually
         // selected (a click or a marquee), the rest go hollow —
         // Illustrator's white arrow. With none selected the path is just
-        // "shown", and every anchor is solid blue.
+        // "shown", and every anchor is solid blue — except a path the Pen
+        // tool is merely resuming (`pen_resume_object`), which isn't a
+        // real selection at all: every one of its anchors stays hollow
+        // regardless, the same "here it is, not selected" reading a
+        // Direct Selection hover gets.
         for &id in av.paths {
+            let resuming = av.pen_resume_object == Some(id);
             let any_sel = av.selected.iter().any(|(o, _)| *o == id);
             for (idx, pos) in crate::anchors::anchors_of(doc, id) {
                 let sel = av.selected.contains(&(id, idx));
@@ -1301,9 +1354,9 @@ pub fn paint(
                 let doc_pos = if moved { pos + dv } else { pos };
                 // The hovered node swells so it's clear which one a click
                 // (or a rotation) will act on.
-                let s = if av.hover == Some((id, idx)) { 10.0 } else { 7.0 };
+                let s = (if av.hover == Some((id, idx)) { 10.0 } else { 7.0 }) * hm;
                 let sq = Rect::from_center_size(vt * doc_pos, (s, s));
-                if sel || !any_sel {
+                if !resuming && (sel || !any_sel) {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, theme.accent, None, &sq);
                 } else {
                     scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
@@ -1314,6 +1367,21 @@ pub fn paint(
                         None,
                         &sq,
                     );
+                }
+            }
+        }
+
+        // The Pen tool's own "continue this path" endpoint, when it's on
+        // an object whose anchors aren't otherwise being shown.
+        if let Some((id, idx)) = av.pen_resume_hover {
+            if !av.paths.contains(&id) {
+                if let Some((_, pos)) =
+                    crate::anchors::anchors_of(doc, id).into_iter().find(|&(i, _)| i == idx)
+                {
+                    let s = 10.0 * hm;
+                    let sq = Rect::from_center_size(vt * pos, (s, s));
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, white, None, &sq);
+                    scene.stroke(&Stroke::new(1.25), Affine::IDENTITY, theme.accent, None, &sq);
                 }
             }
         }

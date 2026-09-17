@@ -432,15 +432,13 @@ impl App {
             // shown while just moving the mouse (not yet dragging a
             // handle) never matches what Shift is actually about to do.
             let hover = self.sg_pen_snap(self.doc_point(self.pointer)).0;
-            let near_close = self.pen.len() >= 2
-                && self
-                    .pen
-                    .first()
-                    .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom);
+            let close_target = self.pen_can_close().then(|| self.pen_close_target()).flatten()
+                .filter(|&f| (f - hover).hypot() <= 8.0 / self.doc.view.zoom);
             Some(PenPreview {
                 anchors: &self.pen,
                 hover,
-                near_close,
+                close_target,
+                resuming: self.pen_resume.is_some(),
                 fill: self.doc.fill.color().map(convert::color),
                 stroke: self.doc.stroke.color().map(convert::color),
                 stroke_w: self.doc.stroke_w,
@@ -469,7 +467,7 @@ impl App {
         // duration — they'd just clutter a plain move — and they come
         // back the instant the drag ends.
         let moving_whole_object = matches!(self.drag, Drag::MoveObjects { moved: true, .. });
-        let anchor_paths: Vec<ObjectId> = if moving_whole_object {
+        let mut anchor_paths: Vec<ObjectId> = if moving_whole_object {
             Vec::new()
         } else if peek {
             self.peek_paths()
@@ -478,26 +476,51 @@ impl App {
         } else {
             Vec::new()
         };
+        // A path resumed with the Pen tool shows every one of its own
+        // anchors, same as Illustrator — but it isn't added to the real
+        // selection just for this (`commit_pen` only does that once you
+        // actually finish), so `pen_resume_object` marks it for
+        // canvas.rs to draw in the hollow/white "not selected, but shown"
+        // style rather than the solid style an ordinary selection gets.
+        let pen_resume_object = self.pen_resume.map(|(id, ..)| id);
+        if let Some(id) = pen_resume_object {
+            if !anchor_paths.contains(&id) {
+                anchor_paths.push(id);
+            }
+        }
         // Which on-screen node the pointer is over — matches the Direct
-        // Selection press hit radius (6 screen px) so the swelling node is
-        // exactly the one a click would grab.
-        let anchor_hover = if (direct || peek || pen_nodes) && matches!(self.drag, Drag::None) {
+        // Selection press hit radius (6 screen px, scaled the same way by
+        // the Handle Size preference) so the swelling node is exactly the
+        // one a click would grab.
+        let anchor_hover = if (direct || peek || pen_nodes || pen_resume_object.is_some())
+            && matches!(self.drag, Drag::None)
+        {
             crate::anchors::topmost_anchor_among(
                 self.doc.editor.document(),
                 &anchor_paths,
                 self.doc_point(self.pointer),
-                6.0 / self.doc.view.zoom,
+                6.0 * crate::handle_scale::multiplier() / self.doc.view.zoom,
                 self.isolation_ambient(),
             )
         } else {
             None
         };
-        let anchor_view = (direct || peek || pen_nodes).then_some(AnchorView {
-            selected: &self.doc.anchor_sel,
-            paths: &anchor_paths,
-            peek,
-            hover: anchor_hover,
-        });
+        // The Pen tool offers to continue any open path's free endpoint,
+        // selected or not (see `pen_resume_target`'s own doc comment) — so
+        // that endpoint needs a marker of its own even when nothing else
+        // qualifies `anchor_view` to exist at all (nothing selected, nodes
+        // otherwise hidden).
+        let pen_resume_hover =
+            matches!(self.drag, Drag::None).then(|| self.pen_resume_target()).flatten();
+        let anchor_view = (direct || peek || pen_nodes || pen_resume_hover.is_some() || pen_resume_object.is_some())
+            .then_some(AnchorView {
+                selected: &self.doc.anchor_sel,
+                paths: &anchor_paths,
+                peek,
+                hover: anchor_hover,
+                pen_resume_hover,
+                pen_resume_object,
+            });
 
         self.content.reset();
         let representative = self.representative();
@@ -531,13 +554,12 @@ impl App {
         let cursor_glyph = (self.cursor_mode == CanvasCursor::Glyph).then(|| {
             let hint = if self.active_tool == Tool::Pen {
                 let hover = self.doc_point(self.pointer);
-                let closing = self.pen.len() >= 3
-                    && self
-                        .pen
-                        .first()
-                        .is_some_and(|f| (f.point - hover).hypot() <= 8.0 / self.doc.view.zoom);
+                let closing = self.pen_can_close()
+                    && self.pen_close_target().is_some_and(|f| (f - hover).hypot() <= 8.0 / self.doc.view.zoom);
                 if closing {
                     PenHint::Closing
+                } else if pen_resume_hover.is_some() {
+                    PenHint::Resume
                 } else if self.pen_insert_target().is_some() {
                     PenHint::AddPoint
                 } else {

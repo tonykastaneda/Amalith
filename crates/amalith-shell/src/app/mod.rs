@@ -1093,6 +1093,10 @@ pub(crate) enum PenHint {
     Closing,
     /// Over a segment of a shown path — a click inserts an anchor there.
     AddPoint,
+    /// Not drawing yet, over a free endpoint of an already-drawn open
+    /// path — a click resumes it (see [`App::pen_resume_seed`]) instead of
+    /// starting a fresh path there.
+    Resume,
 }
 
 /// One replayable "Transform Again" gesture. `delta` is the single
@@ -4285,6 +4289,31 @@ impl App {
         anchors::segment_at(self.doc.editor.document(), &paths, dp, r, ambient)
     }
 
+    /// With the Pen tool active and no draw in progress, the free-endpoint
+    /// anchor under the pointer that a click would resume drawing from —
+    /// drives the "continue this path" cursor hint. Canvas-wide, like
+    /// [`join_tool::join_candidates`] and unlike [`Self::node_paths`]:
+    /// Illustrator's own Pen tool offers to continue *any* open path you
+    /// hover, selected or not, so this scans every leaf path in the
+    /// document rather than only the current selection. `app/input/
+    /// press.rs`'s own click handler re-does this same hit test rather
+    /// than caching this call's result, since a hint computed for one
+    /// frame could be stale by the time a later click actually lands.
+    fn pen_resume_target(&self) -> Option<(ObjectId, usize)> {
+        if self.active_tool != Tool::Pen || !self.pen.is_empty() {
+            return None;
+        }
+        let doc = self.doc.editor.document();
+        let paths = anchors::path_leaves(doc);
+        if paths.is_empty() {
+            return None;
+        }
+        let dp = self.doc_point(self.pointer);
+        let r = 6.0 / self.doc.view.zoom;
+        let a = anchors::topmost_anchor_among(doc, &paths, dp, r, Affine::IDENTITY)?;
+        self.pen_resume_seed(a.0, a.1).is_some().then_some(a)
+    }
+
     /// When `(id, n)` is a free endpoint of an open path, the seed for
     /// resuming it with the Pen tool: a document-space `PenAnchor` copy of
     /// that endpoint (so `self.pen` can grow it exactly like a freshly
@@ -4319,17 +4348,62 @@ impl App {
         Some((seed, subpath, at_end))
     }
 
-    /// Commit the in-progress Pen path (needs ≥2 anchors). `closed` joins
-    /// the last anchor back to the first. When `self.pen_resume` is set
-    /// (the session started by clicking an existing open path's free
-    /// endpoint rather than empty canvas), this instead grows that path
-    /// in place via `Command::ExtendOpenPath` — a single undoable step,
-    /// but not one `pen_undo_step` can walk back one anchor at a time the
-    /// way a freshly created path can (that mechanism is specific to
+    /// The doc-space point a click (or hover, for the cursor hint and live
+    /// preview) must land near to close the in-progress Pen path — `None`
+    /// while nothing's been placed yet.
+    ///
+    /// Ordinarily this is just `self.pen`'s own first anchor: the point the
+    /// current drawing session actually started from. But when
+    /// `self.pen_resume` is set, `self.pen[0]` is instead the *resumed*
+    /// path's endpoint you clicked to continue it from — not a useful
+    /// closing target, since it's the point you just left, not the one
+    /// that would complete a loop. The real target there is the resumed
+    /// subpath's *other*, still-untouched free end: closing onto it joins
+    /// the newly drawn anchors onto that far end, completing the whole
+    /// subpath (old anchors + new ones) into one closed loop, exactly what
+    /// `commit_pen`'s own `close: true` produces via `Command::
+    /// ExtendOpenPath` (its wrap-around closing edge runs from the last
+    /// anchor — the last one you drew — back to the subpath's first
+    /// anchor, which is that far end).
+    fn pen_close_target(&self) -> Option<Point> {
+        if self.pen.is_empty() {
+            return None;
+        }
+        if let Some((object, subpath, at_end)) = self.pen_resume {
+            let doc = self.doc.editor.document();
+            let pd = doc.object(object)?.kind.path_data()?;
+            let sp = pd.subpaths().get(subpath)?;
+            let local = if at_end { sp.anchors.first() } else { sp.anchors.last() }?;
+            let m = convert::affine(doc.world_transform(object));
+            return Some(m * convert::point(local.point));
+        }
+        self.pen.first().map(|a| a.point)
+    }
+
+    /// Whether the in-progress Pen path has enough anchors to close right
+    /// now. Ordinarily that's at least 2 — closing a lone point onto
+    /// itself is degenerate — but while resuming ([`Self::pen_resume`])
+    /// even just the seed anchor is enough: it's one end of an
+    /// already-real subpath, so closing straight back onto its other end
+    /// with no new anchors placed is a perfectly good "join this open
+    /// path into a loop" gesture on its own.
+    fn pen_can_close(&self) -> bool {
+        !self.pen.is_empty() && (self.pen_resume.is_some() || self.pen.len() >= 2)
+    }
+
+    /// Commit the in-progress Pen path (needs ≥2 anchors — except closing
+    /// a resumed path, which needs only the seed; see [`Self::
+    /// pen_can_close`]). `closed` joins the last anchor back to the
+    /// first. When `self.pen_resume` is set (the session started by
+    /// clicking an existing open path's free endpoint rather than empty
+    /// canvas), this instead grows that path in place via
+    /// `Command::ExtendOpenPath` — a single undoable step, but not one
+    /// `pen_undo_step` can walk back one anchor at a time the way a
+    /// freshly created path can (that mechanism is specific to
     /// `last_pen`/`CreatePath`); ⌘Z still undoes the whole extension.
     fn commit_pen(&mut self, closed: bool) {
         self.pen_redo.clear();
-        if self.pen.len() < 2 {
+        if self.pen.len() < 2 && !(closed && self.pen_resume.is_some()) {
             self.pen.clear();
             self.pen_resume = None;
             self.last_pen = None;

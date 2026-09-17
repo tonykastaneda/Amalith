@@ -5,9 +5,11 @@
 //! also scale every panel and button — see
 //! `Sys-Refactor/DONE-10-selection-anchor-size-preference-medium.md`.
 //!
-//! Read by [`crate::canvas`] (drawn handle size) and [`crate::handles`]
-//! (grab radius, rotation halo band) — pure document-canvas concerns that
-//! `crate::metrics` itself deliberately excludes.
+//! Read by [`crate::canvas`] (drawn anchor squares, handle dots, and the
+//! Selection tool's own box grips) and [`crate::handles`] /
+//! `app::input::press` (matching grab radii, rotation halo band) — pure
+//! document-canvas concerns that `crate::metrics` itself deliberately
+//! excludes.
 
 use std::cell::Cell;
 
@@ -29,7 +31,10 @@ impl HandleSize {
         match self {
             HandleSize::Small => 0.75,
             HandleSize::Default => 1.0,
-            HandleSize::Large => 1.35,
+            // Was 1.35 — barely bigger than Default once this actually
+            // reached every anchor/handle marker (see this module's own
+            // doc comment), so "Large" didn't read as large at all.
+            HandleSize::Large => 1.75,
         }
     }
 

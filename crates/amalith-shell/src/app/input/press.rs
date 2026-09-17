@@ -1334,12 +1334,36 @@ impl App {
                 // Pen: press to place an anchor, then drag to pull bezier
                 // handles out of it. Click the first anchor to close.
                 if self.active_tool == Tool::Pen {
-                    // Not drawing yet and over an existing anchor of the
-                    // selected path: a free endpoint resumes drawing from
-                    // it (Illustrator's own Pen behavior — hover an open
-                    // path's end and the cursor offers to continue it);
-                    // any other anchor is just selected (so the Convert
-                    // bar shows) rather than starting a fresh path on it.
+                    // Not drawing yet and hovering a free endpoint of *any*
+                    // open path in the document, selected or not: resumes
+                    // drawing from it (Illustrator's own Pen behavior —
+                    // hover an open path's end, anywhere, and the cursor
+                    // offers to continue it). See `pen_resume_target`'s own
+                    // doc comment for why this reaches past the current
+                    // selection, unlike the rest of this block.
+                    if self.pen.is_empty() {
+                        if let Some((id, n)) = self.pen_resume_target() {
+                            if let Some((seed, subpath, at_end)) = self.pen_resume_seed(id, n) {
+                                self.doc.anchor_sel.clear();
+                                self.pen_resume = Some((id, subpath, at_end));
+                                self.pen = vec![seed];
+                                self.pen_redo.clear();
+                                self.drag = Drag::PenHandle {
+                                    anchor: 0,
+                                    from: seed.point,
+                                    press: dp,
+                                    space_anchor: None,
+                                };
+                                self.request_main_redraw();
+                                return;
+                            }
+                        }
+                    }
+                    // Not drawing yet and over some other anchor of the
+                    // selected path: just select it (so the Convert bar
+                    // shows) rather than starting a fresh path on it. A
+                    // resumable free endpoint is already handled above,
+                    // canvas-wide.
                     if self.pen.is_empty() {
                         let paths = self.node_paths();
                         if !paths.is_empty() {
@@ -1350,20 +1374,6 @@ impl App {
                                 6.0 / self.doc.view.zoom,
                                 self.isolation_ambient(),
                             ) {
-                                if let Some((seed, subpath, at_end)) = self.pen_resume_seed(a.0, a.1) {
-                                    self.doc.anchor_sel.clear();
-                                    self.pen_resume = Some((a.0, subpath, at_end));
-                                    self.pen = vec![seed];
-                                    self.pen_redo.clear();
-                                    self.drag = Drag::PenHandle {
-                                        anchor: 0,
-                                        from: seed.point,
-                                        press: dp,
-                                        space_anchor: None,
-                                    };
-                                    self.request_main_redraw();
-                                    return;
-                                }
                                 self.doc.anchor_sel = vec![a];
                                 self.request_main_redraw();
                                 return;
@@ -1398,13 +1408,13 @@ impl App {
                     }
                     // Illustrator allows closing with just 2 anchors — each
                     // side of the loop can still carry its own curve (a
-                    // "leaf" shape), so nothing below 2 is degenerate.
+                    // "leaf" shape), so nothing below 2 is degenerate —
+                    // except closing a resumed path straight back onto its
+                    // own other end with no new anchors at all, which
+                    // needs only the seed (see `pen_can_close`).
                     let close_r = 8.0 / self.doc.view.zoom;
-                    if self.pen.len() >= 2
-                        && self
-                            .pen
-                            .first()
-                            .is_some_and(|f| (f.point - dp).hypot() <= close_r)
+                    if self.pen_can_close()
+                        && self.pen_close_target().is_some_and(|f| (f - dp).hypot() <= close_r)
                     {
                         self.commit_pen(true);
                         return;
@@ -1496,7 +1506,7 @@ impl App {
                 // that either selects the object under the press (if the
                 // pointer never moves) or rubber-bands its nodes.
                 if self.effective_tool() == Tool::DirectSelect {
-                    let hit_r = 6.0 / self.doc.view.zoom;
+                    let hit_r = 6.0 * crate::handle_scale::multiplier() / self.doc.view.zoom;
                     let shown = self.node_paths();
                     let ambient = self.isolation_ambient();
 
