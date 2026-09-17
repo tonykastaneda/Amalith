@@ -24,3 +24,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 rfd = "0.15"
 roxmltree = "0.20"
 zstd = "0.13"
+
+# `[profile.dev.package."*"]` only touches dependencies, never the
+# workspace's own crates — those keep opt-level 0 (fast incremental
+# builds, full debug info). Without this, a plain `cargo run` compiles
+# lopdf/zip/zstd/image fully unoptimized, and byte-level PDF parsing on a
+# real-world multi-hundred-MB .ai file becomes 10-30x slower than a
+# release build for no benefit (nobody steps through their source) —
+# easily read as a hang rather than just a slow debug build.
+[profile.dev.package."*"]
+opt-level = 2

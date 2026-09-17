@@ -13,12 +13,12 @@ use vello::peniko::Color;
 
 /// A named app-wide color scheme — either one of Amalith's own accent
 /// recolors of the base dark chrome, or a full palette borrowed from a
-/// named terminal theme (currently just Dracula). `Theme::for_scheme`
-/// maps each one onto every `Theme` token; see the module doc comment
-/// for what's deliberately excluded from that mapping. These used to be
-/// a separate "Accent Color" swatch picker, independent of the chrome
-/// theme — folded in here instead, so accent is just one more thing a
-/// theme determines rather than a second, overlapping customization.
+/// named terminal theme. `Theme::for_scheme` maps each one onto every
+/// `Theme` token; see the module doc comment for what's deliberately
+/// excluded from that mapping. These used to be a separate "Accent
+/// Color" swatch picker, independent of the chrome theme — folded in
+/// here instead, so accent is just one more thing a theme determines
+/// rather than a second, overlapping customization.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorScheme {
     #[default]
@@ -46,10 +46,16 @@ pub enum ColorScheme {
     Gotham,
     /// https://terminalcolors.com/themes/nordic/default/
     Nordic,
+    /// https://github.com/mbadolato/iTerm2-Color-Schemes (C64)
+    C64,
+    /// https://github.com/mbadolato/iTerm2-Color-Schemes (Batman)
+    Batman,
+    /// https://github.com/mbadolato/iTerm2-Color-Schemes (Acid Lime)
+    AcidLime,
 }
 
 impl ColorScheme {
-    pub const ALL: [ColorScheme; 15] = [
+    pub const ALL: [ColorScheme; 18] = [
         ColorScheme::BasicBlue,
         ColorScheme::Amalith,
         ColorScheme::Emerald,
@@ -65,6 +71,9 @@ impl ColorScheme {
         ColorScheme::GruvboxDark,
         ColorScheme::Gotham,
         ColorScheme::Nordic,
+        ColorScheme::C64,
+        ColorScheme::Batman,
+        ColorScheme::AcidLime,
     ];
 
     pub fn label(self) -> &'static str {
@@ -84,6 +93,9 @@ impl ColorScheme {
             ColorScheme::GruvboxDark => "Gruvbox Dark",
             ColorScheme::Gotham => "Gotham",
             ColorScheme::Nordic => "Nordic",
+            ColorScheme::C64 => "C64",
+            ColorScheme::Batman => "Batman",
+            ColorScheme::AcidLime => "Acid Lime",
         }
     }
 
@@ -105,6 +117,9 @@ impl ColorScheme {
             ColorScheme::GruvboxDark => "gruvbox_dark",
             ColorScheme::Gotham => "gotham",
             ColorScheme::Nordic => "nordic",
+            ColorScheme::C64 => "c64",
+            ColorScheme::Batman => "batman",
+            ColorScheme::AcidLime => "acid_lime",
         }
     }
 
@@ -394,6 +409,44 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xbb, 0xc3, 0xd4),
                 text_dim: Color::from_rgb8(0x3b, 0x42, 0x52), // Polar Night
                 symbol_accent: Color::from_rgb8(0xb4, 0x8e, 0xad), // magenta
+            },
+            ColorScheme::C64 => Palette {
+                bg: Color::from_rgb8(0x40, 0x31, 0x8d),
+                app_bar: Color::from_rgb8(0x39, 0x2a, 0x86),
+                canvas_bg: Color::from_rgb8(0x36, 0x27, 0x83),
+                pasteboard: Color::from_rgb8(0x78, 0x69, 0xc4), // selection
+                border: Color::from_rgb8(0x33, 0x24, 0x80),
+                accent: Color::from_rgb8(0x67, 0xb6, 0xbd), // cyan
+                // Terminal fg (#7869c4) is the C64 light-blue — too close
+                // to bg for chrome labels, so ink uses bright white and
+                // the real fg becomes dim text.
+                text: Color::from_rgb8(0xf7, 0xf7, 0xf7),
+                text_dim: Color::from_rgb8(0x78, 0x69, 0xc4),
+                symbol_accent: Color::from_rgb8(0x98, 0x4c, 0xa3), // purple
+            },
+            ColorScheme::Batman => Palette {
+                bg: Color::from_rgb8(0x1b, 0x1d, 0x1e),
+                app_bar: Color::from_rgb8(0x14, 0x16, 0x17),
+                canvas_bg: Color::from_rgb8(0x11, 0x13, 0x14),
+                pasteboard: Color::from_rgb8(0x4d, 0x50, 0x4c), // selection
+                border: Color::from_rgb8(0x0e, 0x10, 0x11),
+                accent: Color::from_rgb8(0xfc, 0xef, 0x0c), // cursor yellow
+                // Terminal fg (#6f6f6f) is a mid-gray — fine as dim
+                // chrome, too dim as primary ink, so labels use ANSI white.
+                text: Color::from_rgb8(0xc6, 0xc5, 0xbf),
+                text_dim: Color::from_rgb8(0x6f, 0x6f, 0x6f),
+                symbol_accent: Color::from_rgb8(0xe6, 0xdc, 0x44), // gold
+            },
+            ColorScheme::AcidLime => Palette {
+                bg: Color::from_rgb8(0x08, 0x0c, 0x05),
+                app_bar: Color::from_rgb8(0x01, 0x05, 0x00),
+                canvas_bg: Color::from_rgb8(0x00, 0x02, 0x00),
+                pasteboard: Color::from_rgb8(0x1b, 0x2a, 0x10), // selection
+                border: Color::from_rgb8(0x00, 0x00, 0x00),
+                accent: Color::from_rgb8(0xc2, 0xff, 0x33), // cursor lime
+                text: Color::from_rgb8(0xd4, 0xef, 0xbc),
+                text_dim: Color::from_rgb8(0x4a, 0x6b, 0x36), // bright black
+                symbol_accent: Color::from_rgb8(0xff, 0x33, 0x44), // red
             },
             // The six plain recolors never reach here — see `Theme::for_scheme`.
             ColorScheme::BasicBlue
