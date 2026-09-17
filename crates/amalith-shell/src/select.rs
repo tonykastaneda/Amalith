@@ -12,12 +12,17 @@
 //! carve-out every time one is added. Coordinates are vello kurbo.
 
 use amalith_core::{Document, ObjectId, ObjectKind, ObjectParent};
-use vello::kurbo::{Affine, ParamCurveNearest, PathSeg, Point, Rect, Shape};
+use vello::kurbo::{Affine, Line, ParamCurveNearest, PathSeg, Point, Rect, Shape};
 
 use crate::convert;
 
 fn overlaps(a: Rect, b: Rect) -> bool {
     a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0
+}
+
+/// Whether `outer` fully encloses `inner`.
+fn contains_rect(outer: Rect, inner: Rect) -> bool {
+    outer.x0 <= inner.x0 && outer.y0 <= inner.y0 && outer.x1 >= inner.x1 && outer.y1 >= inner.y1
 }
 
 /// The mask child of `id` if it's a clip group, else `None`.
@@ -664,6 +669,67 @@ pub fn clip_mask_at_contour(
     near_contour(doc, clip, point, tol).then_some(clip)
 }
 
+/// Whether any point of `contour` is inside `marquee` while another is
+/// outside it — i.e. the rectangle's boundary actually crosses the
+/// outline, as opposed to merely overlapping its bounding box. Used by
+/// [`marquee_hit`] so a dragged box has to touch real geometry, the same
+/// standard [`path_hit`] already holds single clicks to.
+fn rect_crosses_contour(contour: &vello::kurbo::BezPath, marquee: Rect) -> bool {
+    let edges = [
+        Line::new((marquee.x0, marquee.y0), (marquee.x1, marquee.y0)),
+        Line::new((marquee.x1, marquee.y0), (marquee.x1, marquee.y1)),
+        Line::new((marquee.x1, marquee.y1), (marquee.x0, marquee.y1)),
+        Line::new((marquee.x0, marquee.y1), (marquee.x0, marquee.y0)),
+    ];
+    contour.segments().any(|seg: PathSeg| edges.iter().any(|edge| !seg.intersect_line(*edge).is_empty()))
+}
+
+/// Whether `marquee` (doc space) actually touches `id`'s real content —
+/// crosses its outline, lands inside its fill, or fully encloses its
+/// bounds — rather than just clipping an empty corner of its bounding
+/// box (a concave notch, a circle's box corner, a sparse group's gaps).
+/// Mirrors the precision [`path_hit`]/[`group_hit`] already hold single
+/// clicks to; see those doc comments for why a plain AABB test isn't
+/// enough. Caller has already confirmed `bounds(doc, id)` overlaps
+/// `marquee`.
+fn marquee_hit(doc: &Document, id: ObjectId, marquee: Rect) -> bool {
+    // Fully enclosing an object's bounds necessarily encloses all of its
+    // real content too — cheap, correct for every object kind, and the
+    // only test available for one with no precise geometry of its own
+    // (Text, Image, Symbol instance).
+    if bounds(doc, id).is_some_and(|b| contains_rect(marquee, b)) {
+        return true;
+    }
+    match doc.object(id).map(|o| &o.kind) {
+        Some(ObjectKind::Path(_) | ObjectKind::CompoundPath(_)) => item_shapes(doc, id).into_iter().any(|shape| {
+            if shape.paint == amalith_core::Paint::None {
+                return false;
+            }
+            if rect_crosses_contour(&shape.contour, marquee) {
+                return true;
+            }
+            if !shape.is_fill {
+                return false;
+            }
+            // The outline never enters `marquee`, so its overlap with
+            // this shape's own bounds is either wholly inside or wholly
+            // outside the fill — one sample point settles it for the
+            // whole rectangle.
+            let b = shape.contour.bounding_box();
+            let sample = Rect::new(marquee.x0.max(b.x0), marquee.y0.max(b.y0), marquee.x1.min(b.x1), marquee.y1.min(b.y1)).center();
+            close_open_subpaths(&shape.contour).winding(sample) != 0
+        }),
+        Some(ObjectKind::Group(_)) => doc.children_of(ObjectParent::Group(id)).iter().any(|&child| {
+            doc.object(child).is_some_and(|o| o.visible)
+                && bounds(doc, child).is_some_and(|b| overlaps(b, marquee))
+                && marquee_hit(doc, child, marquee)
+        }),
+        // No precise test of this kind's own — bounds overlap (already
+        // confirmed by the caller) is the best available signal.
+        _ => true,
+    }
+}
+
 /// Direct children of `group` whose bounds intersect `marquee`. When a
 /// bare object is isolated it is the only candidate.
 pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId> {
@@ -684,7 +750,7 @@ pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId
         },
         _ => {
             return match bounds(doc, group) {
-                Some(b) if overlaps(b, marquee) => vec![group],
+                Some(b) if overlaps(b, marquee) && marquee_hit(doc, group, marquee) => vec![group],
                 _ => Vec::new(),
             };
         }
@@ -699,11 +765,13 @@ pub fn within_in(doc: &Document, group: ObjectId, marquee: Rect) -> Vec<ObjectId
             None => true,
         })
         .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
-        .filter(|id| bounds(doc, *id).is_some_and(|b| overlaps(b, marquee)))
+        .filter(|id| bounds(doc, *id).is_some_and(|b| overlaps(b, marquee)) && marquee_hit(doc, *id, marquee))
         .collect()
 }
 
-/// Layer-children whose bounds intersect `marquee` (document space).
+/// Layer-children whose real content intersects `marquee` (document
+/// space) — crosses it, lies inside it, or is fully enclosed by it; see
+/// [`marquee_hit`] for why a plain bounding-box overlap isn't enough.
 pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
     let mut out = Vec::new();
     for layer in doc.layers() {
@@ -714,7 +782,7 @@ pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
             if doc.object(id).is_some_and(|o| !o.visible || o.locked) {
                 continue;
             }
-            if bounds(doc, id).is_some_and(|b| overlaps(b, marquee)) {
+            if bounds(doc, id).is_some_and(|b| overlaps(b, marquee)) && marquee_hit(doc, id, marquee) {
                 out.push(id);
             }
         }
@@ -976,6 +1044,85 @@ mod smart_guide_bounds_tests {
         )
         .unwrap();
         assert!(bounds_within(&doc, id, Rect::new(-100., -100., 100., 100.), &[]).is_empty());
+    }
+
+    /// A concave "tank top" outline: two vertical straps (x 0-8 and
+    /// x 22-30, y 0-20) joined by a solid body (x 0-30, y 20-40), with an
+    /// empty notch between the straps (x 8-22, y 0-20) that is *inside*
+    /// the shape's own bounding box but outside its actual fill — the
+    /// exact repro reported against a real tank-top artwork's armhole.
+    fn prong_shape(id: ObjectId, parent: ObjectParent) -> Object {
+        let mut geometry = vello::kurbo::BezPath::new();
+        geometry.move_to((0.0, 40.0));
+        geometry.line_to((0.0, 0.0));
+        geometry.line_to((8.0, 0.0));
+        geometry.line_to((8.0, 20.0));
+        geometry.line_to((22.0, 20.0));
+        geometry.line_to((22.0, 0.0));
+        geometry.line_to((30.0, 0.0));
+        geometry.line_to((30.0, 40.0));
+        geometry.close_path();
+        Object::new(id, parent, ObjectKind::Path(PathData::from_bezpath(crate::convert::bez_path_to_core(&geometry))))
+    }
+
+    /// The bug: a marquee dragged entirely inside the empty notch between
+    /// the two straps never crosses the outline and never lands on the
+    /// fill, yet it sits inside the shape's overall bounding box — a pure
+    /// AABB-overlap marquee test wrongly selects the shape anyway.
+    #[test]
+    fn marquee_inside_a_concave_shapes_empty_notch_does_not_select_it() {
+        let mut doc = Document::new("marquee-notch");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(prong_shape(id, ObjectParent::Layer(layer)), 0).unwrap();
+
+        assert!(
+            within(&doc, Rect::new(10., 2., 20., 15.)).is_empty(),
+            "a marquee entirely inside the empty notch must not select the shape"
+        );
+    }
+
+    /// Same shape: a marquee that actually lands on one strap's fill
+    /// (without crossing any edge — it never leaves the strap) must still
+    /// select it.
+    #[test]
+    fn marquee_landing_inside_a_shapes_fill_selects_it() {
+        let mut doc = Document::new("marquee-fill");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(prong_shape(id, ObjectParent::Layer(layer)), 0).unwrap();
+
+        assert_eq!(within(&doc, Rect::new(2., 2., 6., 10.)), vec![id], "a marquee wholly inside the strap's fill must select it");
+    }
+
+    /// Same shape: a marquee that straddles the notch's inner edge (the
+    /// segment from (8,0) to (8,20)) must select it — the outline itself
+    /// crosses the marquee, the simplest possible case.
+    #[test]
+    fn marquee_crossing_a_shapes_edge_selects_it() {
+        let mut doc = Document::new("marquee-edge");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(prong_shape(id, ObjectParent::Layer(layer)), 0).unwrap();
+
+        assert_eq!(within(&doc, Rect::new(6., 5., 12., 10.)), vec![id], "a marquee crossing the outline must select it");
+    }
+
+    /// A marquee that fully encloses the shape's bounds must select it
+    /// even where sampling a single point could be ambiguous — the cheap
+    /// full-containment fast path.
+    #[test]
+    fn marquee_fully_enclosing_bounds_selects_it() {
+        let mut doc = Document::new("marquee-enclose");
+        let layer = LayerId::new();
+        doc.insert_layer(Layer::new(layer, "Layer"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(prong_shape(id, ObjectParent::Layer(layer)), 0).unwrap();
+
+        assert_eq!(within(&doc, Rect::new(-10., -10., 40., 50.)), vec![id]);
     }
 
     /// A click just past an unstroked filled shape's edge must miss it
