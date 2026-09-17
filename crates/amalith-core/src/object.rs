@@ -715,11 +715,21 @@ pub fn trim_to_split(subpaths: &mut Vec<Subpath>, subpath: usize, at_end: bool, 
     }
 }
 
-/// Remove anchor `n`. When it sits between two other anchors, the
-/// neighbours' facing handles are re-fitted so the single replacement
-/// segment approximates the two it replaces (cubic through the points at
-/// 1/3 and 2/3 of the old pair). Subpaths that fall below two anchors are
-/// dropped.
+/// Remove anchor `n`. On an *open* subpath, when it sits between two other
+/// anchors, the neighbours' facing handles are re-fitted so the single
+/// replacement segment approximates the two it replaces (cubic through the
+/// points at 1/3 and 2/3 of the old pair).
+///
+/// On a *closed* subpath (a filled shape's outline, typically), deleting a
+/// point opens the shape right there instead: the point's two former
+/// neighbours become the new path's free ends, left unconnected, rather
+/// than stitched into a replacement segment that would leave the shape
+/// looking whole and closed as if nothing had been removed — the entire
+/// point of deleting a point on a shape is to open a gap in it. Its own
+/// facing handles are cleared rather than refitted, same as a fresh open
+/// endpoint anywhere else in this module (see [`trim_to_split`]).
+///
+/// Subpaths that fall below two anchors are dropped.
 pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
     use kurbo::{CubicBez, ParamCurve};
 
@@ -727,21 +737,24 @@ pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
         return;
     };
     let sp = &mut subpaths[si];
+    if sp.closed {
+        sp.anchors.remove(ai);
+        let len = sp.anchors.len();
+        if len > 0 {
+            // Rotate so the deleted point's old neighbours land at the
+            // array's own start and end — the only two positions in an
+            // open subpath with no segment drawn between them.
+            sp.anchors.rotate_left(ai);
+            sp.anchors[0].handle_in = None;
+            sp.anchors[len - 1].handle_out = None;
+        }
+        sp.closed = false;
+        subpaths.retain(|s| s.anchors.len() >= 2);
+        return;
+    }
     let m = sp.anchors.len();
-    let prev_i = if ai > 0 {
-        Some(ai - 1)
-    } else if sp.closed && m > 2 {
-        Some(m - 1)
-    } else {
-        None
-    };
-    let next_i = if ai + 1 < m {
-        Some(ai + 1)
-    } else if sp.closed && m > 2 {
-        Some(0)
-    } else {
-        None
-    };
+    let prev_i = if ai > 0 { Some(ai - 1) } else { None };
+    let next_i = if ai + 1 < m { Some(ai + 1) } else { None };
     if let (Some(pi), Some(ni)) = (prev_i, next_i) {
         let a = sp.anchors[pi];
         let b = sp.anchors[ai];
@@ -1673,6 +1686,62 @@ mod path_data_tests {
                 .sqrt();
             assert!(d < 6.0, "sample {u} drifted {d}");
         }
+    }
+
+    /// Deleting a corner from a closed square must open the shape right
+    /// there — not "solve" it back into a smaller closed polygon. The
+    /// deleted corner's two neighbours become the new open path's free
+    /// ends, in the same order they already had around the loop, with no
+    /// segment stitched between them.
+    #[test]
+    fn delete_anchor_on_a_closed_shape_opens_it_at_that_point() {
+        let mut pd = PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0));
+        // Corners in order: (0,0), (10,0), (10,10), (0,10).
+        pd.edit_subpaths(|sp| delete_anchor(sp, 1));
+        assert_eq!(pd.subpaths().len(), 1);
+        let sp = &pd.subpaths()[0];
+        assert!(!sp.closed, "the shape must become open, not stay closed");
+        let pts: Vec<Point> = sp.anchors.iter().map(|a| a.point).collect();
+        assert_eq!(
+            pts,
+            vec![Point::new(10.0, 10.0), Point::new(0.0, 10.0), Point::new(0.0, 0.0)],
+            "the deleted corner's neighbours must land at the array's own start and end"
+        );
+        assert!(sp.anchors[0].handle_in.is_none());
+        assert!(sp.anchors[2].handle_out.is_none());
+    }
+
+    /// Same shape, deleting the *first* anchor (ordinal 0) — the wraparound
+    /// case, since its "previous" neighbour is the subpath's own last
+    /// anchor.
+    #[test]
+    fn delete_anchor_zero_on_a_closed_shape_opens_it_at_the_wraparound() {
+        let mut pd = PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0));
+        pd.edit_subpaths(|sp| delete_anchor(sp, 0));
+        let sp = &pd.subpaths()[0];
+        assert!(!sp.closed);
+        let pts: Vec<Point> = sp.anchors.iter().map(|a| a.point).collect();
+        assert_eq!(pts, vec![Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0)]);
+    }
+
+    /// A closed triangle (the degenerate 3→2 case a pure AABB/refit
+    /// approach used to mishandle): deleting one corner must leave a
+    /// plain open 2-anchor line between the other two, not a closed
+    /// 2-anchor loop that redraws the same edge twice.
+    #[test]
+    fn delete_anchor_on_a_closed_triangle_leaves_an_open_line() {
+        let mut sp = vec![Subpath {
+            anchors: vec![
+                Anchor::corner(Point::new(0.0, 0.0)),
+                Anchor::corner(Point::new(10.0, 0.0)),
+                Anchor::corner(Point::new(5.0, 10.0)),
+            ],
+            closed: true,
+        }];
+        delete_anchor(&mut sp, 0);
+        assert_eq!(sp.len(), 1);
+        assert!(!sp[0].closed);
+        assert_eq!(sp[0].anchors.iter().map(|a| a.point).collect::<Vec<_>>(), vec![Point::new(10.0, 0.0), Point::new(5.0, 10.0)]);
     }
 
     #[test]
