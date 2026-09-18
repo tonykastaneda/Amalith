@@ -13,8 +13,8 @@ use vello::Scene;
 use crate::text::TextContext;
 
 use super::{
-    draw_eye, draw_name_field, panel_footer_rects, paint_panel_footer, Action, Ctx, RenameId, metric_footer_h, ID,
-    metric_pad, metric_row_h,
+    draw_eye, draw_name_field, footer_color, panel_footer_rects, paint_panel_footer, Action, Ctx, RenameId,
+    metric_footer_h, ID, metric_pad, metric_row_h,
 };
 
 /// Per-depth indent, and the width of each icon column (triangle, eye,
@@ -189,6 +189,28 @@ fn list_rect(body: Rect) -> Rect {
 fn clamp_scroll(raw: f64, n_rows: usize, list_h: f64) -> f64 {
     let max = (n_rows as f64 * metric_row_h() - list_h).max(0.0);
     raw.clamp(0.0, max)
+}
+
+/// Row index of `id` in the (already-expanded) row list, or `None` if it
+/// isn't an object row at all — used by "Locate Object" to know where to
+/// scroll. Ignores the search filter: locating is expected to win over an
+/// active query that would otherwise hide the target row (the caller
+/// clears the query for that reason).
+fn row_index_of(doc: &Document, expanded: &HashSet<ObjectId>, id: ObjectId) -> Option<usize> {
+    layer_rows(doc, expanded)
+        .iter()
+        .position(|r| matches!(r.kind, RowKind::Object { id: rid, .. } if rid == id))
+}
+
+/// Scroll offset (in the same raw, pre-clamp units `App::panel_scroll`
+/// stores) that brings `id`'s row into view, with a little context above
+/// it. The caller's later `clamp_scroll` (run every paint/hit regardless
+/// of what's stored) bounds this to whatever the panel's actual height
+/// turns out to be, so this doesn't need to know it.
+pub(crate) fn locate_scroll_target(doc: &Document, expanded: &HashSet<ObjectId>, id: ObjectId) -> Option<f64> {
+    let idx = row_index_of(doc, expanded, id)?;
+    const LEAD_ROWS: f64 = 4.0;
+    Some((idx as f64 - LEAD_ROWS).max(0.0) * metric_row_h())
 }
 
 /// The layer that ultimately contains `id` (walking out through groups).
@@ -538,12 +560,18 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         ctx.pointer,
         [has_sel, has_sel, true, has_sel],
     );
+    let locate_r = locate_button_rect(body);
+    let locate_c = footer_color(ctx.theme, has_sel, locate_r.contains(ctx.pointer));
+    draw_footer_locate(scene, locate_r, locate_c);
 }
 
 /// Resolve a click: the footer buttons, a disclosure triangle, the eye /
 /// lock columns, or the name (select).
 pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     if local.y >= body.y1 - metric_footer_h() {
+        if locate_button_rect(body).contains(local) {
+            return if ctx.selection.is_empty() { Action::None } else { Action::LocateSelection };
+        }
         let [up, down, add, del] = panel_footer_rects(body);
         return if up.contains(local) {
             Action::LayerRestack(1)
@@ -599,6 +627,29 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             }
         }
     }
+}
+
+/// "Locate Object" button — bottom-left of the footer strip, apart from
+/// the shared right-aligned New/Delete/restack cluster (`panel_footer_rects`,
+/// also used by the Artboards panel), matching where Illustrator puts its
+/// own Layers-panel magnifying-glass button.
+fn locate_button_rect(body: Rect) -> Rect {
+    let sz = ui_px(20.0);
+    let cy = body.y1 - metric_footer_h() * 0.5;
+    let cx = body.x0 + metric_pad() + sz * 0.5;
+    Rect::from_center_size(Point::new(cx, cy), (sz, sz))
+}
+
+/// A magnifying glass, matching `draw_search`'s ring-plus-handle shape but
+/// centred in a footer button rect.
+fn draw_footer_locate(scene: &mut Scene, r: Rect, color: Color) {
+    let c = r.center();
+    let ring = vello::kurbo::Circle::new((c.x - ui_px(1.0), c.y - ui_px(1.0)), ui_px(4.0));
+    scene.stroke(&Stroke::new(ui_px(1.4)), ID, color, None, &ring);
+    let mut handle = BezPath::new();
+    handle.move_to((c.x + ui_px(1.7), c.y + ui_px(1.7)));
+    handle.line_to((c.x + ui_px(5.5), c.y + ui_px(5.5)));
+    scene.stroke(&Stroke::new(ui_px(1.6)), ID, color, None, &handle);
 }
 
 /// A disclosure triangle centred at `(cx, cy)`: pointing right when

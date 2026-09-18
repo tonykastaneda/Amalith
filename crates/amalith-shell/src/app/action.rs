@@ -527,6 +527,26 @@ impl App {
                     self.doc.expanded_groups.insert(id);
                 }
             }
+            panels::Action::LocateSelection => {
+                if let Some(&id) = self.doc.selection.first() {
+                    let doc = self.doc.editor.document();
+                    let mut ancestors = Vec::new();
+                    let mut cur = doc.object(id).map(|o| o.parent);
+                    while let Some(amalith_core::ObjectParent::Group(g)) = cur {
+                        ancestors.push(g);
+                        cur = doc.object(g).map(|o| o.parent);
+                    }
+                    self.doc.expanded_groups.extend(ancestors);
+                    // A search filter that hides the target row would
+                    // defeat the point of locating it.
+                    self.layer_query.clear();
+                    let doc = self.doc.editor.document();
+                    if let Some(target) = panels::layers::locate_scroll_target(doc, &self.doc.expanded_groups, id) {
+                        self.panel_scroll.insert(PanelId(PanelKind::Layers), target);
+                    }
+                    self.request_main_redraw();
+                }
+            }
             panels::Action::NewLayer => {
                 let n = self.doc.editor.document().layers().len() + 1;
                 let _ = self.doc.editor.execute(Command::CreateLayer {

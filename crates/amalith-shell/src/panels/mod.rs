@@ -352,6 +352,11 @@ pub enum Action {
     ToggleExpand(ObjectId),
     /// Layers panel: the search field was clicked — give it keyboard focus.
     FocusLayerSearch,
+    /// Layers panel's "Locate Object" button — reveal (expanding any
+    /// collapsed ancestor groups) and scroll to the first selected
+    /// object's row. One-directional, unlike the search field: it never
+    /// changes the canvas selection, only where the panel scrolls.
+    LocateSelection,
     /// Tools panel: the Shape slot was clicked (tap = last shape tool,
     /// hold = flyout).
     ShapeSlot,
