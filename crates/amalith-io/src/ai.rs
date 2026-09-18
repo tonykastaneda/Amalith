@@ -732,11 +732,31 @@ fn interpret(
                     active_clips.push((stack.len(), sink.out.len(), Rc::new(mask)));
                 }
                 let is_close_stroke = matches!(op.operator.as_str(), "s" | "b" | "b*");
-                let force_closed = !matches!(op.operator.as_str(), "S" | "n");
                 let paints = !matches!(op.operator.as_str(), "n");
                 if paints && !subpaths.is_empty() {
                     let fills = matches!(op.operator.as_str(), "f" | "F" | "f*" | "B" | "B*" | "b" | "b*");
                     let strokes = matches!(op.operator.as_str(), "S" | "s" | "B" | "B*" | "b" | "b*");
+                    // Only force a subpath closed here when it's safe to:
+                    // a fill-only op (`f`/`F`/`f*`) has no stroke for a
+                    // synthetic closing edge to leak into, so marking it
+                    // closed is harmless and matches this module's usual
+                    // behavior. `s`/`b`/`b*` genuinely close the path
+                    // (`is_close_stroke`). But a bare `B`/`B*` fills *and*
+                    // strokes with no explicit `h` — per the PDF spec `B`
+                    // is just "f then S", and unlike `f`, `S` never closes
+                    // on its own. Amalith renders a subpath's fill and
+                    // stroke from the same geometry, but the *renderer*
+                    // (vello) still treats them differently per draw call:
+                    // it always closes a subpath for filling regardless of
+                    // an explicit close, but only closes it for stroking
+                    // when one was actually recorded. So leaving this
+                    // subpath's own `closed` at its true state (not forced)
+                    // still fills correctly while keeping the stroke
+                    // faithful to what was actually drawn (no phantom edge
+                    // closing an open "L"-bracket or "V"-chevron into a
+                    // triangle) — and keeps it the single open-path object
+                    // Illustrator itself models it as, rather than two.
+                    let force_closed = fills && !strokes;
                     let built: Vec<Subpath> = subpaths
                         .into_iter()
                         .map(|sp| Subpath {
@@ -1334,6 +1354,37 @@ mod tests {
         let top_level: Vec<_> = doc.objects().filter(|o| matches!(o.parent, ObjectParent::Layer(_))).collect();
         assert_eq!(top_level.len(), 1, "expected exactly one top-level object (the rect, no wrapping group), got {top_level:?}");
         assert!(matches!(top_level[0].kind, ObjectKind::Path(_)));
+    }
+
+    /// Regression test: an open 3-point path (`m`/`l`/`l`, no `h`) painted
+    /// with `B` (fill *and* stroke, no explicit close) must not gain a
+    /// phantom closing edge in its *stroke* — only the fill is implicitly
+    /// closed per the PDF spec (`B` is "f then S", and `S` never closes
+    /// on its own). An "L"-shaped bracket like this is common in
+    /// Illustrator-authored diagrams/icons; getting this wrong turns it
+    /// into a fully closed triangle outline instead of an open corner.
+    #[test]
+    fn an_open_path_painted_with_b_keeps_an_open_stroke_and_closed_fill() {
+        let bytes = pdf_with_content(b"1 1 1 rg\n0 0 0 RG\n1 w\n0 0 m\n0 -20 l\n20 -20 l\nB");
+        let (doc, _assets) = import_ai(&bytes).unwrap();
+
+        // Illustrator models this as a single open Path carrying both a
+        // fill and a stroke — not two separate objects.
+        let top_level: Vec<_> = doc.objects().filter(|o| matches!(o.parent, ObjectParent::Layer(_))).collect();
+        assert_eq!(top_level.len(), 1, "expected one open Path object with both a fill and a stroke, got {top_level:?}");
+
+        let ObjectKind::Path(path) = &top_level[0].kind else { panic!("expected a Path") };
+        assert!(
+            !path.subpaths()[0].closed,
+            "the path must stay open — `B` without an explicit `h` never closes it, only its fill"
+        );
+        assert_eq!(
+            path.subpaths()[0].anchors.len(),
+            3,
+            "should keep exactly the 3 drawn points, no synthetic closing anchor"
+        );
+        assert!(matches!(top_level[0].appearance.items[0], AppearanceItem::Fill { .. }));
+        assert!(matches!(top_level[0].appearance.items[1], AppearanceItem::Stroke { .. }));
     }
 }
 
