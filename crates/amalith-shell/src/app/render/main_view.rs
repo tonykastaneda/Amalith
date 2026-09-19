@@ -26,6 +26,8 @@ pub(in crate::app) fn paint_main(
     view: &CanvasView,
     theme: &Theme,
     selection: &[ObjectId],
+    pixel_selection: Option<(ObjectId, &[Vec<Point>])>,
+    ants_dash_offset: f64,
     active_tool: Tool,
     active_slot: panels::PaintSlot,
     picker: Option<crate::picker::Picker>,
@@ -201,6 +203,7 @@ pub(in crate::app) fn paint_main(
         theme,
         text,
         selection,
+        pointer,
         drag_preview,
         draw_shape,
         artboard_ghost,
@@ -219,6 +222,8 @@ pub(in crate::app) fn paint_main(
         transparency_grid,
         show_grid,
         grid_spacing,
+        pixel_selection,
+        ants_dash_offset,
     );
 
     if let Some(args) = &terminal_pane {

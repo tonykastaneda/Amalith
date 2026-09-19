@@ -91,9 +91,8 @@ enum Slot {
 fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool) -> Vec<Slot> {
     use crate::tool::ToolGroup;
     use icons::Icon;
-    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::DirectSelect)];
+    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::DirectSelect), Slot::Tool(Tool::MagicWand)];
     if !hide_wip {
-        v.push(Slot::Wip("Magic Wand", Icon::MagicWand));
         v.push(Slot::Wip("Lasso", Icon::Lasso));
     }
     v.push(Slot::Tool(Tool::Pen));
@@ -144,15 +143,14 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
 
 /// The Raster Layer toolset — deliberately much smaller than Vector's:
 /// the real, working tools that already make sense against pixel content
-/// (Move, Eyedropper, Hand, Zoom) plus WIP placeholders for the
-/// pixel-editing tools not built yet (Magic Wand / Brush / Eraser —
-/// Phase 2/3 of the raster roadmap). Grows as those phases land; for now
-/// this proves out the toolbar's Vector/Raster switch itself.
+/// (Move, Magic Wand, Eyedropper, Hand, Zoom) plus WIP placeholders for
+/// the pixel-editing tools not built yet (Brush / Eraser — Phase 3 of the
+/// raster roadmap). Grows as those phases land; for now this proves out
+/// the toolbar's Vector/Raster switch itself.
 fn raster_slots(hide_wip: bool) -> Vec<Slot> {
     use icons::Icon;
-    let mut v = vec![Slot::Tool(Tool::Select)];
+    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::MagicWand)];
     if !hide_wip {
-        v.push(Slot::Wip("Magic Wand", Icon::MagicWand));
         v.push(Slot::Wip("Lasso", Icon::Lasso));
         v.push(Slot::Wip("Brush", Icon::Paintbrush));
         v.push(Slot::Wip("Eraser", Icon::Eraser));

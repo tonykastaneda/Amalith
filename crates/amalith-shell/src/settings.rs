@@ -268,6 +268,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::PathType => "PathType",
         Tool::VerticalAreaType => "VerticalAreaType",
         Tool::VerticalPathType => "VerticalPathType",
+        Tool::MagicWand => "MagicWand",
     }
 }
 

@@ -48,6 +48,7 @@ pub mod imageio;
 pub mod keymap;
 pub mod layout;
 pub mod lod;
+pub mod magicwand;
 #[cfg(target_os = "macos")]
 pub mod macdrop;
 pub mod newdoc;

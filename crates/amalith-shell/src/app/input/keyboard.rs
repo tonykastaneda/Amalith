@@ -786,6 +786,11 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
+                        // A live Magic Wand selection is dismissed by Escape
+                        // regardless of which of the branches below also
+                        // fires — it's an independent, lighter-weight
+                        // selection than the object selection they manage.
+                        self.doc.pixel_selection = None;
                         if self.cancel_free_transform_drag() {
                             // Keep the selection and isolation context intact.
                         } else if !self.isolation.is_empty() {

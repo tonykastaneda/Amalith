@@ -70,7 +70,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, effectdlg, home,
-    icons, layerdlg, layerspaneldlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
+    icons, layerdlg, layerspaneldlg, layout, magicwand, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
     settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
 };
@@ -914,6 +914,17 @@ struct PanelMenu {
     win: WindowId,
 }
 
+/// A Magic Wand selection: a set of closed contours traced from a
+/// flood-fill over one placed raster `Image` object's pixels, in that
+/// object's own local coordinate space (like any path) so it stays
+/// correctly positioned across pan/zoom/transform without re-running the
+/// flood fill every frame.
+#[derive(Clone)]
+struct PixelSelection {
+    object: ObjectId,
+    contours: Vec<Vec<Point>>,
+}
+
 /// One open document's worth of state. The *active* tab's copy lives
 /// directly on [`App`] (the fields below `dock`); the inactive tabs are
 /// parked here and swapped in on a tab switch via
@@ -926,6 +937,10 @@ struct Doc {
     io_error: Option<String>,
     selection: Vec<ObjectId>,
     anchor_sel: Vec<(ObjectId, usize)>,
+    /// Magic Wand's live pixel selection, if any — transient UI state,
+    /// same non-undoable treatment as `selection` itself (Photoshop/GIMP
+    /// don't put "make a selection" on the document undo stack either).
+    pixel_selection: Option<PixelSelection>,
     expanded_groups: std::collections::HashSet<ObjectId>,
     collapsed_layers: std::collections::HashSet<amalith_core::LayerId>,
     selected_artboard: Option<ArtboardId>,
@@ -966,6 +981,7 @@ impl Doc {
             io_error: None,
             selection: Vec::new(),
             anchor_sel: Vec::new(),
+            pixel_selection: None,
             expanded_groups: std::collections::HashSet::new(),
             collapsed_layers: std::collections::HashSet::new(),
             selected_artboard: None,
@@ -1267,6 +1283,15 @@ struct App {
     blend_first: Option<ObjectId>,
     /// Caret blink phase origin.
     text_blink: Instant,
+    /// Marching-ants dash-offset phase origin for the Magic Wand pixel
+    /// selection overlay — only read/scheduled while
+    /// `doc.pixel_selection` is `Some` (see `ants_dash_offset`).
+    ants_phase: Instant,
+    /// Single-entry decode cache for Magic Wand — keyed by asset, so
+    /// repeat wand clicks on the same placed image skip the (potentially
+    /// slow) full-resolution re-decode. Not persisted; just a per-session
+    /// convenience.
+    magic_wand_cache: Option<(amalith_core::AssetId, image::RgbaImage)>,
     /// Installed font family names, sorted — built once, for the Character
     /// panel's family dropdown.
     font_families: Vec<String>,
@@ -1685,6 +1710,8 @@ impl App {
             transform_pivot: None,
             blend_first: None,
             text_blink: Instant::now(),
+            ants_phase: Instant::now(),
+            magic_wand_cache: None,
             font_families: Vec::new(),
             font_menu: None,
             panel_menu: None,
@@ -5721,6 +5748,14 @@ impl App {
                     }
                 });
                 if let Some(asset) = asset {
+                    // A Raster layer embeds a placed image immediately —
+                    // there's no "linked, needs embedding later" state for
+                    // it to sit in (⇐ the user's own ask: no crossed-box
+                    // Linked-image contour should ever be possible there).
+                    // A Vector layer keeps today's Linked default.
+                    if self.doc.editor.document().layer(layer).is_some_and(|l| l.kind == amalith_core::LayerKind::Raster) {
+                        self.embed_asset(asset);
+                    }
                     self.request_lod(asset, src, Some(path.to_path_buf()), None, nw, nh);
                 }
                 self.doc.selection = vec![id];
@@ -6544,6 +6579,109 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// Default color-distance tolerance for [`Self::magic_wand_click`] —
+    /// no options-bar dial yet (a documented fast-follow), so this is the
+    /// one knob for now.
+    const MAGIC_WAND_TOLERANCE: f64 = 32.0;
+
+    /// Magic Wand: flood-fill the placed raster image under `screen` from
+    /// the clicked pixel, and store the resulting contours as the
+    /// document's live pixel selection (`doc.pixel_selection`). A miss —
+    /// nothing there, or the topmost object there isn't an `Image` — just
+    /// clears any existing pixel selection, the same "a miss stays a
+    /// miss" convention the Select tool's own click already follows.
+    fn magic_wand_click(&mut self, screen: Point) {
+        self.doc.pixel_selection = None;
+        let dp = self.doc_point(screen);
+        let visible = self.visible_doc_rect();
+        let doc = self.doc.editor.document();
+        let Some(id) = select::topmost_selectable_at(
+            doc,
+            dp,
+            visible,
+            select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
+        ) else {
+            self.doc.io_error = Some("Magic Wand: nothing under the cursor.".into());
+            self.request_main_redraw();
+            return;
+        };
+        let Some(amalith_core::ObjectKind::Image(img)) = doc.object(id).map(|o| &o.kind) else {
+            self.doc.io_error = Some("Magic Wand needs a placed raster image.".into());
+            self.request_main_redraw();
+            return;
+        };
+        let (asset_id, local_bounds) = (img.asset, img.local_bounds);
+        let world = doc.world_transform(id);
+        let local = world.inverse() * amalith_core::Point::new(dp.x, dp.y);
+        self.doc.io_error = None;
+
+        let Some(image) = self.magic_wand_image(asset_id) else {
+            self.doc.io_error = Some("Magic Wand: could not decode this image's pixels.".into());
+            self.request_main_redraw();
+            return;
+        };
+        let (iw, ih) = image.dimensions();
+        if iw == 0 || ih == 0 || local_bounds.width() <= 0.0 || local_bounds.height() <= 0.0 {
+            self.doc.io_error = Some("Magic Wand: image has no usable pixels.".into());
+            self.request_main_redraw();
+            return;
+        }
+        let px = (((local.x - local_bounds.x0) / local_bounds.width()) * iw as f64)
+            .floor()
+            .clamp(0.0, iw as f64 - 1.0) as u32;
+        let py = (((local.y - local_bounds.y0) / local_bounds.height()) * ih as f64)
+            .floor()
+            .clamp(0.0, ih as f64 - 1.0) as u32;
+
+        let mask = magicwand::flood_fill(image, (px, py), Self::MAGIC_WAND_TOLERANCE);
+        let (sx, sy) = (local_bounds.width() / iw as f64, local_bounds.height() / ih as f64);
+        let contours: Vec<Vec<Point>> = magicwand::mask_to_contours(&mask)
+            .into_iter()
+            .map(|loop_pts| {
+                loop_pts
+                    .into_iter()
+                    .map(|p| Point::new(local_bounds.x0 + p.x * sx, local_bounds.y0 + p.y * sy))
+                    .collect()
+            })
+            .collect();
+        if !contours.is_empty() {
+            self.ants_phase = Instant::now();
+            self.doc.pixel_selection = Some(PixelSelection { object: id, contours });
+        }
+        self.request_main_redraw();
+    }
+
+    /// Full-resolution decoded pixels for asset `id`, from the single-entry
+    /// [`App::magic_wand_cache`] when it's already the right asset, else
+    /// freshly decoded (same embedded/linked byte-fetch `app/image_trace.rs`
+    /// uses) and cached for the next click. `None` if the bytes can't be
+    /// read or aren't a decodable image.
+    fn magic_wand_image(&mut self, id: amalith_core::AssetId) -> Option<&image::RgbaImage> {
+        if self.magic_wand_cache.as_ref().map(|(cached, _)| *cached) != Some(id) {
+            let doc = self.doc.editor.document();
+            let asset = doc.asset(id)?;
+            let bytes = match &asset.source {
+                amalith_core::AssetSource::Embedded { container_path } => {
+                    self.doc.asset_store.get(container_path).map(<[u8]>::to_vec)
+                }
+                amalith_core::AssetSource::Linked { path, .. } => std::fs::read(path).ok(),
+            }?;
+            // ImageIO first (matches every other raster decode in the
+            // app — `canvas::decode_bytes_max_side`/`decode_path_max_side`
+            // — and covers formats the `image` crate's own limited codec
+            // set doesn't, e.g. WebP/HEIC): full native resolution,
+            // straight alpha, exactly what the flood fill needs.
+            #[cfg(target_os = "macos")]
+            let decoded = crate::imageio::decode_rgba_bytes(&bytes)
+                .and_then(|(w, h, rgba)| image::RgbaImage::from_raw(w, h, rgba))
+                .or_else(|| image::load_from_memory(&bytes).ok().map(|d| d.to_rgba8()));
+            #[cfg(not(target_os = "macos"))]
+            let decoded = image::load_from_memory(&bytes).ok().map(|d| d.to_rgba8());
+            self.magic_wand_cache = Some((id, decoded?));
+        }
+        self.magic_wand_cache.as_ref().map(|(_, img)| img)
+    }
+
     /// The head frame of `id`'s text thread (`id` itself if unthreaded or
     /// already the head); `None` if `id` isn't a text object.
     fn thread_head(&self, id: ObjectId) -> Option<ObjectId> {
@@ -6940,6 +7078,15 @@ impl App {
     /// Whether the caret is in its visible blink phase.
     fn text_blink_on(&self) -> bool {
         self.text_blink.elapsed().as_millis() % 1060 < 530
+    }
+
+    /// Marching-ants dash offset (px) for the current moment — a
+    /// continuous crawl, unlike `text_blink`'s binary flip. Only ever
+    /// read/scheduled while `doc.pixel_selection` is `Some`.
+    fn ants_dash_offset(&self) -> f64 {
+        const SPEED_PX_PER_SEC: f64 = 12.0;
+        const PERIOD: f64 = 8.0; // one dash (4) + one gap (4)
+        (self.ants_phase.elapsed().as_secs_f64() * SPEED_PX_PER_SEC).rem_euclid(PERIOD)
     }
 
     /// Screen (logical) point → the open editor's local space.
@@ -9312,6 +9459,15 @@ impl ApplicationHandler for App {
             let phase = self.text_blink.elapsed().as_millis() % 1060;
             let to_flip = if phase < 530 { 530 - phase } else { 1060 - phase };
             wake = merge(wake, Duration::from_millis(to_flip as u64 + 8));
+        }
+
+        // Marching ants: a continuous crawl (not a single flip like the
+        // caret), so this just keeps redrawing at a steady, modest cadence
+        // for as long as a Magic Wand selection is live, and asks for
+        // nothing at all once it's gone.
+        if self.doc.pixel_selection.is_some() {
+            self.request_main_redraw();
+            wake = merge(wake, Duration::from_millis(40));
         }
 
         // Hover tooltip: revealed 350ms after it is set, with no event in

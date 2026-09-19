@@ -290,8 +290,13 @@ pub fn export_scene(
             continue;
         }
         for &id in &layer.children {
+            // A static export never has a live cursor or selection to
+            // gate the Linked-image contour on — always off, regardless
+            // of layer kind (matching what a real hover/select gate
+            // would produce for content nobody's looking at right now).
             paint_object(
                 &mut scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink,
+                layer.kind, Point::new(-1.0, -1.0), &[],
             );
         }
     }
@@ -328,7 +333,14 @@ pub fn export_scene_of(
             Some(amalith_core::ObjectParent::Group(parent)) => convert::affine(doc.world_transform(parent)),
             _ => Affine::IDENTITY,
         };
-        paint_object(&mut scene, doc, id, vt * parent, scale, px, None, text, None, images, outline, link_ink);
+        // Same "no live cursor/selection" reasoning as `export_scene`.
+        let layer_kind = crate::panels::layers::owning_layer(doc, id)
+            .and_then(|l| doc.layer(l))
+            .map_or(amalith_core::LayerKind::Vector, |l| l.kind);
+        paint_object(
+            &mut scene, doc, id, vt * parent, scale, px, None, text, None, images, outline, link_ink,
+            layer_kind, Point::new(-1.0, -1.0), &[],
+        );
     }
     scene.pop_layer();
     scene
@@ -379,6 +391,9 @@ pub fn paint(
     theme: &Theme,
     text: &mut TextContext,
     selection: &[ObjectId],
+    // Screen-space cursor position — currently only used to gate the
+    // Linked-image crossed-box contour's hover condition.
+    pointer: Point,
     drag: Option<DragPreview<'_>>,
     draw_shape: Option<(Tool, Rect)>,
     artboard_ghost: Option<Rect>,
@@ -408,6 +423,12 @@ pub fn paint(
     // the transparency checker is.
     show_grid: bool,
     grid_spacing: f64,
+    // Magic Wand's live pixel selection — the flood-filled object and its
+    // traced contours, in that object's own local space (see
+    // `app::PixelSelection`). Rendered as an animated "marching ants"
+    // outline; `ants_dash_offset` drives the animation.
+    pixel_selection: Option<(ObjectId, &[Vec<Point>])>,
+    ants_dash_offset: f64,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -504,6 +525,9 @@ pub fn paint(
                 images,
                 outline,
                 theme.accent,
+                layer.kind,
+                pointer,
+                selection,
             );
         }
     }
@@ -524,9 +548,12 @@ pub fn paint(
             }
             _ => vt,
         };
+        let root_layer_kind = crate::panels::layers::owning_layer(doc, root)
+            .and_then(|l| doc.layer(l))
+            .map_or(amalith_core::LayerKind::Vector, |l| l.kind);
         paint_object(
             scene, doc, root, parent_m, view.zoom, cull, drag, text, editing_text, images, outline,
-            theme.accent,
+            theme.accent, root_layer_kind, pointer, selection,
         );
     }
 
@@ -552,6 +579,9 @@ pub fn paint(
     // the originals stay put underneath and the blue outline marks it.
     if let Some(d) = drag.filter(|d| d.dup) {
         for &id in d.ids {
+            let layer_kind = crate::panels::layers::owning_layer(doc, id)
+                .and_then(|l| doc.layer(l))
+                .map_or(amalith_core::LayerKind::Vector, |l| l.kind);
             paint_object(
                 scene,
                 doc,
@@ -565,6 +595,9 @@ pub fn paint(
                 images,
                 outline,
                 theme.accent,
+                layer_kind,
+                pointer,
+                selection,
             );
         }
     }
@@ -576,6 +609,9 @@ pub fn paint(
     if let Some(d) = drag.filter(|d| d.dup_xf) {
         if let Some(map) = d.xf {
             for (&id, &xf) in map {
+                let layer_kind = crate::panels::layers::owning_layer(doc, id)
+                    .and_then(|l| doc.layer(l))
+                    .map_or(amalith_core::LayerKind::Vector, |l| l.kind);
                 paint_object(
                     scene,
                     doc,
@@ -589,6 +625,9 @@ pub fn paint(
                     images,
                     outline,
                     theme.accent,
+                    layer_kind,
+                    pointer,
+                    selection,
                 );
             }
         }
@@ -1391,6 +1430,41 @@ pub fn paint(
         }
     }
 
+    // Magic Wand's live pixel selection: an animated dashed "marching
+    // ants" outline over the flood-filled region, drawn in screen space
+    // like every other overlay in this function. Alternating black/white
+    // dashes (two offset strokes) so it stays visible against any
+    // underlying content, matching the convention every raster editor
+    // uses for this exact overlay.
+    if let Some((object, contours)) = pixel_selection {
+        let m = vt * convert::affine(doc.world_transform(object));
+        for loop_pts in contours {
+            if loop_pts.len() < 2 {
+                continue;
+            }
+            let mut p = BezPath::new();
+            p.move_to(m * loop_pts[0]);
+            for pt in &loop_pts[1..] {
+                p.line_to(m * *pt);
+            }
+            p.close_path();
+            scene.stroke(
+                &Stroke::new(1.0).with_dashes(ants_dash_offset, [4.0, 4.0]),
+                Affine::IDENTITY,
+                Color::WHITE,
+                None,
+                &p,
+            );
+            scene.stroke(
+                &Stroke::new(1.0).with_dashes(ants_dash_offset + 4.0, [4.0, 4.0]),
+                Affine::IDENTITY,
+                Color::BLACK,
+                None,
+                &p,
+            );
+        }
+    }
+
     // Debug (Preferences ▸ Debug ▸ Show Cull Outline): the dashed line is
     // the cull threshold — objects whose bounds fully leave it are not
     // drawn, and their rasters are not decoded.
@@ -1794,10 +1868,22 @@ fn paint_object(
     editing_text: Option<ObjectId>,
     images: &HashMap<AssetId, ImageLods>,
     outline: bool,
-    // The crossed-box contour drawn over every *Linked* image — always the
+    // The crossed-box contour's color for a *Linked* image — always the
     // live `theme.accent`, so a customized accent color propagates here
-    // instead of silently keeping the app's old default blue.
+    // instead of silently keeping the app's old default blue. Whether it
+    // shows at all is gated by `layer_kind`/`pointer`/`selection` below.
     link_ink: Color,
+    // Owning layer's kind for `id` — the crossed-box Linked-image
+    // contour only ever shows on a Vector layer (see the `ObjectKind::
+    // Image` branch below). Threaded through recursion unchanged, same
+    // as `link_ink`: a nested child inherits its ancestor layer's kind.
+    layer_kind: amalith_core::LayerKind,
+    // Screen-space cursor position, for the Linked-image contour's
+    // hover gate.
+    pointer: Point,
+    // Current object selection, for the Linked-image contour's other
+    // show condition (hover OR selected).
+    selection: &[ObjectId],
 ) {
     let Some(obj) = doc.object(id) else {
         return;
@@ -2079,6 +2165,9 @@ fn paint_object(
                     images,
                     outline,
                     link_ink,
+                    layer_kind,
+                    pointer,
+                    selection,
                 );
             }
             if clipped.is_some() {
@@ -2110,6 +2199,9 @@ fn paint_object(
                             images,
                             outline,
                             link_ink,
+                            layer_kind,
+                            pointer,
+                            selection,
                         );
                     }
                 }
@@ -2238,13 +2330,25 @@ fn paint_object(
                     &r,
                 );
             }
-            // A Linked image always gets a crossed-box contour on top of
-            // its pixels — an Embedded one gets none (⇐ the user's own
-            // "linked draws a blue X, embedded doesn't" ask).
-            if doc.asset(img.asset).is_some_and(|a| a.is_linked()) {
+            // A Linked image gets a crossed-box contour on top of its
+            // pixels — an Embedded one never does (⇐ the user's own
+            // "linked draws a blue X, embedded doesn't" ask). On a Vector
+            // layer that only shows while the image is hovered or
+            // selected, not permanently (⇐ a later ask — the X was
+            // drowning out the actual artwork). A Raster layer never
+            // shows it at all: placing an image there embeds it
+            // immediately (see `App::place_image_at`), so this only
+            // matters for an image that ends up Linked there some other
+            // way (Unembed, drag-reparent, …) — still correctly hidden.
+            if layer_kind == amalith_core::LayerKind::Vector
+                && doc.asset(img.asset).is_some_and(|a| a.is_linked())
+            {
                 if let Some(b) = obj.kind.own_local_bounds() {
-                    let bp = crossed_box_path(convert::rect(b), m);
-                    scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, link_ink, None, &bp);
+                    let scr = m.transform_rect_bbox(convert::rect(b));
+                    if scr.contains(pointer) || selection.contains(&id) {
+                        let bp = crossed_box_path(convert::rect(b), m);
+                        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, link_ink, None, &bp);
+                    }
                 }
             }
         }
@@ -2535,10 +2639,10 @@ mod tests {
         for zoom in [1., 4., 16., 64.] {
             let view = Affine::translate((50., 50.)) * Affine::scale(zoom) * Affine::translate((-500., -300.));
             let mut scene = Scene::new();
-            paint_object(&mut scene, &doc, group, view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK);
+            paint_object(&mut scene, &doc, group, view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK, amalith_core::LayerKind::Vector, Point::new(-1.0, -1.0), &[]);
             assert!(!scene.encoding().path_tags.is_empty(), "visible child culled at zoom {zoom}");
             let mut offscreen = Scene::new();
-            paint_object(&mut offscreen, &doc, group, Affine::translate((10000., 10000.)) * view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK);
+            paint_object(&mut offscreen, &doc, group, Affine::translate((10000., 10000.)) * view, zoom, Rect::new(0., 0., 200., 200.), None, &mut text, None, &images, false, Color::BLACK, amalith_core::LayerKind::Vector, Point::new(-1.0, -1.0), &[]);
             assert!(offscreen.encoding().path_tags.is_empty());
         }
     }

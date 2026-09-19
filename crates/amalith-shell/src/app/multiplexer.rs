@@ -1523,6 +1523,7 @@ impl App {
                                     &self.theme,
                                     &mut self.text,
                                     &[],
+                                    Point::new(-1.0, -1.0),
                                     None,
                                     None,
                                     None,
@@ -1541,6 +1542,8 @@ impl App {
                                     self.transparency_grid,
                                     self.settings.show_grid,
                                     self.settings.grid_spacing,
+                                    None,
+                                    0.0,
                                 );
                             }
                         }
@@ -1601,9 +1604,9 @@ impl App {
                         // (⌘N/⌘O), or the new one just added for it (⌘J,
                         // Terminal previously had none).
                         const ACTIONS: [(&str, usize, &str); CHOOSER_ACTIONS] = [
-                            ("Create a new Document", 0, "⌘N"),
-                            ("Start a shell in this pane", 1, "⌘J"),
-                            ("Open/Import", 2, "⌘O"),
+                            ("New Document", 0, "⌘N"),
+                            ("New Shell", 1, "⌘J"),
+                            ("Open / Import", 2, "⌘O"),
                         ];
                         for (i, (label, kind, hint)) in ACTIONS.iter().enumerate() {
                             let ar = chooser_action_row(r, i, n_open, n_recent, scroll);

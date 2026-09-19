@@ -548,6 +548,7 @@ impl App {
             (0..self.tabs.len()).map(|i| self.tab_label(i)).collect()
         };
         let document_open = self.document_open();
+        let ants_dash_offset = self.ants_dash_offset();
         let active_tab = self.active;
         let blend_spine_hover = self
             .blend_spine_hover()
@@ -674,6 +675,8 @@ impl App {
                 &self.doc.view,
                 &self.theme,
                 &self.doc.selection,
+                self.doc.pixel_selection.as_ref().map(|ps| (ps.object, ps.contours.as_slice())),
+                ants_dash_offset,
                 self.active_tool,
                 self.active_slot,
                 self.picker,

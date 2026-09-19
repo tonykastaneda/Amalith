@@ -1287,7 +1287,8 @@ impl App {
                         | Tool::AreaType
                         | Tool::PathType
                         | Tool::VerticalAreaType
-                        | Tool::VerticalPathType => return,
+                        | Tool::VerticalPathType
+                        | Tool::MagicWand => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];

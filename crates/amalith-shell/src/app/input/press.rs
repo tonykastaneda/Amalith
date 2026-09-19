@@ -973,6 +973,11 @@ impl App {
                     self.eyedrop_at(self.pointer);
                     return;
                 }
+                // Magic Wand: flood-fill the placed image under the cursor.
+                if self.active_tool == Tool::MagicWand {
+                    self.magic_wand_click(self.pointer);
+                    return;
+                }
                 let dp = self.doc_point(self.pointer);
                 // Start / end / center bracket handles of a single
                 // selected `TextKind::Path` object — checked ahead of the
@@ -1799,6 +1804,7 @@ impl App {
                     if !self.shift_down {
                         self.doc.selection.clear();
                         self.doc.anchor_sel.clear();
+                        self.doc.pixel_selection = None;
                         self.sync_align_mode();
                     }
                     self.drag = Drag::Marquee {

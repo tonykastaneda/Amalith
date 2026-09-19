@@ -36,10 +36,11 @@ pub enum Tool {
     PathType,
     VerticalAreaType,
     VerticalPathType,
+    MagicWand,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 32] = [
+    pub const ALL: [Tool; 33] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -72,6 +73,7 @@ impl Tool {
         Tool::PathType,
         Tool::VerticalAreaType,
         Tool::VerticalPathType,
+        Tool::MagicWand,
     ];
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
@@ -125,6 +127,7 @@ impl Tool {
             Tool::PathType => "Type on a Path",
             Tool::VerticalAreaType => "Vertical Area Type",
             Tool::VerticalPathType => "Vertical Type on a Path",
+            Tool::MagicWand => "Magic Wand",
         }
     }
 
@@ -151,6 +154,7 @@ impl Tool {
             Tool::FreeTransform => "E",
             Tool::ShapeBuilder => "⇧M",
             Tool::Eraser => "⇧E",
+            Tool::MagicWand => "Y",
             // Matching Illustrator's own Type flyout: only the plain Type
             // Tool has a default shortcut: the other five (Area/Path ×
             // horizontal/vertical) are flyout-only.
@@ -192,6 +196,7 @@ impl Tool {
             Tool::PathType => Icon::PathType,
             Tool::VerticalAreaType => Icon::VerticalAreaType,
             Tool::VerticalPathType => Icon::VerticalPathType,
+            Tool::MagicWand => Icon::MagicWand,
         }
     }
 }
@@ -279,7 +284,8 @@ mod tests {
                 | Tool::AreaType
                 | Tool::PathType
                 | Tool::VerticalAreaType
-                | Tool::VerticalPathType => true,
+                | Tool::VerticalPathType
+                | Tool::MagicWand => true,
             }
         }
         for t in Tool::ALL {

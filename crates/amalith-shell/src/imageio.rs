@@ -36,6 +36,14 @@ extern "C" {
         index: usize,
         options: *const CFDictionary,
     ) -> *mut CGImage;
+    /// The actual full-resolution decode, no thumbnail cap — for pixel-
+    /// accurate work (Magic Wand's flood fill) where a downsampled/
+    /// premultiplied thumbnail would give the wrong pixels.
+    fn CGImageSourceCreateImageAtIndex(
+        isrc: *mut CGImageSource,
+        index: usize,
+        options: *const CFDictionary,
+    ) -> *mut CGImage;
     fn CGImageSourceCopyPropertiesAtIndex(
         isrc: *mut CGImageSource,
         index: usize,
@@ -139,7 +147,10 @@ pub fn thumbnail_bytes(bytes: &[u8], max_side: u32) -> Option<ImageData> {
     thumbnail_from_source(&src, max_side)
 }
 
-fn cgimage_to_gpu(image: &CGImage) -> Option<ImageData> {
+/// Renders `image` into a premultiplied-RGBA8 CPU buffer at its own
+/// native size. Shared by the GPU thumbnail path and the full-resolution
+/// decode below — only what happens to the buffer afterward differs.
+fn cgimage_to_rgba_buffer(image: &CGImage) -> Option<(u32, u32, Vec<u8>)> {
     let w = CGImageGetWidth(Some(image));
     let h = CGImageGetHeight(Some(image));
     if w == 0 || h == 0 {
@@ -186,13 +197,48 @@ fn cgimage_to_gpu(image: &CGImage) -> Option<ImageData> {
             }
         }
     }
+    Some((w as u32, h as u32, rgba))
+}
+
+fn cgimage_to_gpu(image: &CGImage) -> Option<ImageData> {
+    let (w, h, rgba) = cgimage_to_rgba_buffer(image)?;
     Some(ImageData {
         data: Blob::from(rgba),
         format: ImageFormat::Rgba8,
         alpha_type: ImageAlphaType::AlphaPremultiplied,
-        width: w as u32,
-        height: h as u32,
+        width: w,
+        height: h,
     })
+}
+
+/// Full native-resolution decode (no thumbnail cap), with straight — not
+/// premultiplied — alpha, since a premultiplied buffer would skew colors
+/// at translucent edges for pixel-accurate work like Magic Wand's flood
+/// fill. ImageIO covers every format `thumbnail_bytes` does (WebP, HEIC,
+/// TIFF, GIF, BMP, …), unlike the `image` crate's own limited codec set.
+pub fn decode_rgba_bytes(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let src = source_from_bytes(bytes)?;
+    let img = unsafe { CGImageSourceCreateImageAtIndex(src_ptr(&src), 0, ptr::null()) };
+    let img = NonNull::new(img)?;
+    let img = unsafe { CFRetained::<CGImage>::from_raw(img) };
+    let (w, h, mut rgba) = cgimage_to_rgba_buffer(&img)?;
+    unpremultiply(&mut rgba);
+    Some((w, h, rgba))
+}
+
+/// In-place premultiplied → straight alpha. A no-op for alpha `0`
+/// (already all-zero, and dividing by it would be undefined anyway) and
+/// `255` (premultiplied and straight are identical there).
+fn unpremultiply(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a == 0 || a == 255 {
+            continue;
+        }
+        for c in &mut px[..3] {
+            *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
 }
 
 #[cfg(test)]
