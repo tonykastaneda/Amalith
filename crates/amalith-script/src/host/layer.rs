@@ -57,6 +57,7 @@ impl JsLayer {
             print: l.print,
             preview: l.preview,
             dim_images_to: l.dim_images_to,
+            kind: l.kind,
         });
         let Some(mut options) = current else { return };
         f(&mut options);

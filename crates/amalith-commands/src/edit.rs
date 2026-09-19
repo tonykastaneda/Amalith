@@ -262,6 +262,7 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
                 print: layer.print,
                 preview: layer.preview,
                 dim_images_to: layer.dim_images_to,
+                kind: layer.kind,
             };
             layer.name = options.name;
             layer.color = options.color;
@@ -271,6 +272,7 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             layer.print = options.print;
             layer.preview = options.preview;
             layer.dim_images_to = options.dim_images_to;
+            layer.kind = options.kind;
             Ok((Edit::SetLayerOptions { id, options: old }, None))
         }
         Edit::InsertObject { object, index } => {

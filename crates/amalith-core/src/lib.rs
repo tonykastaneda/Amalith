@@ -31,7 +31,7 @@ pub mod width;
 pub mod xform;
 
 pub use appearance::{
-    Appearance, AppearanceItem, Effect, LineCap, LineJoin, OffsetEffect, Paint, PuckerBloatEffect,
+    Appearance, AppearanceItem, BlendMode, Effect, LineCap, LineJoin, OffsetEffect, Paint, PuckerBloatEffect,
     RoughenEffect, StrokeAlign, StrokeStyle, TransformEffect, TweakEffect, TwistEffect, ZigZagEffect,
 };
 pub use artboard::Artboard;
@@ -42,7 +42,7 @@ pub use geom::{Affine, Bounds, Point, Rect, Size, Vec2};
 pub use gradient::{FreeformPoint, Gradient, GradientKind, GradientStop};
 pub use guide::{Guide, GuideId, GuideOrient};
 pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId, SymbolId};
-pub use layer::{Layer, LayerColor};
+pub use layer::{Layer, LayerColor, LayerKind};
 pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
 pub use pathtext::ArcLengthPath;

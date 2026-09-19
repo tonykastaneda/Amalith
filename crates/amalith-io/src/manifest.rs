@@ -47,7 +47,7 @@
 //!   so files stay bigger on average, in exchange for never refusing to
 //!   open. Every future `ObjectKind` variant should ship with a
 //!   `fallback`-populating writer from day one, the same way `Symbol` does.
-use amalith_core::{Artboard, Asset, Gradient, Guide, LayerColor, LayerId, Metadata, Object, Settings, Swatch, SymbolId};
+use amalith_core::{Artboard, Asset, Gradient, Guide, LayerColor, LayerId, LayerKind, Metadata, Object, Settings, Swatch, SymbolId};
 use serde::{Deserialize, Serialize};
 
 /// Current `.amalith` container schema version. Bump when `DocumentManifest`
@@ -109,6 +109,8 @@ pub(crate) struct LayerManifest {
     pub preview: bool,
     #[serde(default)]
     pub dim_images_to: Option<u8>,
+    #[serde(default)]
+    pub kind: LayerKind,
 }
 
 fn default_true() -> bool {

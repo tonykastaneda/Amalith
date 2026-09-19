@@ -10,7 +10,7 @@
 use crate::metrics::px as ui_px;
 
 use amalith_commands::LayerOptions;
-use amalith_core::{Layer, LayerColor, LayerId};
+use amalith_core::{Layer, LayerColor, LayerId, LayerKind};
 use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke};
 use vello::peniko::Fill;
 use vello::Scene;
@@ -39,6 +39,10 @@ pub struct LayerOptionsDialog {
     pub preview: bool,
     /// The "Dim Images to" checkbox — `Some(pct text)` when checked.
     pub dim_images: Option<String>,
+    /// Not yet editable from this dialog (no UI control for it) — carried
+    /// through unchanged so opening Layer Options on a Raster layer and
+    /// clicking OK doesn't silently revert it to Vector.
+    kind: LayerKind,
 }
 
 impl LayerOptionsDialog {
@@ -54,6 +58,7 @@ impl LayerOptionsDialog {
             print: layer.print,
             preview: layer.preview,
             dim_images: layer.dim_images_to.map(|p| p.to_string()),
+            kind: layer.kind,
         }
     }
 
@@ -76,6 +81,7 @@ impl LayerOptionsDialog {
             print: self.print,
             preview: self.preview,
             dim_images_to: self.resolved_dim_pct(),
+            kind: self.kind,
         }
     }
 

@@ -885,6 +885,7 @@ mod tests {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: amalith_core::BlendMode::Normal,
                 }],
                 ..Appearance::default()
             },
@@ -958,6 +959,7 @@ mod tests {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: amalith_core::BlendMode::Normal,
             }],
             ..Appearance::default()
         };

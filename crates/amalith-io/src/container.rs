@@ -47,6 +47,7 @@ pub fn save(
                 print: layer.print,
                 preview: layer.preview,
                 dim_images_to: layer.dim_images_to,
+                kind: layer.kind,
             })
             .collect(),
         symbols: document
@@ -134,6 +135,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<(Document, AssetStore), IoError> {
             print: layer_manifest.print,
             preview: layer_manifest.preview,
             dim_images_to: layer_manifest.dim_images_to,
+            kind: layer_manifest.kind,
             children: Vec::new(),
         };
         let index = document.layers().len();

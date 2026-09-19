@@ -69,6 +69,36 @@ pub fn color(c: amalith_core::Color) -> vello::peniko::Color {
     vello::peniko::Color::new([c.r, c.g, c.b, c.a])
 }
 
+/// Illustrator Transparency-panel blend mode → vello's own compositing
+/// type. A direct 1:1 match, not a remapping table — `amalith_core::
+/// BlendMode`'s variants were deliberately named to mirror `peniko::Mix`'s
+/// exactly. `Compose` always stays `SrcOver`: Illustrator's Transparency
+/// panel exposes blend mode (`Mix`) only, never a Porter-Duff composite
+/// operator.
+pub fn blend_mode(b: amalith_core::BlendMode) -> vello::peniko::BlendMode {
+    use amalith_core::BlendMode as B;
+    use vello::peniko::Mix;
+    let mix = match b {
+        B::Normal => Mix::Normal,
+        B::Multiply => Mix::Multiply,
+        B::Screen => Mix::Screen,
+        B::Overlay => Mix::Overlay,
+        B::Darken => Mix::Darken,
+        B::Lighten => Mix::Lighten,
+        B::ColorDodge => Mix::ColorDodge,
+        B::ColorBurn => Mix::ColorBurn,
+        B::HardLight => Mix::HardLight,
+        B::SoftLight => Mix::SoftLight,
+        B::Difference => Mix::Difference,
+        B::Exclusion => Mix::Exclusion,
+        B::Hue => Mix::Hue,
+        B::Saturation => Mix::Saturation,
+        B::Color => Mix::Color,
+        B::Luminosity => Mix::Luminosity,
+    };
+    vello::peniko::BlendMode::new(mix, vello::peniko::Compose::SrcOver)
+}
+
 /// Build a vello gradient from a pooled [`amalith_core::Gradient`], in
 /// **bounding-box unit space** (`0..1`). The caller pairs it with a
 /// `brush_transform` that maps the unit square onto the object's local

@@ -171,6 +171,13 @@ pub enum AppearanceItem {
         /// [`Effect`]'s own doc comment). Empty for most items.
         #[serde(default)]
         effects: Vec<Effect>,
+        /// Illustrator's Transparency-panel blend mode — how this item's
+        /// painted result composites against whatever is beneath it.
+        /// Named `blend_mode`, not `blend`: `GroupData::blend` is the
+        /// unrelated Blend *tool* (shape interpolation/in-betweening) —
+        /// same word, different Illustrator feature entirely.
+        #[serde(default)]
+        blend_mode: BlendMode,
     },
     Stroke {
         paint: Paint,
@@ -183,7 +190,33 @@ pub enum AppearanceItem {
         visible: bool,
         #[serde(default)]
         effects: Vec<Effect>,
+        #[serde(default)]
+        blend_mode: BlendMode,
     },
+}
+
+/// Illustrator Transparency-panel blend modes, matching `peniko::Mix`'s
+/// variant list 1:1 so converting to vello's own type at render time is a
+/// direct match rather than a remapping table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 
 /// One live effect in an Appearance item's effect stack (see
@@ -346,6 +379,8 @@ enum AppearanceItemOnDisk {
         offset: Option<OffsetEffect>,
         #[serde(default)]
         effects: Option<Vec<Effect>>,
+        #[serde(default)]
+        blend_mode: BlendMode,
     },
     Stroke {
         paint: Paint,
@@ -360,6 +395,8 @@ enum AppearanceItemOnDisk {
         offset: Option<OffsetEffect>,
         #[serde(default)]
         effects: Option<Vec<Effect>>,
+        #[serde(default)]
+        blend_mode: BlendMode,
     },
 }
 
@@ -370,20 +407,24 @@ fn migrate_effects(offset: Option<OffsetEffect>, effects: Option<Vec<Effect>>) -
 impl From<AppearanceItemOnDisk> for AppearanceItem {
     fn from(old: AppearanceItemOnDisk) -> Self {
         match old {
-            AppearanceItemOnDisk::Fill { paint, opacity, visible, offset, effects } => AppearanceItem::Fill {
+            AppearanceItemOnDisk::Fill { paint, opacity, visible, offset, effects, blend_mode } => AppearanceItem::Fill {
                 paint,
                 opacity,
                 visible,
                 effects: migrate_effects(offset, effects),
+                blend_mode,
             },
-            AppearanceItemOnDisk::Stroke { paint, width, style, opacity, visible, offset, effects } => AppearanceItem::Stroke {
-                paint,
-                width,
-                style,
-                opacity,
-                visible,
-                effects: migrate_effects(offset, effects),
-            },
+            AppearanceItemOnDisk::Stroke { paint, width, style, opacity, visible, offset, effects, blend_mode } => {
+                AppearanceItem::Stroke {
+                    paint,
+                    width,
+                    style,
+                    opacity,
+                    visible,
+                    effects: migrate_effects(offset, effects),
+                    blend_mode,
+                }
+            }
         }
     }
 }
@@ -424,6 +465,18 @@ impl AppearanceItem {
     pub fn effects_mut(&mut self) -> &mut Vec<Effect> {
         match self {
             AppearanceItem::Fill { effects, .. } | AppearanceItem::Stroke { effects, .. } => effects,
+        }
+    }
+
+    pub fn blend_mode(&self) -> BlendMode {
+        match *self {
+            AppearanceItem::Fill { blend_mode, .. } | AppearanceItem::Stroke { blend_mode, .. } => blend_mode,
+        }
+    }
+
+    pub fn set_blend_mode(&mut self, mode: BlendMode) {
+        match self {
+            AppearanceItem::Fill { blend_mode, .. } | AppearanceItem::Stroke { blend_mode, .. } => *blend_mode = mode,
         }
     }
 
@@ -509,7 +562,13 @@ impl Appearance {
     pub fn set_fill(&mut self, paint: Paint) {
         match self.items.iter_mut().rev().find(|i| i.is_fill()) {
             Some(AppearanceItem::Fill { paint: p, .. }) => *p = paint,
-            _ => self.items.push(AppearanceItem::Fill { paint, opacity: 1.0, visible: true, effects: Vec::new() }),
+            _ => self.items.push(AppearanceItem::Fill {
+                paint,
+                opacity: 1.0,
+                visible: true,
+                effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
+            }),
         }
     }
 
@@ -523,6 +582,7 @@ impl Appearance {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
             }),
         }
     }
@@ -537,6 +597,7 @@ impl Appearance {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
             }),
         }
     }
@@ -551,6 +612,7 @@ impl Appearance {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
             }),
         }
     }
@@ -569,6 +631,7 @@ impl Default for Appearance {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
                 },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.18, 0.18, 0.18)),
@@ -577,6 +640,7 @@ impl Default for Appearance {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
                 },
             ],
             opacity: default_opacity(),
@@ -619,7 +683,13 @@ impl From<AppearanceOnDisk> for Appearance {
     fn from(old: AppearanceOnDisk) -> Self {
         let items = old.items.unwrap_or_else(|| {
             vec![
-                AppearanceItem::Fill { paint: old.fill, opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill {
+                    paint: old.fill,
+                    opacity: 1.0,
+                    visible: true,
+                    effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
+                },
                 AppearanceItem::Stroke {
                     paint: old.stroke,
                     width: old.stroke_width,
@@ -627,6 +697,7 @@ impl From<AppearanceOnDisk> for Appearance {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
                 },
             ]
         });
@@ -656,8 +727,8 @@ mod tests {
     fn fill_and_stroke_read_the_topmost_matching_item() {
         let mut a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
             ],
             opacity: 1.0,
         };
@@ -701,7 +772,7 @@ mod tests {
     fn new_shape_with_items_round_trips_a_multi_item_stack() {
         let a = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 0.0, 0.0)),
                     width: 2.0,
@@ -709,8 +780,9 @@ mod tests {
                     opacity: 0.6,
                     visible: true,
                     effects: vec![Effect::Offset(OffsetEffect { amount: -2.0, join: LineJoin::Round, miter_limit: 4.0 })],
+                    blend_mode: BlendMode::Normal,
                 },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)), opacity: 1.0, visible: false, effects: Vec::new(), blend_mode: BlendMode::Normal },
             ],
             opacity: 0.8,
         };
@@ -755,7 +827,7 @@ mod tests {
     #[test]
     fn effects_accessors_read_and_write_either_variant() {
         let fx = OffsetEffect { amount: -3.0, join: LineJoin::Bevel, miter_limit: 4.0 };
-        let mut fill = AppearanceItem::Fill { paint: Paint::None, opacity: 1.0, visible: true, effects: Vec::new() };
+        let mut fill = AppearanceItem::Fill { paint: Paint::None, opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal };
         let mut stroke = AppearanceItem::Stroke {
             paint: Paint::None,
             width: 1.0,
@@ -763,6 +835,7 @@ mod tests {
             opacity: 1.0,
             visible: true,
             effects: Vec::new(),
+            blend_mode: BlendMode::Normal,
         };
         assert_eq!(fill.offset_effect(), None);
         assert_eq!(stroke.offset_effect(), None);
@@ -783,6 +856,7 @@ mod tests {
             opacity: 1.0,
             visible: true,
             effects: vec![Effect::Offset(a), Effect::Offset(b)],
+            blend_mode: BlendMode::Normal,
         };
         assert_eq!(item.effects().len(), 2, "stacking the same effect twice is allowed, matching real Illustrator");
         assert_eq!(item.offset_effect(), Some(a), "reads the first Offset entry in the stack");

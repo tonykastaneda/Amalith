@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn set_layer_options_commits_every_field_together_and_undoes_them_together() {
-        use amalith_core::LayerColor;
+        use amalith_core::{LayerColor, LayerKind};
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor
             .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
@@ -524,6 +524,7 @@ mod tests {
             print: false,
             preview: true,
             dim_images_to: Some(50),
+            kind: LayerKind::Vector,
         };
         editor
             .execute(Command::SetLayerOptions { id: layer, options: new_options.clone() })
@@ -2821,7 +2822,7 @@ mod tests {
 
     #[test]
     fn set_appearance_items_replaces_the_whole_stack_and_undoes() {
-        use amalith_core::AppearanceItem;
+        use amalith_core::{AppearanceItem, BlendMode};
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor
             .execute(Command::CreateLayer { name: "Layer 1".into(), index: None })
@@ -2845,6 +2846,7 @@ mod tests {
             opacity: 0.5,
             visible: true,
             effects: Vec::new(),
+            blend_mode: BlendMode::Normal,
         });
         editor
             .execute(Command::SetAppearanceItems { object: id, items: items.clone() })

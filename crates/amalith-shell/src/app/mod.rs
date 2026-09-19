@@ -3643,7 +3643,13 @@ impl App {
             .map(|i| i.paint())
             .unwrap_or(self.doc.fill);
         let mut items = obj.appearance.items.clone();
-        items.push(amalith_core::AppearanceItem::Fill { paint, opacity: 1.0, visible: true, effects: Vec::new() });
+        items.push(amalith_core::AppearanceItem::Fill {
+            paint,
+            opacity: 1.0,
+            visible: true,
+            effects: Vec::new(),
+            blend_mode: amalith_core::BlendMode::Normal,
+        });
         self.appearance_selected = Some(items.len() - 1);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
@@ -3665,7 +3671,15 @@ impl App {
             self.doc.stroke_style,
         ));
         let mut items = obj.appearance.items.clone();
-        items.push(amalith_core::AppearanceItem::Stroke { paint, width, style, opacity: 1.0, visible: true, effects: Vec::new() });
+        items.push(amalith_core::AppearanceItem::Stroke {
+            paint,
+            width,
+            style,
+            opacity: 1.0,
+            visible: true,
+            effects: Vec::new(),
+            blend_mode: amalith_core::BlendMode::Normal,
+        });
         self.appearance_selected = Some(items.len() - 1);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();

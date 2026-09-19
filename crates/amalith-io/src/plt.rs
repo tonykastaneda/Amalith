@@ -19,7 +19,7 @@
 //! crate's best-effort philosophy.
 
 use amalith_core::{
-    Affine, Appearance, AppearanceItem, Artboard, ArtboardId, Color, Document, Layer, LayerId,
+    Affine, Appearance, AppearanceItem, Artboard, ArtboardId, BlendMode, Color, Document, Layer, LayerId,
     Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, StrokeStyle,
 };
 use kurbo::{BezPath, PathEl, Shape};
@@ -97,6 +97,7 @@ fn stroke_appearance() -> Appearance {
             opacity: 1.0,
             visible: true,
             effects: Vec::new(),
+            blend_mode: BlendMode::Normal,
         }],
         opacity: 1.0,
     }

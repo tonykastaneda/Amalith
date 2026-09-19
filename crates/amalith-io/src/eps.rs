@@ -21,7 +21,7 @@
 //! a conditional or a repeated block.
 
 use amalith_core::{
-    Affine, Appearance, AppearanceItem, Artboard, ArtboardId, Color, Document, LayerId, Object,
+    Affine, Appearance, AppearanceItem, Artboard, ArtboardId, BlendMode, Color, Document, LayerId, Object,
     ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect,
 };
 use kurbo::{BezPath, PathEl, Shape};
@@ -323,7 +323,13 @@ impl Interpreter {
             return;
         }
         let item = if filling {
-            AppearanceItem::Fill { paint: self.gs.fill, opacity: 1.0, visible: true, effects: Vec::new() }
+            AppearanceItem::Fill {
+                paint: self.gs.fill,
+                opacity: 1.0,
+                visible: true,
+                effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
+            }
         } else {
             let paint = self.gs.stroke.unwrap_or(self.gs.fill);
             AppearanceItem::Stroke {
@@ -333,6 +339,7 @@ impl Interpreter {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
             }
         };
         self.out.push(Recovered {
@@ -721,7 +728,7 @@ mod tests {
         let id = ObjectId::new();
         let mut obj = Object::new(id, ObjectParent::Layer(layer_id), ObjectKind::Path(PathData::rectangle(Rect::new(0.0, 0.0, 50.0, 30.0))));
         obj.appearance = Appearance {
-            items: vec![AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.5, 1.0)), opacity: 1.0, visible: true, effects: Vec::new() }],
+            items: vec![AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 0.5, 1.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal }],
             opacity: 1.0,
         };
         doc.insert_object(obj, 0).unwrap();

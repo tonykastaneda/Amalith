@@ -59,7 +59,7 @@
 use crate::ai_private_data::{self, PrivateSymbols};
 use crate::AssetStore;
 use amalith_core::{
-    Affine, Anchor, Appearance, AppearanceItem, Artboard, ArtboardId, Asset, AssetId, AssetKind,
+    Affine, Anchor, Appearance, AppearanceItem, Artboard, ArtboardId, Asset, AssetId, AssetKind, BlendMode,
     Color, Document, Gradient, GradientId, GradientKind, GradientStop, GroupData, ImageData,
     LayerId, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Point, Rect, StrokeStyle,
     Subpath, SymbolData, SymbolDefinition, SymbolId,
@@ -783,6 +783,7 @@ fn interpret(
                                     opacity: gs.fill_opacity,
                                     visible: true,
                                     effects: Vec::new(),
+                                    blend_mode: BlendMode::Normal,
                                 },
                                 AppearanceItem::Stroke {
                                     paint: stroke_paint,
@@ -791,6 +792,7 @@ fn interpret(
                                     opacity: gs.stroke_opacity,
                                     visible: true,
                                     effects: Vec::new(),
+                                    blend_mode: BlendMode::Normal,
                                 },
                             ],
                             opacity: 1.0,

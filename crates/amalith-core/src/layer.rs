@@ -112,6 +112,21 @@ impl Default for LayerColor {
     }
 }
 
+/// Which toolset a layer defaults to when it's the active target —
+/// Illustrator's own pen/shape/type tools for `Vector`, or a raster
+/// toolset (brush, magic wand, ...) for `Raster`. Deliberately a soft
+/// default, not a hard content restriction: a `Vector` layer can still
+/// hold a placed raster `Image` object exactly as it can today, it just
+/// doesn't grant raster-tool access by default the way a `Raster` layer
+/// does. Every pre-existing document predates this field and is
+/// unambiguously vector-only, hence `Vector` as the fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LayerKind {
+    #[default]
+    Vector,
+    Raster,
+}
+
 /// A layer: an ordered bucket of top-level objects, with panel-style
 /// visibility/lock state and Illustrator's own Layer Options fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +158,11 @@ pub struct Layer {
     /// affects placed raster images on this layer, not vector content.
     #[serde(default)]
     pub dim_images_to: Option<u8>,
+    /// Which toolset this layer defaults to when active. See
+    /// [`LayerKind`]'s own doc comment for why this never restricts what
+    /// kind of object the layer can actually hold.
+    #[serde(default)]
+    pub kind: LayerKind,
     /// Top-level objects owned directly by this layer, in stacking order:
     /// index 0 paints first (bottom), the last entry paints last (top).
     /// This matches the paint order used for `GroupData::children` so the
@@ -166,6 +186,7 @@ impl Layer {
             print: true,
             preview: true,
             dim_images_to: None,
+            kind: LayerKind::Vector,
             children: Vec::new(),
         }
     }
@@ -198,5 +219,6 @@ mod tests {
         assert!(l.print);
         assert!(l.preview);
         assert_eq!(l.dim_images_to, None);
+        assert_eq!(l.kind, LayerKind::Vector);
     }
 }

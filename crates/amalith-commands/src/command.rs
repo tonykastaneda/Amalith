@@ -7,7 +7,7 @@
 //! discipline: never mutate ad hoc, always go through the logged path.
 use amalith_core::{
     Affine, Appearance, AppearanceItem, ArtboardId, AssetId, AssetSource, GuideId, Color, Gradient, GradientId, GradientKind,
-    GuideOrient, Homography, LayerColor, LayerId, ObjectId, ObjectParent, Paint, PathData, Point, ColorMode, Rect,
+    GuideOrient, Homography, LayerColor, LayerId, LayerKind, ObjectId, ObjectParent, Paint, PathData, Point, ColorMode, Rect,
     StrokeStyle, SymbolId, TextData, Unit, Vec2,
 };
 use crate::align::{AlignKind, AlignTo};
@@ -653,6 +653,7 @@ pub struct LayerOptions {
     pub print: bool,
     pub preview: bool,
     pub dim_images_to: Option<u8>,
+    pub kind: LayerKind,
 }
 
 /// Illustrator Pathfinder panel operations.

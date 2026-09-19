@@ -1900,11 +1900,17 @@ fn paint_object(
             }
             // Each item's own opacity (distinct from the object-level
             // opacity layer above) — same "a layer, not a color multiply"
-            // reasoning, one level deeper, per item.
+            // reasoning, one level deeper, per item. A non-Normal blend
+            // mode needs this same offscreen layer to composite through
+            // (vello only accepts a `BlendMode` on `push_layer`, never on
+            // a plain `fill`/`stroke` call), so the gate widens to catch
+            // that case even at full opacity — otherwise it'd be silently
+            // dropped to Normal.
             let item_opacity = item.opacity().clamp(0.0, 1.0);
-            let item_layer = item_opacity < 0.999;
+            let item_blend = convert::blend_mode(item.blend_mode());
+            let item_layer = item_opacity < 0.999 || item.blend_mode() != amalith_core::BlendMode::Normal;
             if item_layer {
-                scene.push_layer(Fill::NonZero, BlendMode::default(), item_opacity, Affine::IDENTITY, &viewport);
+                scene.push_layer(Fill::NonZero, item_blend, item_opacity, Affine::IDENTITY, &viewport);
             }
             // This item's own live effect stack (Illustrator's Effect
             // menu nested under an Appearance-panel row) — recomputed

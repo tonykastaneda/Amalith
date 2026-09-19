@@ -16,7 +16,7 @@
 //! so pasting a complex real-world SVG still recovers whatever Amalith
 //! *can* represent instead of failing outright.
 use amalith_core::{
-    Affine, Appearance, AppearanceItem, Color, Document, GradientKind, GroupData, LayerId, LineCap,
+    Affine, Appearance, AppearanceItem, BlendMode, Color, Document, GradientKind, GroupData, LayerId, LineCap,
     LineJoin, Object, ObjectId, ObjectKind, ObjectParent, Paint, PathData, Rect, StrokeStyle,
 };
 use kurbo::BezPath;
@@ -709,8 +709,16 @@ fn parse_appearance(node: &roxmltree::Node, class_styles: &ClassStyles) -> Appea
     );
     Appearance {
         items: vec![
-            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true, effects: Vec::new() },
-            AppearanceItem::Stroke { paint: stroke_paint, width: sw, style: stroke_style, opacity: 1.0, visible: true, effects: Vec::new() },
+            AppearanceItem::Fill { paint: fill_paint, opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
+            AppearanceItem::Stroke {
+                paint: stroke_paint,
+                width: sw,
+                style: stroke_style,
+                opacity: 1.0,
+                visible: true,
+                effects: Vec::new(),
+                blend_mode: BlendMode::Normal,
+            },
         ],
         opacity: obj_opacity,
     }
@@ -1219,8 +1227,8 @@ mod tests {
         // Two fills: red underneath, green on top.
         object.appearance = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
             ],
             opacity: 1.0,
         };
@@ -1236,7 +1244,7 @@ mod tests {
 
     #[test]
     fn a_multi_item_stack_still_reimports_its_visible_paint_even_though_it_splits_into_siblings() {
-        use amalith_core::AppearanceItem;
+        use amalith_core::{AppearanceItem, BlendMode};
         // Plain SVG can't express "one shape, two fills" — the documented
         // fallback splits it into sibling elements, which re-import as
         // separate objects. That's a disclosed limitation, but the colors
@@ -1252,7 +1260,7 @@ mod tests {
         );
         object.appearance = Appearance {
             items: vec![
-                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+                AppearanceItem::Fill { paint: Paint::Solid(Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new(), blend_mode: BlendMode::Normal },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 0.0, 1.0)),
                     width: 3.0,
@@ -1260,6 +1268,7 @@ mod tests {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
                 },
                 AppearanceItem::Stroke {
                     paint: Paint::Solid(Color::rgb(0.0, 1.0, 0.0)),
@@ -1268,6 +1277,7 @@ mod tests {
                     opacity: 1.0,
                     visible: true,
                     effects: Vec::new(),
+                    blend_mode: BlendMode::Normal,
                 },
             ],
             opacity: 1.0,
