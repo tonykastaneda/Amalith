@@ -14,6 +14,17 @@ use super::{draw_paint_swatch, palette, Action, Ctx, PaintSlot, ID, metric_pad, 
 
 const STROKE_WIDTHS: [f64; 5] = [1.0, 2.0, 4.0, 8.0, 16.0];
 
+/// Full height the Swatches panel wants at `width` — the fixed fill/stroke
+/// chip row plus every preset colour in `palette()`, wrapped to however
+/// many columns fit. Deterministic from `width` alone (the palette is a
+/// fixed constant list, not document state), same as `swatch_layout`'s own
+/// grid math.
+pub(super) fn content_height(width: f64) -> f64 {
+    let cols = (((width - metric_pad() * 2.0) / (metric_swatch() + ui_px(4.0))).floor() as usize).max(1);
+    let rows = palette().len().div_ceil(cols).max(1);
+    ui_px(56.0) + rows as f64 * (metric_swatch() + ui_px(4.0))
+}
+
 struct SwatchLayout {
     fill: Rect,
     stroke: Rect,

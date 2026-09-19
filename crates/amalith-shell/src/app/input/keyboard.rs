@@ -295,6 +295,12 @@ impl App {
             self.layer_dialog_key(&event);
             return;
         }
+        // The Layers Panel Options dialog takes every key while open
+        // (just Escape/Enter — no text fields to type into).
+        if self.layers_panel_options_dialog.is_some() {
+            self.layers_panel_options_key(&event);
+            return;
+        }
         // The Area Type Options dialog takes every key while open.
         if self.area_type_dialog.is_some() {
             self.area_type_dialog_key(&event);

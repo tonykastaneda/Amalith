@@ -112,6 +112,17 @@ fn parse(text: &str) -> Settings {
                 }
             }
             "symbols_view" => s.symbols_view = if v == "thumbnails" { crate::prefs::SymbolsView::Thumbnails } else { crate::prefs::SymbolsView::List },
+            "layer_thumbnail_size" => s.layer_thumbnail_size = match v {
+                "small" => crate::prefs::LayerThumbnailSize::Small,
+                "medium" => crate::prefs::LayerThumbnailSize::Medium,
+                "large" => crate::prefs::LayerThumbnailSize::Large,
+                _ => crate::prefs::LayerThumbnailSize::None,
+            },
+            "layer_thumbnail_contents" => s.layer_thumbnail_contents = if v == "entire_document" {
+                crate::prefs::LayerThumbnailContents::EntireDocument
+            } else {
+                crate::prefs::LayerThumbnailContents::LayerBounds
+            },
             "show_grid" => s.show_grid = v == "true",
             "snap_to_grid" => s.snap_to_grid = v == "true",
             "snap_to_pixel" => s.snap_to_pixel = v == "true",
@@ -197,6 +208,19 @@ fn serialize(s: &Settings) -> String {
         s.grid_spacing,
     );
     body.push_str(&format!("symbols_view = {}\n", if s.symbols_view == crate::prefs::SymbolsView::Thumbnails { "thumbnails" } else { "list" }));
+    body.push_str(&format!(
+        "layer_thumbnail_size = {}\n",
+        match s.layer_thumbnail_size {
+            crate::prefs::LayerThumbnailSize::None => "none",
+            crate::prefs::LayerThumbnailSize::Small => "small",
+            crate::prefs::LayerThumbnailSize::Medium => "medium",
+            crate::prefs::LayerThumbnailSize::Large => "large",
+        }
+    ));
+    body.push_str(&format!(
+        "layer_thumbnail_contents = {}\n",
+        if s.layer_thumbnail_contents == crate::prefs::LayerThumbnailContents::EntireDocument { "entire_document" } else { "layer_bounds" }
+    ));
     for (i, tool) in Tool::ALL.iter().enumerate() {
         let v = s.tool_keys[i].map_or_else(String::new, |c| c.to_string());
         body.push_str(&format!("tool.{} = {}\n", tool_name(*tool), v));
@@ -328,6 +352,8 @@ mod scale_tests {
             sg_tolerance: 6.5,
             sg_angles: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
             symbols_view: crate::prefs::SymbolsView::Thumbnails,
+            layer_thumbnail_size: crate::prefs::LayerThumbnailSize::Large,
+            layer_thumbnail_contents: crate::prefs::LayerThumbnailContents::EntireDocument,
             show_grid: true,
             snap_to_grid: true,
             snap_to_pixel: true,
@@ -361,6 +387,8 @@ mod scale_tests {
             sg_tolerance,
             sg_angles,
             symbols_view,
+            layer_thumbnail_size,
+            layer_thumbnail_contents,
             show_grid,
             snap_to_grid,
             snap_to_pixel,
@@ -391,6 +419,8 @@ mod scale_tests {
         assert_eq!(sg_tolerance, original.sg_tolerance, "sg_tolerance did not round-trip");
         assert_eq!(sg_angles, original.sg_angles, "sg_angles did not round-trip");
         assert_eq!(symbols_view, original.symbols_view);
+        assert_eq!(layer_thumbnail_size, original.layer_thumbnail_size, "layer_thumbnail_size did not round-trip");
+        assert_eq!(layer_thumbnail_contents, original.layer_thumbnail_contents, "layer_thumbnail_contents did not round-trip");
         assert_eq!(show_grid, original.show_grid, "show_grid did not round-trip");
         assert_eq!(snap_to_grid, original.snap_to_grid, "snap_to_grid did not round-trip");
         assert_eq!(snap_to_pixel, original.snap_to_pixel, "snap_to_pixel did not round-trip");

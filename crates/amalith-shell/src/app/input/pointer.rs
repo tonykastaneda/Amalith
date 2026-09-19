@@ -115,8 +115,12 @@ impl App {
             Drag::GroupContentResize { master, group, start_h, start_y } => {
                 let (master, group, start_h, start_y) = (*master, *group, *start_h, *start_y);
                 let dy = (self.pointer.y - start_y) as f32;
-                let next = (start_h + dy)
-                    .clamp(crate::dock::metric_tab_content_min_h(), crate::dock::metric_tab_content_max_h());
+                let active_panel = self.dock.master(master).and_then(|m| m.group(group)).and_then(|g| g.panels.get(g.active).copied());
+                let width = self.master_screen_rect(master).map_or(0.0, |r| r.width());
+                let max_h = active_panel
+                    .and_then(|p| self.panel_content_cap(p, width))
+                    .unwrap_or(crate::dock::metric_tab_content_max_h());
+                let next = (start_h + dy).clamp(crate::dock::metric_tab_content_min_h(), max_h);
                 if let Some(m) = self.dock.master_mut(master) {
                     if let Some(g) = m.group_mut(group) {
                         g.content_h = Some(next);
@@ -345,6 +349,7 @@ impl App {
                 let ids = crate::panels::layers::order_front_to_back(
                     self.doc.editor.document(),
                     &self.doc.expanded_groups,
+                    &self.doc.collapsed_layers,
                     &self.doc.selection,
                 );
                 self.layer_drop = crate::panels::layers::drop_target(
@@ -352,9 +357,11 @@ impl App {
                     self.pointer,
                     self.doc.editor.document(),
                     &self.doc.expanded_groups,
+                    &self.doc.collapsed_layers,
                     &self.layer_query,
                     self.panel_scroll_of(PanelId(PanelKind::Layers)),
                     &ids,
+                    self.settings.layer_thumbnail_size,
                 )
                 .map(|d| (d.parent, d.index, d.row, d.into));
                 self.request_main_redraw();
@@ -1075,6 +1082,7 @@ impl App {
                     let ids = crate::panels::layers::order_front_to_back(
                         self.doc.editor.document(),
                         &self.doc.expanded_groups,
+                        &self.doc.collapsed_layers,
                         &self.doc.selection,
                     );
                     let target = crate::panels::layers::drop_target(
@@ -1082,9 +1090,11 @@ impl App {
                         self.pointer,
                         self.doc.editor.document(),
                         &self.doc.expanded_groups,
+                        &self.doc.collapsed_layers,
                         &self.layer_query,
                         self.panel_scroll_of(PanelId(PanelKind::Layers)),
                         &ids,
+                    self.settings.layer_thumbnail_size,
                     );
                     if let Some(d) = target {
                         if self

@@ -92,6 +92,11 @@ const CHOOSER_ROW_H: f64 = 30.0;
 /// fresh pane, not just once at boot.
 const CHOOSER_MARK_SIZE: f64 = 47.6;
 const CHOOSER_MARK_GAP: f64 = 18.0;
+/// Vertical space reserved for the "Amalith v.x" line directly under the
+/// mark, before `CHOOSER_MARK_GAP` starts — same version string as the
+/// macOS title-bar label and the About panel.
+const CHOOSER_VERSION_BLOCK: f64 = 22.0;
+const CHOOSER_VERSION: &str = "Amalith v.0.0.1";
 
 /// The app mark, drawn as themed vector artwork rather than a raster —
 /// path data straight from `branding/Logos/emptytab-icon.svg` (the mark
@@ -155,7 +160,7 @@ fn chooser_open_section_h(n_open: usize) -> f64 {
 }
 fn chooser_content_h(n_open: usize, n_recent: usize) -> f64 {
     ui_px(CHOOSER_PAD)
-        + ui_px(CHOOSER_MARK_SIZE) + ui_px(CHOOSER_MARK_GAP)
+        + ui_px(CHOOSER_MARK_SIZE) + ui_px(CHOOSER_VERSION_BLOCK) + ui_px(CHOOSER_MARK_GAP)
         + ui_px(CHOOSER_HEADER_H)
         + CHOOSER_ACTIONS as f64 * ui_px(CHOOSER_ACTION_ROW_H)
         + chooser_open_section_h(n_open)
@@ -182,9 +187,13 @@ fn chooser_mark_center(r: Rect, n_open: usize, n_recent: usize, scroll: f64) -> 
     let y = chooser_content_top(r, n_open, n_recent, scroll) + ui_px(CHOOSER_PAD) + ui_px(CHOOSER_MARK_SIZE) * 0.5;
     Point::new((x0 + x1) * 0.5, y)
 }
-/// Top of the "GET STARTED" section, below the mark.
+/// Baseline of the "Amalith v.x" line directly under the mark.
+fn chooser_version_baseline_y(r: Rect, n_open: usize, n_recent: usize, scroll: f64) -> f64 {
+    chooser_content_top(r, n_open, n_recent, scroll) + ui_px(CHOOSER_PAD) + ui_px(CHOOSER_MARK_SIZE) + ui_px(14.0)
+}
+/// Top of the "GET STARTED" section, below the mark and version line.
 fn chooser_actions_top(r: Rect, n_open: usize, n_recent: usize, scroll: f64) -> f64 {
-    chooser_content_top(r, n_open, n_recent, scroll) + ui_px(CHOOSER_PAD) + ui_px(CHOOSER_MARK_SIZE) + ui_px(CHOOSER_MARK_GAP)
+    chooser_content_top(r, n_open, n_recent, scroll) + ui_px(CHOOSER_PAD) + ui_px(CHOOSER_MARK_SIZE) + ui_px(CHOOSER_VERSION_BLOCK) + ui_px(CHOOSER_MARK_GAP)
 }
 /// Baseline of the "GET STARTED" section header.
 fn chooser_actions_header_y(r: Rect, n_open: usize, n_recent: usize, scroll: f64) -> f64 {
@@ -794,9 +803,11 @@ impl App {
                     t.focused = true;
                 }
                 self.mux.origin = None;
+                self.layers_new_menu = false;
             }
             TabContent::Chooser => {
                 self.mux.origin = None;
+                self.layers_new_menu = false;
             }
         }
         self.drag = Drag::None;
@@ -857,6 +868,22 @@ impl App {
             return Vec::new();
         }
         (0..self.tabs.len()).map(|i| (self.tab_title(i), RecentPick::Open(i))).collect()
+    }
+    /// Focused pane's active tab is a document the user opened or created.
+    /// False at boot (chooser over the construction-time sample), after
+    /// closing the last document, and while the focused pane is a chooser
+    /// or terminal — even if another pane still has a document.
+    pub(super) fn document_open(&self) -> bool {
+        if self.boot_empty {
+            return false;
+        }
+        if !self.mux.model.enabled() {
+            return true;
+        }
+        self.mux
+            .model
+            .pane(self.mux.model.focused)
+            .is_some_and(|p| matches!(p.active_tab().content, TabContent::Document(_)))
     }
     /// The chooser's "RECENT DOCUMENTS" section: on-disk file history,
     /// skipping anything already represented in "OPEN DOCUMENTS" so a
@@ -1558,6 +1585,15 @@ impl App {
                         let mark_c = chooser_mark_center(r, n_open, n_recent, scroll);
                         draw_mark(&mut back, mark_c, ui_px(CHOOSER_MARK_SIZE), self.theme.text);
                         let (col_x0, col_x1) = chooser_col_x(r);
+                        let vw = self.text.measure(CHOOSER_VERSION, 11.5);
+                        self.text.draw(
+                            &mut back,
+                            CHOOSER_VERSION,
+                            11.5,
+                            self.theme.text_dim,
+                            (col_x0 + col_x1) * 0.5 - vw * 0.5,
+                            chooser_version_baseline_y(r, n_open, n_recent, scroll),
+                        );
                         let ahy = chooser_actions_header_y(r, n_open, n_recent, scroll);
                         paint_chooser_section_header(&mut back, &mut self.text, &self.theme, col_x0, col_x1, ahy, "GET STARTED");
                         // Legends, not remappable bindings — each is the
@@ -1630,7 +1666,10 @@ impl App {
                         for (i, (name, _)) in recent_files.iter().enumerate() {
                             let row = chooser_recent_row(r, i, n_open, n_recent, scroll);
                             if row.contains(self.pointer) {
-                                back.fill(Fill::NonZero, Affine::IDENTITY, self.theme.strip_active, None, &row.to_rounded_rect(ui_px(3.0)));
+                                // Same translucent bar as "GET STARTED"'s rows
+                                // (paint_chooser_action_row) — one consistent
+                                // hover style across the whole chooser list.
+                                back.fill(Fill::NonZero, Affine::IDENTITY, self.theme.text.with_alpha(0.09), None, &row.to_rounded_rect(ui_px(6.0)));
                             }
                             self.text.draw(&mut back, name, 12.5, self.theme.text, row.x0 + ui_px(4.0), row.y0 + ui_px(19.));
                             if hint_i < 9 {
@@ -2435,5 +2474,28 @@ mod tests {
             .flat_map(|row| row[..width as usize * 4].iter().copied())
             .collect();
         image::save_buffer(output, &pixels, width, height, image::ColorType::Rgba8).unwrap();
+    }
+
+    #[test]
+    fn boot_chooser_is_not_an_open_document() {
+        let app = App::new();
+        assert!(app.boot_empty);
+        assert!(!app.document_open());
+        assert!(!app.doc.editor.document().layers().is_empty());
+    }
+
+    #[test]
+    fn focused_chooser_pane_is_not_an_open_document() {
+        let mut app = App::new();
+        let first = app.mux.model.focused;
+        let id = app.doc.id;
+        app.mux.model.pane_mut(first).unwrap().tabs[0].content = TabContent::Document(id);
+        app.boot_empty = false;
+        assert!(app.document_open());
+        let second = app.mux.model.split(Axis::Horizontal).unwrap();
+        app.mux_focus(second);
+        assert!(!app.document_open());
+        app.mux_focus(first);
+        assert!(app.document_open());
     }
 }

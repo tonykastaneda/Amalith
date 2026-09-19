@@ -72,12 +72,26 @@ fn main() {
         tcx.draw(&mut scene,"Window > Panels > Image Trace",12.,theme.text_dim,380.*scale,475.*scale);
         tcx.draw(&mut scene,"Preview keeps the original. Expand creates editable paths.",12.,theme.text_dim,380.*scale,500.*scale);
     } else if panel_gallery {
-        let doc = amalith_shell::sample::document();
+        let mut doc = amalith_shell::sample::document();
+        let layer = doc.layers()[0].id;
+        let rect_id = amalith_core::ObjectId::new();
+        let mut rect = amalith_core::Object::rectangle(
+            rect_id,
+            amalith_core::ObjectParent::Layer(layer),
+            amalith_core::Rect::new(0.0, 0.0, 120.0, 80.0),
+        );
+        rect.name = Some("Hero card".into());
+        doc.insert_object(rect, 0).unwrap();
+        let mut raster = amalith_core::Layer::new(amalith_core::LayerId::new(), "Photos");
+        raster.kind = amalith_core::LayerKind::Raster;
+        raster.color = amalith_core::LayerColor::Orange;
+        doc.insert_layer(raster, 1);
         let expanded = std::collections::HashSet::new();
         let ctx = panels::Ctx {
             image_trace: &Default::default(),
             theme: &theme,
             doc: &doc,
+            document_open: true,
             selection: &[],
             active_tool: amalith_shell::tool::Tool::Select,
             pointer: Point::new(-1.0, -1.0),
@@ -94,6 +108,7 @@ fn main() {
             type_group_tool: amalith_shell::tool::Tool::Text,
             hide_wip_tools: false,
             expanded: &expanded,
+            collapsed_layers: &Default::default(),
             renaming: None,
             selected_layer: None,
             selected_artboard: None,
@@ -107,11 +122,15 @@ fn main() {
             font_families: &[],
             layer_query: "",
             layer_search_focused: false,
+            layers_new_menu: false,
             layer_scroll: 0.0,
             layer_drop: None,
             links_scroll: 0.0,
             selected_asset: None,
             symbols_view: Default::default(),
+            layer_thumbnail_size: Default::default(),
+            layer_images: &Default::default(),
+            layer_thumbnail_contents: Default::default(),
             symbol_thumbnails: &Default::default(),
             symbol_tiles: &Default::default(),
             symbols_scroll: 0.0,
@@ -135,6 +154,7 @@ fn main() {
             effect_dialog: None,
             symbol_name_dialog: None,
             layer_dialog: None,
+            layers_panel_options_dialog: None,
             recolor_dialog: None,
             area_type_dialog: None,
             gradient: None,
@@ -143,6 +163,7 @@ fn main() {
             appearance_selected: None,
             appearance_drop: None,
             appearance_fx_menu: false,
+            appearance_blend_menu: false,
             appearance_width_edit: None,
         };
         use amalith_shell::dock::PanelKind;

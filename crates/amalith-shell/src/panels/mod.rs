@@ -95,6 +95,10 @@ pub struct Ctx<'a> {
     pub image_trace: &'a crate::image_trace::Panel,
     pub theme: &'a Theme,
     pub doc: &'a Document,
+    /// Focused pane's active tab is a user-opened document. Layers hides
+    /// its rows and greys out add when this is false — `doc` is then
+    /// leftover boot/last-document state, not what's on screen.
+    pub document_open: bool,
     pub selection: &'a [ObjectId],
     pub active_tool: Tool,
     /// Cursor position in screen px, for hover styling.
@@ -125,6 +129,7 @@ pub struct Ctx<'a> {
     pub hide_wip_tools: bool,
     /// Group ids the Layers panel currently shows expanded.
     pub expanded: &'a HashSet<ObjectId>,
+    pub collapsed_layers: &'a HashSet<LayerId>,
     /// The row being inline-renamed, and its current edit buffer.
     pub renaming: Option<(RenameId, &'a str)>,
     /// Panel-row selection highlights.
@@ -162,12 +167,17 @@ pub struct Ctx<'a> {
     /// The drop line sits at the top of that row; when `into` is set the row
     /// itself (a group / layer) is outlined as the drop container instead.
     pub layer_drop: Option<(i64, bool)>,
+    /// Layers panel: the footer "+" button's Vector/Raster popup is open.
+    pub layers_new_menu: bool,
     /// Links panel: wheel-scroll offset of the row list, px.
     pub links_scroll: f64,
     /// Links panel: the highlighted asset row.
     pub selected_asset: Option<AssetId>,
     /// Symbols panel browsing mode and cached artwork previews.
     pub symbols_view: crate::prefs::SymbolsView,
+    pub layer_thumbnail_size: crate::prefs::LayerThumbnailSize,
+    pub layer_images: &'a std::collections::HashMap<AssetId, crate::lod::ImageLods>,
+    pub layer_thumbnail_contents: crate::prefs::LayerThumbnailContents,
     pub symbol_thumbnails: &'a std::collections::HashMap<amalith_core::SymbolId, vello::peniko::ImageData>,
     /// Painted tile rectangles, shared with pointer hit-testing.
     pub symbol_tiles: &'a std::cell::RefCell<Vec<(Rect, amalith_core::SymbolId)>>,
@@ -223,6 +233,7 @@ pub struct Ctx<'a> {
     pub effect_dialog: Option<(&'a crate::effectdlg::EffectDialog, bool)>,
     pub symbol_name_dialog: Option<&'a crate::symbol_name_dialog::SymbolNameDialog>,
     pub layer_dialog: Option<(&'a crate::layerdlg::LayerOptionsDialog, bool)>,
+    pub layers_panel_options_dialog: Option<&'a crate::layerspaneldlg::LayersPanelOptionsDialog>,
     pub recolor_dialog: Option<&'a crate::recolordlg::RecolorDialog>,
     /// The Area Type Options dialog + caret-blink phase, when the
     /// `areatypedlg` float-only panel is being drawn / hit-tested.
@@ -351,8 +362,12 @@ pub enum Action {
     /// Layers panel: flip an object's `visible` / `locked` flag.
     ToggleVisible(ObjectId),
     ToggleLocked(ObjectId),
+    /// Layers panel: flip a layer header's own `visible` / `locked` flag.
+    ToggleLayerVisible(LayerId),
+    ToggleLayerLocked(LayerId),
     /// Layers panel: expand / collapse a group row.
     ToggleExpand(ObjectId),
+    ToggleLayerExpand(LayerId),
     /// Layers panel: the search field was clicked — give it keyboard focus.
     FocusLayerSearch,
     /// Layers panel's "Locate Object" button — reveal (expanding any
@@ -367,7 +382,12 @@ pub enum Action {
     /// hold = the labeled flyout).
     ToolFlyout(crate::tool::ToolGroup),
     /// Panel footer buttons.
-    NewLayer,
+    /// Layers footer "+" — opens/closes the Vector/Raster popup, rather
+    /// than creating a layer directly (mirrors `AppearanceToggleFxMenu`'s
+    /// menu-button convention).
+    ToggleNewLayerMenu,
+    /// The popup's own entry being picked.
+    NewLayerOfKind(amalith_core::LayerKind),
     NewArtboard,
     /// Layers footer: restack the selection (+1 up / −1 down).
     LayerRestack(i32),
@@ -498,6 +518,7 @@ pub enum Action {
     EffectHit(crate::effectdlg::Hit),
     SymbolNameDialogHit(bool),
     LayerDialogHit(crate::layerdlg::Hit),
+    LayersPanelOptionsHit(crate::layerspaneldlg::Hit),
     AreaTypeHit(crate::areatypedlg::Hit),
     // --- Links panel ---
     /// A row was clicked — just highlights it.
@@ -606,6 +627,7 @@ pub fn menu(id: PanelId, ctx: &Ctx) -> Vec<MenuEntry> {
         }
         PanelKind::Symbols => symbols::menu(ctx),
         PanelKind::Links => links::menu(ctx),
+        PanelKind::Layers => layers::menu(),
         _ => Vec::new(),
     }
 }
@@ -626,9 +648,12 @@ pub use color::ColorSpace;
 pub fn layers_content_height(
     doc: &Document,
     expanded: &std::collections::HashSet<ObjectId>,
+    collapsed_layers: &std::collections::HashSet<LayerId>,
     query: &str,
+    document_open: bool,
+    size: crate::prefs::LayerThumbnailSize,
 ) -> f64 {
-    layers::content_height(doc, expanded, query)
+    layers::content_height(doc, expanded, collapsed_layers, query, document_open, size)
 }
 
 /// Full content height of the Links panel for the given document state —
@@ -641,6 +666,18 @@ pub fn links_content_height(doc: &Document) -> f64 {
 /// the shell's wheel handler uses it to size the scroll range.
 pub fn symbols_content_height(doc: &Document, width: f64, view: crate::prefs::SymbolsView) -> f64 {
     symbols::content_height(doc, width, view)
+}
+
+/// Full content height of the Appearance panel for the given item stack —
+/// used to cap how tall its Tabs-group content pane may be dragged.
+pub fn appearance_natural_height(items: &[amalith_core::AppearanceItem]) -> f64 {
+    appearance::natural_height(items)
+}
+
+/// Full content height of the Swatches panel at `width` — used to cap how
+/// tall its Tabs-group content pane may be dragged.
+pub fn swatches_content_height(width: f64) -> f64 {
+    swatches::content_height(width)
 }
 
 /// Draw panel `id`'s body into `body`.
@@ -708,6 +745,11 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         PanelKind::LayerOptionsDlg => {
             if let Some((dlg, caret)) = ctx.layer_dialog {
                 crate::layerdlg::paint(scene, dlg, body, ctx.theme, text, caret);
+            }
+        }
+        PanelKind::LayersPanelOptionsDlg => {
+            if let Some(dlg) = ctx.layers_panel_options_dialog {
+                crate::layerspaneldlg::paint(scene, dlg, body, ctx.theme, text);
             }
         }
         PanelKind::AreaTypeDlg => {
@@ -787,6 +829,10 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
             Some((dlg, _)) => Action::LayerDialogHit(crate::layerdlg::hit(dlg, body, local)),
             None => Action::None,
         },
+        PanelKind::LayersPanelOptionsDlg => match ctx.layers_panel_options_dialog {
+            Some(_) => Action::LayersPanelOptionsHit(crate::layerspaneldlg::hit(body, local)),
+            None => Action::None,
+        },
         PanelKind::AreaTypeDlg => match ctx.area_type_dialog {
             Some((dlg, _)) => Action::AreaTypeHit(crate::areatypedlg::hit(dlg, body, local)),
             None => Action::None,
@@ -835,6 +881,7 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         PanelKind::Offsetdlg => crate::offsetdlg::body_height(),
         PanelKind::SymbolNameDlg => crate::symbol_name_dialog::height(),
         PanelKind::LayerOptionsDlg => crate::layerdlg::body_height(),
+        PanelKind::LayersPanelOptionsDlg => crate::layerspaneldlg::body_height(),
         PanelKind::RecolorDlg => crate::recolordlg::height(),
         PanelKind::AreaTypeDlg => crate::areatypedlg::body_height(),
         PanelKind::ShapedlgRect

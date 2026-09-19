@@ -52,6 +52,7 @@ pub mod lod;
 pub mod macdrop;
 pub mod newdoc;
 pub mod layerdlg;
+pub mod layerspaneldlg;
 pub mod areatypedlg;
 pub mod effectdlg;
 pub mod offsetdlg;

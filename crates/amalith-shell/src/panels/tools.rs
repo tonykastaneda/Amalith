@@ -38,6 +38,25 @@ pub(crate) fn hide_wip() -> bool {
     HIDE_WIP.with(|c| c.get())
 }
 
+std::thread_local! {
+    /// Mirrors `App::current_layer_kind()` for `natural_height` below,
+    /// which has no `Ctx` of its own to read it from — same snapshot idea
+    /// as `HIDE_WIP`. Kept in sync once per frame (`App::redraw`), since
+    /// unlike `hide_wip` this changes with the selection, not just
+    /// Preferences.
+    static LAYER_KIND: std::cell::Cell<Option<amalith_core::LayerKind>> = const { std::cell::Cell::new(None) };
+}
+
+/// Update the layout snapshot above. Call once per frame with whichever
+/// layer governs the current context (`App::current_layer_kind()`).
+pub fn set_layer_kind(kind: Option<amalith_core::LayerKind>) {
+    LAYER_KIND.with(|c| c.set(kind));
+}
+
+fn layer_kind() -> Option<amalith_core::LayerKind> {
+    LAYER_KIND.with(|c| c.get())
+}
+
 const SLASH_RED: Color = Color::from_rgb8(0xff, 0x18, 0x18);
 
 /// One tool button, square.
@@ -68,7 +87,8 @@ enum Slot {
     Wip(&'static str, icons::Icon),
 }
 
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool) -> Vec<Slot> {
+/// The Vector Layer toolset — everything above, unchanged.
+fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool) -> Vec<Slot> {
     use crate::tool::ToolGroup;
     use icons::Icon;
     let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::DirectSelect)];
@@ -122,6 +142,52 @@ fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, h
     v
 }
 
+/// The Raster Layer toolset — deliberately much smaller than Vector's:
+/// the real, working tools that already make sense against pixel content
+/// (Move, Eyedropper, Hand, Zoom) plus WIP placeholders for the
+/// pixel-editing tools not built yet (Magic Wand / Brush / Eraser —
+/// Phase 2/3 of the raster roadmap). Grows as those phases land; for now
+/// this proves out the toolbar's Vector/Raster switch itself.
+fn raster_slots(hide_wip: bool) -> Vec<Slot> {
+    use icons::Icon;
+    let mut v = vec![Slot::Tool(Tool::Select)];
+    if !hide_wip {
+        v.push(Slot::Wip("Magic Wand", Icon::MagicWand));
+        v.push(Slot::Wip("Lasso", Icon::Lasso));
+        v.push(Slot::Wip("Brush", Icon::Paintbrush));
+        v.push(Slot::Wip("Eraser", Icon::Eraser));
+    }
+    v.push(Slot::Tool(Tool::Eyedropper));
+    v.push(Slot::Tool(Tool::Hand));
+    v.push(Slot::Tool(Tool::Zoom));
+    v
+}
+
+/// Which slot grid governs the toolbar right now — Raster only when the
+/// layer that owns the current context is confidently a Raster Layer;
+/// anything ambiguous (nothing selected yet, no document) keeps the
+/// familiar Vector grid rather than flickering between the two.
+fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool, kind: Option<amalith_core::LayerKind>) -> Vec<Slot> {
+    match kind {
+        Some(amalith_core::LayerKind::Raster) => raster_slots(hide_wip),
+        _ => vector_slots(shape, rotate_group, scale_group, type_group, hide_wip),
+    }
+}
+
+/// Which layer's `kind` should govern the toolbar for this `Ctx` — the
+/// layer owning the current object selection when there is one, else the
+/// explicitly selected layer row, else `None`. Mirrors
+/// `App::current_layer_kind`, recomputed here from plain `Ctx` fields so
+/// the Tools panel doesn't need a dedicated field just for this.
+fn ctx_layer_kind(ctx: &Ctx) -> Option<amalith_core::LayerKind> {
+    let layer_id = ctx
+        .selection
+        .first()
+        .and_then(|&id| super::layers::owning_layer(ctx.doc, id))
+        .or(ctx.selected_layer)?;
+    Some(ctx.doc.layer(layer_id)?.kind)
+}
+
 fn cols(body: Rect) -> usize {
     if body.width() >= 2.0 * metric_cell() + ui_px(6.0) {
         2
@@ -134,7 +200,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64, hide_wip: bool) -> f64 {
     let cols = if width >= 2.0 * metric_cell() + ui_px(6.0) { 2 } else { 1 };
-    let n = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip).len();
+    let n = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind()).len();
     let rows = n.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     metric_top() + rows * metric_cell() + ui_px(12.0) + metric_proxy_h()
@@ -153,16 +219,19 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
     Rect::new(x, y, x + metric_cell(), y + metric_cell())
 }
 
-/// Screen rect of the Shape slot — the flyout anchors to it.
+/// Screen rect of the Shape slot — the flyout anchors to it. Vector-only
+/// (Raster has no Shape slot); only ever called while that flyout is
+/// open, which is only possible from the Vector grid in the first place.
 pub fn shape_slot_rect(body: Rect, hide_wip: bool) -> Rect {
-    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let s = vector_slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
     let i = s.iter().position(|s| matches!(s, Slot::Shape(_))).unwrap_or(0);
     cell(body, i, cols(body))
 }
 
 /// Screen rect of a flyout-group slot — its labeled flyout anchors here.
+/// Vector-only, same reasoning as `shape_slot_rect`.
 pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup, hide_wip: bool) -> Rect {
-    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let s = vector_slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
     let i = s
         .iter()
         .position(|s| matches!(s, Slot::Flyout(g, _) if *g == group))
@@ -370,7 +439,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         let r = cell(body, i, cols);
 
@@ -455,7 +524,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::SetPaint(Paint::None);
     }
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
             return match slot {
@@ -494,7 +563,7 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         return Some("Fill".into());
     }
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools);
+    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
             return Some(match slot {

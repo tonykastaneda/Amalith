@@ -29,6 +29,8 @@ impl App {
         self.last_frame = Some(now);
 
         let Some(role) = self.hosts.get(&id).map(|host| host.role) else { return };
+        self.heal_panel_content_heights();
+        panels::tools::set_layer_kind(self.current_layer_kind());
         let (mux_back, mux_front) = if matches!(role, Role::Main) {
             self.warm_images();
             self.warm_symbol_thumbnails();
@@ -545,6 +547,7 @@ impl App {
         } else {
             (0..self.tabs.len()).map(|i| self.tab_label(i)).collect()
         };
+        let document_open = self.document_open();
         let active_tab = self.active;
         let blend_spine_hover = self
             .blend_spine_hover()
@@ -667,6 +670,7 @@ impl App {
                 &mut self.text,
                 &self.dock,
                 self.doc.editor.document(),
+                document_open,
                 &self.doc.view,
                 &self.theme,
                 &self.doc.selection,
@@ -680,6 +684,7 @@ impl App {
                 self.appearance_selected,
                 self.appearance_drop,
                 self.appearance_fx_menu,
+                self.appearance_blend_menu,
                 self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                 self.doc.fill,
                 self.doc.stroke,
@@ -699,6 +704,7 @@ impl App {
                 self.panel_drop_preview.as_ref(),
                 status_text.as_deref(),
                 &self.doc.expanded_groups,
+                &self.doc.collapsed_layers,
                 self.doc.stroke_w,
                 self.doc.opacity,
                 self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
@@ -731,6 +737,7 @@ impl App {
                 &self.font_families,
                 &self.layer_query,
                 self.layer_search_focused,
+                self.layers_new_menu,
                 self.color_mode,
                 self.cmyk_profile.as_ref(),
                 &self.recent_colors,
@@ -770,6 +777,8 @@ impl App {
                 self.settings.hide_wip_tools,
                 self.doc.selected_symbol,
                 self.settings.symbols_view,
+                self.settings.layer_thumbnail_size,
+                self.settings.layer_thumbnail_contents,
                 &self.symbol_thumbnails,
                 &self.symbol_tiles,
                 &self.image_trace.panel,
@@ -816,6 +825,7 @@ impl App {
                             image_trace: &self.image_trace.panel,
                             theme: &self.theme,
                             doc: self.doc.editor.document(),
+                            document_open,
                             selection: &self.doc.selection,
                             active_tool: self.active_tool,
                             pointer: self.pointer,
@@ -832,6 +842,7 @@ impl App {
                             type_group_tool: self.last_type_tool,
                             hide_wip_tools: self.settings.hide_wip_tools,
                             expanded: &self.doc.expanded_groups,
+                            collapsed_layers: &self.doc.collapsed_layers,
                             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                             selected_layer: self.doc.selected_layer,
                             selected_artboard: self.doc.selected_artboard,
@@ -845,11 +856,15 @@ impl App {
                             font_families: &self.font_families,
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
+                            layers_new_menu: self.layers_new_menu,
                             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                             layer_drop: None,
                             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                             selected_asset: self.doc.selected_asset,
                             symbols_view: self.settings.symbols_view,
+            layer_thumbnail_size: self.settings.layer_thumbnail_size,
+            layer_images: &self.image_cache,
+            layer_thumbnail_contents: self.settings.layer_thumbnail_contents,
                             symbol_thumbnails: &self.symbol_thumbnails,
                             symbol_tiles: &self.symbol_tiles,
                             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
@@ -873,6 +888,7 @@ impl App {
                             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                             symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                            layers_panel_options_dialog: self.layers_panel_options_dialog.as_ref(),
                             recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                             gradient: self.gradient_ctx(),
@@ -881,6 +897,7 @@ impl App {
                             appearance_selected: self.appearance_selected,
                             appearance_drop: self.appearance_drop,
                             appearance_fx_menu: self.appearance_fx_menu,
+                            appearance_blend_menu: self.appearance_blend_menu,
                             appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                         };
                         if frame.body.height() > 0.0 {
@@ -903,6 +920,7 @@ impl App {
                                 image_trace: &self.image_trace.panel,
                                 theme: &self.theme,
                                 doc: self.doc.editor.document(),
+                                document_open,
                                 selection: &self.doc.selection,
                                 active_tool: self.active_tool,
                                 pointer: self.pointer,
@@ -919,6 +937,7 @@ impl App {
                                 type_group_tool: self.last_type_tool,
                                 hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
+                                collapsed_layers: &self.doc.collapsed_layers,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
                                 selected_artboard: self.doc.selected_artboard,
@@ -932,6 +951,7 @@ impl App {
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
+                                layers_new_menu: self.layers_new_menu,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: if pid == PanelId(PanelKind::Layers) {
                                     self.layer_drop.map(|(_, _, row, into)| (row, into))
@@ -941,6 +961,9 @@ impl App {
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
                                 symbols_view: self.settings.symbols_view,
+            layer_thumbnail_size: self.settings.layer_thumbnail_size,
+            layer_images: &self.image_cache,
+            layer_thumbnail_contents: self.settings.layer_thumbnail_contents,
                                 symbol_thumbnails: &self.symbol_thumbnails,
                                 symbol_tiles: &self.symbol_tiles,
                                 symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
@@ -964,6 +987,7 @@ impl App {
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                                 symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                                 layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                layers_panel_options_dialog: self.layers_panel_options_dialog.as_ref(),
                                 recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
@@ -972,6 +996,7 @@ impl App {
                                 appearance_selected: self.appearance_selected,
                                 appearance_drop: self.appearance_drop,
                                 appearance_fx_menu: self.appearance_fx_menu,
+                                appearance_blend_menu: self.appearance_blend_menu,
                                 appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &clip_body);
@@ -1003,6 +1028,7 @@ impl App {
                                 image_trace: &self.image_trace.panel,
                                 theme: &self.theme,
                                 doc: self.doc.editor.document(),
+                                document_open,
                                 selection: &self.doc.selection,
                                 active_tool: self.active_tool,
                                 pointer: self.pointer,
@@ -1019,6 +1045,7 @@ impl App {
                                 type_group_tool: self.last_type_tool,
                                 hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
+                                collapsed_layers: &self.doc.collapsed_layers,
                                 renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
                                 selected_layer: self.doc.selected_layer,
                                 selected_artboard: self.doc.selected_artboard,
@@ -1032,11 +1059,15 @@ impl App {
                                 font_families: &self.font_families,
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
+                                layers_new_menu: self.layers_new_menu,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: None,
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
                                 selected_asset: self.doc.selected_asset,
                                 symbols_view: self.settings.symbols_view,
+            layer_thumbnail_size: self.settings.layer_thumbnail_size,
+            layer_images: &self.image_cache,
+            layer_thumbnail_contents: self.settings.layer_thumbnail_contents,
                                 symbol_thumbnails: &self.symbol_thumbnails,
                                 symbol_tiles: &self.symbol_tiles,
                                 symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
@@ -1060,6 +1091,7 @@ impl App {
                                 effect_dialog: self.effect_dialog.as_ref().map(|d| (d, caret_blink)),
                                 symbol_name_dialog: self.symbol_name_dialog.as_ref(),
                                 layer_dialog: self.layer_dialog.as_ref().map(|d| (d, caret_blink)),
+                                layers_panel_options_dialog: self.layers_panel_options_dialog.as_ref(),
                                 recolor_dialog: self.recolor_dialog.as_ref(),
                             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, caret_blink)),
                                 gradient: self.gradient_ctx(),
@@ -1068,6 +1100,7 @@ impl App {
                                 appearance_selected: self.appearance_selected,
                                 appearance_drop: self.appearance_drop,
                                 appearance_fx_menu: self.appearance_fx_menu,
+                                appearance_blend_menu: self.appearance_blend_menu,
                                 appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
                             };
                             self.content.push_clip_layer(Fill::NonZero, ID, &body);

@@ -57,6 +57,11 @@ impl App {
         if self.layer_dialog.is_some() && self.dock.floating_id_of(Self::layer_dialog_panel_id()) == Some(fid) {
             return true;
         }
+        if self.layers_panel_options_dialog.is_some()
+            && self.dock.floating_id_of(Self::layers_panel_options_panel_id()) == Some(fid)
+        {
+            return true;
+        }
         self.area_type_dialog.is_some() && self.dock.floating_id_of(Self::area_type_panel_id()) == Some(fid)
     }
 

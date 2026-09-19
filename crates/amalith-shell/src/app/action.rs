@@ -8,6 +8,30 @@ use super::*;
 
 impl App {
     pub(in crate::app) fn apply_panel_action(&mut self, action: panels::Action, double: bool) {
+        // Docked panels (Layers, Pathfinder, Appearance, ...) live in the
+        // side rails, a separate region from the main canvas pane — the
+        // Home screen only captures presses *there* (see `input/press.rs`:
+        // "the Home screen captures every press"), so a click landing in
+        // a docked panel never went through that check at all. Without
+        // this, every panel action (New Layer, Delete, Add Fill, ...)
+        // would happily execute against whatever `self.doc` currently
+        // holds — the boot-time sample document or the throwaway
+        // `Doc::placeholder()` left behind by closing the last tab —
+        // neither of which is a document the user actually opened. Same
+        // "no overlay is blocking real document interaction" guard
+        // already used piecemeal elsewhere in this file. `boot_empty`
+        // covers both of those placeholder cases directly (`self.home`
+        // alone can't: the multiplexer refactor left it permanently
+        // `None` once booted, since nothing re-arms the old Home screen
+        // anymore) — see `boot_empty`'s own doc comment.
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
+            return;
+        }
         match action {
             panels::Action::ImageTrace(hit) => self.trace_hit(hit),
             panels::Action::None => {}
@@ -401,6 +425,24 @@ impl App {
                 self.text_blink = Instant::now();
                 self.request_main_redraw();
             }
+            panels::Action::LayersPanelOptionsHit(hit) => {
+                match hit {
+                    layerspaneldlg::Hit::Size(size) => {
+                        if let Some(dlg) = self.layers_panel_options_dialog.as_mut() {
+                            dlg.size = size;
+                        }
+                    }
+                    layerspaneldlg::Hit::Contents(contents) => {
+                        if let Some(dlg) = self.layers_panel_options_dialog.as_mut() {
+                            dlg.contents = contents;
+                        }
+                    }
+                    layerspaneldlg::Hit::Ok => self.close_layers_panel_options_dialog(layer_panel_options_dialog::LayersPanelOptionsClose::Ok),
+                    layerspaneldlg::Hit::Cancel => self.close_layers_panel_options_dialog(layer_panel_options_dialog::LayersPanelOptionsClose::Cancel),
+                    layerspaneldlg::Hit::None => {}
+                }
+                self.request_main_redraw();
+            }
             panels::Action::AreaTypeHit(hit) => {
                 match hit {
                     areatypedlg::Hit::Width => {
@@ -530,6 +572,13 @@ impl App {
                     }
                 }
             }
+            panels::Action::ToggleLayerVisible(id) => self.toggle_layer_flag(id, true),
+            panels::Action::ToggleLayerLocked(id) => self.toggle_layer_flag(id, false),
+            panels::Action::ToggleLayerExpand(id) => {
+                if !self.doc.collapsed_layers.remove(&id) {
+                    self.doc.collapsed_layers.insert(id);
+                }
+            }
             panels::Action::ToggleExpand(id) => {
                 if !self.doc.expanded_groups.remove(&id) {
                     self.doc.expanded_groups.insert(id);
@@ -545,22 +594,60 @@ impl App {
                         cur = doc.object(g).map(|o| o.parent);
                     }
                     self.doc.expanded_groups.extend(ancestors);
+                    if let Some(amalith_core::ObjectParent::Layer(layer)) = cur {
+                        self.doc.collapsed_layers.remove(&layer);
+                    }
                     // A search filter that hides the target row would
                     // defeat the point of locating it.
                     self.layer_query.clear();
                     let doc = self.doc.editor.document();
-                    if let Some(target) = panels::layers::locate_scroll_target(doc, &self.doc.expanded_groups, id) {
+                    if let Some(target) = panels::layers::locate_scroll_target(doc, &self.doc.expanded_groups, &self.doc.collapsed_layers, id, self.settings.layer_thumbnail_size) {
                         self.panel_scroll.insert(PanelId(PanelKind::Layers), target);
                     }
                     self.request_main_redraw();
                 }
             }
-            panels::Action::NewLayer => {
+            panels::Action::ToggleNewLayerMenu => {
+                self.layers_new_menu = self.document_open() && !self.layers_new_menu;
+                self.request_main_redraw();
+            }
+            panels::Action::NewLayerOfKind(kind) => {
+                self.layers_new_menu = false;
+                if !self.document_open() {
+                    return;
+                }
                 let n = self.doc.editor.document().layers().len() + 1;
-                let _ = self.doc.editor.execute(Command::CreateLayer {
-                    name: format!("Layer {n}"),
-                    index: None,
-                });
+                let name = match kind {
+                    amalith_core::LayerKind::Vector => format!("Layer {n}"),
+                    amalith_core::LayerKind::Raster => format!("Raster Layer {n}"),
+                };
+                // `CreateLayer` always mints an ordinary (Vector) layer —
+                // deliberately unchanged, so nothing outside this popup
+                // ever has to think about kind. For Raster, a second
+                // `SetLayerOptions` flips it right after, reusing the
+                // same field Layer Options already exposes for changing
+                // kind later. Two undo steps rather than one for that
+                // case; acceptable for now, revisit if that's ever felt.
+                let outcome = self.doc.editor.execute(Command::CreateLayer { name, index: None });
+                if kind == amalith_core::LayerKind::Raster {
+                    if let Ok(CommandOutcome::Layer(id)) = outcome {
+                        if let Some(layer) = self.doc.editor.document().layer(id) {
+                            let options = amalith_commands::LayerOptions {
+                                name: layer.name.clone(),
+                                color: layer.color,
+                                visible: layer.visible,
+                                locked: layer.locked,
+                                template: layer.template,
+                                print: layer.print,
+                                preview: layer.preview,
+                                dim_images_to: layer.dim_images_to,
+                                kind: amalith_core::LayerKind::Raster,
+                            };
+                            let _ = self.doc.editor.execute(Command::SetLayerOptions { id, options });
+                        }
+                    }
+                }
+                self.request_main_redraw();
             }
             panels::Action::LayerRestack(dir) => self.restack(dir),
             panels::Action::DeleteObjects => {
@@ -793,6 +880,33 @@ impl App {
                         }
                         _ => {}
                     }
+                } else if panel.0 == PanelKind::Layers {
+                    // Menu clicks have no `event_loop` here — the window
+                    // spawns next `about_to_wait`, same deferred-spawn
+                    // pattern as `pending_layer_dialog`.
+                    if id == "layers-panel-options" {
+                        self.pending_layers_panel_options_dialog = true;
+                    } else if id == "layers-collapse-all" {
+                        self.doc.expanded_groups.clear();
+                        self.doc.collapsed_layers.extend(self.doc.editor.document().layers().iter().map(|l| l.id));
+                        self.panel_scroll.insert(PanelId(PanelKind::Layers), 0.0);
+                    } else if id == "layers-expand-all" && self.document_open() {
+                        self.doc.collapsed_layers.clear();
+                        fn collect(doc: &amalith_core::Document, parent: amalith_core::ObjectParent, groups: &mut Vec<amalith_core::ObjectId>) {
+                            for &id in doc.children_of(parent) {
+                                if matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Group(_))) {
+                                    groups.push(id);
+                                    collect(doc, amalith_core::ObjectParent::Group(id), groups);
+                                }
+                            }
+                        }
+                        let doc = self.doc.editor.document();
+                        let mut groups = Vec::new();
+                        for layer in doc.layers() {
+                            collect(doc, amalith_core::ObjectParent::Layer(layer.id), &mut groups);
+                        }
+                        self.doc.expanded_groups.extend(groups);
+                    }
                 }
             }
             panels::Action::SelectAsset(id) => {
@@ -977,6 +1091,44 @@ impl App {
         self.xform_edit = Some((field, seed, true));
     }
 
+    fn toggle_layer_flag(&mut self, id: amalith_core::LayerId, visibility: bool) {
+        let Some(mut options) = self.doc.editor.document().layer(id).map(|layer| {
+            amalith_commands::LayerOptions {
+                name: layer.name.clone(),
+                color: layer.color,
+                visible: layer.visible,
+                locked: layer.locked,
+                template: layer.template,
+                print: layer.print,
+                preview: layer.preview,
+                dim_images_to: layer.dim_images_to,
+                kind: layer.kind,
+            }
+        }) else {
+            return;
+        };
+        if visibility {
+            options.visible = !options.visible;
+        } else {
+            options.locked = !options.locked;
+        }
+        let drop_sel = (visibility && !options.visible) || (!visibility && options.locked);
+        if drop_sel {
+            let keep: Vec<_> = {
+                let doc = self.doc.editor.document();
+                self.doc
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter(|&o| panels::layers::owning_layer(doc, o) != Some(id))
+                    .collect()
+            };
+            self.doc.selection = keep;
+        }
+        let _ = self.doc.editor.execute(Command::SetLayerOptions { id, options });
+        self.request_main_redraw();
+    }
+
     fn xform_current(&self, field: panels::transform::XformField) -> Option<f64> {
         use amalith_core::xform;
         use panels::transform::XformField as F;
@@ -1126,7 +1278,12 @@ impl App {
     }
 
     pub(in crate::app) fn xform_field_at_pointer(&mut self) -> Option<panels::transform::XformField> {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return None;
         }
         if self.pointer_win == self.main_id
@@ -1146,7 +1303,12 @@ impl App {
 
     /// The Gradient-panel numeric under the pointer, for scroll-to-nudge.
     pub(in crate::app) fn gradient_field_at_pointer(&mut self) -> Option<panels::gradient::GradField> {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return None;
         }
         let kind = self.target_gradient().map(|(_, g)| g.kind);
@@ -1509,7 +1671,12 @@ impl App {
     }
 
     pub(in crate::app) fn align_spacing_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return false;
         }
         let Some(pbody) = self.active_panel_body_at_pointer(PanelKind::Align) else {
@@ -1626,7 +1793,12 @@ impl App {
     }
 
     pub(in crate::app) fn opacity_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return false;
         }
         if self.pointer_win == self.main_id
@@ -1693,7 +1865,12 @@ impl App {
     }
 
     pub(in crate::app) fn stroke_weight_field_at_pointer(&mut self) -> bool {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return false;
         }
         if self.pointer_win == self.main_id

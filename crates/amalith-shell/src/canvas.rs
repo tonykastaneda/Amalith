@@ -324,7 +324,11 @@ pub fn export_scene_of(
         scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &px);
     }
     for &id in ids {
-        paint_object(&mut scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink);
+        let parent = match doc.object(id).map(|o| o.parent) {
+            Some(amalith_core::ObjectParent::Group(parent)) => convert::affine(doc.world_transform(parent)),
+            _ => Affine::IDENTITY,
+        };
+        paint_object(&mut scene, doc, id, vt * parent, scale, px, None, text, None, images, outline, link_ink);
     }
     scene.pop_layer();
     scene

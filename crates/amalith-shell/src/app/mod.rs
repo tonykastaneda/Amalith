@@ -36,6 +36,7 @@ mod area_type_dialog;
 mod image_trace;
 mod symbol_name_dialog;
 mod layer_dialog;
+mod layer_panel_options_dialog;
 mod recolor_dialog;
 mod effect_dialog;
 mod offset_dialog;
@@ -69,7 +70,7 @@ pub(crate) use crate::text::TextContext;
 pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, effectdlg, home,
-    icons, layerdlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
+    icons, layerdlg, layerspaneldlg, layout, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
     settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
 };
@@ -926,6 +927,7 @@ struct Doc {
     selection: Vec<ObjectId>,
     anchor_sel: Vec<(ObjectId, usize)>,
     expanded_groups: std::collections::HashSet<ObjectId>,
+    collapsed_layers: std::collections::HashSet<amalith_core::LayerId>,
     selected_artboard: Option<ArtboardId>,
     selected_layer: Option<LayerId>,
     /// Links panel: the currently highlighted asset row.
@@ -965,6 +967,7 @@ impl Doc {
             selection: Vec::new(),
             anchor_sel: Vec::new(),
             expanded_groups: std::collections::HashSet::new(),
+            collapsed_layers: std::collections::HashSet::new(),
             selected_artboard: None,
             selected_layer: None,
             selected_asset: None,
@@ -1203,6 +1206,10 @@ struct App {
     pending_symbol_name_dialog: bool,
     /// The Layer Options dialog, opened by double-clicking a layer's color swatch.
     layer_dialog: Option<layerdlg::LayerOptionsDialog>,
+    /// The Layers Panel Options dialog, opened from the Layers panel's
+    /// own hamburger menu — Thumbnail Size / Thumbnail Contents.
+    layers_panel_options_dialog: Option<layerspaneldlg::LayersPanelOptionsDialog>,
+    pending_layers_panel_options_dialog: bool,
     recolor_dialog: Option<crate::recolordlg::RecolorDialog>,
     pending_recolor: bool,
     recolor_picker: Option<usize>,
@@ -1281,6 +1288,8 @@ struct App {
     /// holds keyboard focus.
     layer_query: String,
     layer_search_focused: bool,
+    /// Layers panel: the footer "+" button's Vector/Raster popup is open.
+    layers_new_menu: bool,
     /// Last resizability pushed to the main window — false while the Home
     /// screen (a fixed-size card) is up.
     main_resizable: bool,
@@ -1657,6 +1666,8 @@ impl App {
             pending_symbol_name_dialog: false,
             layer_dialog: None,
             pending_layer_dialog: None,
+            layers_panel_options_dialog: None,
+            pending_layers_panel_options_dialog: false,
             recolor_dialog: None,
             pending_recolor: false,
             recolor_picker: None,
@@ -1683,6 +1694,7 @@ impl App {
             tooltip: None,
             layer_query: String::new(),
             layer_search_focused: false,
+            layers_new_menu: false,
             main_resizable: true,
             image_trace: image_trace::TraceState::load(),
             symbol_thumbnails: HashMap::new(),
@@ -1984,7 +1996,10 @@ impl App {
             panels::layers_content_height(
                 self.doc.editor.document(),
                 &self.doc.expanded_groups,
+                &self.doc.collapsed_layers,
                 &self.layer_query,
+                self.document_open(),
+                self.settings.layer_thumbnail_size,
             )
         } else if id == PanelId(PanelKind::Links) {
             panels::links_content_height(self.doc.editor.document())
@@ -1992,6 +2007,74 @@ impl App {
             panels::symbols_content_height(self.doc.editor.document(), body.width(), self.settings.symbols_view)
         } else {
             panels::max_scroll(id, body.width(), body.height()) + body.height()
+        }
+    }
+
+    /// The tallest a Tabs-mode group's content pane should be allowed to
+    /// grow via its resize handle, at `width` — `None` for Layers/
+    /// Artboards, which may hold an arbitrarily long list and are allowed
+    /// to stretch well past their current contents; every other panel is
+    /// capped at exactly how tall its real, current content is, so
+    /// dragging past that just reveals dead space is no longer possible.
+    fn panel_content_cap(&self, id: PanelId, width: f64) -> Option<f32> {
+        if id == PanelId(PanelKind::Layers) || id == PanelId(PanelKind::Artboards) {
+            return None;
+        }
+        let doc = self.doc.editor.document();
+        let h = if id == PanelId(PanelKind::Links) {
+            panels::links_content_height(doc)
+        } else if id == PanelId(PanelKind::Symbols) {
+            panels::symbols_content_height(doc, width, self.settings.symbols_view)
+        } else if id == PanelId(PanelKind::Appearance) {
+            panels::appearance_natural_height(&self.appearance_items())
+        } else if id == PanelId(PanelKind::Swatches) {
+            panels::swatches_content_height(width)
+        } else {
+            panels::min_body_height(id, width)
+        };
+        Some(h as f32)
+    }
+
+    /// Re-clamps every Tabs-mode group's pinned `content_h`, across every
+    /// Master (docked or floating), against its active panel's *current*
+    /// content cap (`panel_content_cap`). Run once per frame so a cap that
+    /// moves with live document state (an Appearance/Links/Symbols/
+    /// Swatches panel whose item count just shrank) — or a height pinned
+    /// before this cap existed at all — self-heals immediately, instead of
+    /// only being enforced the next time that group's resize handle is
+    /// actually dragged.
+    fn heal_panel_content_heights(&mut self) {
+        let this: &App = &*self;
+        let fixes: Vec<(u64, usize, f32)> = this
+            .dock
+            .masters
+            .iter()
+            .filter(|m| m.layout == MasterLayout::Tabs)
+            .flat_map(|m| {
+                let width = if m.dock.is_some() { layout::dock_width(m) } else { m.rect[2] as f64 };
+                m.groups.iter().enumerate().filter_map(move |(gi, g)| {
+                    let h = g.content_h?;
+                    let active = *g.panels.get(g.active)?;
+                    let cap = this.panel_content_cap(active, width)?;
+                    (h > cap).then_some((m.id, gi, cap))
+                })
+            })
+            .collect();
+        let mut touched: Vec<u64> = Vec::new();
+        for (mid, gi, cap) in fixes {
+            if let Some(m) = self.dock.master_mut(mid) {
+                if let Some(g) = m.group_mut(gi) {
+                    g.content_h = Some(cap);
+                    touched.push(mid);
+                }
+            }
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        // A floating window doesn't auto-shrink like a docked rail does —
+        // its OS-level height needs an explicit resize to match.
+        for mid in touched {
+            self.sync_floating_window_height(mid);
         }
     }
 
@@ -2226,6 +2309,14 @@ impl App {
         if self.tabs.len() == 1 {
             self.load_active_doc(Doc::placeholder());
             self.doc.selection.clear();
+            // Back to zero real open documents — same "nothing the user
+            // actually opened yet" state as construction time, and needs
+            // the same flag: the Chooser's "OPEN DOCUMENTS" list should
+            // empty out again (`mux_open_docs`), and every "requires a
+            // real document" guard (`apply_panel_action`'s own) should
+            // re-arm rather than staying permanently satisfied from
+            // whatever the first document happened to clear it.
+            self.boot_empty = true;
             if self.settings.home_on_last_close && !self.mux.model.enabled() {
                 self.home = home::Home::new(recent::load());
             }
@@ -5575,7 +5666,12 @@ impl App {
 
     /// File ▸ Place… / ⌘⇧P — pick a PNG or JPEG and drop it at the view centre.
     pub(in crate::app) fn place_image_dialog(&mut self) {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return;
         }
         let Some(path) = rfd::FileDialog::new()
@@ -5788,7 +5884,12 @@ impl App {
 
     /// Drop a raster onto the document at the pointer.
     fn on_drop_file(&mut self, path: std::path::PathBuf) {
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return;
         }
         // Try to decode anything we can read (PNG/JPEG, and on macOS HEIC
@@ -5856,7 +5957,12 @@ impl App {
         if drops.is_empty() {
             return;
         }
-        if self.home.is_some() || self.newdoc.is_some() || self.quick_newdoc.is_some() || self.prefs.is_some() {
+        if self.home.is_some()
+            || self.newdoc.is_some()
+            || self.quick_newdoc.is_some()
+            || self.prefs.is_some()
+            || self.boot_empty
+        {
             return;
         }
         let fallback = self.doc_point(self.canvas_viewport().center());
@@ -7748,6 +7854,7 @@ impl App {
             image_trace: &self.image_trace.panel,
             theme: &self.theme,
             doc: self.doc.editor.document(),
+            document_open: self.document_open(),
             selection: &self.doc.selection,
             active_tool: self.active_tool,
             pointer: self.pointer,
@@ -7764,6 +7871,7 @@ impl App {
             type_group_tool: self.last_type_tool,
             hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
+            collapsed_layers: &self.doc.collapsed_layers,
             renaming: None,
             selected_layer: self.doc.selected_layer,
             selected_artboard: self.doc.selected_artboard,
@@ -7777,11 +7885,15 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
+            layers_new_menu: self.layers_new_menu,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop: None,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
             symbols_view: self.settings.symbols_view,
+            layer_thumbnail_size: self.settings.layer_thumbnail_size,
+            layer_images: &self.image_cache,
+            layer_thumbnail_contents: self.settings.layer_thumbnail_contents,
             symbol_thumbnails: &self.symbol_thumbnails,
             symbol_tiles: &self.symbol_tiles,
             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
@@ -7808,6 +7920,7 @@ impl App {
             effect_dialog: None,
             symbol_name_dialog: None,
             layer_dialog: None,
+            layers_panel_options_dialog: None,
             area_type_dialog: None,
             recolor_dialog: self.recolor_dialog.as_ref(),
             gradient: self.gradient_ctx(),
@@ -7830,6 +7943,7 @@ impl App {
             image_trace: &self.image_trace.panel,
             theme: &self.theme,
             doc: self.doc.editor.document(),
+            document_open: self.document_open(),
             selection: &self.doc.selection,
             active_tool: self.active_tool,
             pointer: self.pointer,
@@ -7846,6 +7960,7 @@ impl App {
             type_group_tool: self.last_type_tool,
             hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
+            collapsed_layers: &self.doc.collapsed_layers,
             renaming: self.doc.rename.as_ref().map(|r| (r.target, r.buf.as_str())),
             selected_layer: self.doc.selected_layer,
             selected_artboard: self.doc.selected_artboard,
@@ -7859,11 +7974,15 @@ impl App {
             font_families: &self.font_families,
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
+            layers_new_menu: self.layers_new_menu,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
             selected_asset: self.doc.selected_asset,
             symbols_view: self.settings.symbols_view,
+            layer_thumbnail_size: self.settings.layer_thumbnail_size,
+            layer_images: &self.image_cache,
+            layer_thumbnail_contents: self.settings.layer_thumbnail_contents,
             symbol_thumbnails: &self.symbol_thumbnails,
             symbol_tiles: &self.symbol_tiles,
             symbols_scroll: self.panel_scroll_of(PanelId(PanelKind::Symbols)),
@@ -7887,6 +8006,7 @@ impl App {
             effect_dialog: self.effect_dialog.as_ref().map(|d| (d, false)),
             symbol_name_dialog: self.symbol_name_dialog.as_ref(),
             layer_dialog: self.layer_dialog.as_ref().map(|d| (d, false)),
+            layers_panel_options_dialog: self.layers_panel_options_dialog.as_ref(),
             recolor_dialog: self.recolor_dialog.as_ref(),
             area_type_dialog: self.area_type_dialog.as_ref().map(|d| (d, false)),
             gradient: self.gradient_ctx(),
@@ -8642,6 +8762,24 @@ impl App {
         layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p), bespoke, true)
     }
 
+    /// Same geometry as [`Self::build_master_frame`], but the last group
+    /// keeps its own natural (unstretched) height instead of filling the
+    /// rest of the rail. Used only to resolve where a drag would land
+    /// (`resolve_panel_drop` / `resolve_group_drop`) — with the last
+    /// group's content stretched to the rail's bottom edge (as it's
+    /// painted), the genuinely empty rail space below it is swallowed by
+    /// that group's own hit-test rect, so a drag could never resolve to
+    /// "append a new sibling after everything" there. Shrinking it back to
+    /// natural height for this one calculation reopens that gap.
+    fn build_master_frame_natural(&mut self, id: u64, bounds: Rect) -> MasterFrame {
+        let Some(m) = self.dock.master(id).cloned() else {
+            return MasterFrame::default();
+        };
+        let theme = self.theme.clone();
+        let bespoke = self.is_float_only(id);
+        layout::layout_master(&m, bounds, &theme, &mut |p| self.tab_width(p), bespoke, false)
+    }
+
     /// A docked master's rect *within the main window* (local coordinates)
     /// — full available height, x offset from every other master already
     /// docked to the same side (⇐ `layoutDocks`'s offset accumulation).
@@ -8776,7 +8914,7 @@ impl App {
             return None;
         }
         let rect = self.master_screen_rect(target)?;
-        let frame = self.build_master_frame(target, Rect::new(0.0, 0.0, rect.width(), rect.height()));
+        let frame = self.build_master_frame_natural(target, Rect::new(0.0, 0.0, rect.width(), rect.height()));
         let local = global - Point::new(rect.x0, rect.y0).to_vec2();
         layout::hit_test_group_drop(&frame, usize::MAX, local).map(|d| (target, d))
     }
@@ -8801,7 +8939,7 @@ impl App {
             if !rect.contains(global) {
                 continue;
             }
-            let frame = self.build_master_frame(mid, Rect::new(0.0, 0.0, rect.width(), rect.height()));
+            let frame = self.build_master_frame_natural(mid, Rect::new(0.0, 0.0, rect.width(), rect.height()));
             let local = global - Point::new(rect.x0, rect.y0).to_vec2();
             return layout::hit_test_panel_drop(&frame, local).map(|d| (mid, d));
         }
@@ -9096,6 +9234,7 @@ impl ApplicationHandler for App {
             }
         }
         if std::mem::take(&mut self.pending_symbol_name_dialog) { self.spawn_symbol_name_dialog(event_loop); }
+        if std::mem::take(&mut self.pending_layers_panel_options_dialog) { self.spawn_layers_panel_options_dialog(event_loop); }
         if std::mem::take(&mut self.pending_recolor) { self.spawn_recolor_dialog(event_loop); }
         if self.recolor_picker.is_some() && self.picker.is_some() && !self.dock.contains(PanelId(PanelKind::Picker)) { self.spawn_picker_window(event_loop); }
         if let Some(id) = self.pending_layer_dialog.take() {
@@ -9508,6 +9647,7 @@ impl ApplicationHandler for App {
                     || self.offset_dialog.is_some()
                     || self.effect_dialog.is_some()
                     || self.layer_dialog.is_some()
+                    || self.layers_panel_options_dialog.is_some()
                 {
                     self.cmd_down = if cfg!(target_os = "macos") { m.state().super_key() } else { m.state().control_key() };
                     self.shift_down = m.state().shift_key();
@@ -9561,7 +9701,8 @@ impl ApplicationHandler for App {
                     || self.blend_dialog.is_some()
                     || self.offset_dialog.is_some()
                     || self.effect_dialog.is_some()
-                    || self.layer_dialog.is_some() =>
+                    || self.layer_dialog.is_some()
+                    || self.layers_panel_options_dialog.is_some() =>
             {
                 self.on_key(event);
             }

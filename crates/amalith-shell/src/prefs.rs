@@ -317,6 +317,52 @@ pub enum SymbolsView {
     Thumbnails,
 }
 
+/// Layers Panel Options' thumbnail and row size. `None` provides compact
+/// text-only rows; small artwork previews are the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerThumbnailSize {
+    None,
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl LayerThumbnailSize {
+    /// Row height (logical px, pre-UI-scale) at this size — `None` keeps
+    /// exactly the current fixed row height.
+    pub fn row_h(self) -> f64 {
+        match self {
+            LayerThumbnailSize::None => 26.0,
+            LayerThumbnailSize::Small => 32.0,
+            LayerThumbnailSize::Medium => 44.0,
+            LayerThumbnailSize::Large => 60.0,
+        }
+    }
+    /// The thumbnail image's own square size (logical px) at this size —
+    /// `None` never reads this (nothing is rendered).
+    pub fn image_px(self) -> f64 {
+        match self {
+            LayerThumbnailSize::None => 0.0,
+            LayerThumbnailSize::Small => 24.0,
+            LayerThumbnailSize::Medium => 36.0,
+            LayerThumbnailSize::Large => 52.0,
+        }
+    }
+}
+
+/// Layers Panel Options' "Thumbnail Contents" — what a row's preview
+/// actually frames: just that layer/object's own bounds (Illustrator's
+/// and Photoshop's usual default), or the whole document/artboard
+/// composited underneath it (useful for an "at a glance, where does this
+/// sit in the page" read, at the cost of a much smaller subject per tile).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerThumbnailContents {
+    #[default]
+    LayerBounds,
+    EntireDocument,
+}
+
 /// The settings the app actually reads. Cheap to copy; the modal edits a
 /// working copy and only writes back on OK.
 #[derive(Clone, Copy, PartialEq)]
@@ -381,6 +427,11 @@ pub struct Settings {
     pub sg_angles: [f64; 6],
     /// Browsing mode selected in the Symbols panel hamburger menu.
     pub symbols_view: SymbolsView,
+    /// Layers Panel Options' "Thumbnail Size" — set from the Layers
+    /// panel's own hamburger menu, not the Preferences window.
+    pub layer_thumbnail_size: LayerThumbnailSize,
+    /// Layers Panel Options' "Thumbnail Contents".
+    pub layer_thumbnail_contents: LayerThumbnailContents,
     /// View ▸ Show Grid (⌘'). A real persisted preference, same reasoning
     /// as `smart_guides_enabled`.
     pub show_grid: bool,
@@ -433,6 +484,8 @@ impl Default for Settings {
             sg_tolerance: 4.0,
             sg_angles: [0.0, 45.0, 90.0, 135.0, 0.0, 0.0],
             symbols_view: SymbolsView::List,
+            layer_thumbnail_size: LayerThumbnailSize::Small,
+            layer_thumbnail_contents: LayerThumbnailContents::LayerBounds,
             show_grid: false,
             snap_to_grid: false,
             snap_to_pixel: false,
