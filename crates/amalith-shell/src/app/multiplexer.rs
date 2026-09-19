@@ -1676,10 +1676,9 @@ impl App {
                     xg.move_to((xc.x + ui_px(4.0), xc.y - ui_px(4.0)));
                     xg.line_to((xc.x - ui_px(4.0), xc.y + ui_px(4.0)));
                     front.stroke(&Stroke::new(ui_px(1.3)), Affine::IDENTITY, ink, None, &xg);
-                    self.text.draw(
-                        &mut front, &labels[i], 12.6, ink,
-                        close.x1 + ui_px(6.0), strip.y0 + metric_tab_bar_h() * 0.5 + ui_px(4.0),
-                    );
+                    let label_x = close.x1 + ui_px(6.0);
+                    let label_y = strip.y0 + metric_tab_bar_h() * 0.5 + ui_px(4.0);
+                    self.text.draw(&mut front, &labels[i], 12.6, ink, label_x, label_y);
                     // Divider between tabs.
                     if i + 1 < n_chips {
                         front.fill(
@@ -1692,6 +1691,34 @@ impl App {
                 let add_ink = if add_r.contains(self.pointer) { self.theme.text } else { self.theme.text_dim };
                 icon_plus(&mut front, add_r.center(), ui_px(5.0), add_ink);
                 front.pop_layer();
+
+                // Vector/Raster mode pill — fixed at the pane's own top
+                // left, independent of which tab is active or where it
+                // sits in the tab order, sized tightly around its own
+                // bold label. Drawn *after* the tab strip's clip pops (it
+                // sits below `strip`, so clipping to `strip` would cut it
+                // off entirely) but still on top of this pane's canvas
+                // content, painted earlier in this same pass. Only the
+                // focused pane's active tab has a meaningful "current
+                // layer" to report (`App::current_layer_kind` reads
+                // `self.doc`, which always tracks the focused tab), and
+                // only when that tab is actually a document (a Terminal/
+                // Chooser tab has no layers at all).
+                if focused && matches!(pane.active_tab().content, TabContent::Document(_)) {
+                    if let Some(kind) = self.current_layer_kind() {
+                        let (label, color) = match kind {
+                            amalith_core::LayerKind::Vector => ("VECTOR", self.theme.accent),
+                            amalith_core::LayerKind::Raster => ("RASTER", self.theme.raster_accent),
+                        };
+                        let label_size = 11.5;
+                        let pad_x = ui_px(8.0);
+                        let pill_h = ui_px(19.0);
+                        let text_w = self.text.measure_bold(label, label_size);
+                        let pill = Rect::new(strip.x0, strip.y1, strip.x0 + text_w + pad_x * 2.0, strip.y1 + pill_h);
+                        front.fill(Fill::NonZero, Affine::IDENTITY, color, None, &pill);
+                        self.text.draw_bold(&mut front, label, label_size, Color::WHITE, pill.x0 + pad_x, pill.y0 + pill_h * 0.5 + ui_px(4.0));
+                    }
+                }
 
                 // Only meaningful once there's more than one pane to
                 // tell apart — with just one, "which pane are my

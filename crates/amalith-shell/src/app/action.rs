@@ -167,6 +167,14 @@ impl App {
             }
             panels::Action::AppearanceClearEffects => self.appearance_clear_effects(),
             panels::Action::BeginAppearanceWidthEdit(idx) => self.begin_appearance_width_edit(idx),
+            panels::Action::AppearanceToggleBlendMenu => {
+                self.appearance_blend_menu = !self.appearance_blend_menu;
+                self.request_main_redraw();
+            }
+            panels::Action::AppearanceSetBlendMode(idx, mode) => {
+                self.appearance_blend_menu = false;
+                self.appearance_set_blend_mode(idx, mode);
+            }
             panels::Action::PickerSv(s, v) => {
                 if let Some(pk) = &mut self.picker {
                     pk.s = s;

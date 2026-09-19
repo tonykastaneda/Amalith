@@ -13,9 +13,10 @@
 //! show when zero or more than one object is selected — editing a stack
 //! is inherently single-object (`Command::SetAppearanceItems` targets
 //! one id); editing several objects' differently-shaped stacks at once
-//! is a V2 concern. No drag-to-reorder yet (footer buttons only), no
-//! blend modes, no effects — see the Appearance-panel plan for the
-//! reasoning behind each of those V1 cuts.
+//! is a V2 concern. No drag-to-reorder yet (footer buttons only) — see
+//! the Appearance-panel plan for the reasoning behind that V1 cut. Blend
+//! modes (footer "Bl ▾") and live effects (footer "fx ▾") both apply to
+//! the selected row, mirroring each other's menu/modal conventions.
 
 use crate::metrics::px as ui_px;
 
@@ -122,8 +123,8 @@ fn effect_label(e: &amalith_core::Effect) -> String {
     }
 }
 
-pub fn natural_height(ctx: &Ctx) -> f64 {
-    let slots = display_slots(&ctx.appearance_items).len().max(1);
+pub fn natural_height(items: &[AppearanceItem]) -> f64 {
+    let slots = display_slots(items).len().max(1);
     ui_px(4.0) + slots as f64 * metric_row_h() + metric_footer_h()
 }
 
@@ -264,6 +265,10 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     if ctx.appearance_fx_menu {
         paint_fx_menu(scene, text, th, body);
     }
+    if ctx.appearance_blend_menu {
+        let current = ctx.appearance_selected.map(|i| ctx.appearance_items[i].blend_mode());
+        paint_blend_menu(scene, text, th, body, current);
+    }
 }
 
 /// A filled square — Illustrator's own Fill-item glyph.
@@ -313,6 +318,7 @@ struct Footer {
     add_fill: Rect,
     add_stroke: Rect,
     fx: Rect,
+    blend: Rect,
     clear_effects: Rect,
     duplicate: Rect,
     delete: Rect,
@@ -330,10 +336,11 @@ fn footer_layout(body: Rect) -> Footer {
     let add_fill = Rect::new(x0, y0, x0 + w, y1);
     let add_stroke = Rect::new(add_fill.x1 + gap, y0, add_fill.x1 + gap + w, y1);
     let fx = Rect::new(add_stroke.x1 + gap, y0, add_stroke.x1 + gap + fx_w, y1);
+    let blend = Rect::new(fx.x1 + gap, y0, fx.x1 + gap + fx_w, y1);
     let delete = Rect::new(strip.x1 - metric_pad() - icon_w, y0, strip.x1 - metric_pad(), y1);
     let duplicate = Rect::new(delete.x0 - gap - icon_w, y0, delete.x0 - gap, y1);
     let clear_effects = Rect::new(duplicate.x0 - gap - icon_w, y0, duplicate.x0 - gap, y1);
-    Footer { add_fill, add_stroke, fx, clear_effects, duplicate, delete }
+    Footer { add_fill, add_stroke, fx, blend, clear_effects, duplicate, delete }
 }
 
 fn paint_footer(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::Theme, body: Rect, ctx: &Ctx) {
@@ -346,9 +353,31 @@ fn paint_footer(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::Th
     text_button(scene, text, th, f.add_fill, "+ Fill", has_target, ctx.pointer);
     text_button(scene, text, th, f.add_stroke, "+ Stroke", has_target, ctx.pointer);
     fx_button(scene, text, th, f.fx, has_selected, ctx.appearance_fx_menu, ctx.pointer);
+    blend_button(scene, text, th, f.blend, has_selected, ctx.appearance_blend_menu, ctx.pointer);
     icon_button(scene, th, f.clear_effects, IconKind::ClearEffects, has_any_effect, ctx.pointer);
     icon_button(scene, th, f.duplicate, IconKind::Duplicate, has_selected, ctx.pointer);
     icon_button(scene, th, f.delete, IconKind::Trash, has_selected, ctx.pointer);
+}
+
+/// The footer's "Bl ▾" button — opens the blend-mode menu for the
+/// selected row, matching `fx_button`'s exact visual language (same size,
+/// same "open" ring, same caret) so the two read as siblings.
+fn blend_button(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::Theme, r: Rect, enabled: bool, open: bool, pointer: Point) {
+    let hot = enabled && (r.contains(pointer) || open);
+    let bg = if hot { th.strip_bg } else { th.bg };
+    scene.fill(Fill::NonZero, ID, bg, None, &r.to_rounded_rect(ui_px(3.0)));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, if open { th.accent } else { th.text_dim.with_alpha(0.5) }, None, &r.to_rounded_rect(ui_px(3.0)));
+    let ink = if enabled { th.text } else { th.text_dim.with_alpha(0.4) };
+    let label = "Bl";
+    let w = text.measure(label, 11.5);
+    text.draw(scene, label, 11.5, ink, r.center().x - w * 0.5 - ui_px(3.0), r.center().y + ui_px(4.0));
+    let cx = r.x1 - ui_px(8.0);
+    let cy = r.center().y;
+    let mut caret = BezPath::new();
+    caret.move_to((cx - ui_px(3.0), cy - ui_px(1.5)));
+    caret.line_to((cx, cy + ui_px(2.0)));
+    caret.line_to((cx + ui_px(3.0), cy - ui_px(1.5)));
+    scene.stroke(&Stroke::new(ui_px(1.1)), ID, ink, None, &caret);
 }
 
 /// The footer's "fx ▾" button — an italic "fx" mark plus a small
@@ -425,6 +454,67 @@ fn paint_fx_menu(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::T
     }
 }
 
+/// Every `BlendMode` variant, in Illustrator's own Transparency-panel
+/// order — Normal first, then the grouped Darken/Lighten/Contrast/
+/// Comparative/Composite families, matching the order most designers
+/// already have memorized from Photoshop/Illustrator.
+fn blend_menu_entries() -> Vec<(&'static str, amalith_core::BlendMode)> {
+    use amalith_core::BlendMode as B;
+    vec![
+        ("Normal", B::Normal),
+        ("Multiply", B::Multiply),
+        ("Screen", B::Screen),
+        ("Overlay", B::Overlay),
+        ("Darken", B::Darken),
+        ("Lighten", B::Lighten),
+        ("Color Dodge", B::ColorDodge),
+        ("Color Burn", B::ColorBurn),
+        ("Hard Light", B::HardLight),
+        ("Soft Light", B::SoftLight),
+        ("Difference", B::Difference),
+        ("Exclusion", B::Exclusion),
+        ("Hue", B::Hue),
+        ("Saturation", B::Saturation),
+        ("Color", B::Color),
+        ("Luminosity", B::Luminosity),
+    ]
+}
+
+const BLEND_MENU_ITEM_H: f64 = 24.0;
+const BLEND_MENU_W: f64 = 130.0;
+
+/// Where the blend-mode menu sits, opening upward from the "Bl" button —
+/// same clamped-to-`body` reasoning as `fx_menu_rect` (see its own doc
+/// comment): a 16-entry menu is much taller than the 7ish-entry fx one,
+/// so without this it would clip away entirely in a short flyout preview.
+fn blend_menu_rect(body: Rect, entry_count: usize) -> Rect {
+    let f = footer_layout(body);
+    let h = ui_px(BLEND_MENU_ITEM_H) * entry_count as f64;
+    let y1 = (f.blend.y0 - ui_px(6.0)).max(body.y0 + ui_px(4.0));
+    let y0 = (y1 - h).max(body.y0 + ui_px(4.0));
+    Rect::new(f.blend.x0, y0, f.blend.x0 + ui_px(BLEND_MENU_W), y1)
+}
+
+fn blend_menu_entry_rect(body: Rect, entry_count: usize, i: usize) -> Rect {
+    let menu = blend_menu_rect(body, entry_count);
+    let y = menu.y0 + i as f64 * ui_px(BLEND_MENU_ITEM_H);
+    Rect::new(menu.x0, y, menu.x1, y + ui_px(BLEND_MENU_ITEM_H))
+}
+
+fn paint_blend_menu(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::Theme, body: Rect, current: Option<amalith_core::BlendMode>) {
+    let entries = blend_menu_entries();
+    let menu = blend_menu_rect(body, entries.len());
+    scene.fill(Fill::NonZero, ID, th.panel_bg, None, &menu.to_rounded_rect(ui_px(4.0)));
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &menu.to_rounded_rect(ui_px(4.0)));
+    for (i, &(label, mode)) in entries.iter().enumerate() {
+        let r = blend_menu_entry_rect(body, entries.len(), i);
+        if current == Some(mode) {
+            scene.fill(Fill::NonZero, ID, th.accent.with_alpha(0.18), None, &r);
+        }
+        text.draw(scene, label, 12.0, th.text, r.x0 + ui_px(10.0), r.center().y + ui_px(4.0));
+    }
+}
+
 fn text_button(scene: &mut Scene, text: &mut TextContext, th: &crate::theme::Theme, r: Rect, label: &str, enabled: bool, pointer: Point) {
     let hot = enabled && r.contains(pointer);
     let bg = if hot { th.strip_bg } else { th.bg };
@@ -479,7 +569,7 @@ fn icon_button(scene: &mut Scene, th: &crate::theme::Theme, r: Rect, kind: IconK
 }
 
 pub fn hit(body: Rect, p: Point, ctx: &Ctx) -> Action {
-    hit_items(&ctx.appearance_items, ctx.appearance_selected, ctx.appearance_fx_menu, body, p)
+    hit_items(&ctx.appearance_items, ctx.appearance_selected, ctx.appearance_fx_menu, ctx.appearance_blend_menu, body, p)
 }
 
 /// Which Stroke item's weight field (if any) `p` is over — used by
@@ -507,7 +597,7 @@ pub fn row_weight_field_at(items: &[AppearanceItem], body: Rect, p: Point) -> Op
 /// The real hit-test logic, independent of `Ctx` so it's unit-testable
 /// without constructing one (mirrors how `paragraph.rs`'s alignment-tick
 /// math is split out from its own `Ctx`-taking `paint`/`hit`).
-fn hit_items(items: &[AppearanceItem], selected: Option<usize>, fx_menu_open: bool, body: Rect, p: Point) -> Action {
+fn hit_items(items: &[AppearanceItem], selected: Option<usize>, fx_menu_open: bool, blend_menu_open: bool, body: Rect, p: Point) -> Action {
     // The fx menu is modal while open: its own entry commits, anything
     // else (including re-clicking the fx button) just closes it — same
     // "first click away just dismisses" convention as every other
@@ -524,6 +614,19 @@ fn hit_items(items: &[AppearanceItem], selected: Option<usize>, fx_menu_open: bo
         }
         return Action::AppearanceToggleFxMenu;
     }
+    // Same modal convention as the fx menu above.
+    if blend_menu_open {
+        let entries = blend_menu_entries();
+        for (i, &(_, mode)) in entries.iter().enumerate() {
+            if blend_menu_entry_rect(body, entries.len(), i).contains(p) {
+                return match selected {
+                    Some(idx) => Action::AppearanceSetBlendMode(idx, mode),
+                    None => Action::AppearanceToggleBlendMenu,
+                };
+            }
+        }
+        return Action::AppearanceToggleBlendMenu;
+    }
     let f = footer_layout(body);
     if f.add_fill.contains(p) {
         return Action::AppearanceAddFill;
@@ -533,6 +636,9 @@ fn hit_items(items: &[AppearanceItem], selected: Option<usize>, fx_menu_open: bo
     }
     if f.fx.contains(p) && selected.is_some() {
         return Action::AppearanceToggleFxMenu;
+    }
+    if f.blend.contains(p) && selected.is_some() {
+        return Action::AppearanceToggleBlendMenu;
     }
     if f.clear_effects.contains(p) && items.iter().any(|i| !i.effects().is_empty()) {
         return Action::AppearanceClearEffects;
@@ -633,7 +739,13 @@ mod tests {
 
     fn two_items() -> Vec<AppearanceItem> {
         vec![
-            AppearanceItem::Fill { paint: Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+            AppearanceItem::Fill {
+                paint: Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0)),
+                opacity: 1.0,
+                visible: true,
+                effects: Vec::new(),
+                blend_mode: amalith_core::BlendMode::Normal,
+            },
             AppearanceItem::Stroke {
                 paint: Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 1.0)),
                 width: 2.0,
@@ -641,6 +753,7 @@ mod tests {
                 opacity: 1.0,
                 visible: true,
                 effects: Vec::new(),
+                blend_mode: amalith_core::BlendMode::Normal,
             },
         ]
     }
@@ -665,9 +778,9 @@ mod tests {
         let list = list_rect(b);
         let top_row_center = row_rect(list, 0).center();
         // The topmost displayed row is the Stroke (real index 1).
-        assert_eq!(hit_items(&items, None, false, b, top_row_center), Action::AppearanceSelect(1));
+        assert_eq!(hit_items(&items, None, false, false, b, top_row_center), Action::AppearanceSelect(1));
         let second_row_center = row_rect(list, 1).center();
-        assert_eq!(hit_items(&items, None, false, b, second_row_center), Action::AppearanceSelect(0));
+        assert_eq!(hit_items(&items, None, false, false, b, second_row_center), Action::AppearanceSelect(0));
     }
 
     #[test]
@@ -677,7 +790,7 @@ mod tests {
         let list = list_rect(b);
         let r = row_rect(list, 0);
         let eye = row_layout(r).eye.center();
-        assert_eq!(hit_items(&items, None, false, b, eye), Action::AppearanceToggleVisible(1));
+        assert_eq!(hit_items(&items, None, false, false, b, eye), Action::AppearanceToggleVisible(1));
     }
 
     #[test]
@@ -687,7 +800,7 @@ mod tests {
         let list = list_rect(b);
         let r = row_rect(list, 1);
         let swatch = row_layout(r).swatch.center();
-        assert_eq!(hit_items(&items, None, false, b, swatch), Action::OpenAppearanceItemPicker(0));
+        assert_eq!(hit_items(&items, None, false, false, b, swatch), Action::OpenAppearanceItemPicker(0));
     }
 
     #[test]
@@ -695,10 +808,10 @@ mod tests {
         let items = two_items();
         let b = body();
         let f = footer_layout(b);
-        assert_eq!(hit_items(&items, None, false, b, f.duplicate.center()), Action::None);
-        assert_eq!(hit_items(&items, None, false, b, f.delete.center()), Action::None);
-        assert_eq!(hit_items(&items, Some(0), false, b, f.duplicate.center()), Action::AppearanceDuplicate);
-        assert_eq!(hit_items(&items, Some(0), false, b, f.delete.center()), Action::AppearanceDelete);
+        assert_eq!(hit_items(&items, None, false, false, b, f.duplicate.center()), Action::None);
+        assert_eq!(hit_items(&items, None, false, false, b, f.delete.center()), Action::None);
+        assert_eq!(hit_items(&items, Some(0), false, false, b, f.duplicate.center()), Action::AppearanceDuplicate);
+        assert_eq!(hit_items(&items, Some(0), false, false, b, f.delete.center()), Action::AppearanceDelete);
     }
 
     #[test]
@@ -729,13 +842,19 @@ mod tests {
     fn add_fill_and_add_stroke_are_always_live() {
         let b = body();
         let f = footer_layout(b);
-        assert_eq!(hit_items(&[], None, false, b, f.add_fill.center()), Action::AppearanceAddFill);
-        assert_eq!(hit_items(&[], None, false, b, f.add_stroke.center()), Action::AppearanceAddStroke);
+        assert_eq!(hit_items(&[], None, false, false, b, f.add_fill.center()), Action::AppearanceAddFill);
+        assert_eq!(hit_items(&[], None, false, false, b, f.add_stroke.center()), Action::AppearanceAddStroke);
     }
 
     fn item_with_offset() -> Vec<AppearanceItem> {
         vec![
-            AppearanceItem::Fill { paint: Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0)), opacity: 1.0, visible: true, effects: Vec::new() },
+            AppearanceItem::Fill {
+                paint: Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0)),
+                opacity: 1.0,
+                visible: true,
+                effects: Vec::new(),
+                blend_mode: amalith_core::BlendMode::Normal,
+            },
             AppearanceItem::Stroke {
                 paint: Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 1.0)),
                 width: 2.0,
@@ -743,6 +862,7 @@ mod tests {
                 opacity: 1.0,
                 visible: true,
                 effects: vec![amalith_core::Effect::Offset(amalith_core::OffsetEffect { amount: -2.0, join: amalith_core::LineJoin::Miter, miter_limit: 4.0 })],
+                blend_mode: amalith_core::BlendMode::Normal,
             },
         ]
     }
@@ -781,8 +901,8 @@ mod tests {
         let items = two_items();
         let b = body();
         let f = footer_layout(b);
-        assert_eq!(hit_items(&items, None, false, b, f.fx.center()), Action::None, "nothing selected — fx has no target row");
-        assert_eq!(hit_items(&items, Some(1), false, b, f.fx.center()), Action::AppearanceToggleFxMenu);
+        assert_eq!(hit_items(&items, None, false, false, b, f.fx.center()), Action::None, "nothing selected — fx has no target row");
+        assert_eq!(hit_items(&items, Some(1), false, false, b, f.fx.center()), Action::AppearanceToggleFxMenu);
     }
 
     #[test]
@@ -792,7 +912,7 @@ mod tests {
         let entries = fx_menu_entries();
         let entry = fx_menu_entry_rect(b, entries.len(), 0).center();
         assert_eq!(
-            hit_items(&items, Some(1), true, b, entry),
+            hit_items(&items, Some(1), true, false, b, entry),
             Action::AppearanceAddEffect(1, EffectMenuChoice::Offset)
         );
     }
@@ -806,7 +926,7 @@ mod tests {
         // entry 0 is always Offset Path.
         let entry = fx_menu_entry_rect(b, entries.len(), 1).center();
         assert_eq!(
-            hit_items(&items, Some(1), true, b, entry),
+            hit_items(&items, Some(1), true, false, b, entry),
             Action::AppearanceAddEffect(1, EffectMenuChoice::Distort(crate::effectdlg::EffectKind::ZigZag))
         );
     }
@@ -820,8 +940,42 @@ mod tests {
         // closes the menu instead of selecting that row — a second click
         // is needed to actually select it.
         assert_eq!(
-            hit_items(&items, Some(1), true, b, row_rect(list, 1).center()),
+            hit_items(&items, Some(1), true, false, b, row_rect(list, 1).center()),
             Action::AppearanceToggleFxMenu
+        );
+    }
+
+    #[test]
+    fn the_footer_blend_button_toggles_the_menu_only_with_a_row_selected() {
+        let items = two_items();
+        let b = body();
+        let f = footer_layout(b);
+        assert_eq!(hit_items(&items, None, false, false, b, f.blend.center()), Action::None, "nothing selected — blend has no target row");
+        assert_eq!(hit_items(&items, Some(1), false, false, b, f.blend.center()), Action::AppearanceToggleBlendMenu);
+    }
+
+    #[test]
+    fn picking_a_mode_from_the_open_blend_menu_sets_it_on_the_selected_row() {
+        let items = two_items();
+        let b = body();
+        let entries = blend_menu_entries();
+        // Entry 0 is always Normal; pick something else to prove the
+        // click maps to the right entry, not just always Normal.
+        let entry = blend_menu_entry_rect(b, entries.len(), 1).center();
+        assert_eq!(
+            hit_items(&items, Some(1), false, true, b, entry),
+            Action::AppearanceSetBlendMode(1, amalith_core::BlendMode::Multiply)
+        );
+    }
+
+    #[test]
+    fn clicking_anywhere_else_while_the_blend_menu_is_open_just_closes_it() {
+        let items = two_items();
+        let b = body();
+        let list = list_rect(b);
+        assert_eq!(
+            hit_items(&items, Some(1), false, true, b, row_rect(list, 1).center()),
+            Action::AppearanceToggleBlendMenu
         );
     }
 
@@ -831,8 +985,8 @@ mod tests {
         let with_fx = item_with_offset();
         let b = body();
         let f = footer_layout(b);
-        assert_eq!(hit_items(&plain, None, false, b, f.clear_effects.center()), Action::None);
-        assert_eq!(hit_items(&with_fx, None, false, b, f.clear_effects.center()), Action::AppearanceClearEffects);
+        assert_eq!(hit_items(&plain, None, false, false, b, f.clear_effects.center()), Action::None);
+        assert_eq!(hit_items(&with_fx, None, false, false, b, f.clear_effects.center()), Action::AppearanceClearEffects);
     }
 
     #[test]
@@ -842,7 +996,7 @@ mod tests {
         let list = list_rect(b);
         // Topmost displayed row (real index 1) is the Stroke.
         let l = row_layout(row_rect(list, 0));
-        assert_eq!(hit_items(&items, None, false, b, l.weight.center()), Action::BeginAppearanceWidthEdit(1));
+        assert_eq!(hit_items(&items, None, false, false, b, l.weight.center()), Action::BeginAppearanceWidthEdit(1));
     }
 
     #[test]
@@ -852,7 +1006,7 @@ mod tests {
         let list = list_rect(b);
         // Second displayed row (real index 0) is the Fill — no weight field.
         let l = row_layout(row_rect(list, 1));
-        assert_eq!(hit_items(&items, None, false, b, l.weight.center()), Action::AppearanceSelect(0));
+        assert_eq!(hit_items(&items, None, false, false, b, l.weight.center()), Action::AppearanceSelect(0));
     }
 
     #[test]
@@ -864,8 +1018,8 @@ mod tests {
         // nested effect row.
         let effect_row = row_rect(list, 1);
         let el = effect_row_layout(effect_row);
-        assert_eq!(hit_items(&items, None, false, b, el.trash.center()), Action::AppearanceRemoveEffect(1, 0));
-        assert_eq!(hit_items(&items, None, false, b, effect_row.center()), Action::OpenEffectDialog(1, 0));
+        assert_eq!(hit_items(&items, None, false, false, b, el.trash.center()), Action::AppearanceRemoveEffect(1, 0));
+        assert_eq!(hit_items(&items, None, false, false, b, effect_row.center()), Action::OpenEffectDialog(1, 0));
     }
 
     /// The Appearance panel's own Stack-mode flyout preview is a small

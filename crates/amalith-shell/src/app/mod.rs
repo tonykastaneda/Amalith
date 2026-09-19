@@ -1371,6 +1371,8 @@ struct App {
     appearance_selected: Option<usize>,
     /// Appearance panel: the footer "fx ▾" menu is open.
     appearance_fx_menu: bool,
+    /// Appearance panel: the footer "Bl ▾" blend-mode menu is open.
+    appearance_blend_menu: bool,
     /// Appearance panel: live buffer while a Stroke row's weight field is
     /// being typed — `(item index, buffer, fresh)`, same shape as
     /// `stroke_weight_edit`/`align_spacing_edit`, just per-item instead
@@ -1721,6 +1723,7 @@ impl App {
             appearance_picker_target: None,
             appearance_selected: None,
             appearance_fx_menu: false,
+            appearance_blend_menu: false,
             appearance_width_edit: None,
             appearance_drop: None,
             color_mode: panels::ColorSpace::Rgb,
@@ -3625,6 +3628,23 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Which layer's mode ("Vector Layer" / "Raster Layer") the tab
+    /// badge should show right now — the layer owning the current object
+    /// selection when there is one (same "the layer you're in" reasoning
+    /// as the Layers panel's own bold-row highlight, `panels::layers`'
+    /// `owning_layer`), else the explicitly selected layer row, else
+    /// `None` (nothing to confidently show).
+    fn current_layer_kind(&self) -> Option<amalith_core::LayerKind> {
+        let doc = self.doc.editor.document();
+        let layer_id = self
+            .doc
+            .selection
+            .first()
+            .and_then(|&id| panels::layers::owning_layer(doc, id))
+            .or(self.doc.selected_layer)?;
+        Some(doc.layer(layer_id)?.kind)
+    }
+
     /// Appearance panel footer: pushes a new Fill on top of the target's
     /// stack, duplicating the current topmost fill's paint (or the
     /// toolbar's current fill if it has none yet) — never a hard-coded
@@ -3751,6 +3771,16 @@ impl App {
         for item in &mut items {
             item.effects_mut().clear();
         }
+        let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
+        self.request_main_redraw();
+    }
+
+    fn appearance_set_blend_mode(&mut self, idx: usize, mode: amalith_core::BlendMode) {
+        let Some(object) = self.appearance_target() else { return };
+        let Some(obj) = self.doc.editor.document().object(object) else { return };
+        let mut items = obj.appearance.items.clone();
+        let Some(item) = items.get_mut(idx) else { return };
+        item.set_blend_mode(mode);
         let _ = self.doc.editor.execute(Command::SetAppearanceItems { object, items });
         self.request_main_redraw();
     }
@@ -7786,6 +7816,7 @@ impl App {
             appearance_selected: None,
             appearance_drop: None,
             appearance_fx_menu: false,
+            appearance_blend_menu: false,
             appearance_width_edit: None,
         }
     }
@@ -7864,6 +7895,7 @@ impl App {
             appearance_selected: self.appearance_selected,
             appearance_drop: self.appearance_drop,
             appearance_fx_menu: self.appearance_fx_menu,
+            appearance_blend_menu: self.appearance_blend_menu,
             appearance_width_edit: self.appearance_width_edit.as_ref().map(|(i, s, _)| (*i, s.as_str())),
         }
     }

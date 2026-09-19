@@ -158,6 +158,14 @@ impl TextContext {
         self.build(text, size, false).width() as f64
     }
 
+    /// Like [`Self::measure`], but for text that will be drawn with
+    /// [`Self::draw_bold`] — bold glyphs are wider, so a caller sizing a
+    /// box tightly around bold text (rather than just placing it inside
+    /// an already-fixed box) needs this instead of `measure`.
+    pub fn measure_bold(&mut self, text: &str, size: f32) -> f64 {
+        self.build(text, size, true).width() as f64
+    }
+
     /// Lay `text` out wrapped to `wrap_width` px, `line_height` as a multiple
     /// of the font size. The caller keeps the [`Layout`] for drawing and for
     /// hit-testing / selection.

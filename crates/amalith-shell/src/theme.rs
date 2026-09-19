@@ -146,6 +146,7 @@ struct Palette {
     text: Color,
     text_dim: Color,
     symbol_accent: Color,
+    raster_accent: Color,
 }
 
 #[derive(Clone, Debug)]
@@ -195,6 +196,13 @@ pub struct Theme {
     /// stable, recognizable "you're inside a Symbol" color regardless of
     /// the user's chosen selection-UI accent.
     pub symbol_accent: Color,
+    /// The "Raster Layer" mode badge/tab color, paired with `accent` for
+    /// "Vector Layer" — see `panels::layers::LayerKind`. Same reasoning
+    /// as `symbol_accent`: deliberately not derived from `accent`, so a
+    /// user who repoints their selection-UI accent doesn't also lose the
+    /// vector/raster mode distinction (hand-picked per scheme below so it
+    /// stays legible and non-clashing against that scheme's own accent).
+    pub raster_accent: Color,
 
     /// Height of a tab strip.
     pub tab_strip_h: f64,
@@ -295,6 +303,7 @@ impl Theme {
             text: p.text,
             text_dim: p.text_dim,
             symbol_accent: p.symbol_accent,
+            raster_accent: p.raster_accent,
             ..Self::default()
         };
         t.set_accent(t.accent);
@@ -321,6 +330,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xf8, 0xf8, 0xf2), // Foreground
                 text_dim: Color::from_rgb8(0x62, 0x72, 0xa4), // Comment
                 symbol_accent: Color::from_rgb8(0xff, 0x79, 0xc6), // Pink
+                raster_accent: Color::from_rgb8(0xff, 0xb8, 0x6c), // Orange
             },
             ColorScheme::CatppuccinMocha => Palette {
                 bg: Color::from_rgb8(0x1e, 0x1e, 0x2e),
@@ -332,6 +342,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xcd, 0xd6, 0xf4),
                 text_dim: Color::from_rgb8(0x58, 0x5b, 0x70), // bright black
                 symbol_accent: Color::from_rgb8(0xf5, 0xc2, 0xe7), // pink
+                raster_accent: Color::from_rgb8(0xfa, 0xb3, 0x87), // peach
             },
             ColorScheme::Panda => Palette {
                 bg: Color::from_rgb8(0x29, 0x2a, 0x2b),
@@ -343,6 +354,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xcc, 0xcc, 0xcc),
                 text_dim: Color::from_rgb8(0x75, 0x75, 0x75), // bright black
                 symbol_accent: Color::from_rgb8(0x19, 0xf9, 0xd8), // cyan/green
+                raster_accent: Color::from_rgb8(0xff, 0xb8, 0x6c), // orange
             },
             ColorScheme::TokyoNight => Palette {
                 bg: Color::from_rgb8(0x1a, 0x1b, 0x26),
@@ -354,6 +366,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xc0, 0xca, 0xf5),
                 text_dim: Color::from_rgb8(0x41, 0x48, 0x68), // bright black
                 symbol_accent: Color::from_rgb8(0xbb, 0x9a, 0xf7), // magenta
+                raster_accent: Color::from_rgb8(0xff, 0x9e, 0x64), // orange
             },
             ColorScheme::SolarizedDark => Palette {
                 bg: Color::from_rgb8(0x00, 0x2b, 0x36),
@@ -365,6 +378,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0x83, 0x94, 0x96),
                 text_dim: Color::from_rgb8(0x58, 0x6e, 0x75), // base01
                 symbol_accent: Color::from_rgb8(0xd3, 0x36, 0x82), // magenta
+                raster_accent: Color::from_rgb8(0xcb, 0x4b, 0x16), // orange
             },
             ColorScheme::Cobalt2 => Palette {
                 bg: Color::from_rgb8(0x12, 0x27, 0x38),
@@ -376,6 +390,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xff, 0xff, 0xff),
                 text_dim: Color::from_rgb8(0x7d, 0x88, 0x92), // muted blue-gray
                 symbol_accent: Color::from_rgb8(0xfb, 0x94, 0xff), // magenta
+                raster_accent: Color::from_rgb8(0xff, 0xc6, 0x00), // gold
             },
             ColorScheme::GruvboxDark => Palette {
                 bg: Color::from_rgb8(0x28, 0x28, 0x28),
@@ -387,6 +402,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xeb, 0xdb, 0xb2),
                 text_dim: Color::from_rgb8(0x92, 0x83, 0x74), // bright black / gray
                 symbol_accent: Color::from_rgb8(0xfb, 0x49, 0x34), // bright red
+                raster_accent: Color::from_rgb8(0xfe, 0x80, 0x19), // bright orange
             },
             ColorScheme::Gotham => Palette {
                 bg: Color::from_rgb8(0x0c, 0x10, 0x14),
@@ -398,6 +414,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0x99, 0xd1, 0xce),
                 text_dim: Color::from_rgb8(0x4e, 0x51, 0x66), // slate
                 symbol_accent: Color::from_rgb8(0xc2, 0x31, 0x27), // red
+                raster_accent: Color::from_rgb8(0xd9, 0x82, 0x2b), // orange
             },
             ColorScheme::Nordic => Palette {
                 bg: Color::from_rgb8(0x24, 0x29, 0x33),
@@ -409,6 +426,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xbb, 0xc3, 0xd4),
                 text_dim: Color::from_rgb8(0x3b, 0x42, 0x52), // Polar Night
                 symbol_accent: Color::from_rgb8(0xb4, 0x8e, 0xad), // magenta
+                raster_accent: Color::from_rgb8(0xd0, 0x87, 0x70), // Aurora orange
             },
             ColorScheme::C64 => Palette {
                 bg: Color::from_rgb8(0x40, 0x31, 0x8d),
@@ -423,6 +441,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xf7, 0xf7, 0xf7),
                 text_dim: Color::from_rgb8(0x78, 0x69, 0xc4),
                 symbol_accent: Color::from_rgb8(0x98, 0x4c, 0xa3), // purple
+                raster_accent: Color::from_rgb8(0xe0, 0xa6, 0x3a), // gold
             },
             ColorScheme::Batman => Palette {
                 bg: Color::from_rgb8(0x1b, 0x1d, 0x1e),
@@ -436,6 +455,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xc6, 0xc5, 0xbf),
                 text_dim: Color::from_rgb8(0x6f, 0x6f, 0x6f),
                 symbol_accent: Color::from_rgb8(0xe6, 0xdc, 0x44), // gold
+                raster_accent: Color::from_rgb8(0xd9, 0x79, 0x04), // orange
             },
             ColorScheme::AcidLime => Palette {
                 bg: Color::from_rgb8(0x08, 0x0c, 0x05),
@@ -447,6 +467,7 @@ impl ColorScheme {
                 text: Color::from_rgb8(0xd4, 0xef, 0xbc),
                 text_dim: Color::from_rgb8(0x4a, 0x6b, 0x36), // bright black
                 symbol_accent: Color::from_rgb8(0xff, 0x33, 0x44), // red
+                raster_accent: Color::from_rgb8(0xff, 0x9f, 0x1c), // orange
             },
             // The six plain recolors never reach here — see `Theme::for_scheme`.
             ColorScheme::BasicBlue
@@ -482,6 +503,7 @@ impl Default for Theme {
             text: Color::from_rgb8(0xd0, 0xd0, 0xd0),
             text_dim: Color::from_rgb8(0x8a, 0x8a, 0x8a),
             symbol_accent: Color::from_rgb8(0xa0, 0x6c, 0xf5),
+            raster_accent: Color::from_rgb8(0xff, 0x9f, 0x1c),
 
             tab_strip_h: 27.3,
             group_title_h: 20.0,

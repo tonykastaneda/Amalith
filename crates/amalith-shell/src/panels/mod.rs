@@ -249,6 +249,9 @@ pub struct Ctx<'a> {
     /// Path today; more effects land here later without changing how the
     /// menu itself works).
     pub appearance_fx_menu: bool,
+    /// Appearance panel: the footer "Bl ▾" blend-mode menu is open —
+    /// lists every `BlendMode` variant, applied to the selected row.
+    pub appearance_blend_menu: bool,
     /// Appearance panel: live buffer while a Stroke row's weight field is
     /// being typed — `(item index, buffer)`.
     pub appearance_width_edit: Option<(usize, &'a str)>,
@@ -567,6 +570,11 @@ pub enum Action {
     /// place (mirrors the context bar's own `BeginStrokeWeightEdit`, just
     /// targeting one specific stack item instead of the whole selection).
     BeginAppearanceWidthEdit(usize),
+    /// Footer "Bl ▾" — opens/closes the menu of `BlendMode` variants
+    /// available for the selected row, mirroring `AppearanceToggleFxMenu`.
+    AppearanceToggleBlendMenu,
+    /// The blend-mode menu's own entry being picked for the selected row.
+    AppearanceSetBlendMode(usize, amalith_core::BlendMode),
 }
 
 /// One row in a panel hamburger flyout. Panels return these from [`menu`];
