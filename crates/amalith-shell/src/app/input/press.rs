@@ -974,6 +974,20 @@ impl App {
                     return;
                 }
                 // Magic Wand: flood-fill the placed image under the cursor.
+                if matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill) {
+                    self.raster_brush_press();
+                    return;
+                }
+                // Clone Stamp: Option-click sets the source, a plain
+                // click paints from it.
+                if self.active_tool == Tool::RasterCloneStamp {
+                    self.raster_clone_stamp_press();
+                    return;
+                }
+                if matches!(self.active_tool, Tool::RasterMarquee | Tool::RasterEllipse | Tool::RasterLasso) {
+                    self.raster_selection_press();
+                    return;
+                }
                 if self.active_tool == Tool::MagicWand {
                     self.magic_wand_click(self.pointer);
                     return;
@@ -1671,6 +1685,15 @@ impl App {
                     return;
                 }
 
+                // Free Transform with a live pixel selection transforms
+                // just those pixels, not the whole object — checked ahead
+                // of the ordinary object-warp path below.
+                if self.active_tool == Tool::FreeTransform
+                    && self.doc.pixel_selection.is_some()
+                    && self.pixel_transform_press()
+                {
+                    return;
+                }
                 // Capture all Free Transform handles to support modifier
                 // changes between scale, shear and distortion during a drag.
                 if self.active_tool == Tool::FreeTransform

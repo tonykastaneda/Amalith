@@ -362,6 +362,7 @@ impl App {
                     self.panel_scroll_of(PanelId(PanelKind::Layers)),
                     &ids,
                     self.settings.layer_thumbnail_size,
+                    self.layer_kind_filter,
                 )
                 .map(|d| (d.parent, d.index, d.row, d.into));
                 self.request_main_redraw();
@@ -580,6 +581,21 @@ impl App {
                 let mut path = path.clone();
                 self.eraser_move(&mut path);
                 self.drag = Drag::EraserStroke { path };
+                self.request_main_redraw();
+            }
+            Drag::RasterSelection { object, tool, points } => {
+                let (object, tool, mut points) = (*object, *tool, points.clone());
+                self.raster_selection_move(object, tool, &mut points);
+                self.drag = Drag::RasterSelection { object, tool, points };
+            }
+            Drag::RasterBrush(_) => {
+                let dp = self.doc_point(self.pointer);
+                if let Drag::RasterBrush(stroke) = &mut self.drag { stroke.advance(dp); }
+                self.request_main_redraw();
+            }
+            Drag::PixelTransform(_) => {
+                let (dp, uniform, from_center) = (self.doc_point(self.pointer), self.shift_down, self.alt_down);
+                if let Drag::PixelTransform(lift) = &mut self.drag { lift.update(dp, uniform, from_center); }
                 self.request_main_redraw();
             }
             Drag::Rotate {
@@ -1094,7 +1110,8 @@ impl App {
                         &self.layer_query,
                         self.panel_scroll_of(PanelId(PanelKind::Layers)),
                         &ids,
-                    self.settings.layer_thumbnail_size,
+                        self.settings.layer_thumbnail_size,
+                        self.layer_kind_filter,
                     );
                     if let Some(d) = target {
                         if self
@@ -1288,7 +1305,11 @@ impl App {
                         | Tool::PathType
                         | Tool::VerticalAreaType
                         | Tool::VerticalPathType
-                        | Tool::MagicWand => return,
+                        | Tool::MagicWand
+                        | Tool::RasterMarquee
+                        | Tool::RasterEllipse
+                        | Tool::RasterLasso => return,
+                        Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
                         self.doc.selection = vec![id];
@@ -1605,6 +1626,18 @@ impl App {
             Drag::EraserStroke { mut path } => {
                 self.eraser_move(&mut path);
                 self.commit_eraser(path);
+            }
+            Drag::RasterSelection { object, tool, mut points } => {
+                self.raster_selection_move(object, tool, &mut points);
+            }
+            Drag::RasterBrush(mut stroke) => {
+                stroke.advance(self.doc_point(self.pointer));
+                self.commit_raster_brush(*stroke);
+            }
+            Drag::PixelTransform(mut lift) => {
+                let dp = self.doc_point(self.pointer);
+                lift.update(dp, self.shift_down, self.alt_down);
+                self.commit_pixel_transform(*lift);
             }
             Drag::Marquee { start } => {
                 let r_screen = Rect::from_points(start, self.pointer);

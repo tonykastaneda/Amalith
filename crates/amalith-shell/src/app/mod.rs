@@ -21,6 +21,11 @@ mod action;
 mod blend_dialog;
 mod command_palette;
 mod eraser_tool;
+mod raster_selection;
+mod raster_brush;
+mod brush_tip;
+mod paint_tiles;
+mod pixel_transform;
 mod export;
 mod free_transform;
 mod gradient;
@@ -153,6 +158,13 @@ struct WindowHost {
 enum Drag {
     #[default]
     None,
+    RasterBrush(Box<raster_brush::Stroke>),
+    PixelTransform(Box<pixel_transform::Lift>),
+    RasterSelection {
+        object: ObjectId,
+        tool: Tool,
+        points: Vec<Point>,
+    },
     /// Dragging a Master's own left/right edge to resize its width —
     /// docked or floating, both the same (⇐ `.master-resize`).
     MasterWidth {
@@ -914,8 +926,8 @@ struct PanelMenu {
     win: WindowId,
 }
 
-/// A Magic Wand selection: a set of closed contours traced from a
-/// flood-fill over one placed raster `Image` object's pixels, in that
+/// A pixel selection: closed contours from a wand, marquee, or lasso
+/// over one placed raster `Image` object's pixels, in that
 /// object's own local coordinate space (like any path) so it stays
 /// correctly positioned across pan/zoom/transform without re-running the
 /// flood fill every frame.
@@ -972,6 +984,16 @@ struct Doc {
 }
 
 impl Doc {
+    /// Use the same layer context as the toolbar; only fall back when
+    /// neither an object nor a layer is selected.
+    fn creation_layer(&self) -> Option<LayerId> {
+        let doc = self.editor.document();
+        self.selection.first()
+            .and_then(|&id| panels::layers::owning_layer(doc, id))
+            .or(self.selected_layer.filter(|&id| doc.layer(id).is_some()))
+            .or_else(|| doc.layers().last().map(|l| l.id))
+    }
+
     fn new(editor: Editor) -> Self {
         Self {
             id: ObjectId::new(),
@@ -1241,6 +1263,24 @@ struct App {
     /// regardless of zoom, like a real brush cursor) — `[`/`]` resize it
     /// while the tool is active. Not persisted yet.
     eraser_size: f64,
+    raster_brush_size: f64,
+    raster_eraser_size: f64,
+    raster_brush_hardness: f64,
+    raster_eraser_hardness: f64,
+    raster_clone_size: f64,
+    raster_clone_hardness: f64,
+    /// Clone Stamp's Option-clicked anchor: the source object and its own
+    /// pixel-space point. `None` until the first Option-click.
+    raster_clone_source: Option<(ObjectId, Point)>,
+    /// The locked source-minus-destination offset for the current/next
+    /// stroke — `None` until the first stroke after a source is set (or
+    /// after every stroke, when Aligned is off).
+    raster_clone_offset: Option<Vec2>,
+    /// Photoshop's own default: one offset persists across strokes until
+    /// a new source is set. Off resamples from the original source point
+    /// at the start of every new stroke instead.
+    raster_clone_aligned: bool,
+    raster_preview_asset: Option<amalith_core::AssetId>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -1315,6 +1355,10 @@ struct App {
     layer_search_focused: bool,
     /// Layers panel: the footer "+" button's Vector/Raster popup is open.
     layers_new_menu: bool,
+    /// Layers panel: the header blend-mode menu is open.
+    layers_blend_menu: bool,
+    /// Layers panel kind funnel — `None` shows every layer.
+    layer_kind_filter: Option<amalith_core::LayerKind>,
     /// Last resizability pushed to the main window — false while the Home
     /// screen (a fixed-size card) is up.
     main_resizable: bool,
@@ -1701,6 +1745,16 @@ impl App {
             pending_blend_dialog: None,
             shape_builder: None,
             eraser_size: 20.0,
+            raster_brush_size: 20.0,
+            raster_eraser_size: 20.0,
+            raster_brush_hardness: 1.0,
+            raster_eraser_hardness: 1.0,
+            raster_clone_size: 20.0,
+            raster_clone_hardness: 1.0,
+            raster_clone_source: None,
+            raster_clone_offset: None,
+            raster_clone_aligned: true,
+            raster_preview_asset: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -1722,6 +1776,8 @@ impl App {
             layer_query: String::new(),
             layer_search_focused: false,
             layers_new_menu: false,
+            layers_blend_menu: false,
+            layer_kind_filter: None,
             main_resizable: true,
             image_trace: image_trace::TraceState::load(),
             symbol_thumbnails: HashMap::new(),
@@ -2027,6 +2083,7 @@ impl App {
                 &self.layer_query,
                 self.document_open(),
                 self.settings.layer_thumbnail_size,
+                self.layer_kind_filter,
             )
         } else if id == PanelId(PanelKind::Links) {
             panels::links_content_height(self.doc.editor.document())
@@ -6245,6 +6302,10 @@ impl App {
     }
 
     fn set_tool(&mut self, t: Tool) {
+        if matches!(self.drag, Drag::RasterBrush(_)) { self.drag = Drag::None; }
+        if matches!(self.drag, Drag::RasterSelection { .. }) {
+            self.drag = Drag::None;
+        }
         // Leaving the Type tool (either orientation) commits whatever's
         // being typed.
         if !matches!(t, Tool::Text | Tool::VerticalText) && self.text_edit.is_some() {
@@ -7843,8 +7904,8 @@ impl App {
     /// The layer new shapes should land in — the topmost, creating one if
     /// the document has none.
     fn ensure_layer(&mut self) -> LayerId {
-        if let Some(l) = self.doc.editor.document().layers().last() {
-            return l.id;
+        if let Some(id) = self.doc.creation_layer() {
+            return id;
         }
         match self.doc.editor.execute(Command::CreateLayer {
             name: "Layer 1".into(),
@@ -8033,6 +8094,9 @@ impl App {
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
             layers_new_menu: self.layers_new_menu,
+            layers_blend_menu: self.layers_blend_menu,
+            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
+            layer_kind_filter: self.layer_kind_filter,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop: None,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -8122,6 +8186,9 @@ impl App {
             layer_query: &self.layer_query,
             layer_search_focused: self.layer_search_focused,
             layers_new_menu: self.layers_new_menu,
+            layers_blend_menu: self.layers_blend_menu,
+            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
+            layer_kind_filter: self.layer_kind_filter,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -10061,6 +10128,47 @@ mod shift_swapped_type_tool_tests {
     fn a_non_type_tool_never_swaps() {
         assert_eq!(shift_swapped_type_tool(Tool::Select), None);
         assert_eq!(shift_swapped_type_tool(Tool::Pen), None);
+    }
+}
+
+#[cfg(test)]
+mod shared_layer_tool_tests {
+    use super::*;
+
+    #[test]
+    fn shapes_and_text_remain_editable_on_the_active_raster_layer() {
+        let mut document = Document::new("Mixed artwork");
+        let raster = LayerId::new();
+        let vector = LayerId::new();
+        let mut layer = amalith_core::Layer::new(raster, "Pixels and type");
+        layer.kind = amalith_core::LayerKind::Raster;
+        document.insert_layer(layer, 0);
+        document.insert_layer(amalith_core::Layer::new(vector, "Other artwork"), 1);
+        let mut doc = Doc::new(Editor::new(document));
+        doc.selected_layer = Some(raster);
+        assert_eq!(doc.creation_layer(), Some(raster));
+        let CommandOutcome::Object(shape) = doc.editor.execute(Command::CreateRect {
+            layer: doc.creation_layer().unwrap(), rect: amalith_core::Rect::new(0., 0., 100., 80.), name: None,
+        }).unwrap() else { panic!() };
+        doc.selection = vec![shape];
+        doc.selected_layer = Some(vector);
+        assert_eq!(doc.creation_layer(), Some(raster));
+        let CommandOutcome::Object(text) = doc.editor.execute(Command::CreateText {
+            layer: doc.creation_layer().unwrap(), data: amalith_core::TextData { content: "Editable".into(), ..Default::default() },
+            transform: amalith_core::Affine::IDENTITY, name: None,
+        }).unwrap() else { panic!() };
+        assert!(matches!(doc.editor.document().object(shape).unwrap().kind, amalith_core::ObjectKind::Path(_)));
+        assert!(matches!(doc.editor.document().object(text).unwrap().kind, amalith_core::ObjectKind::Text(_)));
+        assert_eq!(panels::layers::owning_layer(doc.editor.document(), text), Some(raster));
+        assert!(doc.editor.document().assets().is_empty());
+        doc.editor.undo().unwrap();
+        assert!(doc.editor.document().object(text).is_none());
+        doc.editor.redo().unwrap();
+        assert!(matches!(doc.editor.document().object(text).unwrap().kind, amalith_core::ObjectKind::Text(_)));
+        doc.selection.clear();
+        assert_eq!(doc.creation_layer(), Some(vector));
+        doc.selected_layer = Some(LayerId::new());
+        assert_eq!(doc.creation_layer(), Some(vector));
     }
 }
 

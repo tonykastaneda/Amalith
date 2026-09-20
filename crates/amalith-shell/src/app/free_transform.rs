@@ -291,7 +291,7 @@ impl App {
     }
 
     pub(in crate::app) fn cancel_free_transform_drag(&mut self) -> bool {
-        if matches!(self.drag, Drag::Warp { .. }) || (self.active_tool == Tool::FreeTransform && matches!(self.drag, Drag::Rotate { .. })) {
+        if matches!(self.drag, Drag::Warp { .. } | Drag::PixelTransform(_)) || (self.active_tool == Tool::FreeTransform && matches!(self.drag, Drag::Rotate { .. })) {
             self.drag = Drag::None;
             self.request_main_redraw();
             true

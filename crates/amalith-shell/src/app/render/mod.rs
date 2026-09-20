@@ -32,6 +32,8 @@ impl App {
         self.heal_panel_content_heights();
         panels::tools::set_layer_kind(self.current_layer_kind());
         let (mux_back, mux_front) = if matches!(role, Role::Main) {
+            self.prepare_raster_preview();
+            self.prepare_pixel_transform_preview();
             self.warm_images();
             self.warm_symbol_thumbnails();
             self.mux_scenes()
@@ -741,6 +743,8 @@ impl App {
                 &self.layer_query,
                 self.layer_search_focused,
                 self.layers_new_menu,
+                self.layers_blend_menu,
+                self.layer_kind_filter,
                 self.color_mode,
                 self.cmyk_profile.as_ref(),
                 &self.recent_colors,
@@ -785,7 +789,10 @@ impl App {
                 &self.symbol_thumbnails,
                 &self.symbol_tiles,
                 &self.image_trace.panel,
-                self.recolor_dialog.as_ref().filter(|d| d.preview && d.document == self.doc.id && d.revision == self.doc.editor.revision()).map(|d| &d.rendered).or(self.image_trace.canvas.as_ref()),
+                (match &self.drag {
+                    Drag::RasterBrush(stroke) => stroke.preview_document(self.doc.editor.revision()),
+                    _ => None,
+                }).or_else(|| self.recolor_dialog.as_ref().filter(|d| d.preview && d.document == self.doc.id && d.revision == self.doc.editor.revision()).map(|d| &d.rendered)).or(self.image_trace.canvas.as_ref()),
                 symbols_drop_hover,
                 terminal_pane_arg,
                 &mux_back,
@@ -860,6 +867,9 @@ impl App {
                             layer_query: &self.layer_query,
                             layer_search_focused: self.layer_search_focused,
                             layers_new_menu: self.layers_new_menu,
+                            layers_blend_menu: self.layers_blend_menu,
+                            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
+                            layer_kind_filter: self.layer_kind_filter,
                             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                             layer_drop: None,
                             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -955,6 +965,9 @@ impl App {
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
                                 layers_new_menu: self.layers_new_menu,
+                            layers_blend_menu: self.layers_blend_menu,
+                            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
+                            layer_kind_filter: self.layer_kind_filter,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: if pid == PanelId(PanelKind::Layers) {
                                     self.layer_drop.map(|(_, _, row, into)| (row, into))
@@ -1063,6 +1076,9 @@ impl App {
                                 layer_query: &self.layer_query,
                                 layer_search_focused: self.layer_search_focused,
                                 layers_new_menu: self.layers_new_menu,
+                            layers_blend_menu: self.layers_blend_menu,
+                            opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
+                            layer_kind_filter: self.layer_kind_filter,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: None,
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -1185,6 +1201,8 @@ impl App {
             self.paint_join_preview();
             self.paint_shape_builder_preview();
             self.paint_eraser_preview();
+            self.paint_raster_brush_preview();
+            self.paint_pixel_transform_preview();
             self.paint_offset_preview();
             self.paint_warp_preview();
             self.paint_free_transform_flyout();

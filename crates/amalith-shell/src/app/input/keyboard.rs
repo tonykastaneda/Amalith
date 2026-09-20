@@ -517,18 +517,74 @@ impl App {
             // Eraser brush size, like most brush tools' own convention —
             // guarded off `cmd_down` so it never shadows ⌘[ / ⌘] z-order.
             PhysicalKey::Code(KeyCode::BracketRight)
-                if pressed && !self.cmd_down && self.active_tool == Tool::Eraser =>
+                if pressed && self.shift_down && !self.cmd_down && matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
             {
-                self.eraser_size = (self.eraser_size + eraser_tool::ERASER_STEP).min(eraser_tool::ERASER_MAX_SIZE);
+                let hardness = match self.active_tool {
+                    Tool::RasterEraser => &mut self.raster_eraser_hardness,
+                    Tool::RasterCloneStamp => &mut self.raster_clone_hardness,
+                    _ => &mut self.raster_brush_hardness,
+                };
+                *hardness = (*hardness + 0.1).min(1.0);
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::BracketLeft)
-                if pressed && !self.cmd_down && self.active_tool == Tool::Eraser =>
+                if pressed && self.shift_down && !self.cmd_down && matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
             {
-                self.eraser_size = (self.eraser_size - eraser_tool::ERASER_STEP).max(eraser_tool::ERASER_MIN_SIZE);
+                let hardness = match self.active_tool {
+                    Tool::RasterEraser => &mut self.raster_eraser_hardness,
+                    Tool::RasterCloneStamp => &mut self.raster_clone_hardness,
+                    _ => &mut self.raster_brush_hardness,
+                };
+                *hardness = (*hardness - 0.1).max(0.0);
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::BracketRight)
+                if pressed && !self.cmd_down && matches!(self.active_tool, Tool::Eraser | Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
+            {
+                if self.active_tool == Tool::RasterEraser {
+                    self.raster_eraser_size = (self.raster_eraser_size + 2.0).min(500.0);
+                } else if self.active_tool == Tool::RasterBrush {
+                    self.raster_brush_size = (self.raster_brush_size + 2.0).min(500.0);
+                } else if self.active_tool == Tool::RasterCloneStamp {
+                    self.raster_clone_size = (self.raster_clone_size + 2.0).min(500.0);
+                } else {
+                    self.eraser_size = (self.eraser_size + eraser_tool::ERASER_STEP).min(eraser_tool::ERASER_MAX_SIZE);
+                }
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::BracketLeft)
+                if pressed && !self.cmd_down && matches!(self.active_tool, Tool::Eraser | Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
+            {
+                if self.active_tool == Tool::RasterEraser {
+                    self.raster_eraser_size = (self.raster_eraser_size - 2.0).max(1.0);
+                } else if self.active_tool == Tool::RasterBrush {
+                    self.raster_brush_size = (self.raster_brush_size - 2.0).max(1.0);
+                } else if self.active_tool == Tool::RasterCloneStamp {
+                    self.raster_clone_size = (self.raster_clone_size - 2.0).max(1.0);
+                } else {
+                    self.eraser_size = (self.eraser_size - eraser_tool::ERASER_STEP).max(eraser_tool::ERASER_MIN_SIZE);
+                }
+                self.request_main_redraw();
+            }
+            // Clone Stamp's Aligned toggle — Photoshop's own default is on
+            // (one locked source/destination offset across strokes);
+            // turning it off resamples from the original source point at
+            // the start of every new stroke instead. A new source point
+            // (Option-click) or a mode flip both invalidate any offset
+            // already locked in from the previous stroke.
+            PhysicalKey::Code(KeyCode::KeyA)
+                if pressed && self.shift_down && !self.cmd_down && self.active_tool == Tool::RasterCloneStamp =>
+            {
+                self.raster_clone_aligned = !self.raster_clone_aligned;
+                self.raster_clone_offset = None;
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::KeyZ) if pressed && self.cmd_down => {
+                if matches!(self.drag, Drag::RasterBrush(_)) {
+                    self.drag = Drag::None;
+                    self.request_main_redraw();
+                    return;
+                }
                 let redo = self.shift_down;
                 if redo && self.active_tool == Tool::Pen && !self.pen_redo.is_empty() {
                     if let Some(p) = self.pen_redo.pop() {
@@ -641,6 +697,11 @@ impl App {
                     // ⌘⇧D — View ▸ Show Transparency Grid; plain ⌘D is
                     // Transform Again, below.
                     KeyCode::KeyD if self.shift_down => self.toggle_transparency_grid(),
+                    KeyCode::KeyD if self.current_layer_kind() == Some(amalith_core::LayerKind::Raster) => {
+                        self.doc.pixel_selection = None;
+                        if matches!(self.drag, Drag::RasterSelection { .. }) { self.drag = Drag::None; }
+                        self.request_main_redraw();
+                    }
                     // Transform Again — Illustrator's real Cmd+D, not
                     // Duplicate (that's Cmd+C, Cmd+F / Cmd+B here, same as
                     // Illustrator itself, which gives Duplicate no default
@@ -786,11 +847,21 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
+                        if matches!(self.drag, Drag::RasterBrush(_)) {
+                            self.drag = Drag::None;
+                            self.request_main_redraw();
+                            return;
+                        }
                         // A live Magic Wand selection is dismissed by Escape
                         // regardless of which of the branches below also
                         // fires — it's an independent, lighter-weight
                         // selection than the object selection they manage.
                         self.doc.pixel_selection = None;
+                        if matches!(self.drag, Drag::RasterSelection { .. }) {
+                            self.drag = Drag::None;
+                            self.request_main_redraw();
+                            return;
+                        }
                         if self.cancel_free_transform_drag() {
                             // Keep the selection and isolation context intact.
                         } else if !self.isolation.is_empty() {
@@ -832,11 +903,14 @@ impl App {
                             cmd: false,
                             alt: false,
                         };
-                        if let Some(i) = self
+                        let raster = self.current_layer_kind() == Some(amalith_core::LayerKind::Raster);
+                        if let Some((i, _)) = self
                             .settings
                             .tool_keys
                             .iter()
-                            .position(|k| *k == Some(chord))
+                            .enumerate()
+                            .filter(|(i, k)| **k == Some(chord) && (raster || !Tool::ALL[*i].is_raster_tool()))
+                            .min_by_key(|(i, _)| !Tool::ALL[*i].is_raster_tool())
                         {
                             self.set_tool(Tool::ALL[i]);
                         } else if let Some(i) = self
