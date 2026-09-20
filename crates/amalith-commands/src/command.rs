@@ -15,6 +15,8 @@ use crate::align::{AlignKind, AlignTo};
 /// A single, undoable document mutation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
+    /// Copy-on-write pixel edit: only this image switches to the new asset.
+    ReplaceImageAsset { object: ObjectId, asset: amalith_core::Asset },
     /// Replace an image in-place with a group of traced, image-pixel paths.
     /// Preserves the original ID, transform, appearance and stacking position;
     /// undo restores the exact linked/embedded image in one step.

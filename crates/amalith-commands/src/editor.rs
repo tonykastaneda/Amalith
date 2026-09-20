@@ -1968,6 +1968,14 @@ impl Editor {
                 .map(|id| Edit::SetLocked { id, locked })
                 .collect(),
             Command::SetAssetSource { id, source } => vec![Edit::SetAssetSource { id, source }],
+            Command::ReplaceImageAsset { object, mut asset } => {
+                if !matches!(self.document.object(object).map(|o| &o.kind), Some(ObjectKind::Image(_))) {
+                    return Err(CommandError::NotAnImage(object));
+                }
+                asset.id = AssetId::new();
+                let id = asset.id;
+                vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageAsset { object, asset: id }]
+            }
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ShapeBuilder {
                 objects,

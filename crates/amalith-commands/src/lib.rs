@@ -901,6 +901,34 @@ mod tests {
     }
 
     #[test]
+    fn brush_asset_replacement_is_copy_on_write_and_one_undo_step() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
+        let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
+            layer, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            name: None, embedded: true, modified: None, size: None,
+        }).unwrap() else { panic!() };
+        let asset_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {
+            ObjectKind::Image(image) => image.asset, _ => panic!(),
+        };
+        let original = asset_of(&editor, object);
+        let copy = editor.duplicate_objects(&[object], Vec2::new(30.,0.)).unwrap()[0];
+        assert_eq!(asset_of(&editor, copy), original);
+        editor.execute(Command::ReplaceImageAsset {
+            object, asset: amalith_core::Asset::embedded(original, "Paint", AssetKind::Image, "images/stroke.png"),
+        }).unwrap();
+        let painted = asset_of(&editor, object);
+        assert_ne!(painted, original);
+        assert_eq!(asset_of(&editor, copy), original);
+        editor.undo().unwrap();
+        assert_eq!(asset_of(&editor, object), original);
+        assert!(editor.document().asset(painted).is_none());
+        editor.redo().unwrap();
+        assert_eq!(asset_of(&editor, object), painted);
+        assert_eq!(asset_of(&editor, copy), original);
+    }
+
+    #[test]
     fn set_transform_undo_redo() {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer_id) = editor

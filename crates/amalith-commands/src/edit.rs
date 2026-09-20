@@ -131,6 +131,7 @@ pub(crate) enum Edit {
         asset: Asset,
         index: usize,
     },
+    SetImageAsset { object: ObjectId, asset: AssetId },
     RemoveAsset {
         id: AssetId,
     },
@@ -425,6 +426,12 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let id = asset.id;
             doc.insert_asset(asset, index);
             Ok((Edit::RemoveAsset { id }, None))
+        }
+        Edit::SetImageAsset { object, asset } => {
+            let obj = doc.object_mut(object).ok_or(CommandError::ObjectNotFound(object))?;
+            let ObjectKind::Image(image) = &mut obj.kind else { return Err(CommandError::NotAnImage(object)); };
+            let old = std::mem::replace(&mut image.asset, asset);
+            Ok((Edit::SetImageAsset { object, asset: old }, None))
         }
         Edit::RemoveAsset { id } => {
             let (asset, index) = doc
