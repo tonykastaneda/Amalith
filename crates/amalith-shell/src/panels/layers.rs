@@ -1,29 +1,35 @@
-//! Layers panel: the layer / object tree with disclosure triangles, eye
-//! and lock toggles, inline rename, and a footer button strip.
+//! Layers panel: blend/opacity/lock header, search + kind funnel, the
+//! layer / object tree, and a Photoshop-style footer button strip.
 
 use crate::metrics::px as ui_px;
 
 use std::collections::HashSet;
 
-use amalith_core::{Document, LayerId, LayerKind, ObjectId, ObjectKind, ObjectParent};
-use vello::kurbo::{BezPath, Point, Rect, Stroke};
+use amalith_core::{BlendMode, Document, LayerId, LayerKind, ObjectId, ObjectKind, ObjectParent};
+use vello::kurbo::{BezPath, Circle, Line, Point, Rect, Stroke};
 use vello::peniko::{Color, Fill};
 use vello::Scene;
 
 use crate::text::TextContext;
+use crate::theme::Theme;
 
 use super::{
-    draw_eye, draw_name_field, footer_color, panel_footer_rects, paint_panel_footer, Action, Ctx, MenuEntry, RenameId,
+    draw_eye, draw_footer_plus, draw_footer_trash, draw_name_field, footer_color, Action, Ctx, MenuEntry, RenameId,
     metric_footer_h, ID, metric_pad,
 };
 
-/// Per-depth indent, and the width of each icon column (triangle, eye,
-/// lock) in a Layers row.
+/// Per-depth indent, and the width of each icon column (triangle, kind)
+/// in a Layers row.
 fn metric_indent() -> f64 { crate::metrics::with(|m| m.panels_layers_indent) }
 fn metric_col() -> f64 { crate::metrics::with(|m| m.panels_layers_col) }
 
 /// Height reserved at the top of the panel body for the search field.
 pub(super) fn metric_search_h() -> f64 { crate::metrics::with(|m| m.panels_layers_search_h) }
+
+/// Blend / opacity / lock toolbar sitting above the search row.
+pub(super) fn metric_toolbar_h() -> f64 { crate::metrics::with(|m| m.panels_layers_toolbar_h) }
+
+fn chrome_h() -> f64 { metric_toolbar_h() + metric_search_h() }
 
 /// The layer / object rows to show, after the search filter. A blank
 /// query shows the whole tree; otherwise only rows whose name contains
@@ -34,15 +40,31 @@ fn visible_rows(ctx: &Ctx) -> Vec<LayerRow> {
     if !ctx.document_open {
         return Vec::new();
     }
-    rows_filtered(ctx.doc, ctx.expanded, ctx.collapsed_layers, ctx.layer_query)
+    rows_filtered(ctx.doc, ctx.expanded, ctx.collapsed_layers, ctx.layer_query, ctx.layer_kind_filter)
 }
 
 fn rows_filtered(
     doc: &Document,
     expanded: &HashSet<ObjectId>, collapsed_layers: &HashSet<LayerId>,
     query: &str,
+    kind_filter: Option<LayerKind>,
 ) -> Vec<LayerRow> {
     let rows = layer_rows(doc, expanded, collapsed_layers);
+    let rows = match kind_filter {
+        None => rows,
+        Some(kind) => {
+            let mut keep = true;
+            rows.into_iter()
+                .filter(|r| match r.kind {
+                    RowKind::Layer(_) => {
+                        keep = r.layer_kind == kind;
+                        keep
+                    }
+                    RowKind::Object { .. } => keep,
+                })
+                .collect()
+        }
+    };
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return rows;
@@ -52,17 +74,288 @@ fn rows_filtered(
         .collect()
 }
 
-/// The search field box, inset from the panel edges.
+fn toolbar_rect(body: Rect) -> Rect {
+    Rect::new(body.x0, body.y0, body.x1, body.y0 + metric_toolbar_h())
+}
+
+fn search_row_rect(body: Rect) -> Rect {
+    Rect::new(body.x0, body.y0 + metric_toolbar_h(), body.x1, body.y0 + chrome_h())
+}
+
+/// The search field box, inset from the search row, leaving room for the
+/// kind-funnel button on the right.
 fn search_box(body: Rect) -> Rect {
-    Rect::new(body.x0 + metric_pad(), body.y0 + ui_px(7.0), body.x1 - metric_pad(), body.y0 + metric_search_h() - ui_px(7.0))
+    let row = search_row_rect(body);
+    let filter = filter_button_rect(body);
+    Rect::new(
+        row.x0 + metric_pad(),
+        row.y0 + ui_px(6.0),
+        filter.x0 - ui_px(6.0),
+        row.y1 - ui_px(6.0),
+    )
+}
+
+fn filter_button_rect(body: Rect) -> Rect {
+    let row = search_row_rect(body);
+    let sz = ui_px(20.0);
+    Rect::from_center_size(Point::new(row.x1 - metric_pad() - sz * 0.5, row.center().y), (sz, sz))
+}
+
+struct Toolbar {
+    blend: Rect,
+    opacity: Rect,
+    lock_transp: Rect,
+    lock_paint: Rect,
+    lock_pos: Rect,
+    lock_all: Rect,
+}
+
+fn toolbar_layout(body: Rect) -> Toolbar {
+    let bar = toolbar_rect(body);
+    let pad = metric_pad();
+    let y0 = bar.y0 + ui_px(5.0);
+    let y1 = bar.y1 - ui_px(5.0);
+    let h = (y1 - y0).max(ui_px(18.0));
+    let lock_gap = ui_px(2.0);
+    let lock_cluster = 4.0 * h + 3.0 * lock_gap;
+    let lock_x1 = bar.x1 - pad;
+    let lock_x0 = lock_x1 - lock_cluster;
+    let lock_at = |i: usize| {
+        let x = lock_x0 + i as f64 * (h + lock_gap);
+        Rect::new(x, y0, x + h, y1)
+    };
+    let op_w = ui_px(52.0);
+    let gap = ui_px(8.0);
+    let op_x1 = (lock_x0 - gap).max(bar.x0 + pad + ui_px(120.0));
+    let op_x0 = op_x1 - op_w;
+    let blend_x1 = (op_x0 - gap).max(bar.x0 + pad + ui_px(72.0));
+    Toolbar {
+        blend: Rect::new(bar.x0 + pad, y0, blend_x1, y1),
+        opacity: Rect::new(op_x0, y0, op_x1, y1),
+        lock_transp: lock_at(0),
+        lock_paint: lock_at(1),
+        lock_pos: lock_at(2),
+        lock_all: lock_at(3),
+    }
+}
+
+/// Whether `p` sits on the header opacity field — used by the shell to
+/// keep a live opacity edit focused while the pointer stays on it.
+pub(super) fn opacity_field_at(body: Rect, p: Point) -> bool {
+    toolbar_layout(body).opacity.contains(p)
+}
+
+fn draw_chrome(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
+    let th = ctx.theme;
+    let chrome = Rect::new(body.x0, body.y0, body.x1, body.y0 + chrome_h());
+    scene.fill(Fill::NonZero, ID, th.strip_bg, None, &chrome);
+    let bar = toolbar_rect(body);
+    scene.fill(Fill::NonZero, ID, th.border.with_alpha(0.55), None, &Rect::new(bar.x0, bar.y1 - 0.5, bar.x1, bar.y1));
+    scene.fill(Fill::NonZero, ID, th.border.with_alpha(0.7), None, &Rect::new(chrome.x0, chrome.y1 - 0.5, chrome.x1, chrome.y1));
+    draw_toolbar(scene, text, ctx, body);
+    draw_search(scene, text, ctx, body);
+}
+
+fn draw_toolbar(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
+    let th = ctx.theme;
+    let live = ctx.document_open;
+    let has_obj = live && !ctx.selection.is_empty();
+    let t = toolbar_layout(body);
+    let pointer = ctx.pointer;
+
+    // A raster `Image` object has no Fill/Stroke appearance items to hold
+    // a blend mode at all — dimmed there, same as a plain vector object
+    // with no selection, rather than looking clickable and silently
+    // no-op'ing (`App::set_selection_blend_mode` already skips items-less
+    // objects; this just keeps the field honest about it).
+    let has_blend = has_obj && ctx.representative.as_ref().is_some_and(|a| !a.items.is_empty());
+    let blend_label = if !has_blend {
+        "Normal"
+    } else {
+        selection_blend_label(ctx)
+    };
+    draw_header_field(scene, text, th, t.blend, blend_label, has_blend, t.blend.contains(pointer) && has_blend, true);
+
+    let op_shown = match ctx.opacity_edit {
+        Some(buf) if has_obj => format!("{buf}%"),
+        _ if has_obj => {
+            let op = ctx.representative.as_ref().map(|a| a.opacity).unwrap_or(1.0);
+            format!("{:.0}%", op * 100.0)
+        }
+        _ => "100%".into(),
+    };
+    draw_header_field(
+        scene,
+        text,
+        th,
+        t.opacity,
+        &op_shown,
+        has_obj,
+        t.opacity.contains(pointer) && has_obj,
+        true,
+    );
+    if has_obj && ctx.opacity_edit.is_some() {
+        let after = text.measure(&op_shown, 11.0);
+        let cx = t.opacity.x0 + ui_px(8.0) + after + 1.0;
+        scene.fill(
+            Fill::NonZero,
+            ID,
+            th.text,
+            None,
+            &Rect::new(cx, t.opacity.y0 + ui_px(4.0), cx + 1.3, t.opacity.y1 - ui_px(4.0)),
+        );
+    }
+
+    let lock_on = header_lock_engaged(ctx);
+    let lock_live = live && (has_obj || ctx.selected_layer.is_some());
+    draw_lock_glyph(scene, t.lock_transp, th, false, t.lock_transp.contains(pointer), LockGlyph::Transparency);
+    draw_lock_glyph(scene, t.lock_paint, th, false, t.lock_paint.contains(pointer), LockGlyph::Paint);
+    draw_lock_glyph(scene, t.lock_pos, th, false, t.lock_pos.contains(pointer), LockGlyph::Position);
+    draw_lock_glyph(scene, t.lock_all, th, lock_live && lock_on, t.lock_all.contains(pointer) && lock_live, LockGlyph::All);
+}
+
+fn selection_blend_label(ctx: &Ctx) -> &'static str {
+    let Some(app) = ctx.representative.as_ref() else { return "Normal" };
+    let Some(item) = app.items.last() else { return "Normal" };
+    blend_label(item.blend_mode())
+}
+
+fn header_lock_engaged(ctx: &Ctx) -> bool {
+    if let Some(&id) = ctx.selection.first() {
+        return ctx.doc.object(id).is_some_and(|o| o.locked);
+    }
+    ctx.selected_layer.and_then(|id| ctx.doc.layer(id)).is_some_and(|l| l.locked)
+}
+
+fn draw_header_field(
+    scene: &mut Scene,
+    text: &mut TextContext,
+    th: &Theme,
+    r: Rect,
+    label: &str,
+    enabled: bool,
+    hot: bool,
+    chevron: bool,
+) {
+    let round = r.to_rounded_rect(ui_px(4.0));
+    let fill = if hot { th.bg } else { th.panel_bg };
+    scene.fill(Fill::NonZero, ID, fill, None, &round);
+    let border = if enabled { th.border } else { th.border.with_alpha(0.45) };
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &round);
+    let ink = if enabled { th.text } else { th.border };
+    let tx = r.x0 + ui_px(8.0);
+    let text_right = if chevron { r.x1 - ui_px(16.0) } else { r.x1 - ui_px(4.0) };
+    scene.push_clip_layer(Fill::NonZero, ID, &Rect::new(r.x0, r.y0, text_right.max(r.x0 + 1.0), r.y1));
+    text.draw(scene, label, 11.0, ink, tx, r.center().y + ui_px(3.5));
+    scene.pop_layer();
+    if chevron {
+        let cx = r.x1 - ui_px(10.0);
+        let cy = r.center().y;
+        let mut p = BezPath::new();
+        p.move_to((cx - ui_px(3.5), cy - ui_px(1.2)));
+        p.line_to((cx, cy + ui_px(2.2)));
+        p.line_to((cx + ui_px(3.5), cy - ui_px(1.2)));
+        scene.stroke(&Stroke::new(ui_px(1.2)), ID, ink.with_alpha(0.8), None, &p);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LockGlyph {
+    Transparency,
+    Paint,
+    Position,
+    All,
+}
+
+fn draw_lock_glyph(scene: &mut Scene, r: Rect, th: &Theme, on: bool, hot: bool, kind: LockGlyph) {
+    if hot || on {
+        let fill = if on { th.accent.with_alpha(0.18) } else { th.text.with_alpha(0.08) };
+        scene.fill(Fill::NonZero, ID, fill, None, &r.to_rounded_rect(ui_px(3.0)));
+    }
+    let enabled = matches!(kind, LockGlyph::All);
+    let color = if !enabled {
+        th.border
+    } else if on {
+        th.text
+    } else if hot {
+        th.text_dim
+    } else {
+        th.border
+    };
+    let c = r.center();
+    match kind {
+        LockGlyph::Transparency => {
+            let s = ui_px(3.2);
+            for (i, (dx, dy)) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)].into_iter().enumerate() {
+                if i % 2 == 0 {
+                    scene.fill(
+                        Fill::NonZero,
+                        ID,
+                        color,
+                        None,
+                        &Rect::from_center_size((c.x + dx * s, c.y + dy * s), (s, s)),
+                    );
+                } else {
+                    scene.stroke(
+                        &Stroke::new(ui_px(0.9)),
+                        ID,
+                        color,
+                        None,
+                        &Rect::from_center_size((c.x + dx * s, c.y + dy * s), (s, s)),
+                    );
+                }
+            }
+        }
+        LockGlyph::Paint => {
+            let mut p = BezPath::new();
+            p.move_to((c.x + ui_px(2.5), c.y - ui_px(4.8)));
+            p.line_to((c.x + ui_px(4.2), c.y - ui_px(3.1)));
+            p.line_to((c.x - ui_px(1.6), c.y + ui_px(2.7)));
+            p.line_to((c.x - ui_px(3.3), c.y + ui_px(1.0)));
+            p.close_path();
+            scene.stroke(&Stroke::new(ui_px(1.15)), ID, color, None, &p);
+            scene.stroke(
+                &Stroke::new(ui_px(1.15)),
+                ID,
+                color,
+                None,
+                &Line::new((c.x - ui_px(3.6), c.y + ui_px(3.4)), (c.x - ui_px(1.2), c.y + ui_px(4.6))),
+            );
+        }
+        LockGlyph::Position => {
+            let arm = ui_px(4.6);
+            let head = ui_px(2.2);
+            scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &Line::new((c.x - arm, c.y), (c.x + arm, c.y)));
+            scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &Line::new((c.x, c.y - arm), (c.x, c.y + arm)));
+            for (dx, dy, hx, hy) in [
+                (arm, 0.0, -head, -head),
+                (arm, 0.0, -head, head),
+                (-arm, 0.0, head, -head),
+                (-arm, 0.0, head, head),
+                (0.0, arm, -head, -head),
+                (0.0, arm, head, -head),
+                (0.0, -arm, -head, head),
+                (0.0, -arm, head, head),
+            ] {
+                scene.stroke(
+                    &Stroke::new(ui_px(1.1)),
+                    ID,
+                    color,
+                    None,
+                    &Line::new((c.x + dx, c.y + dy), (c.x + dx + hx, c.y + dy + hy)),
+                );
+            }
+        }
+        LockGlyph::All => draw_lock(scene, c.x, c.y, color),
+    }
 }
 
 fn draw_search(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
     let th = ctx.theme;
     let box_ = search_box(body);
     let live = ctx.document_open;
-    let round = box_.to_rounded_rect(ui_px(5.0));
-    scene.fill(Fill::NonZero, ID, th.strip_bg, None, &round);
+    let round = box_.to_rounded_rect(ui_px(6.0));
+    scene.fill(Fill::NonZero, ID, th.bg, None, &round);
     let border = if !live {
         th.border.with_alpha(0.45)
     } else if ctx.layer_search_focused {
@@ -74,20 +367,25 @@ fn draw_search(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect)
 
     let ink = if live { th.text_dim } else { th.border };
     let cy = box_.y0 + box_.height() * 0.5;
-    let gx = box_.x0 + ui_px(12.0);
-    let ring = vello::kurbo::Circle::new((gx, cy - 0.5), ui_px(4.0));
+    let gx = box_.x0 + ui_px(11.0);
+    let ring = Circle::new((gx, cy - 0.5), ui_px(4.0));
     scene.stroke(&Stroke::new(ui_px(1.4)), ID, ink, None, &ring);
     let mut handle = BezPath::new();
     handle.move_to((gx + ui_px(3.0), cy + ui_px(2.5)));
     handle.line_to((gx + ui_px(6.5), cy + ui_px(6.0)));
     scene.stroke(&Stroke::new(ui_px(1.4)), ID, ink, None, &handle);
 
-    let tx = box_.x0 + ui_px(24.0);
+    let tx = box_.x0 + ui_px(22.0);
     let baseline = cy + ui_px(4.0);
+    let placeholder = match ctx.layer_kind_filter {
+        None => "Search All",
+        Some(LayerKind::Vector) => "Search Vector",
+        Some(LayerKind::Raster) => "Search Raster",
+    };
     let (label, color): (&str, Color) = if !live {
-        ("Search layers", th.border)
+        (placeholder, th.border)
     } else if ctx.layer_query.is_empty() {
-        ("Search layers", th.text_dim)
+        (placeholder, th.text_dim)
     } else {
         (ctx.layer_query, th.text)
     };
@@ -108,6 +406,36 @@ fn draw_search(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect)
             &Rect::new(cx, box_.y0 + ui_px(4.0), cx + 1.4, box_.y1 - ui_px(4.0)),
         );
     }
+
+    let filter = filter_button_rect(body);
+    let filter_on = ctx.layer_kind_filter.is_some();
+    let filter_hot = live && filter.contains(ctx.pointer);
+    if filter_hot || filter_on {
+        let fill = if filter_on { th.accent.with_alpha(0.18) } else { th.text.with_alpha(0.08) };
+        scene.fill(Fill::NonZero, ID, fill, None, &filter.to_rounded_rect(ui_px(3.0)));
+    }
+    let fink = if !live {
+        th.border
+    } else if filter_on {
+        th.accent
+    } else if filter_hot {
+        th.text
+    } else {
+        th.text_dim
+    };
+    draw_funnel(scene, filter.center(), fink);
+}
+
+fn draw_funnel(scene: &mut Scene, c: Point, color: Color) {
+    let mut p = BezPath::new();
+    p.move_to((c.x - ui_px(5.5), c.y - ui_px(4.5)));
+    p.line_to((c.x + ui_px(5.5), c.y - ui_px(4.5)));
+    p.line_to((c.x + ui_px(1.6), c.y + ui_px(1.2)));
+    p.line_to((c.x + ui_px(1.6), c.y + ui_px(5.0)));
+    p.line_to((c.x - ui_px(1.6), c.y + ui_px(3.4)));
+    p.line_to((c.x - ui_px(1.6), c.y + ui_px(1.2)));
+    p.close_path();
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &p);
 }
 
 #[derive(Clone, Copy)]
@@ -179,16 +507,13 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &H
 }
 
 /// Number of rows the list would show for `doc` under the current filter.
-fn row_count(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &HashSet<LayerId>, query: &str) -> usize {
-    let rows = layer_rows(doc, expanded, collapsed_layers);
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        rows.len()
-    } else {
-        rows.iter()
-            .filter(|r| r.label.to_lowercase().contains(&q))
-            .count()
-    }
+fn row_count(
+    doc: &Document,
+    expanded: &HashSet<ObjectId>, collapsed_layers: &HashSet<LayerId>,
+    query: &str,
+    kind_filter: Option<LayerKind>,
+) -> usize {
+    rows_filtered(doc, expanded, collapsed_layers, query, kind_filter).len()
 }
 
 /// Full height the Layers panel wants: search strip + every row + footer.
@@ -200,15 +525,16 @@ pub(super) fn content_height(
     query: &str,
     document_open: bool,
     size: crate::prefs::LayerThumbnailSize,
+    kind_filter: Option<LayerKind>,
 ) -> f64 {
     let metric_row_h = || ui_px(size.row_h());
-    let n = if document_open { row_count(doc, expanded, collapsed_layers, query) } else { 0 };
-    metric_search_h() + n as f64 * metric_row_h() + metric_footer_h()
+    let n = if document_open { row_count(doc, expanded, collapsed_layers, query, kind_filter) } else { 0 };
+    chrome_h() + n as f64 * metric_row_h() + metric_footer_h()
 }
 
-/// The scrollable list area (between the search strip and the footer).
+/// The scrollable list area (between the chrome and the footer).
 fn list_rect(body: Rect) -> Rect {
-    Rect::new(body.x0, body.y0 + metric_search_h(), body.x1, body.y1 - metric_footer_h())
+    Rect::new(body.x0, body.y0 + chrome_h(), body.x1, body.y1 - metric_footer_h())
 }
 
 /// Scroll offset clamped to what the current row count allows.
@@ -319,13 +645,14 @@ pub(crate) fn drop_target(
     scroll_raw: f64,
     moved: &[ObjectId],
     size: crate::prefs::LayerThumbnailSize,
+    kind_filter: Option<LayerKind>,
 ) -> Option<LayerDrop> {
     let metric_row_h = || ui_px(size.row_h());
     let list = list_rect(body);
     if pointer.x < list.x0 || pointer.x > list.x1 || pointer.y < list.y0 || pointer.y > list.y1 {
         return None;
     }
-    let rows = rows_filtered(doc, expanded, collapsed_layers, query);
+    let rows = rows_filtered(doc, expanded, collapsed_layers, query, kind_filter);
     if rows.is_empty() {
         return None;
     }
@@ -426,7 +753,7 @@ pub(super) fn menu() -> Vec<MenuEntry> {
 
 pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let metric_row_h = || ui_px(ctx.layer_thumbnail_size.row_h());
-    draw_search(scene, text, ctx, body);
+    draw_chrome(scene, text, ctx, body);
     let list = list_rect(body);
     let rows = visible_rows(ctx);
     let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list.height(), metric_row_h());
@@ -451,128 +778,8 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         let row = &rows[i];
         let ry = list.y0 + i as f64 * metric_row_h() - scroll;
         let r = Rect::new(list.x0, ry, list.x1, ry + metric_row_h());
-        let indent = layer_disclosure_rect(r).x0 + row.depth as f64 * metric_indent();
         let hot = hot_row == Some(i as i64);
-        let (eye_r, lock_r) = trailing_eye_lock(r);
-        let cy = r.center().y;
-
-        match row.kind {
-            RowKind::Layer(lid) => {
-                let has_obj_sel = !ctx.selection.is_empty();
-                let owns = has_obj_sel
-                    && ctx
-                        .selection
-                        .iter()
-                        .any(|o| owning_layer(ctx.doc, *o) == Some(lid));
-                let selected = !has_obj_sel && ctx.selected_layer == Some(lid);
-                if selected {
-                    scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.22), None, &r);
-                } else if owns {
-                    scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.10), None, &r);
-                } else if hot {
-                    scene.fill(Fill::NonZero, ID, ctx.theme.text.with_alpha(0.05), None, &r);
-                }
-                let swatch = crate::convert::color(row.color.rgb());
-                let rail_a = if row.visible { 1.0 } else { 0.35 };
-                scene.fill(
-                    Fill::NonZero,
-                    ID,
-                    swatch.with_alpha(rail_a),
-                    None,
-                    &layer_rail_rect(r),
-                );
-                draw_triangle(scene, layer_disclosure_rect(r).center().x, cy, row.expanded, ctx.theme.text_dim);
-                if ctx.layer_thumbnail_size == crate::prefs::LayerThumbnailSize::None {
-                    draw_layer_kind(scene, layer_name_x(r) - ui_px(8.0), cy, row.layer_kind, ctx.theme.text_dim);
-                }
-                let editing = match ctx.renaming {
-                    Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
-                    _ => None,
-                };
-                let name_x = paint_thumbnail(scene, text, ctx, row, r, layer_name_x(r));
-                let name_c = if !row.visible {
-                    ctx.theme.text_dim
-                } else {
-                    ctx.theme.text
-                };
-                let name_right = target_rect(r).x0 - ui_px(4.0);
-                if editing.is_some() {
-                    let clip = Rect::new(r.x0, r.y0, name_right, r.y1);
-                    scene.push_clip_layer(Fill::NonZero, ID, &clip);
-                    draw_name_field(scene, text, ctx.theme, name_x, r, &row.label, name_c, editing);
-                    scene.pop_layer();
-                } else {
-                    let baseline = r.y0 + metric_row_h() * 0.5 + ui_px(4.0);
-                    scene.push_clip_layer(Fill::NonZero, ID, &Rect::new(name_x, r.y0, name_right.max(name_x), r.y1));
-                    text.draw(scene, &row.label, 12.0, name_c, name_x, baseline);
-                    if owns {
-                        text.draw(scene, &row.label, 12.0, name_c, name_x + 0.6, baseline);
-                    }
-                    scene.pop_layer();
-                }
-                let target = target_rect(r).center();
-                scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.text_dim, None, &vello::kurbo::Circle::new(target, ui_px(3.5)));
-                if selected || owns {
-                    scene.fill(Fill::NonZero, ID, swatch, None, &vello::kurbo::Circle::new(target, ui_px(2.0)));
-                }
-                let eye_c = if row.visible { ctx.theme.text_dim } else { ctx.theme.border };
-                draw_eye(scene, eye_r.center().x, cy, row.visible, eye_c);
-                if row.locked {
-                    draw_lock(scene, lock_r.center().x, cy, ctx.theme.text);
-                } else if hot {
-                    draw_lock(scene, lock_r.center().x, cy, ctx.theme.border);
-                }
-            }
-            RowKind::Object { id, is_group } => {
-                let selected = ctx.selection.contains(&id);
-                if selected {
-                    scene.fill(Fill::NonZero, ID, ctx.theme.accent.with_alpha(0.22), None, &r);
-                } else if hot {
-                    scene.fill(Fill::NonZero, ID, ctx.theme.text.with_alpha(0.05), None, &r);
-                }
-                for d in 1..=row.depth {
-                    let x = layer_disclosure_rect(r).x0 + (d as f64 - 0.5) * metric_indent();
-                    scene.stroke(
-                        &Stroke::new(ui_px(1.0)),
-                        ID,
-                        ctx.theme.border.with_alpha(0.35),
-                        None,
-                        &vello::kurbo::Line::new((x, r.y0), (x, r.y1)),
-                    );
-                }
-                if is_group {
-                    draw_triangle(scene, indent + metric_col() * 0.5, cy, row.expanded, ctx.theme.text_dim);
-                }
-                let icon_x = indent + if is_group { metric_col() * 1.5 } else { metric_col() * 0.5 };
-                draw_object_kind(scene, icon_x, cy, ctx.doc.object(id).map(|o| &o.kind), ctx.theme.text_dim);
-                let name_c = if !row.visible || row.locked {
-                    ctx.theme.border
-                } else if selected {
-                    ctx.theme.text
-                } else {
-                    ctx.theme.text_dim
-                };
-                let editing = match ctx.renaming {
-                    Some((RenameId::Object(o), buf)) if o == id => Some(buf),
-                    _ => None,
-                };
-                let name_x = paint_thumbnail(scene, text, ctx, row, r, icon_x + metric_col() * 0.7);
-                scene.push_clip_layer(Fill::NonZero, ID, &Rect::new(r.x0, r.y0, target_rect(r).x0 - ui_px(4.0), r.y1));
-                draw_name_field(scene, text, ctx.theme, name_x, r, &row.label, name_c, editing);
-                scene.pop_layer();
-                let eye_c = if row.visible { ctx.theme.text_dim } else { ctx.theme.border };
-                draw_eye(scene, eye_r.center().x, cy, row.visible, eye_c);
-                if row.locked {
-                    draw_lock(scene, lock_r.center().x, cy, ctx.theme.text);
-                } else if hot {
-                    draw_lock(scene, lock_r.center().x, cy, ctx.theme.border);
-                }
-            }
-        }
-        for x in [eye_r.x1, lock_r.x1, target_rect(r).x0] {
-            scene.stroke(&Stroke::new(ui_px(0.5)), ID, ctx.theme.border.with_alpha(0.4), None, &vello::kurbo::Line::new((x, r.y0), (x, r.y1)));
-        }
-        scene.stroke(&Stroke::new(ui_px(0.5)), ID, ctx.theme.border.with_alpha(0.5), None, &vello::kurbo::Line::new((r.x0, r.y1), (r.x1, r.y1)));
+        paint_row(scene, text, ctx, row, r, hot);
     }
 
     // Drag-reorder indicator.
@@ -622,18 +829,226 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
 
     let can_edit = ctx.document_open;
     let has_sel = can_edit && !ctx.selection.is_empty();
-    paint_panel_footer(
-        scene,
-        body,
-        ctx.theme,
-        ctx.pointer,
-        [has_sel, has_sel, can_edit, has_sel],
-    );
+    let raster_ready = has_sel && current_layer_is_raster(ctx);
+    paint_layers_footer(scene, text, body, ctx.theme, ctx.pointer, has_sel, can_edit, raster_ready);
     let locate_r = locate_button_rect(body);
-    let locate_c = footer_color(ctx.theme, has_sel, locate_r.contains(ctx.pointer));
+    let locate_hot = locate_r.contains(ctx.pointer);
+    if locate_hot && has_sel {
+        scene.fill(Fill::NonZero, ID, ctx.theme.text.with_alpha(0.08), None, &locate_r.to_rounded_rect(ui_px(3.0)));
+    }
+    let locate_c = footer_color(ctx.theme, has_sel, locate_hot);
     draw_footer_locate(scene, locate_r, locate_c);
     if ctx.layers_new_menu && can_edit {
         paint_new_layer_menu(scene, text, ctx, body);
+    }
+    if ctx.layers_blend_menu && has_sel {
+        paint_layers_blend_menu(scene, text, ctx, body);
+    }
+}
+
+fn paint_row(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, row: &LayerRow, r: Rect, hot: bool) {
+    let th = ctx.theme;
+    let cy = r.center().y;
+    let (eye_r, lock_r) = row_eye_lock(r);
+    let name_right = target_rect(r).x0 - ui_px(4.0);
+
+    match row.kind {
+        RowKind::Layer(lid) => {
+            let has_obj_sel = !ctx.selection.is_empty();
+            let owns = has_obj_sel
+                && ctx
+                    .selection
+                    .iter()
+                    .any(|o| owning_layer(ctx.doc, *o) == Some(lid));
+            let selected = !has_obj_sel && ctx.selected_layer == Some(lid);
+            paint_row_fill(scene, r, selected, owns, hot, th);
+            let swatch = crate::convert::color(row.color.rgb());
+            let rail_a = if row.visible { 1.0 } else { 0.35 };
+            scene.fill(Fill::NonZero, ID, swatch.with_alpha(rail_a), None, &layer_rail_rect(r));
+            draw_triangle(scene, layer_disclosure_rect(r).center().x, cy, row.expanded, th.text_dim);
+            if ctx.layer_thumbnail_size == crate::prefs::LayerThumbnailSize::None {
+                draw_layer_kind(scene, layer_name_x(r) - ui_px(8.0), cy, row.layer_kind, th.text_dim);
+            }
+            let editing = match ctx.renaming {
+                Some((RenameId::Layer(l), buf)) if l == lid => Some(buf),
+                _ => None,
+            };
+            let name_x = paint_thumbnail(scene, text, ctx, row, r, layer_name_x(r));
+            let name_c = if !row.visible { th.text_dim } else { th.text };
+            scene.push_clip_layer(Fill::NonZero, ID, &Rect::new(name_x, r.y0, name_right.max(name_x), r.y1));
+            if editing.is_some() {
+                draw_name_field(scene, text, th, name_x, r, &row.label, name_c, editing);
+            } else {
+                let baseline = r.center().y + ui_px(4.0);
+                text.draw(scene, &row.label, 12.0, name_c, name_x, baseline);
+                if owns {
+                    text.draw(scene, &row.label, 12.0, name_c, name_x + 0.6, baseline);
+                }
+            }
+            scene.pop_layer();
+            let target = target_rect(r).center();
+            scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.text_dim, None, &Circle::new(target, ui_px(3.5)));
+            if selected || owns {
+                scene.fill(Fill::NonZero, ID, swatch, None, &Circle::new(target, ui_px(2.0)));
+            }
+            let eye_c = if row.visible { th.text_dim } else { th.border };
+            draw_eye(scene, eye_r.center().x, cy, row.visible, eye_c);
+            if row.locked {
+                draw_lock(scene, lock_r.center().x, cy, th.text);
+            } else if hot {
+                draw_lock(scene, lock_r.center().x, cy, th.border);
+            }
+        }
+        RowKind::Object { id, is_group } => {
+            let selected = ctx.selection.contains(&id);
+            paint_row_fill(scene, r, selected, false, hot, th);
+            let indent = layer_disclosure_rect(r).x0 + row.depth as f64 * metric_indent();
+            for d in 1..=row.depth {
+                let x = layer_disclosure_rect(r).x0 + (d as f64 - 0.5) * metric_indent();
+                scene.stroke(
+                    &Stroke::new(ui_px(1.0)),
+                    ID,
+                    th.border.with_alpha(0.35),
+                    None,
+                    &Line::new((x, r.y0), (x, r.y1)),
+                );
+            }
+            if is_group {
+                draw_triangle(scene, indent + metric_col() * 0.5, cy, row.expanded, th.text_dim);
+            }
+            let icon_x = indent + if is_group { metric_col() * 1.5 } else { metric_col() * 0.5 };
+            draw_object_kind(scene, icon_x, cy, ctx.doc.object(id).map(|o| &o.kind), th.text_dim);
+            let name_c = if !row.visible || row.locked {
+                th.border
+            } else if selected {
+                th.text
+            } else {
+                th.text_dim
+            };
+            let editing = match ctx.renaming {
+                Some((RenameId::Object(o), buf)) if o == id => Some(buf),
+                _ => None,
+            };
+            let name_x = paint_thumbnail(scene, text, ctx, row, r, icon_x + metric_col() * 0.7);
+            scene.push_clip_layer(Fill::NonZero, ID, &Rect::new(r.x0, r.y0, name_right, r.y1));
+            draw_name_field(scene, text, th, name_x, r, &row.label, name_c, editing);
+            scene.pop_layer();
+            let eye_c = if row.visible { th.text_dim } else { th.border };
+            draw_eye(scene, eye_r.center().x, cy, row.visible, eye_c);
+            if row.locked {
+                draw_lock(scene, lock_r.center().x, cy, th.text);
+            } else if hot {
+                draw_lock(scene, lock_r.center().x, cy, th.border);
+            }
+        }
+    }
+    for x in [eye_r.x1, lock_r.x1, target_rect(r).x0] {
+        scene.stroke(&Stroke::new(ui_px(0.5)), ID, th.border.with_alpha(0.4), None, &Line::new((x, r.y0), (x, r.y1)));
+    }
+    scene.stroke(&Stroke::new(ui_px(0.5)), ID, th.border.with_alpha(0.5), None, &Line::new((r.x0, r.y1), (r.x1, r.y1)));
+}
+
+fn paint_row_fill(scene: &mut Scene, r: Rect, selected: bool, owns: bool, hot: bool, th: &Theme) {
+    if selected {
+        scene.fill(Fill::NonZero, ID, th.accent.with_alpha(0.22), None, &r);
+    } else if owns {
+        scene.fill(Fill::NonZero, ID, th.accent.with_alpha(0.10), None, &r);
+    } else if hot {
+        scene.fill(Fill::NonZero, ID, th.text.with_alpha(0.05), None, &r);
+    }
+}
+
+/// Which layer's `kind` governs the footer's Raster-only buttons —
+/// mirrors `App::current_layer_kind`/`panels::tools::ctx_layer_kind`,
+/// computed here from plain `Ctx` fields.
+fn current_layer_is_raster(ctx: &Ctx) -> bool {
+    let layer_id = ctx.selection.first().and_then(|&id| owning_layer(ctx.doc, id)).or(ctx.selected_layer);
+    layer_id.and_then(|id| ctx.doc.layer(id)).map(|l| l.kind) == Some(LayerKind::Raster)
+}
+
+/// The Layers footer's own button set, left→right: Link, fx (layer
+/// effects), Add Layer Mask, New Fill/Adjustment Layer, New Group, New
+/// Layer, Delete. Deliberately not the generic four-slot
+/// `panels::panel_footer_rects` other panels share — Photoshop's layer
+/// footer needs a much richer set, and the redundant move up/down arrows
+/// are gone (drag-reorder and the restack shortcuts/menu items already
+/// cover that).
+fn layers_footer_rects(body: Rect) -> [Rect; 7] {
+    let sz = ui_px(20.0);
+    let gap = ui_px(10.0);
+    let cy = body.y1 - metric_footer_h() * 0.5;
+    std::array::from_fn(|k| {
+        let cx = body.x1 - metric_pad() - (6 - k) as f64 * (sz + gap) - sz * 0.5;
+        Rect::from_center_size(Point::new(cx, cy), (sz, sz))
+    })
+}
+
+fn draw_footer_link(scene: &mut Scene, r: Rect, color: Color) {
+    let c = r.center();
+    let (s, rad) = (ui_px(3.5), ui_px(4.5));
+    scene.stroke(&Stroke::new(ui_px(1.5)), ID, color, None, &vello::kurbo::Circle::new((c.x - s, c.y), rad));
+    scene.stroke(&Stroke::new(ui_px(1.5)), ID, color, None, &vello::kurbo::Circle::new((c.x + s, c.y), rad));
+}
+
+fn draw_footer_mask(scene: &mut Scene, r: Rect, color: Color) {
+    let ri = r.inset(-ui_px(3.0));
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &ri.to_rounded_rect(ui_px(2.0)));
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &vello::kurbo::Circle::new(ri.center(), ri.width().min(ri.height()) * 0.3));
+}
+
+fn draw_footer_adjustment(scene: &mut Scene, r: Rect, color: Color) {
+    let c = r.center();
+    let rad = ui_px(7.0);
+    let circle = vello::kurbo::Circle::new(c, rad);
+    scene.push_clip_layer(Fill::NonZero, ID, &circle);
+    scene.fill(Fill::NonZero, ID, color, None, &Rect::new(c.x - rad, c.y - rad, c.x, c.y + rad));
+    scene.pop_layer();
+    scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &circle);
+}
+
+fn draw_footer_group(scene: &mut Scene, r: Rect, color: Color) {
+    let (x0, x1) = (r.x0 + ui_px(3.0), r.x1 - ui_px(3.0));
+    let (y0, y1) = (r.y0 + ui_px(6.0), r.y1 - ui_px(4.0));
+    let mut p = BezPath::new();
+    p.move_to((x0, y0));
+    p.line_to((x0 + ui_px(4.0), y0));
+    p.line_to((x0 + ui_px(6.0), y0 - ui_px(2.0)));
+    p.line_to((x1 - ui_px(2.0), y0 - ui_px(2.0)));
+    p.line_to((x1, y0));
+    p.line_to((x1, y1));
+    p.line_to((x0, y1));
+    p.close_path();
+    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &p);
+}
+
+/// `raster_only` gates Link/fx/Mask/Adjustment: dimmed unless the current
+/// context is confidently a Raster layer with a selection — they have no
+/// vector-layer meaning yet, and no backing implementation at all yet
+/// (clicking is a harmless no-op either way; see `hit`'s own comment).
+fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, theme: &Theme, pointer: Point, has_sel: bool, can_edit: bool, raster_only: bool) {
+    let strip = Rect::new(body.x0, body.y1 - metric_footer_h(), body.x1, body.y1);
+    scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &strip);
+    scene.fill(Fill::NonZero, ID, theme.border.with_alpha(0.7), None, &Rect::new(strip.x0, strip.y0, strip.x1, strip.y0 + 0.5));
+    let rects = layers_footer_rects(body);
+    let enabled = [raster_only, raster_only, raster_only, raster_only, has_sel, can_edit, has_sel];
+    for (k, r) in rects.iter().enumerate() {
+        let hot = enabled[k] && r.contains(pointer);
+        if hot {
+            scene.fill(Fill::NonZero, ID, theme.text.with_alpha(0.08), None, &r.to_rounded_rect(ui_px(3.0)));
+        }
+        let c = footer_color(theme, enabled[k], hot);
+        match k {
+            0 => draw_footer_link(scene, *r, c),
+            1 => text.draw(scene, "fx", 11.0, c, r.x0 + ui_px(1.0), r.center().y + ui_px(4.0)),
+            2 => draw_footer_mask(scene, *r, c),
+            3 => draw_footer_adjustment(scene, *r, c),
+            4 => draw_footer_group(scene, *r, c),
+            5 => {
+                scene.stroke(&Stroke::new(ui_px(1.15)), ID, c, None, &r.inset(ui_px(2.0)).to_rounded_rect(ui_px(2.0)));
+                draw_footer_plus(scene, *r, c);
+            }
+            _ => draw_footer_trash(scene, *r, c),
+        }
     }
 }
 
@@ -652,7 +1067,7 @@ const NEW_LAYER_MENU_W: f64 = 168.0;
 /// flyout preview can otherwise put the naive top edge above the body's
 /// own clip region, making the menu exist but never actually be visible).
 fn new_layer_menu_rect(body: Rect) -> Rect {
-    let [_, _, add, _] = panel_footer_rects(body);
+    let [_, _, _, _, _, add, _] = layers_footer_rects(body);
     let entries = new_layer_menu_entries();
     let h = ui_px(NEW_LAYER_MENU_ITEM_H) * entries.len() as f64;
     let y1 = (add.y0 - ui_px(6.0)).max(body.y0 + ui_px(4.0));
@@ -706,6 +1121,15 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         }
         return Action::ToggleNewLayerMenu;
     }
+    if ctx.layers_blend_menu {
+        let entries = blend_entries();
+        for (i, &(_, mode)) in entries.iter().enumerate() {
+            if layers_blend_entry_rect(body, entries.len(), i).contains(local) {
+                return Action::SetSelectionBlendMode(mode);
+            }
+        }
+        return Action::ToggleLayersBlendMenu;
+    }
     if local.y >= body.y1 - metric_footer_h() {
         if !ctx.document_open {
             return Action::None;
@@ -713,11 +1137,15 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         if locate_button_rect(body).contains(local) {
             return if ctx.selection.is_empty() { Action::None } else { Action::LocateSelection };
         }
-        let [up, down, add, del] = panel_footer_rects(body);
-        return if up.contains(local) {
-            Action::LayerRestack(1)
-        } else if down.contains(local) {
-            Action::LayerRestack(-1)
+        let [link, fx, mask, adjustment, group, add, del] = layers_footer_rects(body);
+        // Link/fx/Mask/Adjustment have no backing implementation yet
+        // (see `paint_layers_footer`'s own doc comment) — a harmless
+        // no-op click either way, gated to look enabled only on a Raster
+        // layer per the mockup this footer follows.
+        return if link.contains(local) || fx.contains(local) || mask.contains(local) || adjustment.contains(local) {
+            Action::None
+        } else if group.contains(local) {
+            if ctx.selection.is_empty() { Action::None } else { Action::GroupSelection }
         } else if add.contains(local) {
             Action::ToggleNewLayerMenu
         } else if del.contains(local) {
@@ -726,14 +1154,38 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             Action::None
         };
     }
-    // The search field owns the top strip.
-    if local.y < body.y0 + metric_search_h() {
-        return if ctx.document_open { Action::FocusLayerSearch } else { Action::None };
+    if local.y < body.y0 + metric_toolbar_h() {
+        if !ctx.document_open {
+            return Action::None;
+        }
+        let t = toolbar_layout(body);
+        let has_blend = ctx.representative.as_ref().is_some_and(|a| !a.items.is_empty());
+        return if t.blend.contains(local) {
+            if ctx.selection.is_empty() || !has_blend { Action::None } else { Action::ToggleLayersBlendMenu }
+        } else if t.opacity.contains(local) {
+            if ctx.selection.is_empty() { Action::None } else { Action::BeginOpacityEdit }
+        } else if t.lock_all.contains(local) {
+            if ctx.selection.is_empty() && ctx.selected_layer.is_none() { Action::None } else { Action::ToggleLockAll }
+        } else {
+            Action::None
+        };
+    }
+    if local.y < body.y0 + chrome_h() {
+        if !ctx.document_open {
+            return Action::None;
+        }
+        if filter_button_rect(body).contains(local) {
+            return Action::CycleLayerFilter;
+        }
+        if search_box(body).contains(local) {
+            return Action::FocusLayerSearch;
+        }
+        return Action::None;
     }
     let list = list_rect(body);
     let rows = visible_rows(ctx);
     let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list.height(), metric_row_h());
-    let i = ((local.y - (body.y0 + metric_search_h()) + scroll) / metric_row_h()).floor();
+    let i = ((local.y - list.y0 + scroll) / metric_row_h()).floor();
     if i < 0.0 {
         return Action::None;
     }
@@ -742,12 +1194,11 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
     };
     let ry = list.y0 + i * metric_row_h() - scroll;
     let r = Rect::new(body.x0, ry, body.x1, ry + metric_row_h());
-    let (eye_r, lock_r) = trailing_eye_lock(r);
+    let (eye_r, lock_r) = row_eye_lock(r);
     match row.kind {
-        // The color swatch is its own precise square — a single click
-        // still selects the layer like the rest of the row; a double
-        // click (resolved by the caller) opens Layer Options instead of
-        // renaming.
+        // The color rail is its own hit target — a single click still
+        // selects the layer like the rest of the row; a double click
+        // (resolved by the caller) opens Layer Options instead of renaming.
         RowKind::Layer(id) => {
             if eye_r.contains(local) {
                 Action::ToggleLayerVisible(id)
@@ -775,6 +1226,63 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             }
         }
     }
+}
+
+pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<&'static str> {
+    if local.y >= body.y1 - metric_footer_h() {
+        if locate_button_rect(body).contains(local) {
+            return Some("Locate Object");
+        }
+        let [link, fx, mask, adjustment, group, add, del] = layers_footer_rects(body);
+        return if link.contains(local) {
+            Some("Link Layers")
+        } else if fx.contains(local) {
+            Some("Layer Effects")
+        } else if mask.contains(local) {
+            Some("Add Layer Mask")
+        } else if adjustment.contains(local) {
+            Some("New Fill or Adjustment Layer")
+        } else if group.contains(local) {
+            Some("New Group")
+        } else if add.contains(local) {
+            Some("New Layer")
+        } else if del.contains(local) {
+            Some("Delete")
+        } else {
+            None
+        };
+    }
+    if local.y < body.y0 + metric_toolbar_h() {
+        let t = toolbar_layout(body);
+        return if t.blend.contains(local) {
+            Some("Blend Mode")
+        } else if t.opacity.contains(local) {
+            Some("Opacity")
+        } else if t.lock_transp.contains(local) {
+            Some("Lock Transparent Pixels")
+        } else if t.lock_paint.contains(local) {
+            Some("Lock Image Pixels")
+        } else if t.lock_pos.contains(local) {
+            Some("Lock Position")
+        } else if t.lock_all.contains(local) {
+            Some("Lock All")
+        } else {
+            None
+        };
+    }
+    if local.y < body.y0 + chrome_h() {
+        if filter_button_rect(body).contains(local) {
+            return Some(match ctx.layer_kind_filter {
+                None => "Filter: All",
+                Some(LayerKind::Vector) => "Filter: Vector",
+                Some(LayerKind::Raster) => "Filter: Raster",
+            });
+        }
+        if search_box(body).contains(local) {
+            return Some("Search layers");
+        }
+    }
+    None
 }
 
 /// "Locate Object" button — bottom-left of the footer strip, apart from
@@ -816,7 +1324,14 @@ fn draw_triangle(scene: &mut Scene, cx: f64, cy: f64, expanded: bool, color: Col
     scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &p);
 }
 
-/// Color rail follows the visibility and lock columns.
+/// Eye and lock columns on the left of every row, matching the
+/// Illustrator Layers list: visibility, then lock, then the color rail.
+fn row_eye_lock(row: Rect) -> (Rect, Rect) {
+    let eye = Rect::new(row.x0, row.y0, row.x0 + ui_px(20.0), row.y1);
+    let lock = Rect::new(eye.x1, row.y0, row.x0 + ui_px(40.0), row.y1);
+    (eye, lock)
+}
+
 fn layer_rail_rect(row: Rect) -> Rect {
     let x = row.x0 + ui_px(42.0);
     Rect::new(x, row.y0 + ui_px(2.0), x + ui_px(3.0), row.y1 - ui_px(2.0))
@@ -835,11 +1350,72 @@ fn layer_name_x(row: Rect) -> f64 {
     row.x0 + ui_px(70.0)
 }
 
-/// Full-height visibility and lock hit areas at the left of every row.
-fn trailing_eye_lock(row: Rect) -> (Rect, Rect) {
-    let eye = Rect::new(row.x0, row.y0, row.x0 + ui_px(20.0), row.y1);
-    let lock = Rect::new(eye.x1, row.y0, row.x0 + ui_px(40.0), row.y1);
-    (eye, lock)
+fn blend_entries() -> [(&'static str, BlendMode); 16] {
+    [
+        ("Normal", BlendMode::Normal),
+        ("Multiply", BlendMode::Multiply),
+        ("Screen", BlendMode::Screen),
+        ("Overlay", BlendMode::Overlay),
+        ("Darken", BlendMode::Darken),
+        ("Lighten", BlendMode::Lighten),
+        ("Color Dodge", BlendMode::ColorDodge),
+        ("Color Burn", BlendMode::ColorBurn),
+        ("Hard Light", BlendMode::HardLight),
+        ("Soft Light", BlendMode::SoftLight),
+        ("Difference", BlendMode::Difference),
+        ("Exclusion", BlendMode::Exclusion),
+        ("Hue", BlendMode::Hue),
+        ("Saturation", BlendMode::Saturation),
+        ("Color", BlendMode::Color),
+        ("Luminosity", BlendMode::Luminosity),
+    ]
+}
+
+fn blend_label(mode: BlendMode) -> &'static str {
+    blend_entries()
+        .iter()
+        .find(|&&(_, m)| m == mode)
+        .map(|&(label, _)| label)
+        .unwrap_or("Normal")
+}
+
+const BLEND_MENU_ITEM_H: f64 = 22.0;
+const BLEND_MENU_W: f64 = 140.0;
+
+fn layers_blend_menu_rect(body: Rect, entry_count: usize) -> Rect {
+    let blend = toolbar_layout(body).blend;
+    let h = ui_px(BLEND_MENU_ITEM_H) * entry_count as f64;
+    let y0 = (blend.y1 + ui_px(4.0)).min((body.y1 - h - ui_px(4.0)).max(body.y0 + ui_px(4.0)));
+    let y1 = (y0 + h).min(body.y1 - ui_px(4.0));
+    let x1 = (blend.x0 + ui_px(BLEND_MENU_W)).min(body.x1 - ui_px(4.0));
+    Rect::new(blend.x0, y0, x1, y1)
+}
+
+fn layers_blend_entry_rect(body: Rect, entry_count: usize, i: usize) -> Rect {
+    let menu = layers_blend_menu_rect(body, entry_count);
+    let y = menu.y0 + i as f64 * ui_px(BLEND_MENU_ITEM_H);
+    Rect::new(menu.x0, y, menu.x1, y + ui_px(BLEND_MENU_ITEM_H))
+}
+
+fn paint_layers_blend_menu(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, body: Rect) {
+    let th = ctx.theme;
+    let entries = blend_entries();
+    let menu = layers_blend_menu_rect(body, entries.len());
+    let round = menu.to_rounded_rect(ui_px(5.0));
+    scene.fill(Fill::NonZero, ID, th.panel_bg, None, &round);
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, th.border, None, &round);
+    let current = ctx.representative.as_ref().and_then(|a| a.items.last()).map(|i| i.blend_mode());
+    scene.push_clip_layer(Fill::NonZero, ID, &menu);
+    for (i, &(label, mode)) in entries.iter().enumerate() {
+        let r = layers_blend_entry_rect(body, entries.len(), i);
+        if current == Some(mode) {
+            scene.fill(Fill::NonZero, ID, th.accent.with_alpha(0.18), None, &r);
+        } else if r.contains(ctx.pointer) {
+            scene.fill(Fill::NonZero, ID, th.text.with_alpha(0.06), None, &r);
+        }
+        text.draw(scene, label, 11.5, th.text, r.x0 + ui_px(10.0), r.center().y + ui_px(3.5));
+    }
+    scene.pop_layer();
 }
 
 /// Preview actual artwork, using the same renderer as the canvas. The
@@ -1055,7 +1631,7 @@ mod tests {
         assert!(!rows[0].expanded);
         assert!(row_index_of(&doc, &expanded, &collapsed, child).is_none());
         let size = crate::prefs::LayerThumbnailSize::Small;
-        assert_eq!(content_height(&doc, &expanded, &collapsed, "", true, size), metric_search_h() + ui_px(size.row_h()) + metric_footer_h());
+        assert_eq!(content_height(&doc, &expanded, &collapsed, "", true, size, None), chrome_h() + ui_px(size.row_h()) + metric_footer_h());
         collapsed.remove(&layer);
         assert_eq!(layer_rows(&doc, &expanded, &collapsed).len(), 3);
         assert_eq!(row_index_of(&doc, &expanded, &collapsed, child), Some(2));
@@ -1071,12 +1647,42 @@ mod tests {
         let body = Rect::new(0.0, 0.0, 320.0, 400.0);
         for size in [crate::prefs::LayerThumbnailSize::None, crate::prefs::LayerThumbnailSize::Small, crate::prefs::LayerThumbnailSize::Medium, crate::prefs::LayerThumbnailSize::Large] {
             let row_h = ui_px(size.row_h());
-            assert_eq!(content_height(&doc, &expanded, &HashSet::new(), "", true, size), metric_search_h() + row_h + metric_footer_h());
-            let pointer = Point::new(100.0, metric_search_h() + row_h * 0.5);
-            let target = drop_target(body, pointer, &doc, &expanded, &HashSet::new(), "", 0.0, &[], size).unwrap();
+            assert_eq!(content_height(&doc, &expanded, &HashSet::new(), "", true, size, None), chrome_h() + row_h + metric_footer_h());
+            let pointer = Point::new(100.0, chrome_h() + row_h * 0.5);
+            let target = drop_target(body, pointer, &doc, &expanded, &HashSet::new(), "", 0.0, &[], size, None).unwrap();
             assert_eq!(target.parent, ObjectParent::Layer(layer));
             assert!(target.into);
             assert_eq!(clamp_scroll(1000.0, 10, row_h * 3.0, row_h), row_h * 7.0);
         }
+    }
+
+    #[test]
+    fn kind_filter_hides_other_layers_and_their_objects() {
+        let mut doc = Document::new("Layers");
+        let vector = LayerId::new();
+        doc.insert_layer(amalith_core::Layer::new(vector, "Artwork"), 0);
+        let id = ObjectId::new();
+        doc.insert_object(amalith_core::Object::rectangle(id, ObjectParent::Layer(vector), amalith_core::Rect::new(0.0, 0.0, 10.0, 10.0)), 0).unwrap();
+        let mut raster = amalith_core::Layer::new(LayerId::new(), "Photos");
+        raster.kind = LayerKind::Raster;
+        doc.insert_layer(raster, 1);
+        let expanded = HashSet::new();
+        let collapsed = HashSet::new();
+        assert_eq!(rows_filtered(&doc, &expanded, &collapsed, "", None).len(), 3);
+        let vector_rows = rows_filtered(&doc, &expanded, &collapsed, "", Some(LayerKind::Vector));
+        assert_eq!(vector_rows.len(), 2);
+        assert!(matches!(vector_rows[0].kind, RowKind::Layer(_)));
+        let raster_rows = rows_filtered(&doc, &expanded, &collapsed, "", Some(LayerKind::Raster));
+        assert_eq!(raster_rows.len(), 1);
+        assert_eq!(raster_rows[0].label, "Photos");
+    }
+
+    #[test]
+    fn opacity_field_sits_in_the_toolbar_not_the_search_row() {
+        let body = Rect::new(0.0, 0.0, 320.0, 400.0);
+        let t = toolbar_layout(body);
+        assert!(opacity_field_at(body, t.opacity.center()));
+        assert!(!opacity_field_at(body, search_box(body).center()));
+        assert!(t.blend.y1 <= search_row_rect(body).y0 + 0.5);
     }
 }

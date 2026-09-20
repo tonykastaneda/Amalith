@@ -82,20 +82,47 @@ fn main() {
         );
         rect.name = Some("Hero card".into());
         doc.insert_object(rect, 0).unwrap();
+        let group_id = amalith_core::ObjectId::new();
+        let mut group = amalith_core::Object::new(
+            group_id,
+            amalith_core::ObjectParent::Layer(layer),
+            amalith_core::ObjectKind::Group(Default::default()),
+        );
+        group.name = Some("Logo".into());
+        doc.insert_object(group, 1).unwrap();
+        let mark_id = amalith_core::ObjectId::new();
+        let mut mark = amalith_core::Object::rectangle(
+            mark_id,
+            amalith_core::ObjectParent::Group(group_id),
+            amalith_core::Rect::new(0.0, 0.0, 24.0, 24.0),
+        );
+        mark.name = Some("Mark".into());
+        doc.insert_object(mark, 0).unwrap();
+        let word_id = amalith_core::ObjectId::new();
+        let mut word = amalith_core::Object::rectangle(
+            word_id,
+            amalith_core::ObjectParent::Group(group_id),
+            amalith_core::Rect::new(28.0, 4.0, 96.0, 20.0),
+        );
+        word.name = Some("Wordmark".into());
+        doc.insert_object(word, 1).unwrap();
         let mut raster = amalith_core::Layer::new(amalith_core::LayerId::new(), "Photos");
         raster.kind = amalith_core::LayerKind::Raster;
         raster.color = amalith_core::LayerColor::Orange;
         doc.insert_layer(raster, 1);
-        let expanded = std::collections::HashSet::new();
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert(group_id);
+        let selection = [rect_id];
+        let representative = doc.object(rect_id).map(|o| o.appearance.clone());
         let ctx = panels::Ctx {
             image_trace: &Default::default(),
             theme: &theme,
             doc: &doc,
             document_open: true,
-            selection: &[],
+            selection: &selection,
             active_tool: amalith_shell::tool::Tool::Select,
             pointer: Point::new(-1.0, -1.0),
-            representative: None,
+            representative,
             fill_mixed: false,
             stroke_mixed: false,
             active_slot: panels::PaintSlot::Fill,
@@ -123,6 +150,9 @@ fn main() {
             layer_query: "",
             layer_search_focused: false,
             layers_new_menu: false,
+            layers_blend_menu: false,
+            opacity_edit: None,
+            layer_kind_filter: None,
             layer_scroll: 0.0,
             layer_drop: None,
             links_scroll: 0.0,

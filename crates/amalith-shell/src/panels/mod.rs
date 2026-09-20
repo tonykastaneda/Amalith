@@ -169,6 +169,12 @@ pub struct Ctx<'a> {
     pub layer_drop: Option<(i64, bool)>,
     /// Layers panel: the footer "+" button's Vector/Raster popup is open.
     pub layers_new_menu: bool,
+    /// Layers panel: the header blend-mode menu is open.
+    pub layers_blend_menu: bool,
+    /// Layers panel: live opacity-field buffer, shared with the context bar.
+    pub opacity_edit: Option<&'a str>,
+    /// Layers panel kind funnel — `None` shows every layer.
+    pub layer_kind_filter: Option<amalith_core::LayerKind>,
     /// Links panel: wheel-scroll offset of the row list, px.
     pub links_scroll: f64,
     /// Links panel: the highlighted asset row.
@@ -393,6 +399,18 @@ pub enum Action {
     LayerRestack(i32),
     /// Layers footer: delete the object selection.
     DeleteObjects,
+    /// Layers footer: group the current selection.
+    GroupSelection,
+    /// Layers header: open/close the blend-mode menu.
+    ToggleLayersBlendMenu,
+    /// Layers header: apply a blend mode to every appearance item of the
+    /// object selection.
+    SetSelectionBlendMode(amalith_core::BlendMode),
+    /// Layers search-row funnel: All → Vector → Raster → All.
+    CycleLayerFilter,
+    /// Layers header padlock: lock/unlock the object selection, or the
+    /// selected layer when nothing is selected.
+    ToggleLockAll,
     /// Artboards footer: delete the selected artboard.
     DeleteArtboard,
     // --- Character panel ---
@@ -652,8 +670,14 @@ pub fn layers_content_height(
     query: &str,
     document_open: bool,
     size: crate::prefs::LayerThumbnailSize,
+    kind_filter: Option<amalith_core::LayerKind>,
 ) -> f64 {
-    layers::content_height(doc, expanded, collapsed_layers, query, document_open, size)
+    layers::content_height(doc, expanded, collapsed_layers, query, document_open, size, kind_filter)
+}
+
+/// Whether `p` sits on the Layers header's opacity field.
+pub fn layers_opacity_field_at(body: Rect, p: Point) -> bool {
+    layers::opacity_field_at(body, p)
 }
 
 /// Full content height of the Links panel for the given document state —
@@ -861,7 +885,9 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
     match id.0 {
         PanelKind::Character => character::natural_height(),
         PanelKind::Tools => tools::natural_height(width, tools::hide_wip()),
-        PanelKind::Layers => layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h(),
+        PanelKind::Layers => {
+            layers::metric_toolbar_h() + layers::metric_search_h() + metric_row_h() * 2.0 + metric_footer_h()
+        }
         PanelKind::Links => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Symbols => metric_row_h() * 2.0 + metric_footer_h(),
         PanelKind::Artboards | PanelKind::Swatches => ui_px(132.0),
@@ -986,6 +1012,7 @@ pub fn tip(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         PanelKind::Align => align::tip(body, local, ctx).map(str::to_string),
         PanelKind::Paragraph => paragraph::tip(body, local, ctx).map(str::to_string),
         PanelKind::Appearance => appearance::tip(body, local, ctx).map(str::to_string),
+        PanelKind::Layers => layers::tip(body, local, ctx).map(str::to_string),
         _ => None,
     }
 }

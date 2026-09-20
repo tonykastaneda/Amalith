@@ -79,6 +79,7 @@ impl App {
             panels::Action::FocusLayerSearch => {
                 self.doc.rename = None;
                 self.layer_search_focused = true;
+                self.layers_blend_menu = false;
                 self.request_main_redraw();
             }
             panels::Action::SetActiveSlot(s) => self.active_slot = s,
@@ -609,8 +610,27 @@ impl App {
             }
             panels::Action::ToggleNewLayerMenu => {
                 self.layers_new_menu = self.document_open() && !self.layers_new_menu;
+                self.layers_blend_menu = false;
                 self.request_main_redraw();
             }
+            panels::Action::ToggleLayersBlendMenu => {
+                self.layers_blend_menu = self.document_open() && !self.doc.selection.is_empty() && !self.layers_blend_menu;
+                self.layers_new_menu = false;
+                self.request_main_redraw();
+            }
+            panels::Action::SetSelectionBlendMode(mode) => {
+                self.layers_blend_menu = false;
+                self.set_selection_blend_mode(mode);
+            }
+            panels::Action::CycleLayerFilter => {
+                self.layer_kind_filter = match self.layer_kind_filter {
+                    None => Some(amalith_core::LayerKind::Vector),
+                    Some(amalith_core::LayerKind::Vector) => Some(amalith_core::LayerKind::Raster),
+                    Some(amalith_core::LayerKind::Raster) => None,
+                };
+                self.request_main_redraw();
+            }
+            panels::Action::ToggleLockAll => self.toggle_lock_all(),
             panels::Action::NewLayerOfKind(kind) => {
                 self.layers_new_menu = false;
                 if !self.document_open() {
@@ -650,6 +670,7 @@ impl App {
                 self.request_main_redraw();
             }
             panels::Action::LayerRestack(dir) => self.restack(dir),
+            panels::Action::GroupSelection => self.group_selection(),
             panels::Action::DeleteObjects => {
                 if !self.doc.selection.is_empty() {
                     let ids = std::mem::take(&mut self.doc.selection);
@@ -1810,7 +1831,48 @@ impl App {
             let cx = self.context_bar_ctx();
             return context_bar::opacity_field_at(bar, &cx, self.pointer);
         }
+        if let Some(body) = self.active_panel_body_at_pointer(PanelKind::Layers) {
+            return panels::layers_opacity_field_at(body, self.pointer);
+        }
         false
+    }
+
+    fn set_selection_blend_mode(&mut self, mode: amalith_core::BlendMode) {
+        let ids = self.doc.selection.clone();
+        for id in ids {
+            let Some(obj) = self.doc.editor.document().object(id) else { continue };
+            let mut items = obj.appearance.items.clone();
+            if items.is_empty() {
+                continue;
+            }
+            for item in &mut items {
+                item.set_blend_mode(mode);
+            }
+            let _ = self.doc.editor.execute(Command::SetAppearanceItems { object: id, items });
+        }
+        self.request_main_redraw();
+    }
+
+    fn toggle_lock_all(&mut self) {
+        if !self.doc.selection.is_empty() {
+            let ids = self.doc.selection.clone();
+            let lock = ids.iter().any(|&id| {
+                self.doc.editor.document().object(id).is_some_and(|o| !o.locked)
+            });
+            let _ = self.doc.editor.execute(Command::SetLocked {
+                objects: ids.clone(),
+                locked: lock,
+            });
+            if lock {
+                self.doc.selection.clear();
+                self.doc.anchor_sel.clear();
+            }
+            self.request_main_redraw();
+            return;
+        }
+        if let Some(id) = self.doc.selected_layer {
+            self.toggle_layer_flag(id, false);
+        }
     }
 
     /// Digit / Enter / Esc stay in the Opacity field.
