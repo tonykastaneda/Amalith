@@ -177,6 +177,13 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::Eraser => KeyChord::with_shift(KeyE),
         Tool::VerticalText => KeyChord::with_shift(KeyT),
         Tool::MagicWand => KeyChord::plain(KeyY),
+        Tool::RasterMarquee => KeyChord::plain(KeyM),
+        Tool::RasterEllipse => KeyChord::with_shift(KeyM),
+        Tool::RasterLasso => KeyChord::plain(KeyL),
+        Tool::RasterBrush => KeyChord::plain(KeyB),
+        Tool::RasterEraser => KeyChord::with_shift(KeyE),
+        Tool::RasterFill => KeyChord::plain(KeyK),
+        Tool::RasterCloneStamp => KeyChord::plain(KeyC),
         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral
         | Tool::Join | Tool::AreaType | Tool::PathType | Tool::VerticalAreaType
         | Tool::VerticalPathType => {

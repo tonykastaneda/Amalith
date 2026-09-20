@@ -17,6 +17,22 @@ pub const LOD_SIDES: [u32; 3] = [256, 2048, canvas::GPU_ATLAS_MAX];
 #[derive(Clone, Default)]
 pub struct ImageLods {
     pub levels: [Option<ImageData>; 3],
+    /// Transient live-paint tiles; immutable image blobs are shared across frames.
+    pub tiles: Option<std::sync::Arc<RasterTiles>>,
+}
+
+pub struct RasterTiles {
+    pub width: u32,
+    pub height: u32,
+    pub tiles: Vec<RasterTile>,
+}
+
+#[derive(Clone)]
+pub struct RasterTile {
+    /// Core and padded image rectangles, in source-image pixels.
+    pub core: vello::kurbo::Rect,
+    pub image_rect: amalith_core::Rect,
+    pub image: ImageData,
 }
 
 impl ImageLods {

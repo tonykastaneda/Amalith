@@ -25,7 +25,7 @@ impl Mask {
     /// Out-of-bounds always reads as unselected — lets boundary code treat
     /// the mask's own edge the same as an interior edge, with no special
     /// casing.
-    fn get(&self, x: i64, y: i64) -> bool {
+    pub(crate) fn get(&self, x: i64, y: i64) -> bool {
         if x < 0 || y < 0 || x >= self.width as i64 || y >= self.height as i64 {
             false
         } else {
@@ -56,9 +56,15 @@ fn color_distance(a: [u8; 4], b: [u8; 4]) -> f64 {
 /// fully transparent pixel never matches a non-transparent seed either
 /// way. Returns an all-`false` mask if `seed` is outside the image.
 pub fn flood_fill(img: &RgbaImage, seed: (u32, u32), tolerance: f64) -> Mask {
+    flood_fill_masked(img, seed, tolerance, |_, _| true)
+}
+
+/// Selection boundaries stop propagation, rather than just hiding the
+/// result of a flood that already crossed unselected pixels.
+pub(crate) fn flood_fill_masked(img: &RgbaImage, seed: (u32, u32), tolerance: f64, allowed: impl Fn(u32, u32) -> bool) -> Mask {
     let (w, h) = img.dimensions();
     let mut mask = Mask::new(w, h);
-    if seed.0 >= w || seed.1 >= h {
+    if seed.0 >= w || seed.1 >= h || !allowed(seed.0, seed.1) {
         return mask;
     }
     let seed_px = img.get_pixel(seed.0, seed.1).0;
@@ -81,7 +87,7 @@ pub fn flood_fill(img: &RgbaImage, seed: (u32, u32), tolerance: f64) -> Mask {
             (x, y + 1),
         ];
         for (nx, ny) in neighbors {
-            if nx >= w || ny >= h || mask.get(nx as i64, ny as i64) {
+            if nx >= w || ny >= h || mask.get(nx as i64, ny as i64) || !allowed(nx, ny) {
                 continue;
             }
             if matches(img.get_pixel(nx, ny).0) {

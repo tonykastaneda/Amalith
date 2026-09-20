@@ -269,6 +269,13 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::VerticalAreaType => "VerticalAreaType",
         Tool::VerticalPathType => "VerticalPathType",
         Tool::MagicWand => "MagicWand",
+        Tool::RasterMarquee => "RasterMarquee",
+        Tool::RasterEllipse => "RasterEllipse",
+        Tool::RasterLasso => "RasterLasso",
+        Tool::RasterBrush => "RasterBrush",
+        Tool::RasterEraser => "RasterEraser",
+        Tool::RasterFill => "RasterFill",
+        Tool::RasterCloneStamp => "RasterCloneStamp",
     }
 }
 

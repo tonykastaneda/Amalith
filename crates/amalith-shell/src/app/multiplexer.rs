@@ -804,10 +804,12 @@ impl App {
                 }
                 self.mux.origin = None;
                 self.layers_new_menu = false;
+                self.layers_blend_menu = false;
             }
             TabContent::Chooser => {
                 self.mux.origin = None;
                 self.layers_new_menu = false;
+                self.layers_blend_menu = false;
             }
         }
         self.drag = Drag::None;

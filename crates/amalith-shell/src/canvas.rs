@@ -2318,7 +2318,23 @@ fn paint_object(
                 let sb = m.transform_rect_bbox(convert::rect(img.local_bounds));
                 sb.width().max(sb.height())
             };
-            if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
+            if let Some(tiles) = images.get(&img.asset).and_then(|l| l.tiles.as_ref()) {
+                let bounds = img.local_bounds;
+                let pixels = m * Affine::translate((bounds.x0, bounds.y0))
+                    * Affine::scale_non_uniform(bounds.width() / tiles.width as f64, bounds.height() / tiles.height as f64);
+                // Add tile coverage in an isolated surface: source-over
+                // between adjacent antialiased edges would leave seams.
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
+                for tile in &tiles.tiles {
+                    if !overlaps(pixels.transform_rect_bbox(tile.core), viewport) { continue; }
+                    let clip = pixels.transform_rect_bbox(tile.core).inflate(2.0, 2.0);
+                    scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::Plus), 1.0, Affine::IDENTITY, &clip);
+                    let brush = ImageBrush::new(tile.image.clone());
+                    scene.fill(Fill::NonZero, pixels, &brush, Some(Affine::translate((tile.image_rect.x0, tile.image_rect.y0))), &tile.core);
+                    scene.pop_layer();
+                }
+                scene.pop_layer();
+            } else if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
                 paint_raster(scene, m, gpu, img.local_bounds);
             } else if let Some(b) = obj.kind.own_local_bounds() {
                 let r = convert::rect(b);

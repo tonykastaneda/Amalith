@@ -37,10 +37,24 @@ pub enum Tool {
     VerticalAreaType,
     VerticalPathType,
     MagicWand,
+    RasterMarquee,
+    RasterEllipse,
+    RasterLasso,
+    RasterBrush,
+    RasterEraser,
+    RasterFill,
+    RasterCloneStamp,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 33] = [
+    pub fn is_raster_selection(self) -> bool {
+        matches!(self, Tool::RasterMarquee | Tool::RasterEllipse | Tool::RasterLasso)
+    }
+    pub fn is_raster_tool(self) -> bool {
+        self.is_raster_selection()
+            || matches!(self, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp)
+    }
+    pub const ALL: [Tool; 40] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -74,6 +88,13 @@ impl Tool {
         Tool::VerticalAreaType,
         Tool::VerticalPathType,
         Tool::MagicWand,
+        Tool::RasterMarquee,
+        Tool::RasterEllipse,
+        Tool::RasterLasso,
+        Tool::RasterBrush,
+        Tool::RasterEraser,
+        Tool::RasterFill,
+        Tool::RasterCloneStamp,
     ];
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
@@ -128,6 +149,13 @@ impl Tool {
             Tool::VerticalAreaType => "Vertical Area Type",
             Tool::VerticalPathType => "Vertical Type on a Path",
             Tool::MagicWand => "Magic Wand",
+            Tool::RasterMarquee => "Rectangular Marquee",
+            Tool::RasterEllipse => "Elliptical Marquee",
+            Tool::RasterLasso => "Lasso",
+            Tool::RasterBrush => "Brush",
+            Tool::RasterEraser => "Pixel Eraser",
+            Tool::RasterFill => "Paint Bucket",
+            Tool::RasterCloneStamp => "Clone Stamp",
         }
     }
 
@@ -155,6 +183,13 @@ impl Tool {
             Tool::ShapeBuilder => "⇧M",
             Tool::Eraser => "⇧E",
             Tool::MagicWand => "Y",
+            Tool::RasterMarquee => "M",
+            Tool::RasterEllipse => "⇧M",
+            Tool::RasterLasso => "L",
+            Tool::RasterBrush => "B",
+            Tool::RasterEraser => "⇧E",
+            Tool::RasterFill => "K",
+            Tool::RasterCloneStamp => "C",
             // Matching Illustrator's own Type flyout: only the plain Type
             // Tool has a default shortcut: the other five (Area/Path ×
             // horizontal/vertical) are flyout-only.
@@ -197,6 +232,13 @@ impl Tool {
             Tool::VerticalAreaType => Icon::VerticalAreaType,
             Tool::VerticalPathType => Icon::VerticalPathType,
             Tool::MagicWand => Icon::MagicWand,
+            Tool::RasterMarquee => Icon::RasterMarquee,
+            Tool::RasterEllipse => Icon::RasterEllipse,
+            Tool::RasterLasso => Icon::Lasso,
+            Tool::RasterBrush => Icon::Paintbrush,
+            Tool::RasterEraser => Icon::Eraser,
+            Tool::RasterFill => Icon::PaintBucket,
+            Tool::RasterCloneStamp => Icon::CloneStamp,
         }
     }
 }
@@ -285,7 +327,11 @@ mod tests {
                 | Tool::PathType
                 | Tool::VerticalAreaType
                 | Tool::VerticalPathType
-                | Tool::MagicWand => true,
+                | Tool::MagicWand
+                | Tool::RasterMarquee
+                | Tool::RasterEllipse
+                | Tool::RasterLasso => true,
+                Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => true,
             }
         }
         for t in Tool::ALL {

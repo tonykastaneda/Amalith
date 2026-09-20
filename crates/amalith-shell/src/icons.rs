@@ -80,6 +80,10 @@ pub enum Icon {
     // Tools panel's greyed-out "(WIP)" placeholder slots.
     MagicWand,
     Lasso,
+    RasterMarquee,
+    RasterEllipse,
+    PaintBucket,
+    CloneStamp,
     CurvaturePen,
     Paintbrush,
     Pencil,
@@ -109,7 +113,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
         | Icon::Eraser | Icon::VerticalText | Icon::AreaType | Icon::PathType
         | Icon::VerticalAreaType | Icon::VerticalPathType
-        | Icon::MagicWand | Icon::Lasso | Icon::CurvaturePen | Icon::Paintbrush
+        | Icon::MagicWand | Icon::Lasso | Icon::RasterMarquee | Icon::RasterEllipse | Icon::PaintBucket | Icon::CloneStamp | Icon::CurvaturePen | Icon::Paintbrush
         | Icon::Pencil | Icon::Mesh | Icon::Measure | Icon::SymbolSprayer
         | Icon::Slice | Icon::Shaper | Icon::PerspectiveGrid | Icon::ColumnGraph => "",
     }
@@ -117,6 +121,49 @@ fn brand_svg(icon: Icon) -> &'static str {
 
 /// Draw `icon` filling `box_` (screen px), tinted `color` — the panel look.
 pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
+    if icon == Icon::PaintBucket {
+        let xf = Affine::translate((box_.x0, box_.y0)) * Affine::scale(box_.width() / 24.0);
+        let mut path = BezPath::new();
+        path.move_to((4., 12.)); path.line_to((11., 5.)); path.line_to((19., 13.));
+        path.line_to((12., 20.)); path.close_path();
+        path.move_to((8., 8.)); path.line_to((8., 3.)); path.line_to((13., 8.));
+        path.move_to((5., 13.)); path.line_to((18., 13.));
+        scene.stroke(&Stroke::new(1.4), xf, color, None, &path);
+        scene.fill(Fill::NonZero, xf, color, None, &Circle::new((20., 19.), 1.8));
+        return;
+    }
+    if icon == Icon::CloneStamp {
+        let xf = Affine::translate((box_.x0, box_.y0)) * Affine::scale(box_.width() / 24.0);
+        let mut path = BezPath::new();
+        // Stamp base (the printing surface).
+        path.move_to((5., 19.));
+        path.line_to((19., 19.));
+        path.line_to((19., 22.));
+        path.line_to((5., 22.));
+        path.close_path();
+        // Body tapering up to the grip.
+        path.move_to((7., 19.));
+        path.line_to((9., 10.));
+        path.line_to((15., 10.));
+        path.line_to((17., 19.));
+        // Grip handle.
+        path.move_to((9., 10.));
+        path.line_to((10., 5.));
+        path.line_to((14., 5.));
+        path.line_to((15., 10.));
+        scene.stroke(&Stroke::new(1.4), xf, color, None, &path);
+        return;
+    }
+    if matches!(icon, Icon::RasterMarquee | Icon::RasterEllipse) {
+        let r = box_.inset(box_.width() * 0.18);
+        let stroke = Stroke::new(box_.width() / 18.0).with_dashes(0.0, [box_.width() / 9.0, box_.width() / 12.0]);
+        if icon == Icon::RasterEllipse {
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &vello::kurbo::Ellipse::from_rect(r));
+        } else {
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        }
+        return;
+    }
     if icon == Icon::Text {
         draw_type_glyph(scene, box_, color);
         return;

@@ -142,23 +142,54 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
 }
 
 /// The Raster Layer toolset — deliberately much smaller than Vector's:
-/// the real, working tools that already make sense against pixel content
-/// (Move, Magic Wand, Eyedropper, Hand, Zoom) plus WIP placeholders for
-/// the pixel-editing tools not built yet (Brush / Eraser — Phase 3 of the
-/// raster roadmap). Grows as those phases land; for now this proves out
-/// the toolbar's Vector/Raster switch itself.
-fn raster_slots(hide_wip: bool) -> Vec<Slot> {
-    use icons::Icon;
+/// Move, pixel selections (wand, rectangular/elliptical marquee, lasso),
+/// Brush, Pixel Eraser, Paint Bucket, and shared editable vector tools.
+fn raster_slots(shape: Tool, type_group: Tool, _hide_wip: bool) -> Vec<Slot> {
     let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::MagicWand)];
-    if !hide_wip {
-        v.push(Slot::Wip("Lasso", Icon::Lasso));
-        v.push(Slot::Wip("Brush", Icon::Paintbrush));
-        v.push(Slot::Wip("Eraser", Icon::Eraser));
-    }
+    v.extend([Slot::Tool(Tool::RasterMarquee), Slot::Tool(Tool::RasterEllipse), Slot::Tool(Tool::RasterLasso)]);
+    v.push(Slot::Tool(Tool::RasterBrush));
+    v.push(Slot::Tool(Tool::RasterEraser));
+    v.push(Slot::Tool(Tool::RasterFill));
+    v.push(Slot::Tool(Tool::RasterCloneStamp));
+    v.push(Slot::Flyout(crate::tool::ToolGroup::Type, type_group));
+    v.push(Slot::Shape(shape));
+    v.push(Slot::Tool(Tool::Line));
+    v.push(Slot::Tool(Tool::Arc));
+    v.push(Slot::Tool(Tool::Spiral));
+    v.push(Slot::Tool(Tool::DirectSelect));
     v.push(Slot::Tool(Tool::Eyedropper));
     v.push(Slot::Tool(Tool::Hand));
     v.push(Slot::Tool(Tool::Zoom));
     v
+}
+
+#[cfg(test)]
+mod raster_tests {
+    use super::*;
+    #[test]
+    fn shared_flyouts_anchor_to_the_current_toolbar_in_both_column_layouts() {
+        for kind in [amalith_core::LayerKind::Vector, amalith_core::LayerKind::Raster] {
+            set_layer_kind(Some(kind));
+            for hide_wip in [true, false] {
+                let all = slots(Tool::Star, Tool::Rotate, Tool::Scale, Tool::VerticalAreaType, hide_wip, Some(kind));
+                let shape = all.iter().position(|s| matches!(s, Slot::Shape(Tool::Star))).unwrap();
+                let text = all.iter().position(|s| matches!(s, Slot::Flyout(crate::tool::ToolGroup::Type, Tool::VerticalAreaType))).unwrap();
+                for width in [metric_cell(), metric_cell() * 2.0 + ui_px(10.0)] {
+                    let body = Rect::new(30.0, 40.0, 30.0 + width, 1040.0);
+                    assert_eq!(shape_slot_rect(body, hide_wip), cell(body, shape, cols(body)));
+                    assert_eq!(group_slot_rect(body, crate::tool::ToolGroup::Type, hide_wip), cell(body, text, cols(body)));
+                }
+            }
+        }
+        set_layer_kind(None);
+    }
+    #[test]
+    fn pixel_selection_tools_are_live_and_only_in_raster_toolbar() {
+        for tool in [Tool::RasterMarquee, Tool::RasterEllipse, Tool::RasterLasso, Tool::RasterBrush, Tool::RasterEraser, Tool::RasterFill, Tool::RasterCloneStamp] {
+            assert!(raster_slots(Tool::Rectangle, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
+            assert!(!vector_slots(Tool::Rectangle, Tool::Rotate, Tool::Scale, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
+        }
+    }
 }
 
 /// Which slot grid governs the toolbar right now — Raster only when the
@@ -167,7 +198,7 @@ fn raster_slots(hide_wip: bool) -> Vec<Slot> {
 /// familiar Vector grid rather than flickering between the two.
 fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool, kind: Option<amalith_core::LayerKind>) -> Vec<Slot> {
     match kind {
-        Some(amalith_core::LayerKind::Raster) => raster_slots(hide_wip),
+        Some(amalith_core::LayerKind::Raster) => raster_slots(shape, type_group, hide_wip),
         _ => vector_slots(shape, rotate_group, scale_group, type_group, hide_wip),
     }
 }
@@ -217,19 +248,16 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
     Rect::new(x, y, x + metric_cell(), y + metric_cell())
 }
 
-/// Screen rect of the Shape slot — the flyout anchors to it. Vector-only
-/// (Raster has no Shape slot); only ever called while that flyout is
-/// open, which is only possible from the Vector grid in the first place.
+/// Screen rect of the Shape slot in the active layer's toolbar.
 pub fn shape_slot_rect(body: Rect, hide_wip: bool) -> Rect {
-    let s = vector_slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind());
     let i = s.iter().position(|s| matches!(s, Slot::Shape(_))).unwrap_or(0);
     cell(body, i, cols(body))
 }
 
 /// Screen rect of a flyout-group slot — its labeled flyout anchors here.
-/// Vector-only, same reasoning as `shape_slot_rect`.
 pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup, hide_wip: bool) -> Rect {
-    let s = vector_slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip);
+    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind());
     let i = s
         .iter()
         .position(|s| matches!(s, Slot::Flyout(g, _) if *g == group))
