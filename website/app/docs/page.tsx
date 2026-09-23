@@ -76,7 +76,7 @@ export default function Docs() {
               <p>Amalith is in early development, but the native editor is already ready to explore. You can follow the project, build it locally, and help shape what comes next.</p>
 
               <h3 id="installation">Installation</h3>
-              <p>Ready-to-run builds for macOS, Windows, and Linux are coming soon. Until then, developers can build Amalith directly from the source repository.</p>
+              <p>Ready-to-run builds for macOS, Windows, and Linux are on the Downloads page. Developers can also build Amalith directly from the source repository.</p>
               <div className="docs-actions">
                 <a className="docs-action docs-action--primary" href={`${basePath}/downloads/`}>Downloads</a>
                 <a className="docs-action" href="https://github.com/tonykastaneda/Amalith#build-and-run" target="_blank" rel="noreferrer">Build from source <ArrowUpRight /></a>

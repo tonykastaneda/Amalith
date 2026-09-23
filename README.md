@@ -74,7 +74,7 @@ The native editor owns document data, geometry, commands, rendering, and file fo
 
 ## Releasing
 
-Every push to `main` builds and tests on macOS and Windows via `.github/workflows/build.yml`. Pushing a tag like `v0.0.1` triggers `.github/workflows/release.yml`, which builds an unsigned `Amalith.dmg` (macOS) and `Amalith-<version>-Windows.zip` (Windows) and publishes them as a GitHub Release. Neither build is code-signed yet, so macOS Gatekeeper and Windows SmartScreen will both warn on first run — see `scripts/package-macos.sh`'s header for how to add signing/notarization later.
+Releases are built only in GitHub CI — there is no local packaging path. Every push to `main` builds and tests via `.github/workflows/build.yml`. Pushing a tag like `v0.0.5` triggers `.github/workflows/release.yml`, which builds and publishes a GitHub Release with `Amalith.dmg` (macOS, signed + notarized), `Amalith-Windows.zip` (a single `Amalith.exe`, not yet code-signed) and `Amalith-Linux.zip` (AppImage, deb, rpm, tarball, Arch PKGBUILD). See `CONTEXT.md` for the release steps.
 
 ## Crates
 

@@ -176,11 +176,12 @@ impl App {
             // `cd` there by hand.
             cmd.cwd(dir);
         }
-        // Put the app's own directory first on PATH so the `amalith-script`
-        // shipped beside it is runnable by bare name. In a packaged build
-        // that's `Amalith.app/Contents/MacOS`; under `cargo run` it's
-        // `target/<profile>`, where cargo puts both binaries — so one line
-        // covers development and the shipped app.
+        // Put the app's own directory first on PATH so `Amalith` itself is
+        // runnable by bare name — that's how headless automation is invoked
+        // now (`Amalith script foo.jsx`, see `crate::main`). In a packaged
+        // build that directory is `Amalith.app/Contents/MacOS`; under
+        // `cargo run` it's `target/<profile>`, so one line covers
+        // development and the shipped app.
         if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
         {
             let mut entries = vec![dir];

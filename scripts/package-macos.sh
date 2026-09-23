@@ -1,22 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build Amalith.app for macOS.
-#
-#   ./scripts/package-macos.sh                 # unsigned bundle in dist/mac/
-#   SIGN_IDENTITY="Developer ID Application: NAME (TEAMID)" \
-#       ./scripts/package-macos.sh             # + codesign (hardened runtime)
-#   SIGN_IDENTITY=...  NOTARY_PROFILE=amalith \
-#       ./scripts/package-macos.sh             # + notarize + staple + .dmg
-#
-# One-time setup for signing / notarising:
-#   1. Install a "Developer ID Application" cert (Xcode ▸ Settings ▸ Accounts
-#      ▸ your team ▸ Manage Certificates ▸ + ▸ Developer ID Application).
-#      Confirm:  security find-identity -p basic -v | grep "Developer ID"
-#   2. Store notary credentials once:
-#        xcrun notarytool store-credentials amalith \
-#          --apple-id you@example.com --team-id TEAMID \
-#          --password <app-specific-password>
-#      (app-specific password: appleid.apple.com ▸ Sign-In and Security)
+# CI step: builds, signs and notarizes Amalith.app + Amalith.dmg for the
+# macOS job in .github/workflows/release.yml. Releases are built only in CI;
+# this isn't meant to be run by hand. The job supplies SIGN_IDENTITY and the
+# notary credentials from repo secrets (see release.yml's header).
 #
 set -euo pipefail
 
@@ -41,22 +28,17 @@ mkdir -p "$out"
 
 echo "==> cargo build --release ($VERSION)"
 export AMALITH_VERSION="$VERSION"
-# amalith-script ships beside the app binary: the built-in terminal puts
-# Contents/MacOS on the spawned shell's PATH, so scripts and coding agents can
-# run it by bare name (see crates/amalith-shell/src/agent.rs).
-cargo build --release -p amalith-shell -p amalith-script
+# One binary: the headless .jsx engine is the `Amalith script` subcommand
+# rather than a second executable (see crates/amalith-shell/src/main.rs).
+cargo build --release -p amalith-shell
 bin="$root/target/release/$APP_NAME"
 [ -x "$bin" ] || { echo "missing $bin"; exit 1; }
-script_bin="$root/target/release/amalith-script"
-[ -x "$script_bin" ] || { echo "missing $script_bin"; exit 1; }
 
 echo "==> assembling $app"
 rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources"
 cp "$bin" "$contents/MacOS/$APP_NAME"
 strip -x "$contents/MacOS/$APP_NAME" 2>/dev/null || true
-cp "$script_bin" "$contents/MacOS/amalith-script"
-strip -x "$contents/MacOS/amalith-script" 2>/dev/null || true
 
 echo "==> $APP_NAME.icns"
 iconset="$(mktemp -d)/$APP_NAME.iconset"
@@ -128,10 +110,6 @@ if [ -n "${SIGN_IDENTITY:-}" ]; then
   <key>com.apple.security.cs.allow-jit</key><true/>
 </dict></plist>
 ENT
-  # Inside-out: the nested helper is signed before the bundle that contains
-  # it, or notarization rejects the app for unsigned nested code.
-  codesign --force --timestamp --options runtime \
-    --entitlements "$ents" --sign "$SIGN_IDENTITY" "$contents/MacOS/amalith-script"
   codesign --force --deep --timestamp --options runtime \
     --entitlements "$ents" --sign "$SIGN_IDENTITY" "$app"
   codesign --verify --strict --verbose=2 "$app"

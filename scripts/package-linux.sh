@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# Build x86_64 Linux release artifacts in dist/linux/, plus the single
-# Amalith-Linux.zip that bundles every install method for the release page.
+# CI step: builds the x86_64 Linux release artifacts, plus the single
+# Amalith-Linux.zip that bundles every install method for the release page,
+# for the Linux job in .github/workflows/release.yml. Releases are built only
+# in CI; this isn't meant to be run by hand.
 #
 # Required: cargo, tar, dpkg-deb, rpmbuild, appimagetool, sha256sum, zip
-# Run on an x86_64 Linux host: ./scripts/package-linux.sh
 #
 set -euo pipefail
 
@@ -41,14 +42,11 @@ mkdir -p "$out/arch"
 
 echo "==> cargo build --release ($VERSION)"
 export AMALITH_VERSION="$VERSION"
-# amalith-script ships beside the app binary: the built-in terminal puts the
-# app's own directory on the spawned shell's PATH, so scripts and coding agents
-# can run it by bare name (see crates/amalith-shell/src/agent.rs).
-cargo build --release -p amalith-shell -p amalith-script
+# One binary: the headless .jsx engine is the `Amalith script` subcommand
+# rather than a second executable (see crates/amalith-shell/src/main.rs).
+cargo build --release -p amalith-shell
 bin="$root/target/release/$APP"
 [ -x "$bin" ] || { echo "missing $bin" >&2; exit 1; }
-script_bin="$root/target/release/amalith-script"
-[ -x "$script_bin" ] || { echo "missing $script_bin" >&2; exit 1; }
 
 desktop="$work/$APP_ID.desktop"
 cat > "$desktop" <<EOF
@@ -67,7 +65,6 @@ EOF
 archive_root="$work/amalith-$VERSION-x86_64"
 mkdir -p "$archive_root"
 install -m 0755 "$bin" "$archive_root/$APP"
-install -m 0755 "$script_bin" "$archive_root/amalith-script"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$archive_root/$APP_ID.png"
 install -m 0644 "$desktop" "$archive_root/$APP_ID.desktop"
 cat > "$archive_root/README.txt" <<EOF
@@ -76,8 +73,7 @@ $APP $VERSION — Linux x86_64
 Run ./$APP, or install the binary somewhere on PATH. The .desktop file and
 icon are included for desktop-menu integration.
 
-amalith-script is the headless .jsx script runner. Amalith's built-in terminal
-puts it on PATH automatically; keep it beside $APP if you move things around.
+Run headless .jsx automation with:  ./$APP script yourscript.jsx
 EOF
 tarball="$out/amalith-$VERSION-x86_64.tar.gz"
 tar -C "$work" -czf "$tarball" "$(basename "$archive_root")"
@@ -87,7 +83,6 @@ debroot="$work/deb"
 mkdir -p "$debroot/DEBIAN" "$debroot/usr/bin" \
   "$debroot/usr/share/applications" "$debroot/usr/share/icons/hicolor/512x512/apps"
 install -m 0755 "$bin" "$debroot/usr/bin/$APP"
-install -m 0755 "$script_bin" "$debroot/usr/bin/amalith-script"
 install -m 0644 "$desktop" "$debroot/usr/share/applications/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" \
   "$debroot/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
@@ -110,7 +105,6 @@ rpmroot="$work/rpmbuild"
 mkdir -p "$rpmroot/BUILD" "$rpmroot/BUILDROOT" "$rpmroot/RPMS" \
   "$rpmroot/SOURCES" "$rpmroot/SPECS" "$rpmroot/SRPMS"
 install -m 0755 "$bin" "$rpmroot/SOURCES/$APP"
-install -m 0755 "$script_bin" "$rpmroot/SOURCES/amalith-script"
 install -m 0644 "$desktop" "$rpmroot/SOURCES/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$rpmroot/SOURCES/$APP_ID.png"
 cat > "$rpmroot/SPECS/amalith.spec" <<EOF
@@ -123,20 +117,17 @@ URL:            https://www.amalith.app/
 Source0:        $APP
 Source1:        $APP_ID.desktop
 Source2:        $APP_ID.png
-Source3:        amalith-script
 
 %description
 Amalith is a native, open-source vector design application.
 
 %install
 install -Dm755 %{SOURCE0} %{buildroot}%{_bindir}/$APP
-install -Dm755 %{SOURCE3} %{buildroot}%{_bindir}/amalith-script
 install -Dm644 %{SOURCE1} %{buildroot}%{_datadir}/applications/$APP_ID.desktop
 install -Dm644 %{SOURCE2} %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/$APP_ID.png
 
 %files
 %{_bindir}/$APP
-%{_bindir}/amalith-script
 %{_datadir}/applications/$APP_ID.desktop
 %{_datadir}/icons/hicolor/512x512/apps/$APP_ID.png
 EOF
@@ -150,7 +141,6 @@ appdir="$work/$APP.AppDir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
   "$appdir/usr/share/icons/hicolor/512x512/apps"
 install -m 0755 "$bin" "$appdir/usr/bin/$APP"
-install -m 0755 "$script_bin" "$appdir/usr/bin/amalith-script"
 install -m 0644 "$desktop" "$appdir/$APP_ID.desktop"
 install -m 0644 "$desktop" "$appdir/usr/share/applications/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$appdir/$APP_ID.png"
@@ -220,8 +210,9 @@ Portable tarball — no root needed
   $APP_ID.desktop into ~/.local/share/applications and $APP_ID.png into
   ~/.local/share/icons/hicolor/512x512/apps.
 
-amalith-script, the headless .jsx runner, ships beside the app in every
-method above; Amalith's built-in terminal puts it on PATH automatically.
+The headless .jsx runner is built into the app: run
+  $APP script yourscript.jsx
+Amalith's built-in terminal puts $APP itself on PATH, so that works there too.
 EOF
 (cd "$work" && zip -qr "$out/$APP-Linux.zip" "$APP-Linux-$VERSION")
 

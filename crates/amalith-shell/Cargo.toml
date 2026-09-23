@@ -9,7 +9,7 @@ description = "Amalith's custom UI shell: winit + wgpu + vello. Windows, input, 
 name = "amalith_shell"
 path = "src/lib.rs"
 
-# Binary name: the .app / .exe / Dock name. See scripts/package.sh.
+# Binary name: the .app / .exe / Dock name. See .github/workflows/release.yml.
 [[bin]]
 name = "Amalith"
 path = "src/main.rs"
@@ -20,6 +20,11 @@ path = "src/main.rs"
 embed-resource = "3"
 
 [dependencies]
+# The headless .jsx engine is a subcommand of this binary rather than a
+# second executable: it shares amalith-core/commands/io, parley, skrifa and
+# kurbo with the shell, so shipping it separately duplicated most of its own
+# size. Only the JS engine is genuinely extra. See `main.rs`.
+amalith-script = { path = "../amalith-script" }
 amalith-trace = { path = "../amalith-trace" }
 # Only used for the startup update check (see update_check::spawn) — a
 # single blocking GET against the GitHub releases API on a background

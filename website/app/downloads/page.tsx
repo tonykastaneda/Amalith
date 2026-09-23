@@ -6,8 +6,8 @@ import { DownloadLinks, type Platform } from "./DownloadLinks";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 export const metadata: Metadata = {
-  title: "Download Amalith — Coming Soon",
-  description: "Amalith downloads for macOS, Windows 10/11, and Linux are coming soon.",
+  title: "Download Amalith",
+  description: "Download Amalith for macOS, Windows 10/11, and Linux.",
 };
 
 const platforms: Platform[] = [

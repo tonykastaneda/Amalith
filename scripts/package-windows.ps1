@@ -1,7 +1,6 @@
-# Builds and zips Amalith for Windows. Run from the repo root, on Windows
-# (this can't be cross-compiled reliably from macOS via rustup's std alone —
-# see scripts/package.sh's cargo-xwin path for the cross-compile option;
-# this script and the release CI job are the native-Windows equivalent).
+# CI step: builds and zips Amalith for the Windows job in
+# .github/workflows/release.yml. Releases are built only in CI; this isn't
+# meant to be run by hand.
 #
 # No code signing here — there's no Windows code-signing certificate yet,
 # so the built .exe is unsigned and Windows SmartScreen will show an
@@ -15,10 +14,9 @@ $Version = if ($env:VERSION) { $env:VERSION } else {
 
 Write-Host "==> Building release ($Version)"
 $env:AMALITH_VERSION = $Version
-# amalith-script ships beside the app binary: the built-in terminal puts the
-# app's own directory on the spawned shell's PATH, so scripts and coding agents
-# can run it by bare name (see crates/amalith-shell/src/agent.rs).
-cargo build --release -p amalith-shell -p amalith-script
+# One binary: the headless .jsx engine is the `Amalith script` subcommand
+# rather than a second executable (see crates/amalith-shell/src/main.rs).
+cargo build --release -p amalith-shell
 
 $StageDir = "target/package/windows"
 # No version in the filename (like the macOS .dmg) so the website can link
@@ -28,7 +26,6 @@ $ZipName = "Amalith-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/Amalith.exe" "$StageDir/Amalith.exe"
-Copy-Item "target/release/amalith-script.exe" "$StageDir/amalith-script.exe"
 
 Write-Host "==> Zipping"
 $ZipPath = "target/package/$ZipName"

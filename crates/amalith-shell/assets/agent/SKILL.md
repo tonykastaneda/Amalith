@@ -73,24 +73,27 @@ is set to, so do not apply a unit conversion to the numbers you read.
 
 ## Automating with .jsx
 
-Amalith ships a headless ExtendScript compatibility shim, so Illustrator-style
-`.jsx` automation runs against its document engine:
+Amalith has a built-in headless ExtendScript compatibility shim, so
+Illustrator-style `.jsx` automation runs against its document engine:
 
 ```bash
-amalith-script run script.jsx [script2.jsx ...]
+Amalith script script.jsx [script2.jsx ...]
 ```
+
+`Amalith` is on your `PATH` inside this terminal. The `script` subcommand
+never opens a window — it runs the scripts and exits.
 
 Scripts run sequentially in one shared context, so `$.global` and any documents
 a script opened persist from one file to the next — matching how a chained
-Illustrator pipeline behaves. Note that `amalith-script` takes **script paths
-only**; a script opens and saves documents itself, so passing a `.amalith` path
-as an argument will not work.
+Illustrator pipeline behaves. It takes **script paths only**; a script opens
+and saves documents itself, so passing a `.amalith` path as an argument will
+not work.
 
 Scripts saved in `$AMALITH_SCRIPTS_DIR` also show up under File ▸ Scripts in
 the app, so anything you write there is reachable from the menu bar.
 
-`amalith-script` runs headlessly and does not touch the open window. Have it
-write to a new file rather than over the user's document.
+This runs headlessly against files on disk and does not touch the open window.
+Have it write to a new file rather than over the user's document.
 
 ## Working with the user
 

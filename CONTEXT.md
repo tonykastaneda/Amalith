@@ -13,57 +13,39 @@ through `Editor::execute`.** See `README.md` for the crate breakdown and
 |---|---|
 | **"run it" / "open the app" / dev loop** | `cargo run -p amalith-shell` |
 | tests | `cargo test --workspace` |
-| **"build" / "package" / "cut a build"** | `./scripts/package.sh` |
-| just the macOS `.app` and `.dmg` | `./scripts/package-macos.sh` |
-| Linux release artifacts (on x86_64 Linux) | `./scripts/package-linux.sh` |
+| **"build" / "build a new version" / "release"** | GitHub CI — see below. Never build release artifacts locally. |
 
-"run" and "build" mean different things here — **"run" is `cargo run`**, **"build"
-is the packaging script.**
+"run" and "build" mean different things here — **"run" is `cargo run`**,
+**"build" is a GitHub release built entirely in CI.**
 
-## `./scripts/package.sh`
+## Building a new version (CI only)
 
-Produces, in `dist/`:
+There is no local packaging path. Releases are built, signed, notarized and
+published by `.github/workflows/release.yml`; nothing is built on a
+developer machine. "Build new version" means:
 
-- `dist/mac/` — `Amalith.app` and `Amalith.dmg`. Signed with Developer ID +
-  hardened runtime when the env vars below are set; otherwise unsigned.
-- `dist/windows/` — `Amalith.exe` (self-contained, static CRT — nothing to
-  install), its `.ico`, and a `README.txt`. Cross-compiled from macOS.
-- `dist/linux/` — AppImage, tarball, Debian and RPM packages, plus Arch Linux
-  and Flatpak packaging manifests. Built on an x86_64 Linux host.
+1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`
+   (patch bump unless told otherwise) and refresh `Cargo.lock`.
+2. Commit and push to `main`. `build.yml` compiles and tests on every
+   platform — wait for it to go green.
+3. Tag `vX.Y.Z` on that commit and push the tag. `release.yml` builds all
+   three platforms and publishes the GitHub Release (full release, marked
+   Latest). CI uses the tag as the version, so tag and binaries always match.
+4. Check the published release has exactly these three assets:
+   - `Amalith.dmg` — macOS arm64, Developer ID signed + notarized
+   - `Amalith-Windows.zip` — just `Amalith.exe` (unsigned; SmartScreen warns)
+   - `Amalith-Linux.zip` — AppImage, deb, rpm, tarball, Arch PKGBUILD,
+     `INSTALL.txt`, `SHA256SUMS`
 
-Default run = fast (signs the `.app`, skips Apple notarization). For a real
-public release, notarize:
+5. Website: the Downloads buttons fetch the newest release from the GitHub
+   API at page load, so a new version needs no site edit. Only touch
+   `website/` if the release changed something the site describes (new
+   platform, renamed asset, a feature or install step the docs mention).
+   Pushing `website/**` redeploys via `pages.yml`.
 
-```bash
-SIGN_IDENTITY="Developer ID Application: Anthony Castaneda (GM98GV6S97)" \
-NOTARY_PROFILE=amalith \
-  ./scripts/package.sh
-```
-
-The notary credentials live in the login keychain under the profile name
-`amalith` (`xcrun notarytool store-credentials`). Team ID `GM98GV6S97`.
-`package.sh` notarizes and staples both the `.app` and the `.dmg`.
-
-Windows signing is **not** set up and is **not required** — an unsigned exe
-runs; first launch just shows a SmartScreen "unknown publisher" notice the
-user clicks past.
-
-## Toolchain notes (macOS build host)
-
-- This Mac has **two Rust installs**: a Homebrew `rust` formula (what bare
-  `cargo` resolves to — fine for the native mac build) and `rustup` (needed for
-  cross-compiling, since Homebrew rust can't `rustup target add`).
-  `package.sh` forces the rustup toolchain for the Windows step via
-  `rustup which cargo`.
-- Windows cross-compile needs, one-time:
-  `rustup target add x86_64-pc-windows-msvc`, `cargo install cargo-xwin`,
-  `brew install llvm` (for `llvm-rc`, used by `build.rs` to embed the icon).
-- If a link step ever dies with `lld-link ... SIGABRT` and
-  `Library not loaded: @rpath/libLLVM.dylib`, the rustup toolchain is missing
-  its LLVM tools: `rustup component add llvm-tools`.
-- `cargo-xwin` downloads a ~1 GB MS SDK/CRT into `~/Library/Caches/cargo-xwin`
-  on first use. The `LNK4099` "cannot use debug info for libcmt.lib" warnings
-  it prints are harmless (Microsoft never ships those PDBs).
+The website matches those three filenames, so don't rename them. Signing credentials live in repo secrets (see the header of
+`release.yml`). The `scripts/package-*` files are the per-platform steps CI
+runs; they aren't meant to be run by hand.
 
 ## Where the deeper context lives
 

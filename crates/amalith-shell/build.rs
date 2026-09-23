@@ -1,8 +1,7 @@
 //! Build-time codegen:
 //!
 //! - Embeds the Windows app icon into `Amalith.exe` (no-op elsewhere).
-//!   When cross-compiling to Windows, `embed-resource` needs an
-//!   `llvm-rc` / `rc.exe` on PATH — `cargo xwin` provides one.
+//!   `embed-resource` uses the MSVC `rc.exe` on the Windows CI runner.
 //! - Scans `assets/newdoc-art/` and writes `$OUT_DIR/cnd_art.rs` — a
 //!   `CND_ART: &[&[u8]]` of `include_bytes!` for every `.png` in there.
 //!   The folder's contents *are* the rotation: adding an export puts it in,
