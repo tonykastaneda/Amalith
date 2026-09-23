@@ -173,19 +173,12 @@ pub fn install(selected: &[bool]) -> Vec<String> {
     errors
 }
 
-/// Whether any installed copy has drifted from this build's skill — which is
-/// what raises the bottom-right toast (see `crate::skill_notice`).
-///
-/// Amalith does *not* quietly rewrite those copies: they live inside another
-/// tool's configuration, so the user gets told and clicks Install. That also
-/// means the toast has something to report in the first place.
-pub fn needs_update() -> bool {
-    statuses().iter().any(|s| s.stale)
-}
-
 /// Called once at app launch: writes Amalith's own copy of the skill, which
-/// is what `AMALITH_SKILL` points at. Agent copies are left alone — see
-/// [`needs_update`].
+/// is what `AMALITH_SKILL` points at. Agent copies are left alone, and drift
+/// is reported instead of repaired — see `crate::integrations::needs_update`,
+/// which raises the corner notice. Those copies live inside another tool's
+/// configuration, so the user is told and clicks Install; that's also what
+/// gives the notice something to report.
 pub fn refresh() {
     if let Some(path) = skill_path() {
         let _ = write_if_changed(&path);

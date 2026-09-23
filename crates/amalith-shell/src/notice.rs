@@ -8,11 +8,11 @@
 //! - **An available app update**, once `App::update_available` (see
 //!   `update_check::spawn`) has an answer. There's no auto-download here;
 //!   the button opens the releases page in the system browser.
-//! - **An agent skill that has drifted** from the installed build
-//!   (`crate::agent::needs_update`). Its button opens Preferences ▸
-//!   Integrations, where the user reinstalls it for their agents. Amalith
-//!   doesn't rewrite those copies unasked — they live inside another tool's
-//!   configuration.
+//! - **An integration that has drifted** from the installed build
+//!   (`crate::integrations::needs_update`) — the `ama` shell function or an
+//!   agent's copy of the skill. Its button opens Preferences ▸ Integrations,
+//!   where the user reinstalls. Amalith doesn't rewrite those files unasked:
+//!   they live inside another tool's configuration.
 //!
 //! Either way the card is dismissible for the session.
 

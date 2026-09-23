@@ -1692,15 +1692,19 @@ struct App {
     /// from `update_available` so a stray late-arriving check result
     /// can't un-dismiss a banner the user already closed this session.
     update_dismissed: bool,
-    /// True when an agent has an installed copy of the skill that no longer
-    /// matches this build (`crate::agent::needs_update`), checked once at
-    /// startup. Raises the same corner notice as an app update, whose button
-    /// opens Preferences ▸ Integrations; Amalith never rewrites those copies
-    /// on its own, since they live in another tool's configuration.
-    skill_update: bool,
-    /// The skill notice's own dismissal, separate from `update_dismissed`
-    /// for the same reason that one exists.
-    skill_dismissed: bool,
+    /// True when some installed integration — the `ama` shell function, an
+    /// agent's copy of the skill — no longer matches this build
+    /// (`crate::integrations::needs_update`), checked once at startup.
+    /// Raises the same corner notice as an app update, whose button opens
+    /// Preferences ▸ Integrations. Amalith never rewrites those files on its
+    /// own, since they live in another tool's configuration.
+    integration_update: bool,
+    /// That notice's own dismissal, separate from `update_dismissed` for the
+    /// same reason that one exists.
+    integration_dismissed: bool,
+    /// Last body written to `crate::open_docs`, so the per-tick publish only
+    /// touches the disk when the open-document list actually changed.
+    open_docs_published: String,
 }
 
 impl App {
@@ -1930,8 +1934,9 @@ impl App {
             update_check_rx: crate::update_check::spawn(),
             update_available: None,
             update_dismissed: false,
-            skill_update: crate::agent::needs_update(),
-            skill_dismissed: false,
+            integration_update: crate::integrations::needs_update(),
+            integration_dismissed: false,
+            open_docs_published: String::new(),
         };
         // The fancy Home/Welcome screen is hidden, not deleted (its own
         // code and fields are untouched) — the app boots straight into a
@@ -4798,6 +4803,39 @@ impl App {
         };
     }
 
+    /// Every open document, for `crate::open_docs`. `tabs` holds one entry
+    /// per document, with whichever one is on screen living on `doc` instead
+    /// — the same live/parked split `mux_tab_label` works from.
+    fn open_document_entries(&self) -> Vec<crate::open_docs::Entry> {
+        (0..self.tabs.len())
+            .map(|i| if i == self.active { &self.doc } else { &self.tabs[i] })
+            .map(|doc| crate::open_docs::Entry {
+                title: doc
+                    .editor
+                    .document()
+                    .metadata
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "Untitled".to_string()),
+                path: doc.file_path.clone(),
+                dirty: doc.editor.is_dirty(),
+            })
+            .collect()
+    }
+
+    /// Publish the open-document list for the `ama` shell command, if it
+    /// changed. Called once per event-loop tick: building and comparing the
+    /// body is cheap, and it means no open/close/save/rename path has to
+    /// remember to do this itself.
+    fn publish_open_documents(&mut self) {
+        let body =
+            crate::open_docs::encode(std::process::id(), &self.open_document_entries());
+        if body != self.open_docs_published {
+            crate::open_docs::write(&body);
+            self.open_docs_published = body;
+        }
+    }
+
     /// Open Preferences on `category` (an index into
     /// [`prefs::CATEGORIES`]) — 0 for the plain ⌘, route, and the
     /// Integrations page when the skill notice's button is clicked.
@@ -4805,9 +4843,9 @@ impl App {
         let mut prefs =
             prefs::Prefs::new(self.settings, self.scripts.clone(), self.keymaps.clone());
         prefs.category = category;
-        // Reads each agent's install state once, here, so the Integrations
+        // Reads each integration's state once, here, so the Integrations
         // page never stats the filesystem while painting a frame.
-        prefs.refresh_agents();
+        prefs.refresh_integrations();
         self.prefs = Some(prefs);
         self.request_main_redraw();
     }
@@ -9333,6 +9371,8 @@ impl ApplicationHandler for App {
         // event-loop iteration rather than only after specific drag
         // commits, so no path can be missed.
         self.reap_closed_floating_windows();
+        // Same per-tick shape, for the `ama` shell command's document list.
+        self.publish_open_documents();
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let actions = self
@@ -9536,6 +9576,9 @@ impl ApplicationHandler for App {
         self.mux_exit_terminals();
         self.exit_terminal();
         self.save_layout();
+        // So `ama` says "is Amalith running?" instead of offering documents
+        // from a session that's over.
+        crate::open_docs::clear();
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {

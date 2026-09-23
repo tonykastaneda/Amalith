@@ -1280,14 +1280,14 @@ impl App {
                     &notice::Notice { title: "Update available", body: &body, action: "Download" },
                     &self.theme,
                 );
-            } else if self.skill_update && !self.skill_dismissed {
+            } else if self.integration_update && !self.integration_dismissed {
                 notice::paint(
                     &mut self.content,
                     &mut self.text,
                     Rect::new(0.0, 0.0, wl, hl),
                     &notice::Notice {
-                        title: "Agent skill updated",
-                        body: "Reinstall it for your agents",
+                        title: "Integrations out of date",
+                        body: "Reinstall for your tools",
                         action: "Open Preferences",
                     },
                     &self.theme,

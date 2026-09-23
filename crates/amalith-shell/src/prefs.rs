@@ -572,19 +572,19 @@ pub struct Prefs {
     reset_keys: Rect,
     scripts_choose: Rect,
     scripts_clear: Rect,
-    /// Integrations page: one row per known agent. Read from disk when the
-    /// dialog opens and after an install, never while painting.
-    agent_statuses: Vec<crate::agent::Status>,
+    /// Integrations page: the CLI row plus one per known agent. Read from
+    /// disk when the dialog opens and after an install, never while painting.
+    integration_rows: Vec<crate::integrations::Row>,
     /// Which rows the Install button will write, indexed alongside
-    /// `agent_statuses`. Agents that aren't installed here can't be picked.
-    agent_selected: Vec<bool>,
+    /// `integration_rows`. Rows with nothing to install into can't be picked.
+    integration_selected: Vec<bool>,
     /// Per-row checkbox hit rects, and the page's Install button.
-    agent_rows: Vec<Rect>,
-    agent_install: Rect,
+    integration_hits: Vec<Rect>,
+    integration_install: Rect,
     /// Whatever the last install couldn't write, shown under the button.
     /// Installing takes effect immediately, so Cancel can't undo it —
     /// unlike every other control on this dialog.
-    agent_errors: Vec<String>,
+    integration_errors: Vec<String>,
     cancel: Rect,
     ok: Rect,
 }
@@ -625,10 +625,10 @@ pub enum Hit {
     AddPreset,
     /// Scripts page: open a folder picker / clear the chosen folder.
     ChooseScriptsFolder,
-    /// Integrations page: include/exclude one agent from the install.
-    ToggleAgent(usize),
-    /// Integrations page: write the skill for every selected agent.
-    InstallAgentSkills,
+    /// Integrations page: include/exclude one row from the install.
+    ToggleIntegration(usize),
+    /// Integrations page: install every selected row.
+    InstallIntegrations,
     ClearScriptsFolder,
     Cancel,
     Ok,
@@ -695,11 +695,11 @@ impl Prefs {
             reset_keys: Rect::ZERO,
             scripts_choose: Rect::ZERO,
             scripts_clear: Rect::ZERO,
-            agent_statuses: Vec::new(),
-            agent_selected: Vec::new(),
-            agent_rows: Vec::new(),
-            agent_install: Rect::ZERO,
-            agent_errors: Vec::new(),
+            integration_rows: Vec::new(),
+            integration_selected: Vec::new(),
+            integration_hits: Vec::new(),
+            integration_install: Rect::ZERO,
+            integration_errors: Vec::new(),
             cancel: Rect::ZERO,
             ok: Rect::ZERO,
         }
@@ -837,13 +837,13 @@ impl Prefs {
         if self.reset_keys.contains(p) {
             return Hit::ResetKeys;
         }
-        for (i, r) in self.agent_rows.iter().enumerate() {
+        for (i, r) in self.integration_hits.iter().enumerate() {
             if r.contains(p) {
-                return Hit::ToggleAgent(i);
+                return Hit::ToggleIntegration(i);
             }
         }
-        if self.agent_install.contains(p) {
-            return Hit::InstallAgentSkills;
+        if self.integration_install.contains(p) {
+            return Hit::InstallIntegrations;
         }
         if self.scripts_choose.contains(p) {
             return Hit::ChooseScriptsFolder;
@@ -942,8 +942,8 @@ impl Prefs {
         self.reset_keys = Rect::ZERO;
         self.scripts_choose = Rect::ZERO;
         self.scripts_clear = Rect::ZERO;
-        self.agent_rows.clear();
-        self.agent_install = Rect::ZERO;
+        self.integration_hits.clear();
+        self.integration_install = Rect::ZERO;
         self.preset_trigger = Rect::ZERO;
         self.preset_add = Rect::ZERO;
         self.preset_items.clear();
@@ -1360,42 +1360,42 @@ impl Prefs {
         scene.pop_layer();
     }
 
-    /// Re-read every agent's install state from disk. Called when the dialog
+    /// Re-read every integration's state from disk. Called when the dialog
     /// opens and after an install, so `paint_integrations` never touches the
     /// filesystem on a frame.
-    pub fn refresh_agents(&mut self) {
-        self.agent_statuses = crate::agent::statuses();
-        // Default to every agent that's actually set up here. Re-selecting on
-        // refresh is fine: the only refresh after opening follows an install,
-        // which is exactly when "all present agents" is right again.
-        self.agent_selected = self.agent_statuses.iter().map(|s| s.present).collect();
+    pub fn refresh_integrations(&mut self) {
+        self.integration_rows = crate::integrations::rows();
+        // Default to everything that can actually be installed here.
+        // Re-selecting on refresh is fine: the only refresh after opening
+        // follows an install, which is when that default is right again.
+        self.integration_selected = self.integration_rows.iter().map(|r| r.present).collect();
     }
 
-    /// Flip one agent row's checkbox. Rows for agents that aren't installed
-    /// on this machine have nothing to write to, so they stay off.
-    pub fn toggle_agent(&mut self, index: usize) {
-        if self.agent_statuses.get(index).is_some_and(|s| s.present) {
-            if let Some(on) = self.agent_selected.get_mut(index) {
+    /// Flip one row's checkbox. Rows with nothing to install into (no
+    /// `~/.zshrc`, an agent that isn't set up here) stay off.
+    pub fn toggle_integration(&mut self, index: usize) {
+        if self.integration_rows.get(index).is_some_and(|r| r.present) {
+            if let Some(on) = self.integration_selected.get_mut(index) {
                 *on = !*on;
             }
         }
     }
 
-    /// Install the skill for the selected agents, then re-read their state so
-    /// the rows show the result.
-    pub fn install_agents(&mut self) {
-        self.agent_errors = crate::agent::install(&self.agent_selected);
-        self.refresh_agents();
+    /// Install the selected rows, then re-read state so they show the result.
+    pub fn install_integrations(&mut self) {
+        self.integration_errors = crate::integrations::install(&self.integration_selected);
+        self.refresh_integrations();
     }
 
-    /// True once every selected agent has an up-to-date copy — the app uses
-    /// this to drop the corner notice after a successful install.
-    pub fn agents_are_current(&self) -> bool {
-        !self.agent_statuses.iter().any(|s| s.stale)
+    /// True once nothing is out of date — the app uses this to drop the
+    /// corner notice after a successful install.
+    pub fn integrations_are_current(&self) -> bool {
+        !self.integration_rows.iter().any(|r| r.stale)
     }
 
-    /// The Integrations page — install the agent skill (`crate::agent`) into
-    /// the coding agents found on this machine.
+    /// The Integrations page — install the `ama` shell command
+    /// (`crate::cli`) and the agent skill (`crate::agent`) into the tools
+    /// found on this machine.
     fn paint_integrations(
         &mut self,
         scene: &mut Scene,
@@ -1405,11 +1405,11 @@ impl Prefs {
         oy: f64,
     ) {
         let mut cy = oy + ui_px(60.0);
-        tcx.draw(scene, "Coding Agents", 13.0, theme.text, px, cy);
+        tcx.draw(scene, "Integrations", 13.0, theme.text, px, cy);
         cy += ui_px(12.0);
         tcx.draw(
             scene,
-            "Teach your coding agent to work with Amalith documents. Installing copies a",
+            "Hook Amalith into the tools you already use. Each one writes into that tool's",
             11.0,
             theme.text_dim,
             px,
@@ -1417,7 +1417,7 @@ impl Prefs {
         );
         tcx.draw(
             scene,
-            "skill into the agent's own folder; it stays dormant outside Amalith's terminal.",
+            "own folder, so nothing is installed until you ask for it here.",
             11.0,
             theme.text_dim,
             px,
@@ -1425,37 +1425,38 @@ impl Prefs {
         );
         cy += ui_px(48.0);
 
-        if self.agent_statuses.is_empty() {
-            tcx.draw(scene, "No supported agents found.", 11.5, theme.text_dim, px, cy);
+        if self.integration_rows.is_empty() {
+            tcx.draw(scene, "Nothing to integrate with here.", 11.5, theme.text_dim, px, cy);
             return;
         }
 
-        for (i, status) in self.agent_statuses.iter().enumerate() {
-            let on = self.agent_selected.get(i).copied().unwrap_or(false);
-            let row = checkbox(scene, tcx, theme, px, cy, status.name, on);
-            self.agent_rows.push(row);
-            // Status sits in a second column so the names stay flush left.
+        for (i, row) in self.integration_rows.iter().enumerate() {
+            let on = self.integration_selected.get(i).copied().unwrap_or(false);
+            self.integration_hits.push(checkbox(scene, tcx, theme, px, cy, row.name, on));
+            // Name, then what it installs, then where it stands — three
+            // fixed columns so the rows line up however long the names are.
+            tcx.draw(scene, row.detail, 11.0, theme.text_dim, px + ui_px(112.0), cy + ui_px(13.0));
             tcx.draw(
                 scene,
-                status.summary(),
+                row.summary,
                 11.0,
-                if status.stale { theme.accent } else { theme.text_dim },
-                px + ui_px(150.0),
+                if row.stale { theme.accent } else { theme.text_dim },
+                px + ui_px(360.0),
                 cy + ui_px(13.0),
             );
             cy += ui_px(26.0);
         }
 
         cy += ui_px(12.0);
-        // One button for the whole list — the rows choose who it writes for.
-        // Any stale copy makes this an update rather than a fresh install.
-        let label = if self.agent_statuses.iter().any(|s| s.stale) { "Update" } else { "Install" };
-        if self.agent_selected.iter().any(|on| *on) {
-            self.agent_install = button(scene, tcx, theme, px, cy, label, true);
+        // One button for the whole list — the checkboxes choose who it
+        // writes for. Anything stale makes this an update, not a fresh install.
+        let label = if self.integration_rows.iter().any(|r| r.stale) { "Update" } else { "Install" };
+        if self.integration_selected.iter().any(|on| *on) {
+            self.integration_install = button(scene, tcx, theme, px, cy, label, true);
             cy += ui_px(34.0);
         }
 
-        for error in &self.agent_errors {
+        for error in &self.integration_errors {
             tcx.draw(scene, error, 11.0, theme.accent, px, cy);
             cy += ui_px(16.0);
         }
@@ -1835,55 +1836,59 @@ mod scale_tests {
 
     #[test]
     fn integrations_rows_and_install_button_hit_where_they_paint() {
+        use crate::integrations::{Kind, Row};
+
         let mut p = Prefs::new(Settings::default(), Default::default(), Default::default());
         p.category = INTEGRATIONS;
-        // Stubbed rather than read from disk: the page's job here is
-        // geometry and selection, not what's installed on this machine.
-        p.agent_statuses = vec![
-            crate::agent::Status {
-                name: "Set Up",
-                dir: std::path::PathBuf::from("/tmp/a"),
+        // Stubbed rather than read from disk: the page's job here is geometry
+        // and selection, not what happens to be installed on this machine.
+        p.integration_rows = vec![
+            Row {
+                name: "CLI",
+                detail: "ama — jump to an open document's folder",
+                summary: "Not installed",
                 present: true,
-                current: false,
                 stale: false,
+                kind: Kind::Cli,
             },
-            crate::agent::Status {
-                name: "Absent",
-                dir: std::path::PathBuf::from("/tmp/b"),
+            Row {
+                name: "Absent Agent",
+                detail: "Amalith skill",
+                summary: "Not found on this computer",
                 present: false,
-                current: false,
                 stale: false,
+                kind: Kind::Agent(0),
             },
         ];
-        p.agent_selected = vec![true, false];
+        p.integration_selected = vec![true, false];
         let mut text = TextContext::new();
         p.paint(&mut Scene::new(), &mut text, &Theme::default(), 1800.0, 1000.0);
 
-        assert_eq!(p.agent_rows.len(), 2, "one row per known agent");
-        for (i, r) in p.agent_rows.clone().into_iter().enumerate() {
+        assert_eq!(p.integration_hits.len(), 2, "one row per integration");
+        for (i, r) in p.integration_hits.clone().into_iter().enumerate() {
             assert!(p.card().contains(r.center()));
             assert!(r.y1 < p.ok.y0, "rows stay clear of the footer");
-            assert!(matches!(p.on_press(r.center()), Hit::ToggleAgent(j) if i == j));
+            assert!(matches!(p.on_press(r.center()), Hit::ToggleIntegration(j) if i == j));
         }
 
-        // The button is live while at least one agent is selected.
-        assert!(p.card().contains(p.agent_install.center()));
-        assert!(matches!(p.on_press(p.agent_install.center()), Hit::InstallAgentSkills));
+        // The button is live while at least one row is selected.
+        assert!(p.card().contains(p.integration_install.center()));
+        assert!(matches!(p.on_press(p.integration_install.center()), Hit::InstallIntegrations));
 
-        // An agent that isn't set up here has nothing to install into.
-        p.toggle_agent(1);
-        assert!(!p.agent_selected[1], "absent agent can't be selected");
+        // A row with nothing to install into can't be selected.
+        p.toggle_integration(1);
+        assert!(!p.integration_selected[1]);
 
         // With nothing selected the button isn't drawn at all.
-        p.toggle_agent(0);
-        assert!(!p.agent_selected[0]);
+        p.toggle_integration(0);
+        assert!(!p.integration_selected[0]);
         p.paint(&mut Scene::new(), &mut text, &Theme::default(), 1800.0, 1000.0);
-        assert_eq!(p.agent_install, Rect::ZERO);
+        assert_eq!(p.integration_install, Rect::ZERO);
 
         // Leaving the page drops its hit rects, like every other page.
         p.category = 0;
         p.paint(&mut Scene::new(), &mut text, &Theme::default(), 1800.0, 1000.0);
-        assert!(p.agent_rows.is_empty());
+        assert!(p.integration_hits.is_empty());
     }
 
     #[test]

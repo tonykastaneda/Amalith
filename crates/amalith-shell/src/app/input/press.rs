@@ -368,24 +368,24 @@ impl App {
                         }
                     }
                 }
-                prefs::Hit::ToggleAgent(i) => {
+                prefs::Hit::ToggleIntegration(i) => {
                     if let Some(p) = &mut self.prefs {
-                        p.toggle_agent(i);
+                        p.toggle_integration(i);
                     }
                 }
-                prefs::Hit::InstallAgentSkills => {
+                prefs::Hit::InstallIntegrations => {
                     // Writes files, so unlike the rest of this dialog it
                     // takes effect at once and Cancel won't undo it.
                     let current = match &mut self.prefs {
                         Some(p) => {
-                            p.install_agents();
-                            p.agents_are_current()
+                            p.install_integrations();
+                            p.integrations_are_current()
                         }
                         None => false,
                     };
-                    // Nothing left to nag about once every copy matches.
+                    // Nothing left to nag about once everything is current.
                     if current {
-                        self.skill_update = false;
+                        self.integration_update = false;
                     }
                 }
                 prefs::Hit::ChooseScriptsFolder => {
@@ -595,10 +595,10 @@ impl App {
                         }
                         notice::Hit::None => {}
                     }
-                } else if self.skill_update && !self.skill_dismissed {
+                } else if self.integration_update && !self.integration_dismissed {
                     match notice::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
                         notice::Hit::Dismiss => {
-                            self.skill_dismissed = true;
+                            self.integration_dismissed = true;
                             return;
                         }
                         notice::Hit::Action => {
