@@ -21,6 +21,7 @@ footer.amalith-footer::after {
 @media (max-width: 700px) {
   footer.amalith-footer { padding-top: 48px; }
   .amalith-footer .footer-links { width: calc(100% - 48px); grid-template-columns: 1fr 1fr; gap: 40px 24px; }
+  .amalith-footer .footer-icon { grid-column: 1 / -1; margin-bottom: 4px; }
   .amalith-footer .footer-note { width: calc(100% - 48px); margin-block: 48px 32px; line-height: 1.6; }
   .amalith-footer .footer-wordmark { width: calc(100% - 16px); margin-bottom: 8px; }
 }
