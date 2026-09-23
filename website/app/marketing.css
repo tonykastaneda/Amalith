@@ -51,8 +51,8 @@
 .marketing-page .status h2 { margin: 24px 0 0; }
 .marketing-page .status__copy { padding: 0; }
 .marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
-.marketing-page .cta { min-height: 0; margin-block: 0; padding: var(--section-space) 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--paper); grid-template-columns: 1fr auto; gap: 32px; }
-.marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; }
+.marketing-page .cta { min-height: 0; margin-block: 0; padding: var(--section-space) 5vw; border: 0; background: #fff; color: var(--ink); grid-template-columns: 1fr auto; gap: 32px; }
+.marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; color: var(--ink); }
 .marketing-page .cta h2 em { color: var(--yellow); }
 .marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
 .marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; }
