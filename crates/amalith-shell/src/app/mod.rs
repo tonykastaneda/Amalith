@@ -76,7 +76,7 @@ pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, effectdlg, home,
     icons, layerdlg, layerspaneldlg, layout, magicwand, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
-    settings, shapedialog, stroke_panel, textedit, update_banner, widgets, workspace, workspace_dialog,
+    notice, settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
@@ -1685,13 +1685,22 @@ struct App {
     update_check_rx: std::sync::mpsc::Receiver<String>,
     /// `Some(version)` once the background check finds a newer release
     /// than this build — drives the dismissible corner banner
-    /// (`update_banner`). `None` both before that check finishes and when
+    /// (`crate::notice`). `None` both before that check finishes and when
     /// it finds nothing newer.
     update_available: Option<String>,
     /// Set when the banner's own close button is clicked — kept separate
     /// from `update_available` so a stray late-arriving check result
     /// can't un-dismiss a banner the user already closed this session.
     update_dismissed: bool,
+    /// True when an agent has an installed copy of the skill that no longer
+    /// matches this build (`crate::agent::needs_update`), checked once at
+    /// startup. Raises the same corner notice as an app update, whose button
+    /// opens Preferences ▸ Integrations; Amalith never rewrites those copies
+    /// on its own, since they live in another tool's configuration.
+    skill_update: bool,
+    /// The skill notice's own dismissal, separate from `update_dismissed`
+    /// for the same reason that one exists.
+    skill_dismissed: bool,
 }
 
 impl App {
@@ -1921,6 +1930,8 @@ impl App {
             update_check_rx: crate::update_check::spawn(),
             update_available: None,
             update_dismissed: false,
+            skill_update: crate::agent::needs_update(),
+            skill_dismissed: false,
         };
         // The fancy Home/Welcome screen is hidden, not deleted (its own
         // code and fields are untouched) — the app boots straight into a
@@ -4787,6 +4798,20 @@ impl App {
         };
     }
 
+    /// Open Preferences on `category` (an index into
+    /// [`prefs::CATEGORIES`]) — 0 for the plain ⌘, route, and the
+    /// Integrations page when the skill notice's button is clicked.
+    fn open_prefs(&mut self, category: usize) {
+        let mut prefs =
+            prefs::Prefs::new(self.settings, self.scripts.clone(), self.keymaps.clone());
+        prefs.category = category;
+        // Reads each agent's install state once, here, so the Integrations
+        // page never stats the filesystem while painting a frame.
+        prefs.refresh_agents();
+        self.prefs = Some(prefs);
+        self.request_main_redraw();
+    }
+
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
     /// keyboard shortcuts so the menu bar and the keys stay in step.
     fn run_menu_action(&mut self, action: MenuAction) {
@@ -4807,12 +4832,7 @@ impl App {
                 self.update_dismissed = false;
             }
             MenuAction::Preferences => {
-                self.prefs = Some(prefs::Prefs::new(
-                    self.settings,
-                    self.scripts.clone(),
-                    self.keymaps.clone(),
-                ));
-                self.request_main_redraw();
+                self.open_prefs(0);
             }
             MenuAction::New => self.mux_new_document(),
             MenuAction::NewTab => self.mux_new_tab(),
@@ -10288,6 +10308,11 @@ const WINDOW_PANELS: [PanelKind; 14] = [
 
 /// Start the shell: create the winit event loop and run [`App`] on it.
 pub fn run() {
+    // Write Amalith's own copy of the agent skill, which `AMALITH_SKILL`
+    // points at. Agent copies are the user's to install (Preferences ▸
+    // Integrations). This lives here rather than in `App::new` so the tests
+    // that construct an `App` don't write into the real config directory.
+    crate::agent::refresh();
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.run_app(&mut App::new()).expect("run app");
 }

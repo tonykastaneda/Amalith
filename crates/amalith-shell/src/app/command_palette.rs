@@ -156,15 +156,10 @@ impl App {
         match kind {
             Some(PaletteKind::Menu(a)) => self.run_menu_action(a),
             Some(PaletteKind::Tool(t)) => self.set_tool(t),
+            // Via `open_prefs` so every route into the dialog (⌘, the menu,
+            // the palette, the skill notice) reads agent state the same way.
             Some(PaletteKind::Prefs(cat)) => {
-                self.prefs = Some(prefs::Prefs::new(
-                    self.settings,
-                    self.scripts.clone(),
-                    self.keymaps.clone(),
-                ));
-                if let Some(p) = &mut self.prefs {
-                    p.category = cat.min(prefs::CATEGORIES.len() - 1);
-                }
+                self.open_prefs(cat.min(prefs::CATEGORIES.len() - 1))
             }
             None => {}
         }

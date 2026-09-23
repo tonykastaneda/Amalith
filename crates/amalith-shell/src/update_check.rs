@@ -1,6 +1,6 @@
 //! One-shot, background check against GitHub's releases API for a newer
 //! Amalith build than this one. See `App::drain_update_check` for how the
-//! result reaches the UI, and `crate::update_banner` for the corner card
+//! result reaches the UI, and `crate::notice` for the corner card
 //! itself.
 
 use std::sync::mpsc::{self, Receiver};

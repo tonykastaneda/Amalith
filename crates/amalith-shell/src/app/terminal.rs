@@ -152,11 +152,19 @@ impl App {
         };
 
         let mut cmd = CommandBuilder::new_default_prog();
-        // A cheap, read-only bridge to "the document that's open": just
-        // enough for a script or an agent's own shell commands (e.g.
-        // `amalith-script run "$AMALITH_DOCUMENT_PATH"`) to find it
-        // without a live IPC channel into the running `Editor` — that's
-        // real future work, not this.
+        // A cheap, read-only bridge to "the document that's open", plus the
+        // flag a coding agent keys off (see `crate::agent`). There's still no
+        // live IPC channel into the running `Editor`, so everything here
+        // describes the document *as last saved* — real future work, not this.
+        //
+        // `AMALITH_ENV` is the trigger and nothing more: an agent can't be
+        // taught anything through the environment, only told that it's inside
+        // Amalith and pointed at the skill that does the teaching.
+        cmd.env("AMALITH_ENV", "1");
+        cmd.env("AMALITH_VERSION", crate::version::VERSION);
+        if let Some(skill) = crate::agent::skill_path() {
+            cmd.env("AMALITH_SKILL", skill);
+        }
         if let Some(path) = &self.doc.file_path {
             cmd.env("AMALITH_DOCUMENT_PATH", path);
         }
@@ -167,6 +175,21 @@ impl App {
             // start off already in it rather than making every session
             // `cd` there by hand.
             cmd.cwd(dir);
+        }
+        // Put the app's own directory first on PATH so the `amalith-script`
+        // shipped beside it is runnable by bare name. In a packaged build
+        // that's `Amalith.app/Contents/MacOS`; under `cargo run` it's
+        // `target/<profile>`, where cargo puts both binaries — so one line
+        // covers development and the shipped app.
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            let mut entries = vec![dir];
+            if let Some(existing) = std::env::var_os("PATH") {
+                entries.extend(std::env::split_paths(&existing));
+            }
+            if let Ok(joined) = std::env::join_paths(&entries) {
+                cmd.env("PATH", joined);
+            }
         }
         let Ok(child) = pair.slave.spawn_command(cmd) else { return };
         drop(pair.slave);

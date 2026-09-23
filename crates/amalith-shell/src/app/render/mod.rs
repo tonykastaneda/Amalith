@@ -1267,12 +1267,29 @@ impl App {
             }
             // Non-modal, so drawn last just to sit visually on top — it
             // never captures clicks meant for anything else.
+            // At most one card fits this corner, and an app update outranks
+            // the skill notice — the update usually brings a new skill with
+            // it anyway, so showing both would be telling the user to do the
+            // same work twice.
             if let Some(version) = self.update_available.clone().filter(|_| !self.update_dismissed) {
-                update_banner::paint(
+                let body = format!("Version {version} is ready");
+                notice::paint(
                     &mut self.content,
                     &mut self.text,
                     Rect::new(0.0, 0.0, wl, hl),
-                    &version,
+                    &notice::Notice { title: "Update available", body: &body, action: "Download" },
+                    &self.theme,
+                );
+            } else if self.skill_update && !self.skill_dismissed {
+                notice::paint(
+                    &mut self.content,
+                    &mut self.text,
+                    Rect::new(0.0, 0.0, wl, hl),
+                    &notice::Notice {
+                        title: "Agent skill updated",
+                        body: "Reinstall it for your agents",
+                        action: "Open Preferences",
+                    },
                     &self.theme,
                 );
             }

@@ -27,6 +27,7 @@
 pub mod symbol_name_dialog;
 pub mod image_trace;
 pub mod about;
+pub mod agent;
 pub mod anchors;
 pub mod app;
 pub mod appicon;
@@ -82,7 +83,7 @@ pub mod thread;
 pub mod theme;
 pub mod metrics;
 pub mod tool;
-pub mod update_banner;
+pub mod notice;
 pub mod update_check;
 pub mod version;
 pub mod vertical_text;

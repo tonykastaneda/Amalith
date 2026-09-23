@@ -93,3 +93,6 @@ objc2-core-graphics = { version = "0.3", features = [
     "CGContext",
     "CGImage",
 ] }
+
+[dev-dependencies]
+tempfile = "3"

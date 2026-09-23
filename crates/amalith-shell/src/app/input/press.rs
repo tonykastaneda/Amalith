@@ -368,6 +368,26 @@ impl App {
                         }
                     }
                 }
+                prefs::Hit::ToggleAgent(i) => {
+                    if let Some(p) = &mut self.prefs {
+                        p.toggle_agent(i);
+                    }
+                }
+                prefs::Hit::InstallAgentSkills => {
+                    // Writes files, so unlike the rest of this dialog it
+                    // takes effect at once and Cancel won't undo it.
+                    let current = match &mut self.prefs {
+                        Some(p) => {
+                            p.install_agents();
+                            p.agents_are_current()
+                        }
+                        None => false,
+                    };
+                    // Nothing left to nag about once every copy matches.
+                    if current {
+                        self.skill_update = false;
+                    }
+                }
                 prefs::Hit::ChooseScriptsFolder => {
                     if let Some(dir) = rfd::FileDialog::new()
                         .set_title("Choose Scripts Folder")
@@ -561,17 +581,32 @@ impl App {
                 // lands on the banner, so it never steals a click meant
                 // for whatever else is on screen (including another
                 // modal below).
+                // Same precedence as the painting side: the update notice
+                // owns the corner while it's up, then the skill notice.
                 if self.update_available.is_some() && !self.update_dismissed {
-                    match update_banner::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
-                        update_banner::Hit::Dismiss => {
+                    match notice::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
+                        notice::Hit::Dismiss => {
                             self.update_dismissed = true;
                             return;
                         }
-                        update_banner::Hit::Download => {
-                            update_banner::open_latest_release();
+                        notice::Hit::Action => {
+                            notice::open_latest_release();
                             return;
                         }
-                        update_banner::Hit::None => {}
+                        notice::Hit::None => {}
+                    }
+                } else if self.skill_update && !self.skill_dismissed {
+                    match notice::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
+                        notice::Hit::Dismiss => {
+                            self.skill_dismissed = true;
+                            return;
+                        }
+                        notice::Hit::Action => {
+                            // Straight to the page with the Install button.
+                            self.open_prefs(prefs::INTEGRATIONS);
+                            return;
+                        }
+                        notice::Hit::None => {}
                     }
                 }
 
