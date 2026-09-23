@@ -14,13 +14,13 @@ const features = [
   {
     eyebrow: "One command engine",
     title: "Draw it. Script it. Agent it.",
-    body: "One engine runs every action in the app. Your hands, your scripts, your agents—all equally capable.",
+    body: "One engine runs every action in the app. Your hands, your scripts, and your agents all use it the same way.",
     tone: "yellow",
     label: "Command engine diagram placeholder",
   },
   {
     eyebrow: "Infinite pasteboard",
-    title: "Artboards are pages—not walls.",
+    title: "Artboards are pages. Not walls.",
     body: "Your canvas doesn't end at an edge. Spread artboards out. Connect your work. Never hit a wall.",
     tone: "dark",
     label: "Infinite canvas placeholder",
@@ -53,7 +53,7 @@ export default function Home() {
 
       <main tabIndex={-1} id="top" className="marketing-page">
         <MarketingHero
-          eyebrow="The first real IDE for artists—not developers"
+          eyebrow="The first real IDE for artists. Not developers."
           title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
@@ -68,14 +68,14 @@ export default function Home() {
           <p className="section-number">01 / Why Amalith</p>
           <div>
             <h2>The design tool with <em>20 years of tutorials</em> that launched yesterday.</h2>
-            <p>Every shortcut, panel, and keystroke you already know. Rebuilt from the ground up so it's yours to script, automate, and own—not rent.</p>
+            <p>Every shortcut, panel, and keystroke you already know. Rebuilt from the ground up so it's yours to script, automate, and own. Not rent.</p>
           </div>
         </section>
 
         <section className="feature-stack" id="features" aria-label="Amalith features">
-          <p className="section-number">02 / The full-circle workflow</p>
+          <p className="section-number">02 / One workflow</p>
           <h2 className="feature-stack__intro">Create. Iterate. <em>Automate.</em></h2>
-          <p className="feature-stack__lede">The design tool you already know—with superpowers. A full-circle, anti-slop workflow for humans who create.</p>
+          <p className="feature-stack__lede">The design tool you already know, with superpowers.</p>
           {features.map((feature, index) => (
             <article className={`feature feature--${feature.tone}`} key={feature.title}>
               <div className="feature__copy">
