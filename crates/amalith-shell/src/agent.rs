@@ -194,6 +194,12 @@ mod tests {
     /// firing in unrelated sessions.
     #[test]
     fn skill_has_frontmatter_and_env_gate() {
+        // `include_str!` embeds whatever the checkout holds, so a Windows
+        // clone with `core.autocrlf=true` would give this CRLF endings —
+        // which breaks the frontmatter below and would install a skill with
+        // stray carriage returns. `.gitattributes` pins it to LF; this keeps
+        // that honest rather than letting it fail obscurely on one platform.
+        assert!(!SKILL_MD.contains('\r'), "skill must be checked out with LF endings");
         assert!(SKILL_MD.starts_with("---\n"), "skill needs YAML frontmatter");
         let (frontmatter, body) = SKILL_MD[4..]
             .split_once("\n---\n")

@@ -119,6 +119,10 @@ mod tests {
 
     #[test]
     fn script_defines_the_ama_function_and_reads_the_published_list() {
+        // Same reason as the skill's own LF check: this file is written to
+        // disk and sourced by the user's shell, where stray carriage
+        // returns are a syntax error rather than a cosmetic problem.
+        assert!(!AMA_ZSH.contains('\r'), "ama.zsh must be checked out with LF endings");
         assert!(AMA_ZSH.contains("\nama() {"), "must define `ama`");
         assert!(
             AMA_ZSH.contains("open-documents.tsv"),

@@ -1,0 +1,9 @@
+# Content that Amalith embeds with `include_str!` and writes back out for
+# another tool to read has to keep LF on every platform. A Windows checkout
+# with `core.autocrlf=true` would otherwise give `SKILL.md` CRLF endings,
+# breaking its YAML frontmatter, and would install a CRLF zsh function.
+crates/amalith-shell/assets/agent/SKILL.md text eol=lf
+*.zsh text eol=lf
+
+# Shell scripts are run on Unix; CRLF makes the shebang line unusable.
+*.sh text eol=lf
