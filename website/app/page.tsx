@@ -1,65 +1,31 @@
-import { MarketingHero } from "./MarketingHero";
 import { Header } from "./Header";
 import { ArrowUpRight } from "./ArrowUpRight";
 import { Footer } from "./Footer";
-
-const features = [
-  {
-    eyebrow: "Familiar by design",
-    title: "Your instincts already know where to go.",
-    body: "Same tools. Same shortcuts. Same muscle memory. You already know how to use Amalith.",
-    tone: "light",
-    label: "Product view placeholder",
-  },
-  {
-    eyebrow: "One command engine",
-    title: "Draw it. Script it. Agent it.",
-    body: "One engine runs every action in the app. Your hands, your scripts, and your agents all use it the same way.",
-    tone: "yellow",
-    label: "Command engine diagram placeholder",
-  },
-  {
-    eyebrow: "Infinite pasteboard",
-    title: "Artboards are pages. Not walls.",
-    body: "Your canvas doesn't end at an edge. Spread artboards out. Connect your work. Never hit a wall.",
-    tone: "dark",
-    label: "Infinite canvas placeholder",
-  },
-];
+import "./home.css";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
-function Placeholder({ label, variant = "window" }: { label: string; variant?: "window" | "canvas" }) {
+/** Replace these illustrative previews with product recordings when available. */
+function Recording({ subject, variant = "canvas" }: { subject: string; variant?: "canvas" | "tools" | "commands" }) {
   return (
-    <div className={`placeholder placeholder--${variant}`} role="img" aria-label={label}>
-      <div className="placeholder__bar"><span /><span /><span /></div>
-      <div className="placeholder__workspace">
-        <div className="placeholder__tools" />
-        <div className="placeholder__stage">
-          <div className="placeholder__artboard" />
-          <div className="placeholder__artboard placeholder__artboard--small" />
-        </div>
-        <div className="placeholder__panel" />
+    <figure className={`home-recording home-recording--${variant}`}>
+      <div className="home-recording__chrome" aria-hidden="true">
+        <span className="home-recording__dots"><i /><i /><i /></span>
+        <span>{subject}</span><span>Amalith</span>
       </div>
-      <span className="placeholder__label">{label}</span>
-    </div>
-  );
-}
-
-function RecordingPlaceholder() {
-  return (
-    <div className="recording-placeholder" role="img" aria-label="Amalith product recording placeholder">
-      <div className="recording-placeholder__grid" aria-hidden="true" />
-      <div className="recording-placeholder__window">
-        <span className="recording-placeholder__play" aria-hidden="true">▶</span>
-        <div>
-          <p className="recording-placeholder__eyebrow">Product recording</p>
-          <p className="recording-placeholder__title">A closer look at Amalith is on the way.</p>
-          <p className="recording-placeholder__note">We’re leaving this space ready for the first walkthrough.</p>
+      <div className="home-recording__canvas">
+        <div className="home-recording__art" aria-hidden="true">
+          <div className="home-sheet home-sheet--one"><span>Room<br />to create.</span><i /></div>
+          <div className="home-sheet home-sheet--two"><span>Aa</span><small>Type. Shape. Explore.</small></div>
+          <div className="home-sheet home-sheet--three"><i /><i /><i /></div>
+        </div>
+        <div className="home-recording__notice">
+          <span className="home-recording__symbol" aria-hidden="true">↗</span>
+          <span>{subject}<small>Recording coming soon</small></span>
         </div>
       </div>
-      <span className="recording-placeholder__label">Recording placeholder</span>
-    </div>
+      <figcaption><span>Amalith in motion</span><span>Illustrative placeholder · {subject}</span></figcaption>
+    </figure>
   );
 }
 
@@ -67,82 +33,69 @@ export default function Home() {
   return (
     <>
       <Header basePath={basePath} />
-
-      <main tabIndex={-1} id="top" className="marketing-page">
-        <MarketingHero
-          eyebrow="The first real IDE for designers — not developers"
-          title={<>Design freely.<br /><em>No subscription.</em></>}
-          actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
-        >
-          <p>Built for artists. Not a pile of glued-together tools. Not a subscription.</p>
-        </MarketingHero>
-
-        <section className="recording-stage section-shell" aria-labelledby="recording-title">
-          <div className="recording-stage__intro">
-            <p className="section-number">01 / See it in motion</p>
-            <h2 id="recording-title">A canvas that stays <em>out of your way.</em></h2>
-            <p>When the walkthrough is ready, this is where we’ll show the real app: the tools, the pasteboard, and the little details that make Amalith feel familiar.</p>
+      <main id="top" tabIndex={-1} className="home-page">
+        <div className="home-frame">
+          <section className="home-hero" aria-labelledby="home-title">
+            <h1 id="home-title">Design freely.<br /><span>A familiar canvas.<br />A whole new possibility.</span></h1>
+            <p>Amalith brings your tools, artboards, and ideas into one open-source design space. Built for the way you think. Yours to make your own.</p>
+            <div className="home-actions">
+              <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
+              <a className="home-link" href="#features">Explore the canvas <span aria-hidden="true">↓</span></a>
+            </div>
+          </section>
+          <Recording subject="The Amalith canvas" />
+          <div className="home-platforms" aria-label="Project at a glance">
+            <span>Open source. Built in public.</span>
+            <span>macOS / Windows / Linux</span>
+            <span>Early development</span>
           </div>
-          <RecordingPlaceholder />
-        </section>
-
-        <section className="manifesto section-shell" id="why">
-          <p className="section-number">02 / Why Amalith</p>
-          <div>
-            <h2>The design tool with <em>20 years of tutorials</em> that launched yesterday.</h2>
-            <p>Every shortcut, panel, and keystroke you already know. Rebuilt from the ground up so it's yours to script, automate, and own. Not rent.</p>
-          </div>
-        </section>
-
-        <section className="feature-stack" id="features" aria-label="Amalith features">
-          <p className="section-number">03 / The full-circle workflow</p>
-          <h2 className="feature-stack__intro">Create. Iterate. <em>Automate.</em></h2>
-          <p className="feature-stack__lede">The design tool you already know, with superpowers. The full-circle, anti-slop workflow for humans who create integrated design systems.</p>
-          {features.map((feature, index) => (
-            <article className={`feature feature--${feature.tone}`} key={feature.title}>
-              <div className="feature__copy">
-                <p className="section-number">0{index + 4} / {feature.eyebrow}</p>
-                <h2>{feature.title}</h2>
-                <p>{feature.body}</p>
-              </div>
-              <Placeholder label={feature.label} variant={index === 2 ? "canvas" : "window"} />
-            </article>
-          ))}
-        </section>
-
-        <section className="principles section-shell">
-          <p className="section-number">06 / Built in public</p>
-          <h2>Open to All.<br /><em>Yours to shape.</em></h2>
-          <p className="section-intro">Amalith is free, and we don&rsquo;t plan to ever charge for it.</p>
-          <div className="principles__grid">
-            <p>No payment required</p><p>No mandatory account</p><p>No proprietary cloud</p>
-            <p>Open document format</p><p>macOS, Windows &amp; Linux</p><p>MIT or Apache 2.0</p>
-          </div>
-        </section>
-
-        <section className="status section-shell" id="status">
-          <div>
-            <p className="section-number">Current status</p>
-            <h2>Early, active, and taking shape.</h2>
-          </div>
-          <div className="status__copy">
-            <p>Amalith is in early development. The native desktop app already has documents, multiple artboards, tabs, an infinite pasteboard, save/load, undoable commands, and core canvas navigation.</p>
-            <p>Features and platform support are evolving. Check the repository for current implementation details and known limitations; previews on this site are illustrative placeholders.</p>
-            <a className="text-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Explore on GitHub <span aria-hidden="true">→</span></a>
-          </div>
-        </section>
-
-        <section className="cta">
-          <div className="cta__art" aria-hidden="true">
-            <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
-          </div>
-          <div className="cta__inner">
-            <h2>Open-source design.<br /><em>Room to create.</em></h2>
-            <a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
-          </div>
-        </section>
+          <section className="home-intro" id="features">
+            <p className="home-eyebrow">Meet Amalith</p>
+            <h2>One place for your ideas.<br /><span>From the first mark<br />to the final detail.</span></h2>
+            <p>Space to explore. Tools that feel familiar. An open foundation you can shape around your own creative process.</p>
+            <div className="home-disciplines" aria-label="Design disciplines"><span>Vector</span><span>Raster</span><span>Typography</span><span>Automation</span></div>
+          </section>
+          <section className="home-chapter" id="why">
+            <div className="home-chapter__copy">
+              <p className="home-eyebrow">Room to think</p>
+              <h2>Your ideas don’t end<br />at the artboard.</h2>
+              <p>Spread out on an infinite pasteboard. Keep references, experiments, and finished work together, with room for whatever comes next.</p>
+            </div>
+            <Recording subject="Exploring the infinite pasteboard" />
+          </section>
+          <section className="home-chapter">
+            <div className="home-chapter__copy">
+              <p className="home-eyebrow">Familiar by design</p>
+              <h2>Less finding your tools.<br />More finding your flow.</h2>
+              <p>Familiar panels, shortcuts, and ways of working. A growing set of vector, raster, and text tools, together on one canvas.</p>
+            </div>
+            <Recording subject="Tools, layers, and type" variant="tools" />
+          </section>
+          <section className="home-chapter">
+            <div className="home-chapter__copy">
+              <p className="home-eyebrow">One command engine</p>
+              <h2>Make it by hand.<br />Make it your own.</h2>
+              <p>The same command engine sits behind the interface, scripts, and agents. A foundation for automating the repetition and spending more time on the work you care about.</p>
+            </div>
+            <Recording subject="From canvas to commands" variant="commands" />
+          </section>
+          <section className="home-open" id="status">
+            <div>
+              <p className="home-eyebrow">Built in public</p>
+              <h2>Early days.<br /><span>Wide-open possibilities.</span></h2>
+            </div>
+            <div>
+              <p>Amalith is in active development and free to try. Features and platform support are still taking shape. Follow the repository for what works today and what’s next.</p>
+              <a className="home-link" href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Follow the project <ArrowUpRight /></a>
+            </div>
+          </section>
+          <section className="home-closing">
+            <p className="home-eyebrow">A space of your own</p>
+            <h2>Bring your ideas.<br /><span>See where they take you.</span></h2>
+            <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
+          </section>
+        </div>
       </main>
-
       <Footer basePath={basePath} />
     </>
   );

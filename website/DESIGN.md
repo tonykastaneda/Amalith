@@ -1,5 +1,25 @@
 # Amalith website design system
 
+## Homepage and footer — September 2026
+
+The homepage now follows the proportions and section sequence of paper.design:
+a compact left-aligned introduction, a wide canvas preview, centered product
+introduction, and full-width media sections separated by short feature copy.
+Home styles live in `app/home.css`, scoped to `.home-page`. Warm neutral light
+surfaces and a system dark appearance follow the reference; yellow remains the
+Amalith action color. Recording placeholders must stay explicitly labeled.
+
+The user explicitly requested the footer redesign. Its styles live in
+`app/footer.css`, scoped to `.amalith-footer`. Use
+`amalith-wordmark-text.svg`, containing the seven original lettering paths
+without the icon, at almost viewport width. Do not substitute a font or crop
+the combined icon-and-text asset with CSS.
+
+The existing Header component, its original logo asset, and all navigation
+styles and behavior are protected. The guidance below continues to apply to
+the other marketing pages; the homepage and footer instructions above take
+precedence for those two surfaces.
+
 Reference: [Linear analysis from VoltAgent/awesome-design-md](https://github.com/voltagent/awesome-design-md/blob/main/design-md/linear.app/DESIGN.md), adapted to Amalith's own identity. Use its consistent spacing, typographic hierarchy, dark bordered surfaces and restrained actions; do not copy its brand colors or proprietary fonts.
 
 ## Protected surfaces

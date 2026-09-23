@@ -1,0 +1,15 @@
+/* The footer uses only the original SVG letter paths, with no icon. */
+footer.amalith-footer { display: flex; flex-direction: column; gap: 0; padding: 80px 0 0; background: #11110f; color: #f5f2ea; border-top: 1px solid #343430; overflow: hidden; }
+.amalith-footer .footer-links { width: min(1120px, calc(100% - 96px)); margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 40px; }
+.amalith-footer .footer-links p { color: #929188; font-weight: 400; }
+.amalith-footer .footer-links a { font-size: 16px; line-height: 1.5; }
+.amalith-footer .footer-note { width: min(1120px, calc(100% - 96px)); margin: 72px auto 48px; font-size: 12px; }
+.amalith-footer .footer-wordmark { display: block; width: calc(100% - 32px); margin: 0 auto 12px; }
+.amalith-footer .footer-wordmark img { display: block; width: 100%; height: auto; opacity: .28; }
+.amalith-footer .footer-wordmark:hover img { opacity: .4; }
+@media (max-width: 700px) {
+  footer.amalith-footer { padding-top: 48px; }
+  .amalith-footer .footer-links { width: calc(100% - 48px); grid-template-columns: 1fr 1fr; gap: 40px 24px; }
+  .amalith-footer .footer-note { width: calc(100% - 48px); margin-block: 48px 32px; line-height: 1.6; }
+  .amalith-footer .footer-wordmark { width: calc(100% - 16px); margin-bottom: 8px; }
+}

@@ -1,11 +1,9 @@
 import { ArrowUpRight } from "./ArrowUpRight";
+import "./footer.css";
 
 export function Footer({ basePath }: { basePath: string }) {
   return (
-    <footer>
-      <a className="footer-brand" href={`${basePath}/#top`} aria-label="Amalith home">
-        <img src={`${basePath}/brand/amalith-wordmark.svg`} alt="Amalith" />
-      </a>
+    <footer className="amalith-footer">
       <div className="footer-links">
         <div>
           <p>Project</p>
@@ -35,9 +33,9 @@ export function Footer({ basePath }: { basePath: string }) {
         <span>© 2026 Amalith</span>
         <span>Built in public. Made for designers. <span className="footer-heart" aria-label="love">♥</span> from Bell, California.</span>
       </p>
-      <div className="footer-watermark" aria-hidden="true">
-        <span>Amalith</span>
-      </div>
+      <a className="footer-wordmark" href={`${basePath}/#top`} aria-label="Amalith home">
+        <img src={`${basePath}/brand/amalith-wordmark-text.svg`} alt="Amalith" width="644" height="124" />
+      </a>
     </footer>
   );
 }
