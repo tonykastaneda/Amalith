@@ -29,7 +29,7 @@
 .home-page .home-recording__chrome { display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 40px; padding: 0 18px; border-bottom: 1px solid var(--home-line); color: var(--home-muted); font-size: 11px; }
 .home-page .home-recording__dots { display: flex; gap: 6px; }
 .home-page .home-recording__dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--home-line); }
-.home-page .home-recording__canvas { position: relative; height: clamp(340px, 45vw, 620px); overflow: hidden; background-image: radial-gradient(var(--home-line) .7px, transparent .7px); background-size: 16px 16px; }
+.home-page .home-recording__canvas { position: relative; height: clamp(340px, 45vw, 620px); overflow: hidden; }
 .home-page .home-recording__canvas--art { height: auto; aspect-ratio: 3456 / 2100; background: #1e1e1e; }
 .home-page .home-recording__canvas--art img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .home-page .home-recording__art { position: absolute; inset: 0; opacity: .58; }
@@ -53,7 +53,7 @@
 .home-page .home-disciplines span { padding: 10px 24px; font-size: 14px; border-right: 1px solid var(--home-line); }
 .home-page .home-disciplines span:last-child { border: 0; }
 .home-page .home-chapter__copy { position: relative; padding: clamp(56px, 6vw, 90px) clamp(28px, 6vw, 100px); border-top: 1px solid var(--home-line); isolation: isolate; overflow: hidden; }
-.home-page .home-chapter__copy::after { content: ""; position: absolute; z-index: -1; right: 0; top: 0; height: 100%; aspect-ratio: 1; clip-path: polygon(0 0, 100% 0, 100% 100%); background-image: linear-gradient(var(--home-line) 1px, transparent 1px), linear-gradient(90deg, var(--home-line) 1px, transparent 1px); background-size: 12px 12px; opacity: .4; }
+.home-page .home-chapter__copy::after { display: none; }
 .home-page .home-chapter__copy > p:last-child { max-width: 570px; margin: 26px 0 0; color: var(--home-muted); }
 .home-page .home-recording--tools .home-sheet--one { width: 29%; left: 16%; top: 18%; height: 64%; }
 .home-page .home-recording--tools .home-sheet--two { left: 49%; top: 12%; width: 35%; height: 75%; }

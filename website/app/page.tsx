@@ -9,14 +9,9 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 function Recording({ subject, art, variant = "canvas" }: { subject: string; art: string; variant?: "canvas" | "tools" | "commands" }) {
   return (
     <figure className={`home-recording home-recording--${variant}`}>
-      <div className="home-recording__chrome" aria-hidden="true">
-        <span className="home-recording__dots"><i /><i /><i /></span>
-        <span>{subject}</span><span>Amalith</span>
-      </div>
       <div className="home-recording__canvas home-recording__canvas--art">
         <img src={`${basePath}/art/${art}.webp`} alt={`${subject}: screenshot of the Amalith app`} loading={art === "canvas" ? "eager" : "lazy"} decoding="async" width={2400} height={1458} />
       </div>
-      <figcaption><span>Amalith v0.0.1</span><span>Screenshot · {subject}</span></figcaption>
     </figure>
   );
 }
