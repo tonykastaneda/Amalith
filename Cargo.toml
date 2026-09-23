@@ -25,9 +25,20 @@ rfd = "0.15"
 roxmltree = "0.20"
 zstd = "0.13"
 
+# The workspace's own crates. At opt-level 0 the renderer's per-frame CPU
+# work — path -> BezPath conversion, bounds/culling math, transforms — runs
+# unoptimized on every object every frame, which drops a 15k-anchor document
+# from 100+ fps to 20-30 and reads as a renderer problem rather than a debug
+# build. Level 1 recovers nearly all of that and still keeps incremental
+# builds quick and debug info intact; level 2 costs noticeably more compile
+# time for no perceptible gain here.
+[profile.dev]
+opt-level = 1
+
 # `[profile.dev.package."*"]` only touches dependencies, never the
-# workspace's own crates — those keep opt-level 0 (fast incremental
-# builds, full debug info). Without this, a plain `cargo run` compiles
+# workspace's own crates (those are `[profile.dev]` above). Without this,
+# dependencies would stay at that lower level too, and a plain `cargo run`
+# would compile
 # lopdf/zip/zstd/image fully unoptimized, and byte-level PDF parsing on a
 # real-world multi-hundred-MB .ai file becomes 10-30x slower than a
 # release build for no benefit (nobody steps through their source) —
