@@ -14,13 +14,13 @@ const platforms: Platform[] = [
   {
     name: "macOS",
     icon: `${basePath}/brand/platform/mac.svg`,
-    label: "Download .dmg",
+    label: "Download for macOS",
     matchExt: ".dmg",
   },
   {
     name: "Windows",
     icon: `${basePath}/brand/platform/win.svg`,
-    label: "Download .zip",
+    label: "Download for Windows",
     matchExt: ".zip",
   },
   {
@@ -39,12 +39,16 @@ export default function Downloads() {
     <>
       <Header basePath={basePath} />
 
-      <main tabIndex={-1} id="top" className="marketing-page downloads-page">
-        <section className="download-stage" aria-labelledby="downloads-title">
-          <p className="kicker">Finally</p>
-          <h1 id="downloads-title">The design tool that lets<br />creatives <em>create.</em></h1>
-          <p className="download-stage__intro">Your ideas. Your files. Your workspace.<br />Free. No payment or card required.</p>
-          <DownloadLinks platforms={platforms} />
+      <main id="top" className="downloads-page">
+        <section className="downloads-hero" aria-labelledby="downloads-title">
+          <div className="downloads-hero__inner">
+            <p className="kicker"><span /> Finally</p>
+            <h1 id="downloads-title">
+              <span>The design tool that lets</span>
+              <span>creatives <em>create.</em></span>
+            </h1>
+            <DownloadLinks platforms={platforms} />
+          </div>
         </section>
       </main>
 

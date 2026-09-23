@@ -55,17 +55,12 @@ export function DownloadLinks({ platforms }: { platforms: Platform[] }) {
   }, [platforms]);
 
   return (
-    <div className="platform-grid">
+    <div className="download-actions" aria-label="Desktop downloads">
       {platforms.map((platform) => (
-        <article className="platform-card" key={platform.name}>
-          <div className="platform-card__icon">
-            <img src={platform.icon} alt="" aria-hidden="true" />
-          </div>
-          <h3>{platform.name}</h3>
-          <a className="marketing-button marketing-button--secondary" href={hrefs[platform.name] ?? RELEASES_PAGE}>
-            {platform.label}
-          </a>
-        </article>
+        <a className="platform-download" key={platform.name} href={hrefs[platform.name] ?? RELEASES_PAGE}>
+          <img src={platform.icon} alt="" aria-hidden="true" />
+          <span>{platform.label}</span>
+        </a>
       ))}
     </div>
   );
