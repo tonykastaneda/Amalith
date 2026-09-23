@@ -75,7 +75,7 @@ pub struct TerminalPaintArgs<'a> {
     /// `docs/canvas-panes.md`.
     pub header: bool,
     pub focused: bool,
-    pub term: &'a alacritty_terminal::Term<alacritty_terminal::event::VoidListener>,
+    pub term: &'a alacritty_terminal::Term<crate::app::PtyReplies>,
     pub font: &'a vello::peniko::FontData,
     pub cell_w: f64,
     pub cell_h: f64,

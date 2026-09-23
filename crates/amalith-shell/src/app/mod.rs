@@ -48,6 +48,7 @@ mod offset_dialog;
 mod render;
 mod shape_dialog;
 mod terminal;
+pub use terminal::PtyReplies;
 mod multiplexer;
 mod thumbnails;
 mod width_tool;

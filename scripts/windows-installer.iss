@@ -28,6 +28,9 @@ AppPublisherURL=https://www.amalith.app/
 AppSupportURL=https://github.com/tonykastaneda/Amalith/issues
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\Amalith
+; Upgrades reuse the existing folder without showing the folder page, so a
+; new version always lands on top of the old one instead of beside it.
+DisableDirPage=auto
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog commandline

@@ -16,7 +16,7 @@
 use std::io::{Read, Write};
 use std::sync::mpsc;
 
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::Config as TermConfig;
 use alacritty_terminal::vte::ansi::Processor;
@@ -40,6 +40,8 @@ pub(super) struct TerminalPane {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     rx: mpsc::Receiver<Vec<u8>>,
+    /// Answers `term` produced while processing output (see [`PtyReplies`]).
+    replies: mpsc::Receiver<Vec<u8>>,
     reader_thread: Option<std::thread::JoinHandle<()>>,
     // `pub(super)` (visible to the rest of `app`, e.g. `app::render`) —
     // `render/mod.rs` borrows these directly to build one frame's
@@ -47,12 +49,30 @@ pub(super) struct TerminalPane {
     // the borrow checker treat the whole of `self` as tied up for the
     // struct's lifetime instead of just this one field (see that call
     // site's own comment).
-    pub(super) term: Term<VoidListener>,
+    pub(super) term: Term<PtyReplies>,
     processor: Processor,
     pub(super) font: vello::peniko::FontData,
     pub(super) cell_w: f64,
     pub(super) cell_h: f64,
     pub(super) ascent: f64,
+}
+
+/// Carries the emulator's replies to the shell's queries back to the PTY.
+///
+/// Some escape sequences are questions — "where's the cursor?" (DSR),
+/// "what terminal are you?" (DA) — and `Term` answers them with
+/// [`Event::PtyWrite`]. Dropping those answers is harmless for a macOS/Linux
+/// shell, which rarely asks, but fatal on Windows: ConPTY opens with a
+/// cursor-position query and shows nothing and accepts no input until it's
+/// answered — a blank, frozen pane.
+pub struct PtyReplies(mpsc::Sender<Vec<u8>>);
+
+impl EventListener for PtyReplies {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            let _ = self.0.send(text.into_bytes());
+        }
+    }
 }
 
 /// Minimum width (logical px) either pane is allowed to shrink to when
@@ -216,7 +236,8 @@ impl App {
         });
 
         let dims = TermDims { columns: cols as usize, lines: rows as usize };
-        let term = Term::new(TermConfig::default(), &dims, VoidListener);
+        let (reply_tx, replies) = mpsc::channel::<Vec<u8>>();
+        let term = Term::new(TermConfig::default(), &dims, PtyReplies(reply_tx));
 
         self.terminal = Some(TerminalPane {
             focused: true,
@@ -225,6 +246,7 @@ impl App {
             writer,
             child,
             rx,
+            replies,
             reader_thread: Some(reader_thread),
             term,
             processor: Processor::new(),
@@ -260,12 +282,7 @@ impl App {
     /// `about_to_wait`, parallel to `trace_tick`.
     pub(in crate::app) fn terminal_tick(&mut self) {
         let Some(pane) = &mut self.terminal else { return };
-        let mut changed = false;
-        while let Ok(bytes) = pane.rx.try_recv() {
-            pane.processor.advance(&mut pane.term, &bytes);
-            changed = true;
-        }
-        if changed {
+        if pane.pump() {
             self.request_main_redraw();
         }
     }
@@ -346,8 +363,28 @@ impl App {
 }
 
 impl TerminalPane {
+    /// Feeds pending PTY output through the ANSI processor into `term`, then
+    /// writes back any answers that produced (see [`PtyReplies`]). Returns
+    /// whether any output arrived.
+    fn pump(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(bytes) = self.rx.try_recv() {
+            self.processor.advance(&mut self.term, &bytes);
+            changed = true;
+        }
+        let mut answered = false;
+        while let Ok(reply) = self.replies.try_recv() {
+            let _ = self.writer.write_all(&reply);
+            answered = true;
+        }
+        if answered {
+            let _ = self.writer.flush();
+        }
+        changed
+    }
+
     pub(super) fn tick_and_resize(&mut self, bounds: Rect) {
-        while let Ok(bytes) = self.rx.try_recv() { self.processor.advance(&mut self.term, &bytes); }
+        self.pump();
         let columns = (bounds.width() / self.cell_w).floor().max(1.) as usize;
         let lines = ((bounds.height() - crate::terminal_paint::header_rect(bounds).height()) / self.cell_h).floor().max(1.) as usize;
         if columns != self.term.columns() || lines != self.term.screen_lines() {
@@ -356,4 +393,19 @@ impl TerminalPane {
         }
     }
     pub(super) fn terminate(&mut self) { let _ = self.child.kill(); let _ = self.child.wait(); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ConPTY's opening cursor-position query must get an answer, or the
+    /// Windows terminal pane stays blank and ignores input.
+    #[test]
+    fn cursor_position_query_is_answered() {
+        let (tx, replies) = mpsc::channel();
+        let mut term = Term::new(TermConfig::default(), &TermDims { columns: 80, lines: 24 }, PtyReplies(tx));
+        Processor::<alacritty_terminal::vte::ansi::StdSyncHandler>::new().advance(&mut term, b"\x1b[6n");
+        assert_eq!(replies.try_recv().unwrap(), b"\x1b[1;1R");
+    }
 }
