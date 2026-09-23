@@ -1188,6 +1188,11 @@ pub fn draw_eye(scene: &mut Scene, cx: f64, cy: f64, on: bool, color: Color) {
 }
 
 /// A single fill / stroke colour chip. `active` gives it the blue border.
+///
+/// `gradient` is the gradient `paint` refers to, when it is one —
+/// [`paint_gradient`] resolves it from the document. Without it a gradient
+/// chip can only draw the stand-in ramp, which tells the user nothing about
+/// the paint they actually have.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_paint_swatch(
     scene: &mut Scene,
@@ -1195,6 +1200,7 @@ pub fn draw_paint_swatch(
     theme: &Theme,
     r: Rect,
     paint: Paint,
+    gradient: Option<&amalith_core::Gradient>,
     active: bool,
     mixed: bool,
 ) {
@@ -1219,7 +1225,7 @@ pub fn draw_paint_swatch(
             Paint::Solid(c) => {
                 scene.fill(Fill::NonZero, ID, crate::convert::color(c), None, &r);
             }
-            Paint::Gradient(_) => gradient_ramp(scene, r),
+            Paint::Gradient(_) => gradient_ramp(scene, r, gradient),
         }
     }
     let (w, col) = if active {
@@ -1230,20 +1236,36 @@ pub fn draw_paint_swatch(
     scene.stroke(&Stroke::new(w), ID, col, None, &r);
 }
 
-/// A generic left→right white→black ramp: the stand-in preview for a
-/// `Paint::Gradient` in the small proxy swatches, where the real gradient
-/// definition isn't threaded through. The Gradient panel draws the actual
-/// per-stop preview.
-pub(crate) fn gradient_ramp(scene: &mut Scene, r: Rect) {
+/// The gradient `paint` refers to, for the swatch painters: `None` when the
+/// paint isn't a gradient, or when its id isn't in `doc`'s pool.
+pub fn paint_gradient(doc: &Document, paint: Paint) -> Option<&amalith_core::Gradient> {
+    doc.gradient(paint.gradient_id()?)
+}
+
+/// A left→right ramp of `g`'s colour sequence — the preview every gradient
+/// swatch draws, from the Gradient panel's own bar down to the Fill/Stroke
+/// proxies, so they can't disagree about what a paint looks like.
+///
+/// Always fully opaque: these read the *colour* sequence, not alpha, so no
+/// checkerboard and no blending. With `None` it falls back to a white→black
+/// stand-in, which now only happens for a paint whose gradient id is missing
+/// from the document — a malformed file, not ordinary state.
+pub(crate) fn gradient_ramp(scene: &mut Scene, r: Rect, g: Option<&amalith_core::Gradient>) {
     let n = r.width().ceil().max(1.0) as i64;
     for i in 0..n {
         let t = i as f32 / n as f32;
-        let g = 1.0 - t;
+        let c = match g {
+            Some(g) => {
+                let c = g.sample(t);
+                Color::new([c.r, c.g, c.b, 1.0])
+            }
+            None => Color::new([1.0 - t, 1.0 - t, 1.0 - t, 1.0]),
+        };
         let x0 = r.x0 + i as f64;
         scene.fill(
             Fill::NonZero,
             ID,
-            Color::new([g, g, g, 1.0]),
+            c,
             None,
             &Rect::new(x0, r.y0, x0 + 1.0, r.y1),
         );
@@ -1289,5 +1311,41 @@ mod tests {
             MenuEntry::Separator,
             MenuEntry::Separator
         ));
+    }
+}
+
+#[cfg(test)]
+mod swatch_tests {
+    use super::*;
+    use amalith_core::{Document, Gradient, GradientId};
+
+    /// Every gradient swatch draws its real colour sequence, so the id has
+    /// to resolve against the document's pool. Before this was threaded
+    /// through, `draw_paint_swatch` matched `Paint::Gradient(_)` and threw
+    /// the id away, so every gradient chip showed the same white→black
+    /// ramp whatever paint the object actually had.
+    #[test]
+    fn a_gradient_paint_resolves_to_its_definition() {
+        let mut doc = Document::new("Swatches");
+        let id = GradientId::new();
+        doc.add_gradient(Gradient::radial(id));
+
+        let found = paint_gradient(&doc, Paint::Gradient(id)).expect("resolves");
+        assert_eq!(found.id, id);
+    }
+
+    /// The generic ramp is the fallback for a reference the document can't
+    /// satisfy — a malformed file — and never for ordinary paints.
+    #[test]
+    fn non_gradient_and_dangling_paints_resolve_to_nothing() {
+        let mut doc = Document::new("Swatches");
+        doc.add_gradient(Gradient::radial(GradientId::new()));
+
+        assert!(
+            paint_gradient(&doc, Paint::Gradient(GradientId::new())).is_none(),
+            "an id the pool doesn't have"
+        );
+        assert!(paint_gradient(&doc, Paint::None).is_none());
+        assert!(paint_gradient(&doc, Paint::Solid(amalith_core::Color::rgb(1.0, 0.0, 0.0))).is_none());
     }
 }

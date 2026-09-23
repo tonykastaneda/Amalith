@@ -184,22 +184,10 @@ fn checker(scene: &mut Scene, r: Rect) {
     }
 }
 
-/// The ramp is always shown fully opaque — it's reading the *colour*
-/// sequence, not previewing alpha, so no checkerboard and no blending.
+/// The panel's own ramp, shared with every gradient swatch in the app so
+/// the bar and the proxy chips always show the same thing.
 fn paint_ramp(scene: &mut Scene, bar: Rect, g: &Gradient) {
-    let n = bar.width().ceil().max(1.0) as i64;
-    for i in 0..n {
-        let t = i as f32 / n as f32;
-        let c = g.sample(t);
-        let x = bar.x0 + i as f64;
-        scene.fill(
-            Fill::NonZero,
-            ID,
-            Color::new([c.r, c.g, c.b, 1.0]),
-            None,
-            &Rect::new(x, bar.y0, x + 1.0, bar.y1),
-        );
-    }
+    super::gradient_ramp(scene, bar, Some(g));
 }
 
 fn field_box(

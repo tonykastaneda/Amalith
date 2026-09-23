@@ -207,7 +207,16 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
         match item {
             AppearanceItem::Fill { paint, opacity, .. } => {
                 draw_fill_glyph(scene, l.kind_glyph, ink);
-                draw_paint_swatch(scene, text, th, l.swatch, *paint, selected, false);
+                draw_paint_swatch(
+                    scene,
+                    text,
+                    th,
+                    l.swatch,
+                    *paint,
+                    super::paint_gradient(ctx.doc, *paint),
+                    selected,
+                    false,
+                );
                 let label_x = l.swatch.x1 + ui_px(10.0);
                 let name_ink = if visible { th.text } else { th.border };
                 text.draw(scene, "Fill", 12.0, name_ink, label_x, r.center().y + ui_px(4.0));
@@ -219,7 +228,16 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
             }
             AppearanceItem::Stroke { paint, width, opacity, .. } => {
                 draw_stroke_glyph(scene, l.kind_glyph, ink);
-                draw_paint_swatch(scene, text, th, l.swatch, *paint, selected, false);
+                draw_paint_swatch(
+                    scene,
+                    text,
+                    th,
+                    l.swatch,
+                    *paint,
+                    super::paint_gradient(ctx.doc, *paint),
+                    selected,
+                    false,
+                );
                 let label_x = l.swatch.x1 + ui_px(10.0);
                 let name_ink = if visible { th.text } else { th.border };
                 text.draw(scene, "Stroke", 12.0, name_ink, label_x, r.center().y + ui_px(4.0));

@@ -71,6 +71,10 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     let l = swatch_layout(body);
     let rep = ctx.representative.as_ref();
     let white = Color::from_rgb8(0xff, 0xff, 0xff);
+    let stroke = rep.map(|a| a.stroke()).unwrap_or(Paint::None);
+    let fill = rep
+        .map(|a| a.fill())
+        .unwrap_or(Paint::Solid(CoreColor::rgb(0.87, 0.87, 0.87)));
 
     // Stroke behind, fill in front (Illustrator's overlap).
     draw_paint_swatch(
@@ -78,7 +82,8 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         text,
         ctx.theme,
         l.stroke,
-        rep.map(|a| a.stroke()).unwrap_or(Paint::None),
+        stroke,
+        super::paint_gradient(ctx.doc, stroke),
         ctx.active_slot == PaintSlot::Stroke,
         ctx.stroke_mixed,
     );
@@ -87,8 +92,8 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         text,
         ctx.theme,
         l.fill,
-        rep.map(|a| a.fill())
-            .unwrap_or(Paint::Solid(CoreColor::rgb(0.87, 0.87, 0.87))),
+        fill,
+        super::paint_gradient(ctx.doc, fill),
         ctx.active_slot == PaintSlot::Fill,
         ctx.fill_mixed,
     );
@@ -114,7 +119,16 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     }
 
     for (p, r) in &l.swatches {
-        draw_paint_swatch(scene, text, ctx.theme, *r, *p, false, false);
+        draw_paint_swatch(
+            scene,
+            text,
+            ctx.theme,
+            *r,
+            *p,
+            super::paint_gradient(ctx.doc, *p),
+            false,
+            false,
+        );
     }
 }
 

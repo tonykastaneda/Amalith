@@ -50,6 +50,10 @@ fn metric_gap() -> f64 { crate::metrics::with(|m| m.context_bar_gap) }
 /// not threading two dozen positional args through `paint_main`.
 pub struct Ctx<'a> {
     pub theme: &'a Theme,
+    /// The document on screen. Needed to resolve a `Paint::Gradient` id to
+    /// its definition so the Fill/Stroke chips can show the real ramp
+    /// rather than a generic one.
+    pub doc: &'a amalith_core::Document,
     /// Size of the object selection.
     pub selection_len: usize,
     /// True when text is the editing focus (caret in a text object, or the

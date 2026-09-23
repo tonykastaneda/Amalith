@@ -830,6 +830,7 @@ pub(in crate::app) fn paint_main(
             }));
     let cbar = context_bar::Ctx {
         theme,
+        doc,
         selection_len: selection.len(),
         text_context: text_ctx,
         representative,

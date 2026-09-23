@@ -314,12 +314,14 @@ fn slot_paints(ctx: &Ctx) -> (Paint, Paint) {
 /// One proxy swatch. The foreground colour has a white inset; the rear
 /// swatch is hollow so fill and stroke stay legible where they overlap.
 /// `mixed` overrides the colour with a grey "?" pattern.
+#[allow(clippy::too_many_arguments)]
 fn swatch(
     scene: &mut Scene,
     text: &mut crate::text::TextContext,
     theme: &Theme,
     r: Rect,
     paint: Paint,
+    gradient: Option<&amalith_core::Gradient>,
     hollow: bool,
     mixed: bool,
 ) {
@@ -345,11 +347,11 @@ fn swatch(
         }
         Paint::Gradient(_) => {
             if hollow {
-                super::gradient_ramp(scene, r);
+                super::gradient_ramp(scene, r, gradient);
             } else {
                 scene.fill(Fill::NonZero, ID, Color::WHITE, None, &r);
                 let inset = Rect::new(r.x0 + ui_px(2.0), r.y0 + ui_px(2.0), r.x1 - ui_px(2.0), r.y1 - ui_px(2.0));
-                super::gradient_ramp(scene, inset);
+                super::gradient_ramp(scene, inset, gradient);
             }
         }
     }
@@ -373,14 +375,16 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
     let (fill, stroke) = slot_paints(ctx);
     let fill_active = ctx.active_slot == PaintSlot::Fill;
     let (fm, sm) = (ctx.fill_mixed, ctx.stroke_mixed);
+    let fill_grad = super::paint_gradient(ctx.doc, fill);
+    let stroke_grad = super::paint_gradient(ctx.doc, stroke);
 
     // Inactive swatch first so the active one sits on top.
     if fill_active {
-        swatch(scene, text, th, p.stroke, stroke, true, sm);
-        swatch(scene, text, th, p.fill, fill, false, fm);
+        swatch(scene, text, th, p.stroke, stroke, stroke_grad, true, sm);
+        swatch(scene, text, th, p.fill, fill, fill_grad, false, fm);
     } else {
-        swatch(scene, text, th, p.fill, fill, false, fm);
-        swatch(scene, text, th, p.stroke, stroke, true, sm);
+        swatch(scene, text, th, p.fill, fill, fill_grad, false, fm);
+        swatch(scene, text, th, p.stroke, stroke, stroke_grad, true, sm);
     }
 
     // Swap arrows (top-right): a right-angle elbow with a head at each end.

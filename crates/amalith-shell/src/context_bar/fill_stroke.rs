@@ -36,15 +36,23 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         let s = Rect::from_center_size(Point::new(chip.x1 + ui_px(13.0), chip.center().y), (ui_px(13.0), ui_px(13.0)));
         scene.stroke(&Stroke::new(ui_px(1.0)), ID, theme.text_dim, None, &s);
     };
+    let fill_paint = ctx
+        .representative
+        .as_ref()
+        .map(|a| a.fill())
+        .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87)));
+    let stroke_paint = ctx
+        .representative
+        .as_ref()
+        .map(|a| a.stroke())
+        .unwrap_or(amalith_core::Paint::None);
     panels::draw_paint_swatch(
         scene,
         text,
         theme,
         fill,
-        ctx.representative
-            .as_ref()
-            .map(|a| a.fill())
-            .unwrap_or(amalith_core::Paint::Solid(amalith_core::Color::rgb(0.87, 0.87, 0.87))),
+        fill_paint,
+        panels::paint_gradient(ctx.doc, fill_paint),
         ctx.active_slot == PaintSlot::Fill,
         ctx.fill_mixed,
     );
@@ -54,10 +62,8 @@ fn paint(scene: &mut Scene, text: &mut TextContext, r: Rect, ctx: &Ctx) {
         text,
         theme,
         stroke,
-        ctx.representative
-            .as_ref()
-            .map(|a| a.stroke())
-            .unwrap_or(amalith_core::Paint::None),
+        stroke_paint,
+        panels::paint_gradient(ctx.doc, stroke_paint),
         ctx.active_slot == PaintSlot::Stroke,
         ctx.stroke_mixed,
     );

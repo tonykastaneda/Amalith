@@ -7088,6 +7088,7 @@ impl App {
     fn context_bar_tip_ctx(&self) -> context_bar::Ctx<'_> {
         context_bar::Ctx {
             theme: &self.theme,
+            doc: self.doc.editor.document(),
             selection_len: self.doc.selection.len(),
             text_context: self.text_context(),
             representative: None,
@@ -7147,6 +7148,7 @@ impl App {
     fn context_bar_ctx(&self) -> context_bar::Ctx<'_> {
         context_bar::Ctx {
             theme: &self.theme,
+            doc: self.doc.editor.document(),
             selection_len: self.doc.selection.len(),
             text_context: self.text_context(),
             representative: self.representative(),

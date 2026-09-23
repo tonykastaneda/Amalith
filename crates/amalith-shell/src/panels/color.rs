@@ -407,6 +407,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         th,
         l.stroke,
         stroke,
+        super::paint_gradient(ctx.doc, stroke),
         ctx.active_slot == PaintSlot::Stroke,
         ctx.stroke_mixed,
     );
@@ -416,6 +417,7 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
         th,
         l.fill,
         fill,
+        super::paint_gradient(ctx.doc, fill),
         ctx.active_slot == PaintSlot::Fill,
         ctx.fill_mixed,
     );
