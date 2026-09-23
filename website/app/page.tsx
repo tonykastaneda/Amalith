@@ -59,7 +59,7 @@ export default function Home() {
             <div className="home-chapter__copy">
               <p className="home-eyebrow">Room to think</p>
               <h2>Your ideas don’t end<br />at the artboard.</h2>
-              <p>Spread out on an infinite pasteboard. Keep references, experiments, and finished work together, with room for whatever comes next.</p>
+              <p>Spread out on an infinite pasteboard. Make space for your references, experiments, and finished work, with room for whatever comes next.</p>
             </div>
             <Recording subject="Exploring the infinite pasteboard" />
           </section>
