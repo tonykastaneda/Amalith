@@ -2,12 +2,12 @@ name: Release
 
 # Push a tag like v0.0.1 (or run this manually with a version input) to
 # build unsigned release artifacts and publish a GitHub Release with a
-# macOS DMG and a Windows zip attached.
+# macOS DMG, a Windows zip, and Linux tarball/deb/rpm/AppImage attached.
 #
-# Neither build is code-signed: there's no Apple Developer ID or Windows
-# code-signing certificate configured for this repo yet, so macOS
-# Gatekeeper and Windows SmartScreen will both show an "unidentified
-# developer" / "unknown publisher" warning on first run. See
+# Neither the macOS nor Windows build is code-signed: there's no Apple
+# Developer ID or Windows code-signing certificate configured for this
+# repo yet, so macOS Gatekeeper and Windows SmartScreen will both show an
+# "unidentified developer" / "unknown publisher" warning on first run. See
 # scripts/package-macos.sh's header for how to add signing + notarization
 # once a Developer ID cert exists — set the SIGN_IDENTITY / NOTARY_PROFILE
 # (or NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID for CI) env vars and
@@ -65,8 +65,39 @@ jobs:
           name: windows-zip
           path: target/package/*.zip
 
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build + packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxkbcommon-dev libwayland-dev pkg-config rpm squashfs-tools
+          sudo curl -L -o /usr/local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
+
+      - name: Build and package
+        env:
+          # appimagetool ships as an AppImage itself; this makes it extract
+          # and run in place instead of mounting via FUSE, which the CI
+          # runner doesn't have set up.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: ./scripts/package-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/linux/*.tar.gz
+            dist/linux/*.deb
+            dist/linux/*.rpm
+            dist/linux/*.AppImage
+
   release:
-    needs: [macos, windows]
+    needs: [macos, windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -80,5 +111,6 @@ jobs:
           files: |
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
+            artifacts/linux-packages/*
           prerelease: true
           generate_release_notes: true
