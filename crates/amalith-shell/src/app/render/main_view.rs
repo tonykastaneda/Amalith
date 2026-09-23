@@ -1110,7 +1110,7 @@ pub(in crate::app) fn paint_main(
         // hidden (macOS). Elsewhere the native title bar already shows it.
         #[cfg(target_os = "macos")]
         {
-            let name = "Amalith v.0.0.1";
+            let name = crate::version::TITLE;
             let tw = text.measure(name, 12.5);
             text.draw(
                 scene,

@@ -9538,7 +9538,7 @@ impl ApplicationHandler for App {
             .map(|(w, h)| (w as f64, h as f64))
             .unwrap_or((1280.0, 800.0));
         let attrs = Window::default_attributes()
-            .with_title("Amalith v.0.0.1")
+            .with_title(crate::version::TITLE)
             .with_window_icon(appicon::window_icon())
             .with_inner_size({
                 let (w, h) = crate::metrics::main_min_size();

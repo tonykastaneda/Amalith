@@ -76,6 +76,7 @@ const BG: Color = Color::from_rgb8(10, 10, 12);
 const INK: Color = Color::from_rgb8(232, 232, 232);
 const LINK: Color = Color::WHITE;
 const SEL: Color = Color::from_rgb8(58, 105, 170);
+const DIM: Color = Color::from_rgb8(130, 130, 136);
 
 /// What a press landed on.
 pub enum Hit {
@@ -285,6 +286,15 @@ impl About {
         let tx = self.hit_github.x1 + metric_link_gap();
         let label = if self.credits { "About" } else { "Credits" };
         self.hit_toggle = draw_link(scene, tcx, label, tx, base);
+
+        // Version, right-aligned in the left panel on the links' baseline.
+        let version = if crate::version::COMMIT.is_empty() {
+            format!("Version {}", crate::version::VERSION)
+        } else {
+            format!("Version {} ({})", crate::version::VERSION, crate::version::COMMIT)
+        };
+        let vw = tcx.measure(&version, LINK_SIZE);
+        tcx.draw(scene, &version, LINK_SIZE, DIM, ox + px - metric_pad_x() - vw, base);
 
         scene.pop_layer();
     }

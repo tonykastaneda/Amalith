@@ -38,7 +38,8 @@ fi
 rm -rf "$out"
 mkdir -p "$out/arch"
 
-echo "==> cargo build --release"
+echo "==> cargo build --release ($VERSION)"
+export AMALITH_VERSION="$VERSION"
 cargo build --release -p amalith-shell
 bin="$root/target/release/$APP"
 [ -x "$bin" ] || { echo "missing $bin" >&2; exit 1; }

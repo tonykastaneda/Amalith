@@ -14,6 +14,7 @@ $Version = if ($env:VERSION) { $env:VERSION } else {
 }
 
 Write-Host "==> Building release ($Version)"
+$env:AMALITH_VERSION = $Version
 cargo build --release -p amalith-shell
 
 $StageDir = "target/package/windows"

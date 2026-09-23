@@ -11,6 +11,10 @@
 //!   can't be broken by a branding wipe. The `.ai` master sits alongside
 //!   for reference and is ignored (not a `.png`). The embedded list is
 //!   printed as a build warning so it's visible.
+//! - Sets `AMALITH_VERSION` / `AMALITH_COMMIT` for `crate::version`. A
+//!   release build gets its version from the git tag (the packaging
+//!   scripts export `AMALITH_VERSION`); a plain `cargo build` falls back to
+//!   Cargo.toml. The commit is only known in CI (`GITHUB_SHA`).
 
 use std::path::PathBuf;
 
@@ -19,6 +23,20 @@ fn main() {
         let _ = embed_resource::compile("windows/amalith.rc", embed_resource::NONE);
     }
     gen_cnd_art();
+    gen_version();
+}
+
+fn gen_version() {
+    println!("cargo:rerun-if-env-changed=AMALITH_VERSION");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    let version = std::env::var("AMALITH_VERSION")
+        .ok()
+        .map(|v| v.trim().trim_start_matches('v').to_owned())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| std::env::var("CARGO_PKG_VERSION").unwrap());
+    let commit: String = std::env::var("GITHUB_SHA").unwrap_or_default().chars().take(7).collect();
+    println!("cargo:rustc-env=AMALITH_VERSION={version}");
+    println!("cargo:rustc-env=AMALITH_COMMIT={commit}");
 }
 
 fn gen_cnd_art() {

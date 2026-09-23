@@ -39,7 +39,8 @@ contents="$app/Contents"
 
 mkdir -p "$out"
 
-echo "==> cargo build --release"
+echo "==> cargo build --release ($VERSION)"
+export AMALITH_VERSION="$VERSION"
 cargo build --release -p amalith-shell
 bin="$root/target/release/$APP_NAME"
 [ -x "$bin" ] || { echo "missing $bin"; exit 1; }

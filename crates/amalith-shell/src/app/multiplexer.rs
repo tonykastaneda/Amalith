@@ -96,7 +96,7 @@ const CHOOSER_MARK_GAP: f64 = 18.0;
 /// mark, before `CHOOSER_MARK_GAP` starts — same version string as the
 /// macOS title-bar label and the About panel.
 const CHOOSER_VERSION_BLOCK: f64 = 22.0;
-const CHOOSER_VERSION: &str = "Amalith v.0.0.1";
+const CHOOSER_VERSION: &str = crate::version::TITLE;
 
 /// The app mark, drawn as themed vector artwork rather than a raster —
 /// path data straight from `branding/Logos/emptytab-icon.svg` (the mark

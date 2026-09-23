@@ -14,7 +14,7 @@ pub fn spawn() -> Receiver<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         if let Some(latest) = fetch_latest_release_version() {
-            if is_newer_version(&latest, env!("CARGO_PKG_VERSION")) {
+            if is_newer_version(&latest, crate::version::VERSION) {
                 let _ = tx.send(latest);
             }
         }

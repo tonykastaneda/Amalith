@@ -329,7 +329,7 @@ impl Home {
             Rect::from_origin_size((cx - wm_w / 2.0, wm_top), (wm_w, wm_h)),
         );
 
-        let ver = "v.0.0.1";
+        let ver = crate::version::LABEL;
         let ver_w = tcx.measure(ver, 15.0);
         let ver_baseline = wm_top + wm_h + ui_px(30.0);
         tcx.draw(scene, ver, 15.0, DIM, cx - ver_w / 2.0, ver_baseline);
