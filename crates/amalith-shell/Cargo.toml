@@ -21,6 +21,11 @@ embed-resource = "3"
 
 [dependencies]
 amalith-trace = { path = "../amalith-trace" }
+# Only used for the startup update check (see update_check::spawn) — a
+# single blocking GET against the GitHub releases API on a background
+# thread, so this deliberately stays a small synchronous client rather
+# than pulling in an async runtime just for that.
+ureq = { version = "3", features = ["json"] }
 vello = "0.10"
 winit = "0.30"
 pollster = "0.4"

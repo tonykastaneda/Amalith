@@ -557,6 +557,24 @@ impl App {
                     return;
                 };
 
+                // Non-modal: only consumes the press when it actually
+                // lands on the banner, so it never steals a click meant
+                // for whatever else is on screen (including another
+                // modal below).
+                if self.update_available.is_some() && !self.update_dismissed {
+                    match update_banner::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
+                        update_banner::Hit::Dismiss => {
+                            self.update_dismissed = true;
+                            return;
+                        }
+                        update_banner::Hit::Download => {
+                            update_banner::open_latest_release();
+                            return;
+                        }
+                        update_banner::Hit::None => {}
+                    }
+                }
+
                 // The unsaved-changes prompt is modal while open — it
                 // takes precedence over everything, including About/
                 // NewDoc/Home, since it can be triggered while any of

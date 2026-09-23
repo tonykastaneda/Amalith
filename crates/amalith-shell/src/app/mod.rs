@@ -76,7 +76,7 @@ pub(crate) use crate::tool::{Tool, ToolGroup};
 pub(crate) use crate::{
     about, appicon, areatypedlg, blenddlg, chrome, colormanage, confirm_close, context_bar, convert, effectdlg, home,
     icons, layerdlg, layerspaneldlg, layout, magicwand, offsetdlg, panels, pathtext, picker, prefs, recent, rulers, sample, select,
-    settings, shapedialog, stroke_panel, textedit, widgets, workspace, workspace_dialog,
+    settings, shapedialog, stroke_panel, textedit, update_banner, widgets, workspace, workspace_dialog,
     workspaces, xformdlg, Theme,
 };
 pub(crate) use vello::kurbo::{Affine, BezPath, Point, Rect, Stroke, Vec2};
@@ -600,6 +600,11 @@ enum Drag {
 enum MenuAction {
     About,
     Preferences,
+    /// Amalith ▸ Check for Updates — re-runs the same background check
+    /// that fires once at startup (`update_check::spawn`), so the banner
+    /// can be triggered on demand too. Silent if already up to date, same
+    /// as the startup check.
+    CheckForUpdates,
     /// Quit / Exit. Routed here (not the macOS predefined Quit) so
     /// `about_to_wait` can `event_loop.exit()` and `App::exiting` can
     /// save the layout on the way out.
@@ -1674,6 +1679,19 @@ struct App {
     /// resumed.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     native_menu: Option<NativeMenu>,
+    /// The one-shot startup version check (`update_check::spawn`) — polled
+    /// in `drain_update_check`, which is what actually sets
+    /// `update_available`.
+    update_check_rx: std::sync::mpsc::Receiver<String>,
+    /// `Some(version)` once the background check finds a newer release
+    /// than this build — drives the dismissible corner banner
+    /// (`update_banner`). `None` both before that check finishes and when
+    /// it finds nothing newer.
+    update_available: Option<String>,
+    /// Set when the banner's own close button is clicked — kept separate
+    /// from `update_available` so a stray late-arriving check result
+    /// can't un-dismiss a banner the user already closed this session.
+    update_dismissed: bool,
 }
 
 impl App {
@@ -1900,6 +1918,9 @@ impl App {
             last_caret_drawn: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             native_menu: None,
+            update_check_rx: crate::update_check::spawn(),
+            update_available: None,
+            update_dismissed: false,
         };
         // The fancy Home/Welcome screen is hidden, not deleted (its own
         // code and fields are untouched) — the app boots straight into a
@@ -4781,6 +4802,10 @@ impl App {
                 }
                 self.request_main_redraw();
             }
+            MenuAction::CheckForUpdates => {
+                self.update_check_rx = crate::update_check::spawn();
+                self.update_dismissed = false;
+            }
             MenuAction::Preferences => {
                 self.prefs = Some(prefs::Prefs::new(
                     self.settings,
@@ -5950,6 +5975,16 @@ impl App {
             self.lod.enqueue_bytes(asset, key, b, native_w, native_h);
         } else {
             self.lod_inflight.remove(&asset);
+        }
+    }
+
+    /// One value, ever, and only when `update_check::spawn`'s background
+    /// thread actually found a newer release — see its own doc comment.
+    fn drain_update_check(&mut self) {
+        if let Ok(version) = self.update_check_rx.try_recv() {
+            self.update_available = Some(version);
+            self.update_dismissed = false;
+            self.request_main_redraw();
         }
     }
 
@@ -9307,6 +9342,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
         }
         self.drain_lod();
+        self.drain_update_check();
         self.trace_tick();
         self.mux_tick();
         self.terminal_tick();

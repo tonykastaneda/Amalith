@@ -345,6 +345,11 @@ impl NativeMenu {
 
         let sep = PredefinedMenuItem::separator;
         let about_i = reg(&mut items, MenuItem::new("About Amalith", true, None), MenuAction::About);
+        let check_updates_i = reg(
+            &mut items,
+            MenuItem::new("Check for Updates…", true, None),
+            MenuAction::CheckForUpdates,
+        );
         let prefs_i = reg(
             &mut items,
             MenuItem::new("Preferences…", true, Some(Accelerator::new(sup, Code::Comma))),
@@ -363,7 +368,7 @@ impl NativeMenu {
         let app = Submenu::with_items(
             "Amalith",
             true,
-            &[&about_i, &sep(), &prefs_i, &sep(), &quit_i],
+            &[&about_i, &check_updates_i, &sep(), &prefs_i, &sep(), &quit_i],
         )
         .expect("app menu");
         // File ▸ Scripts — a user-pointed folder, its scripts listed here.

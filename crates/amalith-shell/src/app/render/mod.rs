@@ -1265,6 +1265,17 @@ impl App {
                     &self.theme,
                 );
             }
+            // Non-modal, so drawn last just to sit visually on top — it
+            // never captures clicks meant for anything else.
+            if let Some(version) = self.update_available.clone().filter(|_| !self.update_dismissed) {
+                update_banner::paint(
+                    &mut self.content,
+                    &mut self.text,
+                    Rect::new(0.0, 0.0, wl, hl),
+                    &version,
+                    &self.theme,
+                );
+            }
         }
         if self.panel_menu.as_ref().is_some_and(|m| m.win == id) {
             self.paint_panel_menu(wl, hl);

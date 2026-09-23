@@ -82,6 +82,8 @@ pub mod thread;
 pub mod theme;
 pub mod metrics;
 pub mod tool;
+pub mod update_banner;
+pub mod update_check;
 pub mod vertical_text;
 pub mod widgets;
 pub mod workspace;
