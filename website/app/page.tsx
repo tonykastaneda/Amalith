@@ -53,7 +53,7 @@ export default function Home() {
 
       <main tabIndex={-1} id="top" className="marketing-page">
         <MarketingHero
-          eyebrow="The first real IDE for artists. Not developers."
+          eyebrow="The first real IDE for designers — not developers"
           title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
@@ -73,9 +73,9 @@ export default function Home() {
         </section>
 
         <section className="feature-stack" id="features" aria-label="Amalith features">
-          <p className="section-number">02 / One workflow</p>
+          <p className="section-number">02 / The full-circle workflow</p>
           <h2 className="feature-stack__intro">Create. Iterate. <em>Automate.</em></h2>
-          <p className="feature-stack__lede">The design tool you already know, with superpowers.</p>
+          <p className="feature-stack__lede">The design tool you already know, with superpowers. The full-circle, anti-slop workflow for humans who create integrated design systems.</p>
           {features.map((feature, index) => (
             <article className={`feature feature--${feature.tone}`} key={feature.title}>
               <div className="feature__copy">
