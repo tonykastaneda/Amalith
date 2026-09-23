@@ -5,26 +5,18 @@ import "./home.css";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
-/** Replace these illustrative previews with product recordings when available. */
-function Recording({ subject, variant = "canvas" }: { subject: string; variant?: "canvas" | "tools" | "commands" }) {
+/** Screenshots of the running Amalith app. */
+function Recording({ subject, art, variant = "canvas" }: { subject: string; art: string; variant?: "canvas" | "tools" | "commands" }) {
   return (
     <figure className={`home-recording home-recording--${variant}`}>
       <div className="home-recording__chrome" aria-hidden="true">
         <span className="home-recording__dots"><i /><i /><i /></span>
         <span>{subject}</span><span>Amalith</span>
       </div>
-      <div className="home-recording__canvas">
-        <div className="home-recording__art" aria-hidden="true">
-          <div className="home-sheet home-sheet--one"><span>Room<br />to create.</span><i /></div>
-          <div className="home-sheet home-sheet--two"><span>Aa</span><small>Type. Shape. Explore.</small></div>
-          <div className="home-sheet home-sheet--three"><i /><i /><i /></div>
-        </div>
-        <div className="home-recording__notice">
-          <span className="home-recording__symbol" aria-hidden="true">↗</span>
-          <span>{subject}<small>Recording coming soon</small></span>
-        </div>
+      <div className="home-recording__canvas home-recording__canvas--art">
+        <img src={`${basePath}/art/${art}.webp`} alt={`${subject}: screenshot of the Amalith app`} loading={art === "canvas" ? "eager" : "lazy"} decoding="async" width={2400} height={1458} />
       </div>
-      <figcaption><span>Amalith in motion</span><span>Illustrative placeholder · {subject}</span></figcaption>
+      <figcaption><span>Amalith v0.0.1</span><span>Screenshot · {subject}</span></figcaption>
     </figure>
   );
 }
@@ -43,7 +35,7 @@ export default function Home() {
               <a className="home-link" href="#features">Explore the canvas <span aria-hidden="true">↓</span></a>
             </div>
           </section>
-          <Recording subject="The Amalith canvas" />
+          <Recording subject="The Amalith canvas" art="canvas" />
           <div className="home-platforms" aria-label="Project at a glance">
             <span>Open source. Built in public.</span>
             <span>macOS / Windows / Linux</span>
@@ -61,7 +53,7 @@ export default function Home() {
               <h2>Your ideas don’t end<br />at the artboard.</h2>
               <p>Spread out on an infinite pasteboard. Make space for your references, experiments, and finished work, with room for whatever comes next.</p>
             </div>
-            <Recording subject="Exploring the infinite pasteboard" />
+            <Recording subject="Exploring the infinite pasteboard" art="pasteboard" />
           </section>
           <section className="home-chapter">
             <div className="home-chapter__copy">
@@ -69,7 +61,7 @@ export default function Home() {
               <h2>Less finding your tools.<br /><em>More finding your flow.</em></h2>
               <p>Familiar panels, shortcuts, and ways of working. A growing set of vector, raster, and text tools, together on one canvas.</p>
             </div>
-            <Recording subject="Tools, layers, and type" variant="tools" />
+            <Recording subject="Tools, layers, and type" art="tools" variant="tools" />
           </section>
           <section className="home-chapter">
             <div className="home-chapter__copy">
@@ -77,7 +69,7 @@ export default function Home() {
               <h2>Make it by hand.<br /><em>Make it your own.</em></h2>
               <p>The same command engine sits behind the interface, scripts, and agents. A foundation for automating the repetition and spending more time on the work you care about.</p>
             </div>
-            <Recording subject="From canvas to commands" variant="commands" />
+            <Recording subject="From canvas to commands" art="commands" variant="commands" />
           </section>
           <section className="home-open" id="status">
             <div>
