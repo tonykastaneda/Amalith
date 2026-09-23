@@ -134,7 +134,7 @@ if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
   zip="$(mktemp -d)/$APP_NAME.zip"
   echo "==> notarize app ($NOTARY_PROFILE)"
   ditto -c -k --keepParent "$app" "$zip"
-  xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" ${NOTARY_KEYCHAIN:+--keychain "$NOTARY_KEYCHAIN"} --wait
   xcrun stapler staple "$app"
   rm -rf "$(dirname "$zip")"
 
@@ -149,10 +149,15 @@ ln -s /Applications "$stage/Applications"
 hdiutil create -volname "$APP_NAME" -srcfolder "$stage" -ov -format UDZO "$dmg" >/dev/null
 rm -rf "$stage"
 
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  echo "==> codesign $dmg"
+  codesign --force --timestamp --sign "$SIGN_IDENTITY" "$dmg"
+fi
+
 if [ -n "${SIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
   echo "==> notarize $dmg"
   # The dmg needs its own notarization ticket to pass Gatekeeper offline.
-  xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" ${NOTARY_KEYCHAIN:+--keychain "$NOTARY_KEYCHAIN"} --wait
   xcrun stapler staple "$dmg"
 fi
 

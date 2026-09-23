@@ -4,14 +4,13 @@ name: Release
 # build unsigned release artifacts and publish a GitHub Release with a
 # macOS DMG, a Windows zip, and Linux tarball/deb/rpm/AppImage attached.
 #
-# Neither the macOS nor Windows build is code-signed: there's no Apple
-# Developer ID or Windows code-signing certificate configured for this
-# repo yet, so macOS Gatekeeper and Windows SmartScreen will both show an
-# "unidentified developer" / "unknown publisher" warning on first run. See
-# scripts/package-macos.sh's header for how to add signing + notarization
-# once a Developer ID cert exists — set the SIGN_IDENTITY / NOTARY_PROFILE
-# (or NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID for CI) env vars and
-# this workflow will pick them up automatically.
+# The macOS DMG is signed with the Developer ID certificate and notarized
+# by Apple (Apple Silicon only), using these repo secrets:
+#   MACOS_CERT_P12        base64 of the Developer ID Application .p12
+#   MACOS_CERT_PASSWORD   password for that .p12
+#   APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID   notarytool credentials
+# The Windows build is not code-signed yet, so SmartScreen will show an
+# "unknown publisher" warning on first run.
 
 on:
   push:
@@ -39,10 +38,43 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and package (unsigned)
+      - name: Import signing certificate and notary credentials
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_pw="$(openssl rand -base64 24)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$keychain_pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pw" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_pw" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          [ -n "$identity" ] || { echo "Developer ID identity not found"; exit 1; }
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          xcrun notarytool store-credentials amalith-ci --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          echo "NOTARY_PROFILE=amalith-ci" >> "$GITHUB_ENV"
+          echo "NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+
+      - name: Build, sign, and notarize
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: ./scripts/package-macos.sh
+
+      - name: Verify Gatekeeper acceptance
+        run: |
+          test "$(lipo -archs dist/mac/Amalith.app/Contents/MacOS/Amalith)" = "arm64"
+          spctl -a -vv -t exec dist/mac/Amalith.app
+          spctl -a -vv -t open --context context:primary-signature dist/mac/Amalith.dmg
+          xcrun stapler validate dist/mac/Amalith.dmg
 
       - uses: actions/upload-artifact@v4
         with:
@@ -118,6 +150,8 @@ jobs:
             dist/linux/*.AppImage
 
   release:
+    # Manual runs only build (useful for testing signing); tags publish.
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [macos, windows, linux]
     runs-on: ubuntu-latest
     permissions:
