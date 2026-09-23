@@ -52,7 +52,7 @@
 .marketing-page .status h2 { margin: 24px 0 0; }
 .marketing-page .status__copy { padding: 0; }
 .marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
-.marketing-page .cta { width: 100%; max-width: none; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) 0; border: 0; background: #fff; color: var(--ink); position: relative; overflow: hidden; }
+.marketing-page .cta { display: block; grid-template-columns: none; align-items: normal; width: 100%; max-width: none; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) 0; border: 0; background: #fff; color: var(--ink); position: relative; overflow: hidden; }
 .marketing-page .cta__inner { max-width: 1280px; margin-inline: auto; padding-inline: var(--gutter); position: relative; z-index: 1; display: grid; align-items: center; grid-template-columns: 1fr auto; gap: 32px; }
 .marketing-page .cta h2 { margin: 0; color: var(--ink); }
 .marketing-page .cta h2 em { color: var(--yellow); }
@@ -137,7 +137,7 @@
   .marketing-page .download-stage .platform-card h3 { font-size: 18px; }
 }
 
-.marketing-page .research-content { width: calc(100% - var(--gutter) * 2); margin: 0 auto; }
+.marketing-page .research-content { width: calc(100% - var(--gutter) * 2); max-width: 1280px; margin: 0 auto; }
 .marketing-page .research-intro { display: grid; grid-template-columns: 1fr 1.4fr; gap: 64px; padding-bottom: 64px; }
 .marketing-page .research-intro h2 { margin: 0; }
 .marketing-page .research-content p { color: var(--muted); font-size: 18px; line-height: 1.65; margin: 0 0 20px; }
