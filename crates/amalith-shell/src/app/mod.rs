@@ -593,6 +593,17 @@ enum Drag {
     },
 }
 
+/// Which bottom-right notice is up. One card fits that corner, so these are
+/// mutually exclusive and ranked — see [`App::visible_notice`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum NoticeKind {
+    /// A newer release is available (`crate::update_check`).
+    Update,
+    /// An installed integration has drifted from this build
+    /// (`crate::integrations::needs_update`).
+    Integration,
+}
+
 /// A command reachable from the menu bar (native NSMenu on macOS, native
 /// HMENU on Windows). Keyboard shortcuts still handle these directly; this
 /// is the same set routed through one dispatcher.
@@ -1705,6 +1716,10 @@ struct App {
     /// Last body written to `crate::open_docs`, so the per-tick publish only
     /// touches the disk when the open-document list actually changed.
     open_docs_published: String,
+    /// Which notice is currently up and when it appeared, for the
+    /// `notice::TIMEOUT` auto-dismiss. Restarts when a different notice
+    /// replaces it, so the second card gets its own full 30 seconds.
+    notice_since: Option<(NoticeKind, Instant)>,
 }
 
 impl App {
@@ -1937,6 +1952,7 @@ impl App {
             integration_update: crate::integrations::needs_update(),
             integration_dismissed: false,
             open_docs_published: String::new(),
+            notice_since: None,
         };
         // The fancy Home/Welcome screen is hidden, not deleted (its own
         // code and fields are untouched) — the app boots straight into a
@@ -4801,6 +4817,68 @@ impl App {
             amalith_core::ColorMode::Cmyk => panels::ColorSpace::Cmyk,
             amalith_core::ColorMode::Rgb => panels::ColorSpace::Rgb,
         };
+    }
+
+    /// The notice currently showing, if any. An app update outranks an
+    /// integration one — the update usually brings new integrations with it,
+    /// so showing both would ask for the same work twice. Painting, clicking
+    /// and the timeout all read this, so they can't disagree about which
+    /// card is up.
+    fn visible_notice(&self) -> Option<NoticeKind> {
+        if self.update_available.is_some() && !self.update_dismissed {
+            Some(NoticeKind::Update)
+        } else if self.integration_update && !self.integration_dismissed {
+            Some(NoticeKind::Integration)
+        } else {
+            None
+        }
+    }
+
+    /// Advance the corner notice's timeout, returning how long until it next
+    /// needs attention (for `about_to_wait`'s wake accumulator).
+    ///
+    /// Same shape as the tooltip reveal: act and repaint on the tick that
+    /// crosses the deadline, otherwise just make sure we wake for it. The
+    /// clock starts the first time a card is up and restarts if a different
+    /// one replaces it, so the second card gets its own full `TIMEOUT`.
+    fn tick_notice(&mut self) -> Option<Duration> {
+        let kind = match self.visible_notice() {
+            Some(kind) => kind,
+            None => {
+                self.notice_since = None;
+                return None;
+            }
+        };
+        match self.notice_since {
+            Some((shown, since)) if shown == kind => {
+                let left = notice::TIMEOUT.checked_sub(since.elapsed());
+                match left {
+                    Some(left) if !left.is_zero() => Some(left + Duration::from_millis(8)),
+                    // Deadline crossed: close the card and repaint without it.
+                    _ => {
+                        self.dismiss_notice(kind);
+                        self.request_main_redraw();
+                        None
+                    }
+                }
+            }
+            // Not showing yet, or a different card replaced it.
+            _ => {
+                self.notice_since = Some((kind, Instant::now()));
+                Some(notice::TIMEOUT + Duration::from_millis(8))
+            }
+        }
+    }
+
+    /// Close one notice for the rest of the session — the ✕, or the timeout.
+    /// Dismissal is tracked per notice so closing one doesn't suppress the
+    /// other, and clearing the clock lets a replacement start its own.
+    fn dismiss_notice(&mut self, kind: NoticeKind) {
+        match kind {
+            NoticeKind::Update => self.update_dismissed = true,
+            NoticeKind::Integration => self.integration_dismissed = true,
+        }
+        self.notice_since = None;
     }
 
     /// Every open document, for `crate::open_docs`. `tabs` holds one entry
@@ -9528,6 +9606,10 @@ impl ApplicationHandler for App {
             }
         }
 
+        if let Some(d) = self.tick_notice() {
+            wake = merge(wake, d);
+        }
+
         // A held Shape-slot press opens its flyout after 300ms (handled
         // above); wake in time to notice.
         if let Some((t, _)) = self.shape_press {
@@ -10358,6 +10440,96 @@ pub fn run() {
     crate::agent::refresh();
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.run_app(&mut App::new()).expect("run app");
+}
+
+#[cfg(test)]
+mod corner_notice_tests {
+    use super::*;
+
+    fn quiet() -> App {
+        let mut app = App::new();
+        // `App::new` kicks off a real update check; pin the notice state so
+        // the test doesn't depend on whether a release is out.
+        app.update_available = None;
+        app.update_dismissed = false;
+        app.integration_update = false;
+        app.integration_dismissed = false;
+        app.notice_since = None;
+        app
+    }
+
+    /// Dismissing the card on top reveals the one underneath rather than
+    /// clearing the corner, and each is remembered separately.
+    #[test]
+    fn an_app_update_outranks_an_integration_notice() {
+        let mut app = quiet();
+        assert_eq!(app.visible_notice(), None);
+
+        app.integration_update = true;
+        assert_eq!(app.visible_notice(), Some(NoticeKind::Integration));
+
+        app.update_available = Some("9.9.9".to_string());
+        assert_eq!(app.visible_notice(), Some(NoticeKind::Update));
+
+        app.dismiss_notice(NoticeKind::Update);
+        assert!(app.update_dismissed);
+        assert_eq!(app.visible_notice(), Some(NoticeKind::Integration));
+
+        app.dismiss_notice(NoticeKind::Integration);
+        assert_eq!(app.visible_notice(), None);
+    }
+
+    #[test]
+    fn a_notice_clears_itself_once_the_timeout_passes() {
+        let mut app = quiet();
+        app.integration_update = true;
+
+        // First tick starts the clock and asks to be woken for the deadline.
+        let wake = app.tick_notice().expect("a wake for the deadline");
+        assert!(wake >= notice::TIMEOUT, "must not wake early and miss it");
+        assert!(matches!(app.notice_since, Some((NoticeKind::Integration, _))));
+        assert_eq!(app.visible_notice(), Some(NoticeKind::Integration));
+
+        // Still inside the window: nothing closes, and it re-arms.
+        app.notice_since = Some((NoticeKind::Integration, Instant::now()));
+        assert!(app.tick_notice().is_some());
+        assert_eq!(app.visible_notice(), Some(NoticeKind::Integration));
+
+        // Deadline crossed.
+        app.notice_since =
+            Some((NoticeKind::Integration, Instant::now() - notice::TIMEOUT - Duration::from_secs(1)));
+        assert!(app.tick_notice().is_none(), "nothing left to wake for");
+        assert_eq!(app.visible_notice(), None, "card is gone");
+        assert!(app.integration_dismissed);
+        assert!(app.notice_since.is_none());
+    }
+
+    /// The clock belongs to the card that's showing: when one replaces
+    /// another, the new one gets the full timeout rather than inheriting
+    /// however much was left.
+    #[test]
+    fn a_replacing_notice_restarts_the_clock() {
+        let mut app = quiet();
+        app.update_available = Some("9.9.9".to_string());
+
+        let stale = Instant::now() - notice::TIMEOUT + Duration::from_secs(2);
+        app.notice_since = Some((NoticeKind::Integration, stale));
+
+        app.tick_notice();
+        let (kind, since) = app.notice_since.expect("clock restarted");
+        assert_eq!(kind, NoticeKind::Update);
+        assert!(since > stale, "started fresh, not carried over");
+        assert!(!app.update_dismissed, "a fresh card must not expire at once");
+    }
+
+    /// With nothing up, the timeout costs no wake-ups at all.
+    #[test]
+    fn no_notice_means_no_clock() {
+        let mut app = quiet();
+        app.notice_since = Some((NoticeKind::Update, Instant::now()));
+        assert!(app.tick_notice().is_none());
+        assert!(app.notice_since.is_none());
+    }
 }
 
 #[cfg(test)]

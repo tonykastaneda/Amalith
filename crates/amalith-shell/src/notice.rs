@@ -14,7 +14,9 @@
 //!   where the user reinstalls. Amalith doesn't rewrite those files unasked:
 //!   they live inside another tool's configuration.
 //!
-//! Either way the card is dismissible for the session.
+//! Either way the card is dismissible for the session: the ✕ in its top-right
+//! corner closes it, and it clears itself after [`TIMEOUT`] so a card nobody
+//! acted on doesn't sit in the corner for the rest of the session.
 
 use crate::metrics::px as ui_px;
 
@@ -26,6 +28,10 @@ use crate::text::TextContext;
 use crate::theme::Theme;
 
 const ID: Affine = Affine::IDENTITY;
+
+/// How long a notice stays up before clearing itself. Long enough to read and
+/// act on, short enough that an ignored card doesn't become furniture.
+pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn card_rect(viewport: Rect) -> Rect {
     let w = ui_px(260.0);

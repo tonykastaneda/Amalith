@@ -581,29 +581,22 @@ impl App {
                 // lands on the banner, so it never steals a click meant
                 // for whatever else is on screen (including another
                 // modal below).
-                // Same precedence as the painting side: the update notice
-                // owns the corner while it's up, then the skill notice.
-                if self.update_available.is_some() && !self.update_dismissed {
+                // `visible_notice` decides which card is up, so the click
+                // and paint paths can't disagree about what's on screen.
+                if let Some(kind) = self.visible_notice() {
                     match notice::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
                         notice::Hit::Dismiss => {
-                            self.update_dismissed = true;
+                            self.dismiss_notice(kind);
                             return;
                         }
                         notice::Hit::Action => {
-                            notice::open_latest_release();
-                            return;
-                        }
-                        notice::Hit::None => {}
-                    }
-                } else if self.integration_update && !self.integration_dismissed {
-                    match notice::hit(Rect::new(0.0, 0.0, w, h), self.pointer) {
-                        notice::Hit::Dismiss => {
-                            self.integration_dismissed = true;
-                            return;
-                        }
-                        notice::Hit::Action => {
-                            // Straight to the page with the Install button.
-                            self.open_prefs(prefs::INTEGRATIONS);
+                            match kind {
+                                NoticeKind::Update => notice::open_latest_release(),
+                                // Straight to the page with the Install button.
+                                NoticeKind::Integration => {
+                                    self.open_prefs(prefs::INTEGRATIONS)
+                                }
+                            }
                             return;
                         }
                         notice::Hit::None => {}
