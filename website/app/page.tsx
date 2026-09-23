@@ -57,7 +57,7 @@ export default function Home() {
           title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
-          <p>A professional vector editor with the workflows you already know—built so scripts, plugins, and agents can do anything you can.</p>
+          <p>The professional vector editor with the workflows you already know—built so scripts, plugins, and agents can do anything you can.</p>
         </MarketingHero>
 
         <section className="hero-media section-shell" aria-label="Amalith product preview">
@@ -111,8 +111,10 @@ export default function Home() {
           <div className="cta__art" aria-hidden="true">
             <img src={`${basePath}/brand/amalith-mark.svg`} alt="" className="cta__mark" />
           </div>
-          <h2>Open-source design.<br /><em>Room to create.</em></h2>
-          <a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
+          <div className="cta__inner">
+            <h2>Open-source design.<br /><em>Room to create.</em></h2>
+            <a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
+          </div>
         </section>
       </main>
 

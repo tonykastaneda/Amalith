@@ -52,10 +52,11 @@
 .marketing-page .status h2 { margin: 24px 0 0; }
 .marketing-page .status__copy { padding: 0; }
 .marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
-.marketing-page .cta { width: 100%; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) var(--gutter); border: 0; background: #fff; color: var(--ink); position: relative; overflow: hidden; display: grid; align-items: center; grid-template-columns: 1fr auto; gap: 32px; }
-.marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; color: var(--ink); }
+.marketing-page .cta { width: 100%; max-width: none; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) 0; border: 0; background: #fff; color: var(--ink); position: relative; overflow: hidden; }
+.marketing-page .cta__inner { max-width: 1280px; margin-inline: auto; padding-inline: var(--gutter); position: relative; z-index: 1; display: grid; align-items: center; grid-template-columns: 1fr auto; gap: 32px; }
+.marketing-page .cta h2 { margin: 0; color: var(--ink); }
 .marketing-page .cta h2 em { color: var(--yellow); }
-.marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
+.marketing-page .cta__inner > a { grid-column: auto; justify-self: end; min-width: 0; }
 .marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; display: flex; align-items: center; justify-content: flex-start; pointer-events: none; }
 .marketing-page .cta__mark { width: clamp(280px, 32vw, 480px); max-width: none; height: auto; margin-left: 5vw; opacity: .06; }
 .marketing-page .why-cost-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; border: 0; padding-block: 48px; }
@@ -95,8 +96,9 @@
   .marketing-page .why-cost-grid { grid-template-columns: 1fr; }
   .marketing-page .why-cost-grid article { min-height: 0; }
   .marketing-page .status, .marketing-page .why-cost-answer, .marketing-page .why-cost-allies { grid-template-columns: 1fr; gap: 32px; }
-  .marketing-page .cta { padding: var(--section-space) 0; grid-template-columns: 1fr; grid-template-rows: auto; }
-  .marketing-page .cta > a { justify-self: start; grid-row: auto; }
+  .marketing-page .cta { padding: var(--section-space) 0; }
+  .marketing-page .cta__inner { grid-template-columns: 1fr; grid-template-rows: auto; }
+  .marketing-page .cta__inner > a { justify-self: start; grid-row: auto; }
   .marketing-page .platform-card { padding: 24px 0 0; }
   .marketing-page .information-layout { grid-template-columns: 1fr; gap: 32px; }
   .marketing-page .information-nav { position: static; flex-direction: row; flex-wrap: wrap; }
