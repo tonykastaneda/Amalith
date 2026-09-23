@@ -179,8 +179,10 @@ impl App {
         // Put the app's own directory first on PATH so `Amalith` itself is
         // runnable by bare name — that's how headless automation is invoked
         // now (`Amalith script foo.jsx`, see `crate::main`). In a packaged
-        // build that directory is `Amalith.app/Contents/MacOS`; under
-        // `cargo run` it's `target/<profile>`, so one line covers
+        // build that directory is `Amalith.app/Contents/MacOS` (or, on
+        // Windows, the install folder, where `Amalith.com` sits beside
+        // `Amalith.exe` and wins the bare-name lookup — see amalith-console);
+        // under `cargo run` it's `target/<profile>`, so one line covers
         // development and the shipped app.
         if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
         {

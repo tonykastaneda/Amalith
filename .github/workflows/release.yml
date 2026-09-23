@@ -1,19 +1,19 @@
 name: Release
 
 # Push a tag like v0.0.1 (or run this manually with a version input) to
-# build unsigned release artifacts and publish a GitHub Release with a
-# macOS DMG, a Windows zip, and a Linux zip attached. The Linux zip bundles
-# every install method package-linux.sh produces — AppImage, deb, rpm,
-# portable tarball and the Arch PKGBUILD — so the page carries one Linux
-# asset rather than four.
+# build release artifacts and publish a GitHub Release with a macOS DMG,
+# a Windows installer (Amalith-Setup.exe), and a Linux zip attached. The
+# Linux zip bundles every install method package-linux.sh produces —
+# AppImage, deb, rpm, portable tarball and the Arch PKGBUILD — so the page
+# carries one Linux asset rather than four.
 #
 # The macOS DMG is signed with the Developer ID certificate and notarized
 # by Apple (Apple Silicon only), using these repo secrets:
 #   MACOS_CERT_P12        base64 of the Developer ID Application .p12
 #   MACOS_CERT_PASSWORD   password for that .p12
 #   APPLE_ID / APPLE_APP_PASSWORD / APPLE_TEAM_ID   notarytool credentials
-# The Windows build is not code-signed yet, so SmartScreen will show an
-# "unknown publisher" warning on first run.
+# The Windows installer is not code-signed yet, so SmartScreen will show an
+# "unknown publisher" warning when it's run.
 
 on:
   push:
@@ -106,10 +106,41 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: ./scripts/package-windows.ps1
 
+      # Real install on the runner: proves the installer works, that
+      # Amalith.com waits for `script` and passes its output and exit code
+      # through (the whole reason it exists), and that uninstall cleans up.
+      - name: Install, run a script through Amalith.com, uninstall
+        shell: pwsh
+        run: |
+          $dir = "C:\AmalithCI"
+          Start-Process target/package/Amalith-Setup.exe -Wait -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$dir",'/TASKS=addtopath'
+          foreach ($f in 'Amalith.exe', 'Amalith.com', 'unins000.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "installer didn't put $f in $dir" }
+          }
+          if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -notlike "*$dir*") { throw "$dir not added to PATH" }
+
+          Set-Content ok.jsx '$.writeln("hello from the installed build");'
+          Set-Content bad.jsx 'throw new Error("expected failure");'
+          $out = & "$dir\Amalith.com" script ok.jsx
+          if ($LASTEXITCODE -ne 0 -or "$out" -notmatch 'hello from the installed build') {
+            throw "ok.jsx: exit $LASTEXITCODE, output: $out"
+          }
+          & "$dir\Amalith.com" script bad.jsx 2>$null
+          if ($LASTEXITCODE -eq 0) { throw "bad.jsx should have exited non-zero" }
+          Write-Host "Amalith.com: output and exit codes pass through"
+
+          Start-Process "$dir\unins000.exe" -Wait -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES'
+          # The uninstaller relaunches itself from %TEMP%, so -Wait returns
+          # before it's done; poll for the files to go.
+          for ($i = 0; $i -lt 60 -and (Test-Path "$dir\Amalith.exe"); $i++) { Start-Sleep 1 }
+          if (Test-Path "$dir\Amalith.exe") { throw "uninstall left Amalith.exe behind" }
+          if ([Environment]::GetEnvironmentVariable('Path', 'Machine') -like "*$dir*") { throw "uninstall left $dir on PATH" }
+          Write-Host "uninstall removed files and PATH entry"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-zip
-          path: target/package/*.zip
+          name: windows-installer
+          path: target/package/Amalith-Setup.exe
 
   linux:
     runs-on: ubuntu-latest
@@ -172,7 +203,7 @@ jobs:
         with:
           files: |
             artifacts/macos-dmg/*.dmg
-            artifacts/windows-zip/*.zip
+            artifacts/windows-installer/*.exe
             artifacts/linux-zip/*.zip
           prerelease: false
           generate_release_notes: true

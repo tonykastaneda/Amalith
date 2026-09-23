@@ -64,10 +64,15 @@ fn run_scripts() -> ExitCode {
 /// and `CONOUT$` gives us a handle to install as stdout/stderr; this runs
 /// before any output, which is what makes re-pointing the handles effective.
 ///
-/// Declared by hand rather than via a binding crate: these four symbols are
+/// Declared by hand rather than via a binding crate: these few symbols are
 /// stable Win32 ABI, so this can't drift with a dependency's module layout.
 /// A no-op when there's no parent console (double-clicked, say) — output then
 /// goes nowhere, exactly as it would have before.
+///
+/// Also a no-op when we already have a stdout handle: `Amalith.com` (see the
+/// amalith-console crate) and redirections like `> log.txt` hand the GUI
+/// process real handles, and re-pointing those at `CONOUT$` would send the
+/// output to the screen instead of where it was asked to go.
 #[cfg(target_os = "windows")]
 fn attach_parent_console() {
     use std::ffi::c_void;
@@ -94,15 +99,20 @@ fn attach_parent_console() {
             template_file: Handle,
         ) -> Handle;
         fn SetStdHandle(std_handle: u32, handle: Handle) -> i32;
+        fn GetStdHandle(std_handle: u32) -> Handle;
     }
 
     // SAFETY: plain Win32 calls with a NUL-terminated literal and null
     // optional pointers; every return value is checked before use.
     unsafe {
+        let invalid = usize::MAX as Handle;
+        let inherited = GetStdHandle(STD_OUTPUT_HANDLE);
+        if !inherited.is_null() && inherited != invalid {
+            return;
+        }
         if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
             return;
         }
-        let invalid = usize::MAX as Handle;
         let conout = CreateFileA(
             c"CONOUT$".to_bytes_with_nul().as_ptr(),
             GENERIC_READ | GENERIC_WRITE,

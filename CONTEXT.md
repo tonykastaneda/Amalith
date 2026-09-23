@@ -33,7 +33,11 @@ developer machine. "Build new version" means:
    Latest). CI uses the tag as the version, so tag and binaries always match.
 4. Check the published release has exactly these three assets:
    - `Amalith.dmg` — macOS arm64, Developer ID signed + notarized
-   - `Amalith-Windows.zip` — just `Amalith.exe` (unsigned; SmartScreen warns)
+   - `Amalith-Setup.exe` — Windows installer (Inno Setup, unsigned;
+     SmartScreen warns). Installs `Amalith.exe` + `Amalith.com` (console
+     front door for `Amalith script`), shortcuts, `.amalith` association,
+     optional PATH entry. CI installs it, runs a script through it and
+     uninstalls it before publishing.
    - `Amalith-Linux.zip` — AppImage, deb, rpm, tarball, Arch PKGBUILD,
      `INSTALL.txt`, `SHA256SUMS`
 

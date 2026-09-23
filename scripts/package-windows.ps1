@@ -1,10 +1,10 @@
-# CI step: builds and zips Amalith for the Windows job in
-# .github/workflows/release.yml. Releases are built only in CI; this isn't
-# meant to be run by hand.
+# CI step: builds Amalith and its installer (Amalith-Setup.exe) for the
+# Windows job in .github/workflows/release.yml. Releases are built only in
+# CI; this isn't meant to be run by hand.
 #
 # No code signing here — there's no Windows code-signing certificate yet,
-# so the built .exe is unsigned and Windows SmartScreen will show an
-# "unknown publisher" warning on first run until one is added later.
+# so the installer is unsigned and Windows SmartScreen will show an
+# "unknown publisher" warning when it's run, until one is added later.
 $ErrorActionPreference = "Stop"
 Set-Location (Join-Path $PSScriptRoot "..")
 
@@ -14,22 +14,29 @@ $Version = if ($env:VERSION) { $env:VERSION } else {
 
 Write-Host "==> Building release ($Version)"
 $env:AMALITH_VERSION = $Version
-# One binary: the headless .jsx engine is the `Amalith script` subcommand
-# rather than a second executable (see crates/amalith-shell/src/main.rs).
-cargo build --release -p amalith-shell
+# Amalith.exe is the app (and the `Amalith script` headless engine, see
+# crates/amalith-shell/src/main.rs); amalith-console becomes Amalith.com, the
+# console front door terminals resolve first (see crates/amalith-console).
+cargo build --release -p amalith-shell -p amalith-console
+if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
 $StageDir = "target/package/windows"
-# No version in the filename (like the macOS .dmg) so the website can link
-# to a stable releases/latest/download/Amalith-Windows.zip URL that never
-# needs updating.
-$ZipName = "Amalith-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/Amalith.exe" "$StageDir/Amalith.exe"
+# A PE executable runs the same whatever its extension; .com just makes
+# Windows pick it over Amalith.exe when someone types `Amalith`.
+Copy-Item "target/release/amalith-console.exe" "$StageDir/Amalith.com"
 
-Write-Host "==> Zipping"
-$ZipPath = "target/package/$ZipName"
-Remove-Item -Force $ZipPath -ErrorAction SilentlyContinue
-Compress-Archive -Path "$StageDir/*" -DestinationPath $ZipPath
+Write-Host "==> Building installer"
+$Iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+if (-not (Test-Path $Iscc)) {
+    choco install innosetup --no-progress -y
+    if ($LASTEXITCODE -ne 0) { throw "installing Inno Setup failed" }
+}
+# The output name has no version (like the macOS .dmg) so the website can
+# always find it by its "-setup.exe" suffix.
+& $Iscc /Qp "/DAppVersion=$Version" "scripts/windows-installer.iss"
+if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-Write-Host "==> Done: $ZipPath"
+Write-Host "==> Done: target/package/Amalith-Setup.exe"

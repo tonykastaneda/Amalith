@@ -175,7 +175,7 @@ EOF
 # The release page carries a single Linux asset instead of four, and the Arch
 # recipe travels with the tarball it checksums — its `source=` is relative to
 # the PKGBUILD, so `arch/` has to stay one level below the tarball. No version
-# in the zip's own name (like the Windows zip and the macOS dmg) so the site
+# in the zip's own name (like the Windows installer and the macOS dmg) so the site
 # can link a stable releases/latest/download URL.
 echo "==> $APP-Linux.zip"
 stage="$work/$APP-Linux-$VERSION"
