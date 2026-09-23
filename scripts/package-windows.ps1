@@ -15,7 +15,10 @@ $Version = if ($env:VERSION) { $env:VERSION } else {
 
 Write-Host "==> Building release ($Version)"
 $env:AMALITH_VERSION = $Version
-cargo build --release -p amalith-shell
+# amalith-script ships beside the app binary: the built-in terminal puts the
+# app's own directory on the spawned shell's PATH, so scripts and coding agents
+# can run it by bare name (see crates/amalith-shell/src/agent.rs).
+cargo build --release -p amalith-shell -p amalith-script
 
 $StageDir = "target/package/windows"
 # No version in the filename (like the macOS .dmg) so the website can link
@@ -25,6 +28,7 @@ $ZipName = "Amalith-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/Amalith.exe" "$StageDir/Amalith.exe"
+Copy-Item "target/release/amalith-script.exe" "$StageDir/amalith-script.exe"
 
 Write-Host "==> Zipping"
 $ZipPath = "target/package/$ZipName"

@@ -40,9 +40,14 @@ mkdir -p "$out/arch"
 
 echo "==> cargo build --release ($VERSION)"
 export AMALITH_VERSION="$VERSION"
-cargo build --release -p amalith-shell
+# amalith-script ships beside the app binary: the built-in terminal puts the
+# app's own directory on the spawned shell's PATH, so scripts and coding agents
+# can run it by bare name (see crates/amalith-shell/src/agent.rs).
+cargo build --release -p amalith-shell -p amalith-script
 bin="$root/target/release/$APP"
 [ -x "$bin" ] || { echo "missing $bin" >&2; exit 1; }
+script_bin="$root/target/release/amalith-script"
+[ -x "$script_bin" ] || { echo "missing $script_bin" >&2; exit 1; }
 
 desktop="$work/$APP_ID.desktop"
 cat > "$desktop" <<EOF
@@ -61,6 +66,7 @@ EOF
 archive_root="$work/amalith-$VERSION-x86_64"
 mkdir -p "$archive_root"
 install -m 0755 "$bin" "$archive_root/$APP"
+install -m 0755 "$script_bin" "$archive_root/amalith-script"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$archive_root/$APP_ID.png"
 install -m 0644 "$desktop" "$archive_root/$APP_ID.desktop"
 cat > "$archive_root/README.txt" <<EOF
@@ -68,6 +74,9 @@ $APP $VERSION — Linux x86_64
 
 Run ./$APP, or install the binary somewhere on PATH. The .desktop file and
 icon are included for desktop-menu integration.
+
+amalith-script is the headless .jsx script runner. Amalith's built-in terminal
+puts it on PATH automatically; keep it beside $APP if you move things around.
 EOF
 tarball="$out/amalith-$VERSION-x86_64.tar.gz"
 tar -C "$work" -czf "$tarball" "$(basename "$archive_root")"
@@ -77,6 +86,7 @@ debroot="$work/deb"
 mkdir -p "$debroot/DEBIAN" "$debroot/usr/bin" \
   "$debroot/usr/share/applications" "$debroot/usr/share/icons/hicolor/512x512/apps"
 install -m 0755 "$bin" "$debroot/usr/bin/$APP"
+install -m 0755 "$script_bin" "$debroot/usr/bin/amalith-script"
 install -m 0644 "$desktop" "$debroot/usr/share/applications/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" \
   "$debroot/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
@@ -99,6 +109,7 @@ rpmroot="$work/rpmbuild"
 mkdir -p "$rpmroot/BUILD" "$rpmroot/BUILDROOT" "$rpmroot/RPMS" \
   "$rpmroot/SOURCES" "$rpmroot/SPECS" "$rpmroot/SRPMS"
 install -m 0755 "$bin" "$rpmroot/SOURCES/$APP"
+install -m 0755 "$script_bin" "$rpmroot/SOURCES/amalith-script"
 install -m 0644 "$desktop" "$rpmroot/SOURCES/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$rpmroot/SOURCES/$APP_ID.png"
 cat > "$rpmroot/SPECS/amalith.spec" <<EOF
@@ -111,17 +122,20 @@ URL:            https://www.amalith.app/
 Source0:        $APP
 Source1:        $APP_ID.desktop
 Source2:        $APP_ID.png
+Source3:        amalith-script
 
 %description
 Amalith is a native, open-source vector design application.
 
 %install
 install -Dm755 %{SOURCE0} %{buildroot}%{_bindir}/$APP
+install -Dm755 %{SOURCE3} %{buildroot}%{_bindir}/amalith-script
 install -Dm644 %{SOURCE1} %{buildroot}%{_datadir}/applications/$APP_ID.desktop
 install -Dm644 %{SOURCE2} %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/$APP_ID.png
 
 %files
 %{_bindir}/$APP
+%{_bindir}/amalith-script
 %{_datadir}/applications/$APP_ID.desktop
 %{_datadir}/icons/hicolor/512x512/apps/$APP_ID.png
 EOF
@@ -135,6 +149,7 @@ appdir="$work/$APP.AppDir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
   "$appdir/usr/share/icons/hicolor/512x512/apps"
 install -m 0755 "$bin" "$appdir/usr/bin/$APP"
+install -m 0755 "$script_bin" "$appdir/usr/bin/amalith-script"
 install -m 0644 "$desktop" "$appdir/$APP_ID.desktop"
 install -m 0644 "$desktop" "$appdir/usr/share/applications/$APP_ID.desktop"
 install -m 0644 "$root/crates/amalith-shell/assets/app-icon.png" "$appdir/$APP_ID.png"
