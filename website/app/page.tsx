@@ -36,7 +36,7 @@ export default function Home() {
       <main id="top" tabIndex={-1} className="home-page">
         <div className="home-frame">
           <section className="home-hero" aria-labelledby="home-title">
-            <h1 id="home-title">Design freely.<br /><span>A familiar canvas.<br />A whole new possibility.</span></h1>
+            <h1 id="home-title">A familiar canvas.<br /><span>Whole new possibilities.</span></h1>
             <p>Amalith brings your tools, artboards, and ideas into one open-source design space. Built for the way you think. Yours to make your own.</p>
             <div className="home-actions">
               <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
