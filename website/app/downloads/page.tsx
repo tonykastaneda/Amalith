@@ -30,11 +30,12 @@ const platforms: Platform[] = [
   {
     name: "Linux",
     icon: `${basePath}/brand/platform/linux.svg`,
-    label: "View releases",
-    // Never matches, so DownloadLinks falls back to the release page —
-    // Linux ships four package formats (tar.gz/deb/rpm/AppImage), so
-    // sending users to pick one there beats guessing for them.
-    matchExt: null,
+    label: "Download for Linux",
+    // One zip now carries every install method — AppImage, deb, rpm,
+    // portable tarball and the Arch PKGBUILD — with an INSTALL.txt giving
+    // the command for each, so there's a single asset to link rather than
+    // four for the user to choose between on the release page.
+    matchExt: "-linux.zip",
   },
 ];
 

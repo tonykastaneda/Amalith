@@ -174,5 +174,5 @@ jobs:
             artifacts/macos-dmg/*.dmg
             artifacts/windows-zip/*.zip
             artifacts/linux-zip/*.zip
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
