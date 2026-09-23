@@ -51,12 +51,12 @@
 .marketing-page .status h2 { margin: 24px 0 0; }
 .marketing-page .status__copy { padding: 0; }
 .marketing-page .status__copy p { font-size: 18px; line-height: 1.6; color: var(--muted); }
-.marketing-page .cta { width: 100%; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) var(--gutter); border: 0; background: #fff; color: var(--ink); grid-template-columns: 1fr auto; gap: 32px; }
+.marketing-page .cta { width: 100%; margin-inline: 0; min-height: 0; margin-block: 0; padding: var(--section-space) var(--gutter); border: 0; background: #fff; color: var(--ink); position: relative; overflow: hidden; display: grid; align-items: center; grid-template-columns: 1fr auto; gap: 32px; }
 .marketing-page .cta h2 { position: relative; z-index: 1; margin: 0; color: var(--ink); }
 .marketing-page .cta h2 em { color: var(--yellow); }
 .marketing-page .cta > a { grid-column: auto; justify-self: end; position: relative; z-index: 1; min-width: 0; }
-.marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; }
-.marketing-page .cta__mark { width: 400px; max-width: none; top: -100px; bottom: auto; left: 20%; transform: none; opacity: .08; }
+.marketing-page .cta__art { position: absolute; inset: 0; height: auto; margin: 0; display: flex; align-items: center; justify-content: flex-start; pointer-events: none; }
+.marketing-page .cta__mark { width: clamp(280px, 32vw, 480px); max-width: none; height: auto; margin-left: 5vw; opacity: .06; }
 .marketing-page .why-cost-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; border: 0; padding-block: 48px; }
 .marketing-page .why-cost-grid article { min-height: 0; padding: 24px 0 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
 .marketing-page .why-cost-grid h2 { margin: 32px 0 20px; font-size: 32px; }
@@ -76,6 +76,10 @@
 .marketing-page .platform-card h3 { margin: 32px 0 8px; font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
 .marketing-page .platform-card p { margin: 0 0 24px; color: var(--muted); font-size: 16px; }
 .marketing-page .availability-label { display: inline-block; padding: 0; border: 0; font-size: 13px; color: var(--muted); }
+.marketing-page .platform-download { margin-top: 16px; min-height: 36px; padding: 10px 14px; border: 0; border-radius: 7px; background: #f4f4f4; color: #151515; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 500; line-height: 16px; letter-spacing: .2px; cursor: pointer; text-decoration: none; box-shadow: 0 0 0 2px rgba(0,0,0,.5), 0 0 14px rgba(255,255,255,.19), inset 0 -1px .4px rgba(0,0,0,.2), inset 0 1px .4px #fff; transition: background-color .2s, box-shadow .2s ease-in-out, transform .1s ease-in-out; }
+.marketing-page .platform-download:hover { background: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.25), 0 0 30px rgba(255,255,255,.5), inset 0 -1px .4px rgba(0,0,0,.18), inset 0 1px .4px #fff; transform: translateY(-1px); }
+.marketing-page .platform-download:active { background: #e9e9e9; transform: translateY(0) scale(.98); }
+.marketing-page .platform-download:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--yellow), 0 0 18px rgba(255,198,25,.3), inset 0 -1px .4px rgba(0,0,0,.2), inset 0 1px .4px #fff; }
 .marketing-page .pricing-note { margin: 32px 0 0; max-width: 680px; color: var(--muted); font-size: 16px; line-height: 1.6; }
 .marketing-page .pricing-note a { display: inline; color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
 .marketing-page .information-layout { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 3fr); justify-content: space-between; gap: 64px; padding-block: 32px var(--section-space); border-top: 1px solid var(--line); }

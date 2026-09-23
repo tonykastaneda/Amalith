@@ -43,7 +43,7 @@ export default function Downloads() {
         <section className="download-stage" aria-labelledby="downloads-title">
           <p className="kicker">Finally</p>
           <h1 id="downloads-title">The design tool that lets<br />creatives <em>create.</em></h1>
-          <p className="download-stage__intro">Your ideas. Your files. Your workspace.<br />Free today. No payment or card required.</p>
+          <p className="download-stage__intro">Your ideas. Your files. Your workspace.<br />Free. No payment or card required.</p>
           <DownloadLinks platforms={platforms} />
         </section>
       </main>
