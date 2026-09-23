@@ -121,7 +121,8 @@ jobs:
 
           Set-Content ok.jsx '$.writeln("hello from the installed build");'
           Set-Content bad.jsx 'throw new Error("expected failure");'
-          $out = & "$dir\Amalith.com" script ok.jsx
+          # $.writeln prints to stderr (engine.rs), so capture both streams.
+          $out = & "$dir\Amalith.com" script ok.jsx 2>&1
           if ($LASTEXITCODE -ne 0 -or "$out" -notmatch 'hello from the installed build') {
             throw "ok.jsx: exit $LASTEXITCODE, output: $out"
           }
