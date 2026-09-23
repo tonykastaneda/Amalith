@@ -90,7 +90,7 @@ export default function Home() {
             </div>
           </section>
           <section className="home-closing">
-            <p className="home-eyebrow">A space of your own</p>
+            <p className="home-eyebrow">Create. Iterate. Automate.</p>
             <h2>Bring your ideas.<br /><span>See where they take you.</span></h2>
             <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
           </section>
