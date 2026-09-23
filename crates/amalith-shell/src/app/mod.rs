@@ -10432,6 +10432,12 @@ const WINDOW_PANELS: [PanelKind; 14] = [
 ];
 
 /// Start the shell: create the winit event loop and run [`App`] on it.
+///
+/// Any paths on the command line are opened before the first frame, so
+/// `Amalith design.amalith` lands straight in the document instead of the
+/// chooser. Note this is argv only: Finder double-click and `open -a` deliver
+/// files as Apple Events, which would also need `CFBundleDocumentTypes` in
+/// the bundle and an event handler winit doesn't currently surface.
 pub fn run() {
     // Write Amalith's own copy of the agent skill, which `AMALITH_SKILL`
     // points at. Agent copies are the user's to install (Preferences ▸
@@ -10439,7 +10445,74 @@ pub fn run() {
     // that construct an `App` don't write into the real config directory.
     crate::agent::refresh();
     let event_loop = EventLoop::new().expect("event loop");
-    event_loop.run_app(&mut App::new()).expect("run app");
+    let mut app = App::new();
+    for path in cli_document_paths(std::env::args_os().skip(1)) {
+        // Same route a RECENT DOCUMENTS click takes, so every import format
+        // `document_from_path` handles works here too and a failure shows up
+        // in the document's own error strip rather than on stderr.
+        app.open_path(&path);
+    }
+    event_loop.run_app(&mut app).expect("run app");
+}
+
+/// The document paths to open from `args`, complaining about the rest.
+///
+/// Anything starting with `-` is left alone so a future flag isn't mistaken
+/// for a filename, and a path that isn't there is reported now rather than
+/// becoming an error strip on a document the user didn't ask for.
+fn cli_document_paths<I: IntoIterator<Item = std::ffi::OsString>>(
+    args: I,
+) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    for arg in args {
+        if arg.to_string_lossy().starts_with('-') {
+            eprintln!("Amalith: ignoring unknown option {}", arg.to_string_lossy());
+            continue;
+        }
+        let path = std::path::PathBuf::from(arg);
+        if path.is_file() {
+            paths.push(path);
+        } else {
+            eprintln!("Amalith: no such file: {}", path.display());
+        }
+    }
+    paths
+}
+
+#[cfg(test)]
+mod cli_args_tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn parse<const N: usize>(args: [&str; N]) -> Vec<std::path::PathBuf> {
+        cli_document_paths(args.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn keeps_real_files_and_reports_everything_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("design.amalith");
+        std::fs::write(&doc, b"not really a document").unwrap();
+        let missing = dir.path().join("gone.amalith");
+
+        let doc_s = doc.to_string_lossy().into_owned();
+        let missing_s = missing.to_string_lossy().into_owned();
+        let dir_s = dir.path().to_string_lossy().into_owned();
+
+        assert_eq!(parse([doc_s.as_str()]), vec![doc.clone()]);
+        // A flag is not a filename.
+        assert_eq!(parse(["--verbose", doc_s.as_str()]), vec![doc.clone()]);
+        // Neither is a path that isn't there, or a directory.
+        assert!(parse([missing_s.as_str()]).is_empty());
+        assert!(parse([dir_s.as_str()]).is_empty());
+        // Order is preserved, so the first path becomes the active tab.
+        assert_eq!(parse([doc_s.as_str(), doc_s.as_str()]), vec![doc.clone(), doc]);
+    }
+
+    #[test]
+    fn no_arguments_opens_nothing() {
+        assert!(parse([]).is_empty());
+    }
 }
 
 #[cfg(test)]
