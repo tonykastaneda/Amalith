@@ -68,6 +68,15 @@
 .home-page .home-closing::before { content: ""; position: absolute; width: 82%; aspect-ratio: 1; border: 1px solid var(--home-line); border-radius: 50%; top: 20%; left: 9%; pointer-events: none; }
 .home-page .home-closing > * { position: relative; }
 .home-page .home-closing .home-button { margin-top: 32px; }
+
+/* Keep the outer canvas frame, but let each homepage block breathe without
+   the boxed section strokes. */
+.home-page .home-recording,
+.home-page .home-recording__chrome,
+.home-page .home-recording figcaption,
+.home-page .home-platforms,
+.home-page .home-chapter__copy,
+.home-page .home-open { border: 0; }
 @media (prefers-color-scheme: dark) {
   .home-page h1 em, .home-page h2 em { color: var(--yellow); }
   .home-page { --home-bg: #080808; --home-surface: #10100f; --home-ink: #efede5; --home-muted: #8e8d85; --home-line: rgba(235, 232, 220, .15); }
