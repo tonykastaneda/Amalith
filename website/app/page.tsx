@@ -36,7 +36,7 @@ export default function Home() {
       <main id="top" tabIndex={-1} className="home-page">
         <div className="home-frame">
           <section className="home-hero" aria-labelledby="home-title">
-            <h1 id="home-title">A familiar canvas.<br /><span>Whole new possibilities.</span></h1>
+            <h1 id="home-title">A familiar canvas.<br /><em>Whole new possibilities.</em></h1>
             <p>Amalith brings your tools, artboards, and ideas into one open-source design space. Built for the way you think. Yours to make your own.</p>
             <div className="home-actions">
               <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
@@ -51,7 +51,7 @@ export default function Home() {
           </div>
           <section className="home-intro" id="features">
             <p className="home-eyebrow">Meet Amalith</p>
-            <h2>The full-circle, anti-slop workflow<br /><span>for humans who create<br />integrated design system.</span></h2>
+            <h2>The full-circle, <em>anti-slop workflow</em><br /><span>for humans who create<br />integrated design system.</span></h2>
             <p>Space to explore. Tools that feel familiar. An open foundation you can shape around your own creative process.</p>
             <div className="home-disciplines" aria-label="Design disciplines"><span>Vector</span><span>Raster</span><span>Typography</span><span>Automation</span></div>
           </section>
@@ -66,7 +66,7 @@ export default function Home() {
           <section className="home-chapter">
             <div className="home-chapter__copy">
               <p className="home-eyebrow">Familiar by design</p>
-              <h2>Less finding your tools.<br />More finding your flow.</h2>
+              <h2>Less finding your tools.<br /><em>More finding your flow.</em></h2>
               <p>Familiar panels, shortcuts, and ways of working. A growing set of vector, raster, and text tools, together on one canvas.</p>
             </div>
             <Recording subject="Tools, layers, and type" variant="tools" />
@@ -74,7 +74,7 @@ export default function Home() {
           <section className="home-chapter">
             <div className="home-chapter__copy">
               <p className="home-eyebrow">One command engine</p>
-              <h2>Make it by hand.<br />Make it your own.</h2>
+              <h2>Make it by hand.<br /><em>Make it your own.</em></h2>
               <p>The same command engine sits behind the interface, scripts, and agents. A foundation for automating the repetition and spending more time on the work you care about.</p>
             </div>
             <Recording subject="From canvas to commands" variant="commands" />
@@ -91,7 +91,7 @@ export default function Home() {
           </section>
           <section className="home-closing">
             <p className="home-eyebrow">Create. Iterate. Automate.</p>
-            <h2>Bring your ideas.<br /><span>See where they take you.</span></h2>
+            <h2>Bring your ideas.<br /><em>See where they take you.</em></h2>
             <a className="home-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a>
           </section>
         </div>

@@ -15,6 +15,7 @@
 .home-page h1 { margin: 0; font-size: clamp(38px, 4vw, 60px); }
 .home-page h2 { margin: 0; font-size: clamp(34px, 3.8vw, 56px); }
 .home-page h1 span, .home-page h2 span { color: var(--home-muted); }
+.home-page h1 em, .home-page h2 em { color: #896500; font-family: Georgia, "Times New Roman", serif; font-weight: 400; }
 .home-page p { font-size: 17px; line-height: 1.6; text-wrap: pretty; }
 .home-page .home-hero { padding: clamp(64px, 7vw, 112px) clamp(28px, 6vw, 100px) 72px; position: relative; }
 .home-page .home-hero > p { max-width: 550px; color: var(--home-muted); margin: 28px 0 0; }
@@ -66,6 +67,7 @@
 .home-page .home-closing > * { position: relative; }
 .home-page .home-closing .home-button { margin-top: 32px; }
 @media (prefers-color-scheme: dark) {
+  .home-page h1 em, .home-page h2 em { color: var(--yellow); }
   .home-page { --home-bg: #080808; --home-surface: #10100f; --home-ink: #efede5; --home-muted: #8e8d85; --home-line: rgba(235, 232, 220, .15); }
   .home-page .home-recording__art { opacity: .25; }
 }
