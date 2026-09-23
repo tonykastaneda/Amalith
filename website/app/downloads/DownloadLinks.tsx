@@ -62,7 +62,7 @@ export function DownloadLinks({ platforms }: { platforms: Platform[] }) {
             <img src={platform.icon} alt="" aria-hidden="true" />
           </div>
           <h3>{platform.name}</h3>
-          <a className="platform-download" href={hrefs[platform.name] ?? RELEASES_PAGE}>
+          <a className="marketing-button marketing-button--secondary" href={hrefs[platform.name] ?? RELEASES_PAGE}>
             {platform.label}
           </a>
         </article>
