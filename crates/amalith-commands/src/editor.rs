@@ -879,6 +879,7 @@ impl Editor {
                     ObjectKind::Image(amalith_core::ImageData {
                         asset: asset_id,
                         local_bounds: bounds,
+                        mask: None,
                     }),
                 );
                 object.appearance.set_fill(Paint::None);
@@ -1975,6 +1976,46 @@ impl Editor {
                 asset.id = AssetId::new();
                 let id = asset.id;
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageAsset { object, asset: id }]
+            }
+            Command::AddLayerMask { object, mut asset } => {
+                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnImage(object));
+                };
+                if image.mask.is_some() {
+                    return Err(CommandError::AlreadyHasMask(object));
+                }
+                asset.id = AssetId::new();
+                let mask = amalith_core::ImageMask { asset: asset.id, enabled: true };
+                vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
+            }
+            Command::RemoveLayerMask { object } => {
+                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnImage(object));
+                };
+                if image.mask.is_none() {
+                    return Err(CommandError::NoLayerMask(object));
+                }
+                vec![Edit::SetImageMask { object, mask: None }]
+            }
+            Command::ReplaceMaskAsset { object, mut asset } => {
+                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnImage(object));
+                };
+                let Some(existing) = image.mask else {
+                    return Err(CommandError::NoLayerMask(object));
+                };
+                asset.id = AssetId::new();
+                let mask = amalith_core::ImageMask { asset: asset.id, enabled: existing.enabled };
+                vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
+            }
+            Command::SetMaskEnabled { object, enabled } => {
+                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnImage(object));
+                };
+                let Some(existing) = image.mask else {
+                    return Err(CommandError::NoLayerMask(object));
+                };
+                vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { asset: existing.asset, enabled }) }]
             }
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ShapeBuilder {

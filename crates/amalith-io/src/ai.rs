@@ -463,6 +463,7 @@ fn transform_kind(kind: ObjectKind, t: Affine) -> ObjectKind {
         ObjectKind::Image(img) => ObjectKind::Image(ImageData {
             asset: img.asset,
             local_bounds: amalith_core::geom::transformed_bounds(t, img.local_bounds),
+            mask: img.mask,
         }),
         other => other,
     }
@@ -932,7 +933,7 @@ fn run_xobject(pdf: &PdfDocument, name: &[u8], gs: &GState, resources: &Dictiona
             let asset_id = AssetId::new();
             let rect = amalith_core::geom::transformed_bounds(gs.ctm, Rect::new(0.0, 0.0, 1.0, 1.0));
             sink.out.push(Recovered {
-                kind: ObjectKind::Image(ImageData { asset: asset_id, local_bounds: rect }),
+                kind: ObjectKind::Image(ImageData { asset: asset_id, local_bounds: rect, mask: None }),
                 appearance: Appearance { items: Vec::new(), opacity: 1.0 },
                 preserve_id: None,
             });

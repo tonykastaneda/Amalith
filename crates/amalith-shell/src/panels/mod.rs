@@ -175,6 +175,10 @@ pub struct Ctx<'a> {
     pub opacity_edit: Option<&'a str>,
     /// Layers panel kind funnel — `None` shows every layer.
     pub layer_kind_filter: Option<amalith_core::LayerKind>,
+    /// Which image's layer mask a raster paint stroke currently targets,
+    /// if any — highlights that row's mask thumbnail and the footer Mask
+    /// icon. See `Doc::editing_mask`.
+    pub editing_mask: Option<ObjectId>,
     /// Links panel: wheel-scroll offset of the row list, px.
     pub links_scroll: f64,
     /// Links panel: the highlighted asset row.
@@ -401,6 +405,9 @@ pub enum Action {
     DeleteObjects,
     /// Layers footer: group the current selection.
     GroupSelection,
+    /// Layers footer: add a layer mask to the selected image (if it has
+    /// none), else toggle whether painting currently targets that mask.
+    AddOrToggleLayerMask,
     /// Layers header: open/close the blend-mode menu.
     ToggleLayersBlendMenu,
     /// Layers header: apply a blend mode to every appearance item of the

@@ -36,6 +36,55 @@ impl Mask {
     fn set(&mut self, x: u32, y: u32) {
         self.bits[y as usize * self.width as usize + x as usize] = true;
     }
+
+    /// OR `other` into `self`, pixel for pixel — Shift-click's "add to
+    /// selection". Mismatched dimensions leave `self` unchanged rather
+    /// than panicking (shouldn't happen: both masks come from the same
+    /// decoded image).
+    pub(crate) fn union_with(&mut self, other: &Mask) {
+        if self.width != other.width || self.height != other.height {
+            return;
+        }
+        for (a, b) in self.bits.iter_mut().zip(&other.bits) {
+            *a |= *b;
+        }
+    }
+
+    /// Rasterizes closed polygons in the same pixel-corner space
+    /// [`mask_to_contours`] outputs (a selected pixel's corners are at
+    /// integer coordinates) back into a boolean mask — the inverse
+    /// operation, needed to union a freshly-clicked region with an
+    /// existing selection's already-traced contours. An even-odd
+    /// scanline fill across every loop together, so a hole contour
+    /// (opposite winding, nested inside its outer loop) correctly
+    /// subtracts rather than needing separate winding-direction logic.
+    pub(crate) fn from_contours(width: u32, height: u32, contours: &[Vec<Point>]) -> Mask {
+        let mut mask = Mask::new(width, height);
+        for y in 0..height {
+            let scan_y = y as f64 + 0.5;
+            let mut xs: Vec<f64> = Vec::new();
+            for loop_pts in contours {
+                let n = loop_pts.len();
+                for i in 0..n {
+                    let a = loop_pts[i];
+                    let b = loop_pts[(i + 1) % n];
+                    if (a.y <= scan_y) != (b.y <= scan_y) {
+                        let t = (scan_y - a.y) / (b.y - a.y);
+                        xs.push(a.x + t * (b.x - a.x));
+                    }
+                }
+            }
+            xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for pair in xs.chunks_exact(2) {
+                let x0 = pair[0].round().clamp(0.0, width as f64) as u32;
+                let x1 = pair[1].round().clamp(0.0, width as f64) as u32;
+                for x in x0..x1 {
+                    mask.set(x, y);
+                }
+            }
+        }
+        mask
+    }
 }
 
 /// Euclidean RGB distance between two pixels (alpha handled separately —
@@ -282,5 +331,51 @@ mod tests {
     fn an_empty_mask_has_no_contours() {
         let mask = Mask::new(4, 4);
         assert!(mask_to_contours(&mask).is_empty());
+    }
+
+    #[test]
+    fn from_contours_round_trips_a_simple_mask() {
+        let mut mask = Mask::new(4, 4);
+        for y in 0..2 { for x in 0..2 { mask.set(x, y); } }
+        let contours = mask_to_contours(&mask);
+        let rebuilt = Mask::from_contours(4, 4, &contours);
+        assert_eq!(selected(&rebuilt), selected(&mask));
+    }
+
+    #[test]
+    fn from_contours_subtracts_a_nested_hole() {
+        let mut mask = Mask::new(3, 3);
+        for y in 0..3 { for x in 0..3 { if (x, y) != (1, 1) { mask.set(x, y); } } }
+        let contours = mask_to_contours(&mask);
+        let rebuilt = Mask::from_contours(3, 3, &contours);
+        assert_eq!(selected(&rebuilt), selected(&mask));
+        assert!(!rebuilt.get(1, 1));
+    }
+
+    #[test]
+    fn union_with_merges_two_disjoint_regions() {
+        let mut a = Mask::new(4, 1);
+        a.set(0, 0);
+        let mut b = Mask::new(4, 1);
+        b.set(3, 0);
+        a.union_with(&b);
+        assert_eq!(selected(&a), vec![(0, 0), (3, 0)]);
+    }
+
+    #[test]
+    fn shift_click_union_matches_a_single_flood_fill_over_both_regions() {
+        // Two same-color blobs separated by a differently-colored pixel:
+        // one flood fill from each seed, unioned, should match a single
+        // fill that could see both (simulated here by filling each with
+        // a tolerance wide enough to also cross the gap).
+        let img = rgba(&[
+            [10, 10, 10, 255], [10, 10, 10, 255], [200, 200, 200, 255], [10, 10, 10, 255], [10, 10, 10, 255],
+        ], 5, 1);
+        let left = flood_fill(&img, (0, 0), 5.0);
+        let right = flood_fill(&img, (4, 0), 5.0);
+        let left_contours = mask_to_contours(&left);
+        let mut unioned = right;
+        unioned.union_with(&Mask::from_contours(5, 1, &left_contours));
+        assert_eq!(selected(&unioned), vec![(0, 0), (1, 0), (3, 0), (4, 0)]);
     }
 }

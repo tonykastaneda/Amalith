@@ -25,7 +25,6 @@ impl App {
         // `None` once booted, since nothing re-arms the old Home screen
         // anymore) — see `boot_empty`'s own doc comment.
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -671,6 +670,7 @@ impl App {
             }
             panels::Action::LayerRestack(dir) => self.restack(dir),
             panels::Action::GroupSelection => self.group_selection(),
+            panels::Action::AddOrToggleLayerMask => self.add_or_toggle_layer_mask(),
             panels::Action::DeleteObjects => {
                 if !self.doc.selection.is_empty() {
                     let ids = std::mem::take(&mut self.doc.selection);
@@ -1300,7 +1300,6 @@ impl App {
 
     pub(in crate::app) fn xform_field_at_pointer(&mut self) -> Option<panels::transform::XformField> {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -1325,7 +1324,6 @@ impl App {
     /// The Gradient-panel numeric under the pointer, for scroll-to-nudge.
     pub(in crate::app) fn gradient_field_at_pointer(&mut self) -> Option<panels::gradient::GradField> {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -1693,7 +1691,6 @@ impl App {
 
     pub(in crate::app) fn align_spacing_field_at_pointer(&mut self) -> bool {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -1815,7 +1812,6 @@ impl App {
 
     pub(in crate::app) fn opacity_field_at_pointer(&mut self) -> bool {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -1875,6 +1871,43 @@ impl App {
         }
     }
 
+    /// Layers footer Mask icon: the selected image gets a fresh, fully-
+    /// revealing mask if it has none; otherwise toggles whether Brush/
+    /// Eraser/Fill/Clone Stamp currently target that mask instead of the
+    /// image's own pixels (see `raster_paint_target` in `raster_brush.rs`).
+    fn add_or_toggle_layer_mask(&mut self) {
+        let Some(&object) = self.doc.selection.first() else { return };
+        let doc = self.doc.editor.document();
+        let Some(amalith_core::ObjectKind::Image(img)) = doc.object(object).map(|o| &o.kind) else {
+            self.doc.io_error = Some("Select a pixel image to add a layer mask.".into());
+            self.request_main_redraw();
+            return;
+        };
+        if img.mask.is_some() {
+            self.doc.editing_mask = if self.doc.editing_mask == Some(object) { None } else { Some(object) };
+            self.request_main_redraw();
+            return;
+        }
+        // A 1×1 fully-opaque white pixel reveals everything — paint_raster
+        // stretches any mask's own pixel size to fit `local_bounds`, so a
+        // 1x1 seed is all a fresh "reveal all" mask needs.
+        let seed = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        if seed.write_to(&mut bytes, image::ImageFormat::Png).is_err() {
+            self.doc.io_error = Some("Couldn't encode a new layer mask.".into());
+            return;
+        }
+        let path = format!("images/mask-{}.png", amalith_core::AssetId::new());
+        self.doc.asset_store.insert(&path, bytes.into_inner());
+        match self.doc.editor.execute(Command::AddLayerMask {
+            object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Layer Mask", amalith_core::AssetKind::Image, &path),
+        }) {
+            Ok(_) => { self.doc.editing_mask = Some(object); self.doc.io_error = None; }
+            Err(error) => self.doc.io_error = Some(format!("Couldn't add layer mask: {error}")),
+        }
+        self.request_main_redraw();
+    }
+
     /// Digit / Enter / Esc stay in the Opacity field.
     pub(in crate::app) fn opacity_key(&mut self, event: &winit::event::KeyEvent) -> bool {
         let Some(edit) = &mut self.opacity_edit else {
@@ -1928,7 +1961,6 @@ impl App {
 
     pub(in crate::app) fn stroke_weight_field_at_pointer(&mut self) -> bool {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty

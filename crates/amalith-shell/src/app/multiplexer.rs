@@ -385,10 +385,10 @@ const QND_BTN_H: f64 = 30.0;
 const QND_BTN_W: f64 = 84.0;
 const QND_TITLE_H: f64 = 34.0;
 /// Name, Width/Unit, Height/Orientation, Artboards, Bleed, Color Mode,
-/// Raster Effects — everything the old full-page dialog offered except
-/// Preview Mode (the one control rarely touched after a document's
-/// created; still there via `newdoc.rs`'s own dialog if ever wanted).
-const QND_ROWS: usize = 7;
+/// Raster Effects, Start With. Preview Mode isn't offered here — it's
+/// rarely touched after a document's created, and stays reachable
+/// afterward through its own menu.
+const QND_ROWS: usize = 8;
 
 /// The overlay's own card rect, centered on `pane_r`.
 fn quick_newdoc_rect(pane_r: Rect) -> Rect {
@@ -444,12 +444,14 @@ fn qnd_ab_count_rect(card: Rect) -> Rect {
 fn qnd_bleed_rect(card: Rect) -> Rect { qnd_row(card, 4) }
 fn qnd_color_rect(card: Rect) -> Rect { qnd_row(card, 5) }
 fn qnd_raster_rect(card: Rect) -> Rect { qnd_row(card, 6) }
+fn qnd_start_layer_rect(card: Rect) -> Rect { qnd_row(card, 7) }
 /// The field a dropdown (`newdoc::Menu`) opens from.
 fn qnd_menu_trigger_rect(card: Rect, menu: newdoc::Menu) -> Rect {
     match menu {
         newdoc::Menu::Unit => qnd_unit_rect(card),
         newdoc::Menu::Color => qnd_color_rect(card),
-        newdoc::Menu::Raster | newdoc::Menu::Preview => qnd_raster_rect(card),
+        newdoc::Menu::Raster => qnd_raster_rect(card),
+        newdoc::Menu::StartLayer => qnd_start_layer_rect(card),
     }
 }
 /// One rect per option in `menu`'s dropdown, stacked below its trigger —
@@ -460,7 +462,7 @@ fn qnd_menu_item_rects(card: Rect, menu: newdoc::Menu) -> Vec<Rect> {
         newdoc::Menu::Unit => newdoc::UNITS.len(),
         newdoc::Menu::Color => newdoc::COLORS.len(),
         newdoc::Menu::Raster => newdoc::RASTERS.len(),
-        newdoc::Menu::Preview => 0,
+        newdoc::Menu::StartLayer => newdoc::START_LAYERS.len(),
     };
     (0..n)
         .map(|i| {
@@ -474,7 +476,7 @@ fn qnd_menu_labels(menu: newdoc::Menu) -> Vec<&'static str> {
         newdoc::Menu::Unit => newdoc::UNITS.iter().map(|u| newdoc::unit_label(*u)).collect(),
         newdoc::Menu::Color => newdoc::COLORS.iter().map(|c| newdoc::color_label(*c)).collect(),
         newdoc::Menu::Raster => newdoc::RASTERS.iter().map(|r| newdoc::raster_label(*r)).collect(),
-        newdoc::Menu::Preview => Vec::new(),
+        newdoc::Menu::StartLayer => newdoc::START_LAYERS.iter().map(|k| newdoc::start_layer_label(*k)).collect(),
     }
 }
 /// Small filled down-chevron — a dropdown's own affordance, same idea as
@@ -502,9 +504,7 @@ fn qnd_cancel_rect(card: Rect) -> Rect {
     Rect::new(create.x0 - ui_px(8.0) - ui_px(QND_BTN_W), r.y0, create.x0 - ui_px(8.0), r.y1)
 }
 
-/// Small line-art portrait/landscape glyph — the same visual idea as the
-/// old full-page dialog's own orientation icons, just redrawn locally
-/// (that dialog's are baked into its own fixed layout, not reusable here).
+/// Small line-art portrait/landscape glyph for the Orientation toggle.
 fn icon_orientation(scene: &mut Scene, r: Rect, portrait: bool, color: Color) {
     let (w, h) = if portrait { (r.width() * 0.36, r.height() * 0.64) } else { (r.width() * 0.64, r.height() * 0.36) };
     let c = r.center();
@@ -536,10 +536,8 @@ fn paint_quick_newdoc(
     };
     // A real *button* (Orientation, Artboard −/+) rather than a text
     // field or dropdown trigger — sharp corners, same fill/border
-    // convention as `widgets::button` and the old full-page dialog's own
-    // `draw_orient`/`draw_stepper` (which this card's controls otherwise
-    // drifted from by routing through `field_bg`'s rounded, subtler
-    // field look instead).
+    // convention as `widgets::button`, distinct from `field_bg`'s
+    // rounded, subtler field look.
     let button_bg = |scene: &mut Scene, r: Rect, selected: bool| {
         scene.fill(Fill::NonZero, Affine::IDENTITY, if selected { theme.accent } else { theme.strip_active }, None, &r);
         scene.stroke(&Stroke::new(ui_px(1.0)), Affine::IDENTITY, theme.text_dim.with_alpha(0.6), None, &r);
@@ -607,6 +605,13 @@ fn paint_quick_newdoc(
     text.draw(scene, rl, 12.0, theme.text, raster_r.x0 + ui_px(8.0), raster_r.y0 + raster_r.height() * 0.5 + ui_px(4.0));
     qnd_chevron(scene, Point::new(raster_r.x1 - ui_px(12.0), raster_r.center().y), theme.text_dim);
 
+    let start_layer_r = qnd_start_layer_rect(card);
+    field_label(scene, text, start_layer_r, "Start With");
+    field_bg(scene, start_layer_r, form.open_menu == Some(newdoc::Menu::StartLayer));
+    let sl = newdoc::start_layer_label(form.start_layer);
+    text.draw(scene, sl, 12.0, theme.text, start_layer_r.x0 + ui_px(8.0), start_layer_r.y0 + start_layer_r.height() * 0.5 + ui_px(4.0));
+    qnd_chevron(scene, Point::new(start_layer_r.x1 - ui_px(12.0), start_layer_r.center().y), theme.text_dim);
+
     crate::widgets::button(scene, text, theme, qnd_cancel_rect(card), "Cancel", false);
     crate::widgets::button(scene, text, theme, qnd_create_rect(card), "Create", true);
 
@@ -623,7 +628,7 @@ fn paint_quick_newdoc(
                 newdoc::Menu::Unit => newdoc::UNITS.iter().position(|u| *u == form.unit),
                 newdoc::Menu::Color => newdoc::COLORS.iter().position(|c| *c == form.color_mode),
                 newdoc::Menu::Raster => newdoc::RASTERS.iter().position(|r| *r == form.raster),
-                newdoc::Menu::Preview => None,
+                newdoc::Menu::StartLayer => newdoc::START_LAYERS.iter().position(|k| *k == form.start_layer),
             };
             for (i, (r, label)) in items.iter().zip(labels.iter()).enumerate() {
                 if current == Some(i) {
@@ -2011,12 +2016,11 @@ impl App {
         let Some(card) = self.quick_newdoc_card_rect() else {
             return false;
         };
-        // A dropdown eats every click while it's open — same priority
-        // order as the old full-page dialog's own `newdoc::hit`: a click
-        // on one of its items picks that value and closes it; any other
-        // click (even one that would otherwise hit Create/a field) just
-        // closes the dropdown instead of also acting on whatever's under
-        // it. That's what stopped the accidental double-action clicking
+        // A dropdown eats every click while it's open: a click on one of
+        // its items picks that value and closes it; any other click
+        // (even one that would otherwise hit Create/a field) just closes
+        // the dropdown instead of also acting on whatever's under it.
+        // That's what stopped the accidental double-action clicking
         // through to the pane behind the overlay before this existed —
         // every click while a menu is up now resolves to *only* the menu.
         if let Some(menu) = self.quick_newdoc.as_ref().and_then(|q| q.form.open_menu) {
@@ -2027,7 +2031,7 @@ impl App {
                         newdoc::Menu::Unit => qnd.form.set_unit(newdoc::UNITS[i]),
                         newdoc::Menu::Color => qnd.form.color_mode = newdoc::COLORS[i],
                         newdoc::Menu::Raster => qnd.form.raster = newdoc::RASTERS[i],
-                        newdoc::Menu::Preview => {}
+                        newdoc::Menu::StartLayer => qnd.form.start_layer = newdoc::START_LAYERS[i],
                     }
                     qnd.form.open_menu = None;
                 }
@@ -2075,6 +2079,8 @@ impl App {
             qnd.form.open_menu = Some(newdoc::Menu::Color);
         } else if qnd_raster_rect(card).contains(self.pointer) {
             qnd.form.open_menu = Some(newdoc::Menu::Raster);
+        } else if qnd_start_layer_rect(card).contains(self.pointer) {
+            qnd.form.open_menu = Some(newdoc::Menu::StartLayer);
         }
         // A click anywhere else on/around the card (including the card
         // background itself) is absorbed here without action — only a
@@ -2145,11 +2151,10 @@ impl App {
         }
         self.request_main_redraw();
     }
-    /// Build a fresh document from the compact overlay's form and swap it
-    /// in — the same document-building path as the old full-page dialog
-    /// (`App::build_editor_from_form`), always adding a new tab (never
-    /// the boot in-place replace `create_from_form` does — the overlay
-    /// is reachable from a live session, not just an empty boot).
+    /// Build a fresh document from the compact overlay's form
+    /// (`App::build_editor_from_form`) and hand it to `App::add_doc`,
+    /// which itself knows whether to replace the boot placeholder or
+    /// push a new tab.
     fn create_from_quick_form(&mut self) {
         let Some(qnd) = self.quick_newdoc.as_mut() else {
             return;

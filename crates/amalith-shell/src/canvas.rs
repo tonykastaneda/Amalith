@@ -2318,24 +2318,39 @@ fn paint_object(
                 let sb = m.transform_rect_bbox(convert::rect(img.local_bounds));
                 sb.width().max(sb.height())
             };
+            let mask = img.mask.filter(|mk| mk.enabled);
+            let mask_tiles = mask.and_then(|mk| images.get(&mk.asset)).and_then(|l| l.tiles.as_ref());
+            let mask_static = mask.and_then(|mk| images.get(&mk.asset)).and_then(|l| l.pick(cover));
+            let b = convert::rect(img.local_bounds);
             if let Some(tiles) = images.get(&img.asset).and_then(|l| l.tiles.as_ref()) {
-                let bounds = img.local_bounds;
-                let pixels = m * Affine::translate((bounds.x0, bounds.y0))
-                    * Affine::scale_non_uniform(bounds.width() / tiles.width as f64, bounds.height() / tiles.height as f64);
                 // Add tile coverage in an isolated surface: source-over
                 // between adjacent antialiased edges would leave seams.
+                let pixels = pixels_to_screen(m, b, tiles.width, tiles.height);
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
-                for tile in &tiles.tiles {
-                    if !overlaps(pixels.transform_rect_bbox(tile.core), viewport) { continue; }
-                    let clip = pixels.transform_rect_bbox(tile.core).inflate(2.0, 2.0);
-                    scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::Plus), 1.0, Affine::IDENTITY, &clip);
-                    let brush = ImageBrush::new(tile.image.clone());
-                    scene.fill(Fill::NonZero, pixels, &brush, Some(Affine::translate((tile.image_rect.x0, tile.image_rect.y0))), &tile.core);
+                paint_tiled(scene, pixels, tiles, viewport);
+                if mask_tiles.is_some() || mask_static.is_some() {
+                    scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
+                    if let Some(mt) = mask_tiles {
+                        paint_tiled(scene, pixels_to_screen(m, b, mt.width, mt.height), mt, viewport);
+                    } else if let Some(mg) = mask_static {
+                        scene.draw_image(mg, pixels_to_screen(m, b, mg.width, mg.height));
+                    }
                     scene.pop_layer();
                 }
                 scene.pop_layer();
+            } else if let Some(mt) = mask_tiles {
+                // The mask itself is being actively painted (its tiles are
+                // live) while the base image sits at a settled GPU LOD.
+                if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
+                    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
+                    scene.draw_image(gpu, pixels_to_screen(m, b, gpu.width, gpu.height));
+                    scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
+                    paint_tiled(scene, pixels_to_screen(m, b, mt.width, mt.height), mt, viewport);
+                    scene.pop_layer();
+                    scene.pop_layer();
+                }
             } else if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
-                paint_raster(scene, m, gpu, img.local_bounds);
+                paint_raster(scene, m, gpu, img.local_bounds, mask_static, viewport);
             } else if let Some(b) = obj.kind.own_local_bounds() {
                 let r = convert::rect(b);
                 scene.fill(
@@ -2412,14 +2427,42 @@ fn crossed_box_path(local_rect: Rect, m: Affine) -> BezPath {
     bp
 }
 
+/// `m * translate(bounds origin) * scale to fit bounds` for a `w`×`h`
+/// pixel buffer — the mapping every raster draw (base image, layer
+/// mask, live tile) uses to fill its `local_bounds` under `m`.
+fn pixels_to_screen(m: Affine, bounds: Rect, w: u32, h: u32) -> Affine {
+    m * Affine::translate((bounds.x0, bounds.y0))
+        * Affine::scale_non_uniform(bounds.width() / w.max(1) as f64, bounds.height() / h.max(1) as f64)
+}
+
+/// The live-paint tile loop shared by a stroke in progress on a base
+/// image and one in progress on a layer mask: each tile drawn in its own
+/// `Compose::Plus`-blended isolation so adjacent antialiased tile edges
+/// don't double up. Caller wraps this in the outer isolating layer.
+fn paint_tiled(scene: &mut Scene, pixels: Affine, tiles: &crate::lod::RasterTiles, viewport: Rect) {
+    for tile in &tiles.tiles {
+        if !overlaps(pixels.transform_rect_bbox(tile.core), viewport) { continue; }
+        let clip = pixels.transform_rect_bbox(tile.core).inflate(2.0, 2.0);
+        scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::Plus), 1.0, Affine::IDENTITY, &clip);
+        let brush = ImageBrush::new(tile.image.clone());
+        scene.fill(Fill::NonZero, pixels, &brush, Some(Affine::translate((tile.image_rect.x0, tile.image_rect.y0))), &tile.core);
+        scene.pop_layer();
+    }
+}
+
 /// Draw a raster so `img`'s pixel box fills `local_bounds` under `m`.
 /// Native document size comes from `local_bounds`; `img` may be a
-/// downsampled GPU copy (Vello's atlas is 8192²).
+/// downsampled GPU copy (Vello's atlas is 8192²). `mask`, when given, is
+/// composited in as coverage: its alpha (not color) is multiplied into
+/// everything drawn so far via `Compose::DestIn`, non-destructively — see
+/// `docs/compositor-porting.md`'s Layer Mask section.
 fn paint_raster(
     scene: &mut Scene,
     m: Affine,
     img: &ImageData,
     local_bounds: amalith_core::Rect,
+    mask: Option<&ImageData>,
+    viewport: Rect,
 ) {
     if img.width == 0 || img.height == 0 {
         return;
@@ -2428,13 +2471,17 @@ fn paint_raster(
     if b.width() <= 0.0 || b.height() <= 0.0 {
         return;
     }
-    let xf = m
-        * Affine::translate((b.x0, b.y0))
-        * Affine::scale_non_uniform(
-            b.width() / img.width as f64,
-            b.height() / img.height as f64,
-        );
+    let xf = pixels_to_screen(m, b, img.width, img.height);
+    let Some(mask) = mask.filter(|mk| mk.width > 0 && mk.height > 0) else {
+        scene.draw_image(img, xf);
+        return;
+    };
+    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
     scene.draw_image(img, xf);
+    scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
+    scene.draw_image(mask, pixels_to_screen(m, b, mask.width, mask.height));
+    scene.pop_layer();
+    scene.pop_layer();
 }
 
 /// A decoded raster: native document size plus a GPU image that fits

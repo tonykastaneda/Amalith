@@ -132,6 +132,7 @@ pub(crate) enum Edit {
         index: usize,
     },
     SetImageAsset { object: ObjectId, asset: AssetId },
+    SetImageMask { object: ObjectId, mask: Option<amalith_core::ImageMask> },
     RemoveAsset {
         id: AssetId,
     },
@@ -432,6 +433,12 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
             let ObjectKind::Image(image) = &mut obj.kind else { return Err(CommandError::NotAnImage(object)); };
             let old = std::mem::replace(&mut image.asset, asset);
             Ok((Edit::SetImageAsset { object, asset: old }, None))
+        }
+        Edit::SetImageMask { object, mask } => {
+            let obj = doc.object_mut(object).ok_or(CommandError::ObjectNotFound(object))?;
+            let ObjectKind::Image(image) = &mut obj.kind else { return Err(CommandError::NotAnImage(object)); };
+            let old = std::mem::replace(&mut image.mask, mask);
+            Ok((Edit::SetImageMask { object, mask: old }, None))
         }
         Edit::RemoveAsset { id } => {
             let (asset, index) = doc

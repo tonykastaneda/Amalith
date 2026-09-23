@@ -497,8 +497,8 @@ impl Home {
             &Rect::new(split, area_bottom, wl, area_bottom + 1.0),
         );
 
-        // Same button dimensions as the New Document dialog's Create /
-        // Cancel pair (`newdoc::layout`).
+        // Same button dimensions as the "New Document" overlay's Create /
+        // Cancel pair (`multiplexer::qnd_create_rect`/`qnd_cancel_rect`).
         let btn_h = ui_px(34.0);
         let btn_gap = ui_px(12.0);
         let btn_y = area_bottom + (metric_toolbar_h() - btn_h) / 2.0;

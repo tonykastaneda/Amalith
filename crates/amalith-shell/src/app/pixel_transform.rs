@@ -197,7 +197,7 @@ impl App {
         let preview_asset = amalith_core::AssetId::new();
         let mut hole_preview = crate::lod::ImageLods::default();
         hole_preview.set(2, to_gpu_image(&hole));
-        let preview_doc = Some(self.raster_preview_doc(preview_asset, Some(sel.object), layer, &hole, pixel_to_doc));
+        let preview_doc = Some(self.raster_preview_doc(preview_asset, Some(sel.object), layer, &hole, pixel_to_doc, false));
         let floating_gpu = to_gpu_image(&floating);
         let lift = Lift {
             object: sel.object, base, floating, floating_gpu, floating_origin, hole, hole_preview,

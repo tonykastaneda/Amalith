@@ -456,6 +456,8 @@ struct LayerRow {
     color: amalith_core::LayerColor,
     /// Layer rows only — Vector vs Raster badge.
     layer_kind: LayerKind,
+    /// Object rows only — this image's layer mask, if any.
+    mask: Option<amalith_core::ImageMask>,
 }
 
 fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &HashSet<LayerId>) -> Vec<LayerRow> {
@@ -480,6 +482,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &H
                 expanded: is_expanded,
                 color: amalith_core::LayerColor::Blue,
                 layer_kind: LayerKind::Vector,
+                mask: match &obj.kind { ObjectKind::Image(img) => img.mask, _ => None },
             });
             if is_expanded {
                 walk(doc, ObjectParent::Group(id), depth + 1, expanded, rows);
@@ -498,6 +501,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &H
             expanded: !collapsed_layers.contains(&layer.id),
             color: layer.color,
             layer_kind: layer.kind,
+            mask: None,
         });
         if !collapsed_layers.contains(&layer.id) {
             walk(doc, ObjectParent::Layer(layer.id), 1, expanded, &mut rows);
@@ -830,7 +834,8 @@ pub(super) fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: 
     let can_edit = ctx.document_open;
     let has_sel = can_edit && !ctx.selection.is_empty();
     let raster_ready = has_sel && current_layer_is_raster(ctx);
-    paint_layers_footer(scene, text, body, ctx.theme, ctx.pointer, has_sel, can_edit, raster_ready);
+    let mask_active = ctx.editing_mask.is_some() && ctx.editing_mask == ctx.selection.first().copied();
+    paint_layers_footer(scene, text, body, ctx.theme, ctx.pointer, has_sel, can_edit, raster_ready, mask_active);
     let locate_r = locate_button_rect(body);
     let locate_hot = locate_r.contains(ctx.pointer);
     if locate_hot && has_sel {
@@ -1025,7 +1030,7 @@ fn draw_footer_group(scene: &mut Scene, r: Rect, color: Color) {
 /// context is confidently a Raster layer with a selection — they have no
 /// vector-layer meaning yet, and no backing implementation at all yet
 /// (clicking is a harmless no-op either way; see `hit`'s own comment).
-fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, theme: &Theme, pointer: Point, has_sel: bool, can_edit: bool, raster_only: bool) {
+fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, theme: &Theme, pointer: Point, has_sel: bool, can_edit: bool, raster_only: bool, mask_active: bool) {
     let strip = Rect::new(body.x0, body.y1 - metric_footer_h(), body.x1, body.y1);
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &strip);
     scene.fill(Fill::NonZero, ID, theme.border.with_alpha(0.7), None, &Rect::new(strip.x0, strip.y0, strip.x1, strip.y0 + 0.5));
@@ -1036,7 +1041,7 @@ fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, th
         if hot {
             scene.fill(Fill::NonZero, ID, theme.text.with_alpha(0.08), None, &r.to_rounded_rect(ui_px(3.0)));
         }
-        let c = footer_color(theme, enabled[k], hot);
+        let c = if k == 2 && mask_active { theme.accent } else { footer_color(theme, enabled[k], hot) };
         match k {
             0 => draw_footer_link(scene, *r, c),
             1 => text.draw(scene, "fx", 11.0, c, r.x0 + ui_px(1.0), r.center().y + ui_px(4.0)),
@@ -1138,12 +1143,14 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             return if ctx.selection.is_empty() { Action::None } else { Action::LocateSelection };
         }
         let [link, fx, mask, adjustment, group, add, del] = layers_footer_rects(body);
-        // Link/fx/Mask/Adjustment have no backing implementation yet
-        // (see `paint_layers_footer`'s own doc comment) — a harmless
-        // no-op click either way, gated to look enabled only on a Raster
-        // layer per the mockup this footer follows.
-        return if link.contains(local) || fx.contains(local) || mask.contains(local) || adjustment.contains(local) {
+        // Link/fx/Adjustment have no backing implementation yet (see
+        // `paint_layers_footer`'s own doc comment) — a harmless no-op
+        // click either way, gated to look enabled only on a Raster layer
+        // per the mockup this footer follows.
+        return if link.contains(local) || fx.contains(local) || adjustment.contains(local) {
             Action::None
+        } else if mask.contains(local) {
+            if ctx.selection.is_empty() { Action::None } else { Action::AddOrToggleLayerMask }
         } else if group.contains(local) {
             if ctx.selection.is_empty() { Action::None } else { Action::GroupSelection }
         } else if add.contains(local) {
@@ -1451,6 +1458,35 @@ fn paint_thumbnail(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, row: &L
     }
     scene.pop_layer();
     scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.border, None, &tile);
+    let x = x + size + ui_px(8.0);
+    if let Some(mask) = row.mask {
+        paint_mask_thumbnail(scene, ctx, row, mask, rect, x)
+    } else {
+        x
+    }
+}
+
+/// A small square next to the main thumbnail showing a layer mask's own
+/// pixels. Its RGB is unused (see `amalith_core::ImageMask`'s doc comment)
+/// so this draws exactly like any other thumbnail — a white-RGB, variable-
+/// alpha image over a dark backdrop already reads as light-to-dark, no
+/// grayscale conversion needed. Bordered in the accent color while it's
+/// what Brush/Eraser currently paint into.
+fn paint_mask_thumbnail(scene: &mut Scene, ctx: &Ctx, row: &LayerRow, mask: amalith_core::ImageMask, rect: Rect, x: f64) -> f64 {
+    let size = ui_px(ctx.layer_thumbnail_size.image_px());
+    if size == 0.0 { return x; }
+    let tile = Rect::from_origin_size((x, rect.center().y - size * 0.5), (size, size));
+    scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x20, 0x20, 0x20), None, &tile);
+    if let Some(gpu) = ctx.layer_images.get(&mask.asset).and_then(|l| l.pick(size.max(1.0))) {
+        let scale = (size / gpu.width.max(1) as f64).min(size / gpu.height.max(1) as f64);
+        let (w, h) = (gpu.width as f64 * scale, gpu.height as f64 * scale);
+        let origin = (tile.center().x - w * 0.5, tile.center().y - h * 0.5);
+        scene.draw_image(gpu, vello::kurbo::Affine::translate(origin) * vello::kurbo::Affine::scale(scale));
+    }
+    let object = match row.kind { RowKind::Object { id, .. } => Some(id), RowKind::Layer(_) => None };
+    let editing = mask.enabled && object.is_some() && ctx.editing_mask == object;
+    let border = if editing { ctx.theme.accent } else { ctx.theme.border };
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &tile);
     x + size + ui_px(8.0)
 }
 

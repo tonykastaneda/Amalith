@@ -52,7 +52,7 @@ pub use object::{
     set_anchor_smooth, set_handle, subpaths_to_bezpath,
     toggle_anchor_smooth, translate_anchor_n, trim_to_split, Anchor, BlendData,
     BlendSpacing, CompoundPathData, GroupData, HandleMode,
-    HandleSide, ImageData, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
+    HandleSide, ImageData, ImageMask, Object, ObjectKind, ObjectParent, PathData, Subpath, SymbolData,
     Paragraph, PathTextAlign, PathTextData, TextAlign, TextData, TextKind, TextPosition, TextStyle,
 };
 pub use swatch::{Color, Swatch};

@@ -768,6 +768,7 @@ mod tests {
         let kind = ObjectKind::Image(ImageData {
             asset: AssetId::new(),
             local_bounds: Rect::new(0., 0., 10., 10.),
+            mask: None,
         });
         doc.insert_object(Object::new(id, ObjectParent::Layer(layer), kind.clone()), 0)
             .unwrap();

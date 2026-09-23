@@ -12,6 +12,7 @@ fn expand_preserves_placement_and_is_one_undo_step() {
         ObjectKind::Image(ImageData {
             asset: AssetId::new(),
             local_bounds: Rect::new(10., 20., 210., 120.),
+            mask: None,
         }),
     );
     image.transform = Affine::translate((300., 400.)) * Affine::rotate(0.3);
@@ -78,6 +79,7 @@ fn invalid_trace_does_not_remove_the_source() {
         ObjectKind::Image(ImageData {
             asset: AssetId::new(),
             local_bounds: Rect::new(0., 0., 10., 10.),
+            mask: None,
         }),
     );
     doc.insert_object(image.clone(), 0).unwrap();

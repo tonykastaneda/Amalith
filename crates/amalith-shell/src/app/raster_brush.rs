@@ -30,6 +30,8 @@ pub(super) struct Stroke {
     erase: bool,
     preview_asset: amalith_core::AssetId,
     preview_doc: Option<Document>,
+    /// Commit into `object`'s layer mask instead of its own pixels.
+    editing_mask: bool,
 }
 
 impl Stroke {
@@ -126,6 +128,10 @@ struct PaintTarget {
     base: image::RgbaImage,
     pixel_to_doc: vello::kurbo::Affine,
     local_to_pixel: vello::kurbo::Affine,
+    /// Whether this target is `object`'s layer mask rather than its own
+    /// pixels — set when `Doc::editing_mask` names this object and it
+    /// actually has a mask. Only ever true when `object.is_some()`.
+    editing_mask: bool,
 }
 
 impl App {
@@ -153,7 +159,17 @@ impl App {
                 self.doc.io_error = Some("Shapes and text stay editable. Select a pixel image or an empty raster layer to paint.".into());
                 return None;
             };
-            let (asset, bounds, world) = (image.asset, image.local_bounds, crate::convert::affine(doc.world_transform(id)));
+            let (bounds, world) = (image.local_bounds, crate::convert::affine(doc.world_transform(id)));
+            let editing_mask = self.doc.editing_mask == Some(id);
+            let asset = if editing_mask {
+                let Some(mask) = image.mask else {
+                    self.doc.io_error = Some("This image has no layer mask yet — click Mask in the Layers panel to add one.".into());
+                    return None;
+                };
+                mask.asset
+            } else {
+                image.asset
+            };
             self.magic_wand_cache = None;
             let base = self.magic_wand_image(asset).cloned()?;
             if base.width() as u64 * base.height() as u64 > 16_777_216 {
@@ -162,7 +178,7 @@ impl App {
             }
             let pixels_to_local = vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
                 * vello::kurbo::Affine::scale_non_uniform(bounds.width() / base.width() as f64, bounds.height() / base.height() as f64);
-            Some(PaintTarget { object: Some(id), layer, base, pixel_to_doc: world * pixels_to_local, local_to_pixel: pixels_to_local.inverse() })
+            Some(PaintTarget { object: Some(id), layer, base, pixel_to_doc: world * pixels_to_local, local_to_pixel: pixels_to_local.inverse(), editing_mask })
         } else {
             if !allow_new_canvas { return None; }
             if !doc.children_of(amalith_core::ObjectParent::Layer(layer)).is_empty() {
@@ -177,6 +193,7 @@ impl App {
             Some(PaintTarget {
                 object: None, layer, base: image::RgbaImage::new(w, h),
                 pixel_to_doc: vello::kurbo::Affine::translate((bounds.x0, bounds.y0)), local_to_pixel: vello::kurbo::Affine::IDENTITY,
+                editing_mask: false,
             })
         }
     }
@@ -185,15 +202,21 @@ impl App {
     /// target image (or, on an empty layer, a brand-new one) — kept out
     /// of the document and undo history entirely (see
     /// `prepare_raster_preview`).
-    pub(super) fn raster_preview_doc(&self, preview_asset: amalith_core::AssetId, object: Option<ObjectId>, layer: amalith_core::LayerId, base: &image::RgbaImage, pixel_to_doc: vello::kurbo::Affine) -> Document {
+    pub(super) fn raster_preview_doc(&self, preview_asset: amalith_core::AssetId, object: Option<ObjectId>, layer: amalith_core::LayerId, base: &image::RgbaImage, pixel_to_doc: vello::kurbo::Affine, editing_mask: bool) -> Document {
         let mut doc = self.doc.editor.document().clone();
         if let Some(id) = object {
             if let Some(obj) = doc.object_mut(id) {
-                if let amalith_core::ObjectKind::Image(image) = &mut obj.kind { image.asset = preview_asset; }
+                if let amalith_core::ObjectKind::Image(image) = &mut obj.kind {
+                    if editing_mask {
+                        if let Some(mask) = &mut image.mask { mask.asset = preview_asset; }
+                    } else {
+                        image.asset = preview_asset;
+                    }
+                }
             }
         } else {
             let mut image = amalith_core::Object::new(ObjectId::new(), amalith_core::ObjectParent::Layer(layer), amalith_core::ObjectKind::Image(amalith_core::ImageData {
-                asset: preview_asset, local_bounds: amalith_core::Rect::new(0., 0., base.width() as f64, base.height() as f64),
+                asset: preview_asset, local_bounds: amalith_core::Rect::new(0., 0., base.width() as f64, base.height() as f64), mask: None,
             }));
             image.transform = crate::convert::affine_to_core(pixel_to_doc);
             let index = doc.children_of(amalith_core::ObjectParent::Layer(layer)).len();
@@ -206,7 +229,7 @@ impl App {
     pub(super) fn raster_brush_press(&mut self) {
         let erase = self.active_tool == Tool::RasterEraser;
         let Some(target) = self.raster_paint_target(!erase) else { return };
-        let PaintTarget { object, layer, base, pixel_to_doc, local_to_pixel } = target;
+        let PaintTarget { object, layer, base, pixel_to_doc, local_to_pixel, editing_mask } = target;
         let Some(color) = (if erase { Some(amalith_core::Color::rgb(1.,1.,1.)) } else { self.doc.fill.color() }) else {
             self.doc.io_error = Some("Painting needs a solid foreground color.".into());
             return;
@@ -218,14 +241,14 @@ impl App {
         let selection = self.doc.pixel_selection.as_ref().map(|s| s.contours.iter().map(|path| path.iter().map(|&p| local_to_pixel * p).collect()).collect());
         let start = pixel_to_doc.inverse() * self.doc_point(self.pointer);
         let preview_asset = amalith_core::AssetId::new();
-        let preview_doc = Some(self.raster_preview_doc(preview_asset, object, layer, &base, pixel_to_doc));
+        let preview_doc = Some(self.raster_preview_doc(preview_asset, object, layer, &base, pixel_to_doc, editing_mask));
         let mut stroke = Stroke {
             object, layer, ink: PaintTiles::new(base.width(), base.height()), base, pixel_to_doc,
             last: start, radius: if erase { self.raster_eraser_size } else { self.raster_brush_size } * 0.5,
             hardness: if erase { self.raster_eraser_hardness } else { self.raster_brush_hardness },
             source: PixelSource::Flat(image::Rgba([color.r, color.g, color.b, color.a * self.doc.opacity as f32].map(|v| (v.clamp(0., 1.) * 255.).round() as u8))),
             selection, changed: false, revision: self.doc.editor.revision(), preview: None,
-            erase, preview_asset, preview_doc,
+            erase, preview_asset, preview_doc, editing_mask,
         };
         if self.active_tool == Tool::RasterFill {
             stroke.bucket();
@@ -262,7 +285,7 @@ impl App {
             return;
         }
         let Some(target) = self.raster_paint_target(false) else { return };
-        let PaintTarget { object, layer, base, pixel_to_doc, local_to_pixel } = target;
+        let PaintTarget { object, layer, base, pixel_to_doc, local_to_pixel, editing_mask } = target;
         let Some((source_object, source_anchor)) = self.raster_clone_source else {
             self.doc.io_error = Some("Option-click to set a clone source first.".into());
             return;
@@ -285,13 +308,13 @@ impl App {
             o
         };
         let preview_asset = amalith_core::AssetId::new();
-        let preview_doc = Some(self.raster_preview_doc(preview_asset, object, layer, &base, pixel_to_doc));
+        let preview_doc = Some(self.raster_preview_doc(preview_asset, object, layer, &base, pixel_to_doc, editing_mask));
         let mut stroke = Stroke {
             object, layer, ink: PaintTiles::new(base.width(), base.height()), base, pixel_to_doc,
             last: start, radius: self.raster_clone_size * 0.5, hardness: self.raster_clone_hardness,
             source: PixelSource::Clone { offset },
             selection, changed: false, revision: self.doc.editor.revision(), preview: None,
-            erase: false, preview_asset, preview_doc,
+            erase: false, preview_asset, preview_doc, editing_mask,
         };
         stroke.stamp(start);
         stroke.refresh_preview();
@@ -311,7 +334,12 @@ impl App {
         let path = format!("images/brush-{}.png", amalith_core::AssetId::new());
         self.doc.asset_store.insert(&path, bytes.into_inner());
         let command = if let Some(object) = stroke.object {
-            Command::ReplaceImageAsset { object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Brush pixels", amalith_core::AssetKind::Image, &path) }
+            let asset = amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Brush pixels", amalith_core::AssetKind::Image, &path);
+            if stroke.editing_mask {
+                Command::ReplaceMaskAsset { object, asset }
+            } else {
+                Command::ReplaceImageAsset { object, asset }
+            }
         } else {
             Command::CreateImage { layer: stroke.layer, path, bounds: amalith_core::Rect::new(0., 0., stroke.base.width() as f64, stroke.base.height() as f64), transform: crate::convert::affine_to_core(stroke.pixel_to_doc), name: Some("Paint".into()), embedded: true, modified: None, size: None }
         };
@@ -380,7 +408,7 @@ impl App {
 mod tests {
     use super::*;
     fn stroke() -> Stroke {
-        Stroke { object: None, layer: amalith_core::LayerId::new(), base: image::RgbaImage::new(32, 32), ink: PaintTiles::new(32, 32), pixel_to_doc: vello::kurbo::Affine::IDENTITY, last: Point::new(4., 16.), radius: 2., hardness: 1.0, source: PixelSource::Flat(image::Rgba([255, 0, 0, 128])), selection: None, changed: false, revision: 0, preview: None, erase: false, preview_asset: amalith_core::AssetId::new(), preview_doc: None }
+        Stroke { object: None, layer: amalith_core::LayerId::new(), base: image::RgbaImage::new(32, 32), ink: PaintTiles::new(32, 32), pixel_to_doc: vello::kurbo::Affine::IDENTITY, last: Point::new(4., 16.), radius: 2., hardness: 1.0, source: PixelSource::Flat(image::Rgba([255, 0, 0, 128])), selection: None, changed: false, revision: 0, preview: None, erase: false, preview_asset: amalith_core::AssetId::new(), preview_doc: None, editing_mask: false }
     }
     fn flat(s: &mut Stroke) -> &mut image::Rgba<u8> {
         let PixelSource::Flat(c) = &mut s.source else { unreachable!() };

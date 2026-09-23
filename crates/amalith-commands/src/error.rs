@@ -62,4 +62,8 @@ pub enum CommandError {
     NothingToDefine,
     #[error("object {0} is not a symbol instance")]
     NotASymbolInstance(ObjectId),
+    #[error("image {0} already has a layer mask")]
+    AlreadyHasMask(ObjectId),
+    #[error("image {0} has no layer mask")]
+    NoLayerMask(ObjectId),
 }

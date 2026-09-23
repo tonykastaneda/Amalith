@@ -1,0 +1,84 @@
+name: Release
+
+# Push a tag like v0.0.1 (or run this manually with a version input) to
+# build unsigned release artifacts and publish a GitHub Release with a
+# macOS DMG and a Windows zip attached.
+#
+# Neither build is code-signed: there's no Apple Developer ID or Windows
+# code-signing certificate configured for this repo yet, so macOS
+# Gatekeeper and Windows SmartScreen will both show an "unidentified
+# developer" / "unknown publisher" warning on first run. See
+# scripts/package-macos.sh's header for how to add signing + notarization
+# once a Developer ID cert exists — set the SIGN_IDENTITY / NOTARY_PROFILE
+# (or NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID for CI) env vars and
+# this workflow will pick them up automatically.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 0.0.1) — only needed for a manual run off a non-tag commit"
+        required: false
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build and package (unsigned)
+        run: ./scripts/package-macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/mac/*.dmg
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/package-windows.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: target/package/*.zip
+
+  release:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/macos-dmg/*.dmg
+            artifacts/windows-zip/*.zip
+          prerelease: true
+          generate_release_notes: true

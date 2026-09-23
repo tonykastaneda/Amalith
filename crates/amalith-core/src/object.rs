@@ -1244,6 +1244,25 @@ impl Default for TextData {
 pub struct ImageData {
     pub asset: AssetId,
     pub local_bounds: Rect,
+    /// A project saved before layer masks existed just decodes with none.
+    #[serde(default)]
+    pub mask: Option<ImageMask>,
+}
+
+/// Non-destructive per-object raster mask. Alpha is the only channel
+/// that matters — it's coverage (255 reveals, 0 hides), not a visible
+/// image; RGB is unused. Photoshop calls this a "layer mask"; here it
+/// hangs off the object (Amalith's raster unit), not the containing
+/// [`crate::Layer`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImageMask {
+    pub asset: AssetId,
+    #[serde(default = "default_mask_enabled")]
+    pub enabled: bool,
+}
+
+fn default_mask_enabled() -> bool {
+    true
 }
 
 /// A symbol instance: references a [`crate::SymbolDefinition`] in the

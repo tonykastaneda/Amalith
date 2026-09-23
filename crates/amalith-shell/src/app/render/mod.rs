@@ -745,6 +745,7 @@ impl App {
                 self.layers_new_menu,
                 self.layers_blend_menu,
                 self.layer_kind_filter,
+                self.doc.editing_mask,
                 self.color_mode,
                 self.cmyk_profile.as_ref(),
                 &self.recent_colors,
@@ -870,6 +871,7 @@ impl App {
                             layers_blend_menu: self.layers_blend_menu,
                             opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
                             layer_kind_filter: self.layer_kind_filter,
+                            editing_mask: self.doc.editing_mask,
                             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                             layer_drop: None,
                             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -968,6 +970,7 @@ impl App {
                             layers_blend_menu: self.layers_blend_menu,
                             opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
                             layer_kind_filter: self.layer_kind_filter,
+                            editing_mask: self.doc.editing_mask,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: if pid == PanelId(PanelKind::Layers) {
                                     self.layer_drop.map(|(_, _, row, into)| (row, into))
@@ -1079,6 +1082,7 @@ impl App {
                             layers_blend_menu: self.layers_blend_menu,
                             opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
                             layer_kind_filter: self.layer_kind_filter,
+                            editing_mask: self.doc.editing_mask,
                                 layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
                                 layer_drop: None,
                                 links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -1224,17 +1228,6 @@ impl App {
             }
             if let Some(hm) = &mut self.home {
                 hm.paint(&mut self.content, &mut self.text, &self.theme, wl, hl);
-            }
-            if self.newdoc.is_some() {
-                let caret = self.text_blink_on();
-                newdoc::paint(
-                    &mut self.content,
-                    &mut self.text,
-                    &self.theme,
-                    Rect::new(0.0, 0.0, wl, hl),
-                    self.newdoc.as_mut().unwrap(),
-                    caret,
-                );
             }
             if let Some(a) = &mut self.about {
                 a.paint(&mut self.content, &mut self.text, wl, hl);

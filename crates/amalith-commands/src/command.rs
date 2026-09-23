@@ -17,6 +17,18 @@ use crate::align::{AlignKind, AlignTo};
 pub enum Command {
     /// Copy-on-write pixel edit: only this image switches to the new asset.
     ReplaceImageAsset { object: ObjectId, asset: amalith_core::Asset },
+    /// Adds a non-destructive raster mask to an `Image` object. `asset`'s
+    /// alpha channel is coverage (255 reveals, 0 hides); RGB is unused.
+    /// Errors if `object` isn't an image or already has a mask.
+    AddLayerMask { object: ObjectId, asset: amalith_core::Asset },
+    /// Removes an `Image` object's mask entirely. Errors if it has none.
+    RemoveLayerMask { object: ObjectId },
+    /// Copy-on-write pixel edit for an existing mask, mirroring
+    /// `ReplaceImageAsset`. Errors if `object` has no mask yet.
+    ReplaceMaskAsset { object: ObjectId, asset: amalith_core::Asset },
+    /// Shows or hides an existing mask's effect without discarding it.
+    /// Errors if `object` has no mask.
+    SetMaskEnabled { object: ObjectId, enabled: bool },
     /// Replace an image in-place with a group of traced, image-pixel paths.
     /// Preserves the original ID, transform, appearance and stacking position;
     /// undo restores the exact linked/embedded image in one step.

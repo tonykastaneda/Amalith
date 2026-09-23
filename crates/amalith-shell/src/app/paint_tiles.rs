@@ -42,6 +42,7 @@ mod tests {
             amalith_core::ObjectKind::Image(amalith_core::ImageData {
                 asset,
                 local_bounds: amalith_core::Rect::new(0., 0., 513., 257.),
+                mask: None,
             }),
         );
         obj.transform = crate::convert::affine_to_core(

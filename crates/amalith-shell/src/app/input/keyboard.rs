@@ -6,7 +6,7 @@ use winit::event::KeyEvent;
 use winit::keyboard::{KeyCode, PhysicalKey};
 
 use crate::app::eraser_tool;
-use amalith_commands::{Command, CommandOutcome};
+use amalith_commands::Command;
 
 use crate::prefs::{self, KeyChord};
 use crate::dock::{PanelId, PanelKind};
@@ -311,15 +311,10 @@ impl App {
             self.export_key(&event);
             return;
         }
-        // The compact New Document overlay, the old New Document modal,
-        // then an inline rename, each swallow all keyboard input while
-        // active.
+        // The compact New Document overlay, then an inline rename, each
+        // swallow all keyboard input while active.
         if self.quick_newdoc.is_some() {
             self.quick_newdoc_key(&event);
-            return;
-        }
-        if self.newdoc.is_some() {
-            self.newdoc_key(&event);
             return;
         }
         // The New Workspace naming prompt takes every key while open.

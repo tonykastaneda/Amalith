@@ -153,6 +153,7 @@ fn main() {
             layers_blend_menu: false,
             opacity_edit: None,
             layer_kind_filter: None,
+            editing_mask: None,
             layer_scroll: 0.0,
             layer_drop: None,
             links_scroll: 0.0,

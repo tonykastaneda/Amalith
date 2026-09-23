@@ -72,6 +72,10 @@ It deploys to GitHub Pages from `main` via `.github/workflows/pages.yml`: <https
 
 The native editor owns document data, geometry, commands, rendering, and file formats. The website is intentionally a separate presentation layer. For colour management, Amalith will rely on established professional libraries and domain expertise rather than attempting to reinvent ICC and print-colour science in the application.
 
+## Releasing
+
+Every push to `main` builds and tests on macOS and Windows via `.github/workflows/build.yml`. Pushing a tag like `v0.0.1` triggers `.github/workflows/release.yml`, which builds an unsigned `Amalith.dmg` (macOS) and `Amalith-<version>-Windows.zip` (Windows) and publishes them as a GitHub Release. Neither build is code-signed yet, so macOS Gatekeeper and Windows SmartScreen will both warn on first run — see `scripts/package-macos.sh`'s header for how to add signing/notarization later.
+
 ## Crates
 
 | Crate | Role |

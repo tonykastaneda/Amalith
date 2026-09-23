@@ -53,8 +53,6 @@ pub struct Metrics {
     /// Left inset for a flyout header's title text, and gap around its
     /// hamburger/close icons.
     pub chrome_flyout_header_pad: f64,
-    pub newdoc_fh: f64,
-    pub newdoc_footer_h: f64,
     pub stroke_panel_w: f64,
     pub stroke_panel_h: f64,
     pub stroke_panel_pad: f64,
@@ -295,8 +293,6 @@ impl Metrics {
             layout_flyout_h: 220.0 * scale,
             chrome_flyout_header_h: 34.0 * scale,
             chrome_flyout_header_pad: 14.0 * scale,
-            newdoc_fh: 30.0 * scale,
-            newdoc_footer_h: 62.0 * scale,
             stroke_panel_w: 240.0 * scale,
             stroke_panel_h: 232.0 * scale,
             stroke_panel_pad: 12.0 * scale,

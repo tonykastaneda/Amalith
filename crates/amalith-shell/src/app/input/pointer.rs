@@ -427,14 +427,6 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::NewdocSelect { field } => {
-                let field = *field;
-                let p = self.pointer;
-                if let Some(form) = self.newdoc.as_mut() {
-                    form.field(field).pointer_drag(p, &mut self.text);
-                }
-                self.request_main_redraw();
-            }
             Drag::MoveArtboard { id, start_doc, .. } => {
                 let (id, start_doc) = (*id, *start_doc);
                 let raw = self.doc_point(self.pointer);
@@ -1319,7 +1311,7 @@ impl App {
                     self.request_main_redraw();
                 }
             }
-            Drag::TextSelect | Drag::NewdocSelect { .. } => {}
+            Drag::TextSelect => {}
             Drag::DrawText { start_doc, cur_doc } => {
                 // Shift temporarily swaps to this tool's vertical (or
                 // horizontal) sibling — see `effective_tool`.

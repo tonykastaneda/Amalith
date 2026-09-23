@@ -576,8 +576,6 @@ enum Drag {
     DrawText { start_doc: Point, cur_doc: Point },
     /// Type tool: dragging to select text inside the open editor.
     TextSelect,
-    /// New Document modal: drag-selecting text in a form field.
-    NewdocSelect { field: newdoc::Field },
     /// Artboard tool: dragging an existing artboard. Alt (held at any
     /// point) drops a copy; Shift locks to 8 directions — both read live.
     MoveArtboard {
@@ -953,6 +951,13 @@ struct Doc {
     /// same non-undoable treatment as `selection` itself (Photoshop/GIMP
     /// don't put "make a selection" on the document undo stack either).
     pixel_selection: Option<PixelSelection>,
+    /// Which `Image` object's layer mask a raster paint stroke targets
+    /// instead of its own pixels, if any — transient UI state like
+    /// `pixel_selection`, not undoable. Read lazily (`raster_paint_target`
+    /// checks the object still actually has a mask), so selecting away and
+    /// back just resumes editing it, matching Photoshop remembering which
+    /// thumbnail was last active.
+    editing_mask: Option<ObjectId>,
     expanded_groups: std::collections::HashSet<ObjectId>,
     collapsed_layers: std::collections::HashSet<amalith_core::LayerId>,
     selected_artboard: Option<ArtboardId>,
@@ -1004,6 +1009,7 @@ impl Doc {
             selection: Vec::new(),
             anchor_sel: Vec::new(),
             pixel_selection: None,
+            editing_mask: None,
             expanded_groups: std::collections::HashSet::new(),
             collapsed_layers: std::collections::HashSet::new(),
             selected_artboard: None,
@@ -1199,14 +1205,10 @@ struct App {
     /// placeholder while that document is the live one on `doc`.
     tabs: Vec<Doc>,
     active: usize,
-    /// The New Document modal, when open. Superseded by `quick_newdoc` as
-    /// the default entry point (see its own doc comment) — kept, not
-    /// deleted, in case a full-featured dialog is wanted again later.
-    newdoc: Option<newdoc::NewDocForm>,
-    /// The compact, command-palette-styled "New Document" overlay —
-    /// Name/Width/Height/Color Mode only (no bleed/raster/preview/art
-    /// gallery), drawn centered on whichever pane spawned it rather than
-    /// taking over the whole window. See `docs/canvas-panes.md`.
+    /// The compact "New Document" overlay — the sole entry point now (see
+    /// `App::open_quick_new_doc`'s doc comment), drawn centered on
+    /// whichever pane spawned it rather than taking over the whole
+    /// window. See `docs/canvas-panes.md`.
     quick_newdoc: Option<multiplexer::QuickNewDoc>,
     /// The exact-size shape dialog (Rectangle / Ellipse / Polygon / Star),
     /// opened by a plain click with a primitive tool. Free-floating like
@@ -1718,7 +1720,6 @@ impl App {
             tabs: vec![Doc::placeholder()],
             active: 0,
             // Boot into the Home screen; New Document opens from there.
-            newdoc: None,
             quick_newdoc: None,
             shape_dialog: None,
             shape_params: shapedialog::Params::default(),
@@ -4679,142 +4680,10 @@ impl App {
         self.request_main_redraw();
     }
 
-    /// Opens the old full-page New Document modal. No longer wired to any
-    /// menu/shortcut/chooser action — `open_quick_new_doc` (in
-    /// `app/multiplexer.rs`) is the default entry point now (see its own
-    /// doc comment). Kept, not deleted, in case a full-featured dialog is
-    /// wanted again later.
-    #[allow(dead_code)]
-    fn open_new_doc(&mut self) {
-        let mut form = newdoc::NewDocForm::default();
-        // From Home there's no open document — Create should fill the parked
-        // placeholder tab, not add a second one.
-        form.boot = self.home.is_some();
-        self.newdoc = Some(form);
-        self.request_main_redraw();
-    }
-
-    /// Route a click on the New Document modal.
-    fn apply_newdoc_hit(&mut self, hit: newdoc::Hit) {
-        use newdoc::{Hit, Menu};
-        match hit {
-            Hit::Create => {
-                self.create_from_form();
-                return;
-            }
-            Hit::Close => {
-                self.newdoc = None;
-                self.request_main_redraw();
-                return;
-            }
-            _ => {}
-        }
-        let Some(form) = self.newdoc.as_mut() else {
-            return;
-        };
-        // Any click that isn't on the open menu itself dismisses it.
-        if !matches!(hit, Hit::MenuItem(..) | Hit::ToggleMenu(_)) {
-            form.open_menu = None;
-        }
-        match hit {
-            Hit::Field(f) => {
-                form.commit_focus();
-                form.focus = Some(f);
-            }
-            Hit::ToggleMenu(m) => {
-                form.open_menu = (form.open_menu != Some(m)).then_some(m);
-            }
-            Hit::MenuItem(m, i) => {
-                match m {
-                    Menu::Unit => form.set_unit(newdoc::menu_unit(i)),
-                    Menu::Color => form.color_mode = newdoc::menu_color(i),
-                    Menu::Raster => form.raster = newdoc::menu_raster(i),
-                    Menu::Preview => form.preview = newdoc::menu_preview(i),
-                }
-                form.open_menu = None;
-            }
-            Hit::Orientation(portrait) => form.set_orientation(portrait),
-            Hit::ArtboardMinus => form.artboards = form.artboards.saturating_sub(1).max(1),
-            Hit::ArtboardPlus => form.artboards = (form.artboards + 1).min(100),
-            Hit::ToggleLink => {
-                let on = !form.bleed_linked;
-                form.set_link(on);
-            }
-            Hit::None | Hit::Backdrop | Hit::Create | Hit::Close => {}
-        }
-        self.request_main_redraw();
-    }
-
-    /// A key while the New Document modal is open. Editing goes through the
-    /// focused field's [`TextField`]; Up / Down step the numeric ones.
-    fn newdoc_key(&mut self, event: &winit::event::KeyEvent) {
-        if !event.state.is_pressed() {
-            return;
-        }
-        let Some(f) = self.newdoc.as_ref().and_then(newdoc::NewDocForm::focused) else {
-            // No field focused: Esc closes, Enter creates.
-            match event.physical_key {
-                PhysicalKey::Code(KeyCode::Escape) => {
-                    self.newdoc = None;
-                    self.request_main_redraw();
-                }
-                PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter) => self.create_from_form(),
-                _ => {}
-            }
-            return;
-        };
-
-        // Up / Down nudge a numeric field (TextField doesn't handle them).
-        if let PhysicalKey::Code(code @ (KeyCode::ArrowUp | KeyCode::ArrowDown)) = event.physical_key {
-            let dir = if code == KeyCode::ArrowUp { 1.0 } else { -1.0 };
-            let step = (if self.cmd_down { 0.1 } else if self.shift_down { 10.0 } else { 1.0 }) * dir;
-            if let Some(form) = self.newdoc.as_mut() {
-                form.step_focused(step, &mut self.text);
-            }
-            self.request_main_redraw();
-            return;
-        }
-
-        let mods = textedit::Mods {
-            shift: self.shift_down,
-            alt: self.alt_down,
-            meta: self.cmd_down,
-        };
-        let logical = event.logical_key.clone();
-        let typed = event.text.clone();
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        let resp = self.newdoc.as_mut().unwrap().field(f).key(
-            &logical,
-            mods,
-            typed.as_deref(),
-            self.clipboard.as_mut(),
-            &mut self.text,
-        );
-        match resp {
-            crate::text_field::Resp::Cancel => self.newdoc = None,
-            crate::text_field::Resp::Submit => {
-                if let Some(form) = self.newdoc.as_mut() {
-                    form.commit_focus();
-                }
-                self.create_from_form();
-            }
-            crate::text_field::Resp::Tab(back) => {
-                if let Some(form) = self.newdoc.as_mut() {
-                    form.focus_next(back, &mut self.text);
-                }
-            }
-            _ => {}
-        }
-        self.request_main_redraw();
-    }
-
     /// Builds a fresh `Editor` from `form`'s settings — artboards tiled in
     /// a row centred on the origin, one starter layer, history cleared so
-    /// ⌘Z can't undo past a document with no artboards at all. Shared by
-    /// the old full-page dialog (`create_from_form`) and the compact
-    /// "New Document" overlay (`App::create_from_quick_form`, in
+    /// ⌘Z can't undo past a document with no artboards at all. Used by the
+    /// compact "New Document" overlay (`App::create_from_quick_form`, in
     /// `app/multiplexer.rs`). `Err` when width/height come out ≤ 0.
     fn build_editor_from_form(form: &newdoc::NewDocForm) -> Result<Editor, String> {
         let (wpx, hpx) = (form.width_px(), form.height_px());
@@ -4856,10 +4725,33 @@ impl App {
                 index: None,
             });
         }
-        let _ = editor.execute(Command::CreateLayer {
-            name: "Layer 1".into(),
-            index: None,
-        });
+        // `CreateLayer` always mints an ordinary (Vector) layer, same as
+        // the Layers footer's own "New Raster Layer" entry — for Raster, a
+        // second `SetLayerOptions` flips it right after (cleared from
+        // history below along with everything else this form does).
+        let name = match form.start_layer {
+            amalith_core::LayerKind::Vector => "Layer 1".to_string(),
+            amalith_core::LayerKind::Raster => "Raster Layer 1".to_string(),
+        };
+        let outcome = editor.execute(Command::CreateLayer { name, index: None });
+        if form.start_layer == amalith_core::LayerKind::Raster {
+            if let Ok(CommandOutcome::Layer(id)) = outcome {
+                if let Some(layer) = editor.document().layer(id) {
+                    let options = amalith_commands::LayerOptions {
+                        name: layer.name.clone(),
+                        color: layer.color,
+                        visible: layer.visible,
+                        locked: layer.locked,
+                        template: layer.template,
+                        print: layer.print,
+                        preview: layer.preview,
+                        dim_images_to: layer.dim_images_to,
+                        kind: amalith_core::LayerKind::Raster,
+                    };
+                    let _ = editor.execute(Command::SetLayerOptions { id, options });
+                }
+            }
+        }
         editor.clear_history();
         Ok(editor)
     }
@@ -4872,38 +4764,6 @@ impl App {
             amalith_core::ColorMode::Cmyk => panels::ColorSpace::Cmyk,
             amalith_core::ColorMode::Rgb => panels::ColorSpace::Rgb,
         };
-    }
-
-    /// Build a fresh document from the modal's form and swap it in.
-    fn create_from_form(&mut self) {
-        let Some(form) = self.newdoc.as_mut() else {
-            return;
-        };
-        form.commit_focus();
-        let color_mode = form.color_mode;
-        let editor = match Self::build_editor_from_form(form) {
-            Ok(e) => e,
-            Err(msg) => {
-                self.doc.io_error = Some(msg);
-                self.request_main_redraw();
-                return;
-            }
-        };
-        self.sync_color_panel_to(color_mode);
-
-        let boot = self.newdoc.as_ref().is_some_and(|f| f.boot);
-        self.newdoc = None;
-        // Leaving Home for the editor.
-        self.home = None;
-        if boot {
-            // No open document yet: fill the parked placeholder tab.
-            self.load_active_doc(Doc::new(editor));
-            self.mux_bind_document();
-            self.pending_fit = true;
-            self.request_main_redraw();
-        } else {
-            self.add_doc(Doc::new(editor));
-        }
     }
 
     /// Route one [`MenuAction`] to the matching operation. Mirrors the
@@ -5751,7 +5611,6 @@ impl App {
     /// File ▸ Place… / ⌘⇧P — pick a PNG or JPEG and drop it at the view centre.
     pub(in crate::app) fn place_image_dialog(&mut self) {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -5977,7 +5836,6 @@ impl App {
     /// Drop a raster onto the document at the pointer.
     fn on_drop_file(&mut self, path: std::path::PathBuf) {
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -6050,7 +5908,6 @@ impl App {
             return;
         }
         if self.home.is_some()
-            || self.newdoc.is_some()
             || self.quick_newdoc.is_some()
             || self.prefs.is_some()
             || self.boot_empty
@@ -6157,6 +6014,7 @@ impl App {
                 match &obj.kind {
                     amalith_core::ObjectKind::Image(i) => {
                         out.insert(i.asset);
+                        if let Some(mask) = i.mask { out.insert(mask.asset); }
                     }
                     amalith_core::ObjectKind::Group(g) => walk(doc, &g.children, vis, out),
                     _ => {}
@@ -6182,7 +6040,11 @@ impl App {
                 let mut parent = object.parent;
                 loop {
                     match parent {
-                        amalith_core::ObjectParent::Symbol(_) => { needed.insert(image.asset); break; }
+                        amalith_core::ObjectParent::Symbol(_) => {
+                            needed.insert(image.asset);
+                            if let Some(mask) = image.mask { needed.insert(mask.asset); }
+                            break;
+                        }
                         amalith_core::ObjectParent::Group(id) => {
                             let Some(group) = doc.object(id) else { break };
                             parent = group.parent;
@@ -6647,12 +6509,18 @@ impl App {
 
     /// Magic Wand: flood-fill the placed raster image under `screen` from
     /// the clicked pixel, and store the resulting contours as the
-    /// document's live pixel selection (`doc.pixel_selection`). A miss —
-    /// nothing there, or the topmost object there isn't an `Image` — just
-    /// clears any existing pixel selection, the same "a miss stays a
-    /// miss" convention the Select tool's own click already follows.
+    /// document's live pixel selection (`doc.pixel_selection`). Shift adds
+    /// the new region to an existing selection on the *same* image
+    /// (unioned at the pixel-mask level, so overlapping/adjacent regions
+    /// merge cleanly); on a different image, or with Shift not held, this
+    /// replaces it. A miss — nothing there, or the topmost object there
+    /// isn't an `Image` — clears any existing selection unless Shift is
+    /// held, matching Photoshop leaving a Shift-click miss alone.
     fn magic_wand_click(&mut self, screen: Point) {
-        self.doc.pixel_selection = None;
+        let additive = self.shift_down;
+        if !additive {
+            self.doc.pixel_selection = None;
+        }
         let dp = self.doc_point(screen);
         let visible = self.visible_doc_rect();
         let doc = self.doc.editor.document();
@@ -6662,18 +6530,22 @@ impl App {
             visible,
             select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
         ) else {
-            self.doc.io_error = Some("Magic Wand: nothing under the cursor.".into());
+            if !additive { self.doc.io_error = Some("Magic Wand: nothing under the cursor.".into()); }
             self.request_main_redraw();
             return;
         };
         let Some(amalith_core::ObjectKind::Image(img)) = doc.object(id).map(|o| &o.kind) else {
-            self.doc.io_error = Some("Magic Wand needs a placed raster image.".into());
+            if !additive { self.doc.io_error = Some("Magic Wand needs a placed raster image.".into()); }
             self.request_main_redraw();
             return;
         };
         let (asset_id, local_bounds) = (img.asset, img.local_bounds);
         let world = doc.world_transform(id);
         let local = world.inverse() * amalith_core::Point::new(dp.x, dp.y);
+        // Read out before `magic_wand_image` needs `&mut self`.
+        let existing = self.doc.pixel_selection.as_ref()
+            .filter(|s| additive && s.object == id)
+            .map(|s| s.contours.clone());
         self.doc.io_error = None;
 
         let Some(image) = self.magic_wand_image(asset_id) else {
@@ -6694,8 +6566,14 @@ impl App {
             .floor()
             .clamp(0.0, ih as f64 - 1.0) as u32;
 
-        let mask = magicwand::flood_fill(image, (px, py), Self::MAGIC_WAND_TOLERANCE);
+        let mut mask = magicwand::flood_fill(image, (px, py), Self::MAGIC_WAND_TOLERANCE);
         let (sx, sy) = (local_bounds.width() / iw as f64, local_bounds.height() / ih as f64);
+        if let Some(existing) = existing {
+            let existing_px: Vec<Vec<Point>> = existing.iter()
+                .map(|loop_pts| loop_pts.iter().map(|&p| Point::new((p.x - local_bounds.x0) / sx, (p.y - local_bounds.y0) / sy)).collect())
+                .collect();
+            mask.union_with(&magicwand::Mask::from_contours(iw, ih, &existing_px));
+        }
         let contours: Vec<Vec<Point>> = magicwand::mask_to_contours(&mask)
             .into_iter()
             .map(|loop_pts| {
@@ -8097,6 +7975,7 @@ impl App {
             layers_blend_menu: self.layers_blend_menu,
             opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
             layer_kind_filter: self.layer_kind_filter,
+            editing_mask: self.doc.editing_mask,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop: None,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -8189,6 +8068,7 @@ impl App {
             layers_blend_menu: self.layers_blend_menu,
             opacity_edit: self.opacity_edit.as_ref().map(|e| e.buf.as_str()),
             layer_kind_filter: self.layer_kind_filter,
+            editing_mask: self.doc.editing_mask,
             layer_scroll: self.panel_scroll_of(PanelId(PanelKind::Layers)),
             layer_drop,
             links_scroll: self.panel_scroll_of(PanelId(PanelKind::Links)),
@@ -8723,7 +8603,6 @@ impl App {
         };
         let over = self.pointer_win == self.main_id
             && (self.picker.is_none() || self.dock.contains(PanelId(PanelKind::Picker)))
-            && self.newdoc.is_none()
             && self.about.is_none()
             && self.home.is_none()
             && self.prefs.is_none()

@@ -929,6 +929,58 @@ mod tests {
     }
 
     #[test]
+    fn layer_mask_add_replace_disable_remove_are_each_undoable() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
+        let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
+            layer, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            name: None, embedded: true, modified: None, size: None,
+        }).unwrap() else { panic!() };
+        let mask_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {
+            ObjectKind::Image(image) => image.mask, _ => panic!(),
+        };
+        assert_eq!(mask_of(&editor, object), None);
+        assert!(matches!(
+            editor.execute(Command::RemoveLayerMask { object }),
+            Err(CommandError::NoLayerMask(id)) if id == object
+        ));
+
+        editor.execute(Command::AddLayerMask {
+            object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", AssetKind::Image, "images/mask.png"),
+        }).unwrap();
+        let first = mask_of(&editor, object).unwrap();
+        assert!(first.enabled);
+        assert!(matches!(
+            editor.execute(Command::AddLayerMask {
+                object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", AssetKind::Image, "images/mask2.png"),
+            }),
+            Err(CommandError::AlreadyHasMask(id)) if id == object
+        ));
+
+        editor.execute(Command::ReplaceMaskAsset {
+            object, asset: amalith_core::Asset::embedded(first.asset, "Mask", AssetKind::Image, "images/mask-painted.png"),
+        }).unwrap();
+        let painted = mask_of(&editor, object).unwrap();
+        assert_ne!(painted.asset, first.asset);
+        assert!(painted.enabled);
+        assert!(editor.document().asset(first.asset).is_some(), "copy-on-write: old mask asset stays in the pool");
+
+        editor.execute(Command::SetMaskEnabled { object, enabled: false }).unwrap();
+        assert_eq!(mask_of(&editor, object), Some(amalith_core::ImageMask { asset: painted.asset, enabled: false }));
+
+        editor.undo().unwrap(); // re-enable
+        assert_eq!(mask_of(&editor, object), Some(painted));
+        editor.undo().unwrap(); // un-replace
+        assert_eq!(mask_of(&editor, object), Some(first));
+        assert!(editor.document().asset(painted.asset).is_none());
+
+        editor.execute(Command::RemoveLayerMask { object }).unwrap();
+        assert_eq!(mask_of(&editor, object), None);
+        editor.undo().unwrap();
+        assert_eq!(mask_of(&editor, object), Some(first));
+    }
+
+    #[test]
     fn set_transform_undo_redo() {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer_id) = editor
