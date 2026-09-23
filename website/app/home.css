@@ -96,5 +96,5 @@
   .home-page .home-platforms { flex-direction: column; align-items: center; gap: 12px; }
   .home-page .home-disciplines { gap: 8px; }
   .home-page .home-disciplines span { padding: 8px 12px; }
-  .home-page .home-closing::before { top: 5%; }
+  .home-page .home-closing::before { width: 128%; left: -14%; top: -8%; }
 }
