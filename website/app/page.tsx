@@ -54,7 +54,7 @@ export default function Home() {
       <main tabIndex={-1} id="top" className="marketing-page">
         <MarketingHero
           eyebrow="Free · open source · cross-platform"
-          title={<>Design freely.<br /><em>Keep the power.</em></>}
+          title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
           <p>A professional vector editor built for familiar workflows—and a future where every action is equally available to people, scripts, plugins, and agents.</p>

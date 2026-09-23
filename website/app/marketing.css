@@ -16,6 +16,7 @@
 .marketing-page .section-number, .marketing-page .kicker { color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1.5; letter-spacing: .1em; }
 .marketing-page .section-shell, .marketing-page .feature-stack, .marketing-page .platform-section, .marketing-page .information-layout, .marketing-page .cta, .marketing-page .marketing-hero {
   width: calc(100% - var(--gutter) * 2);
+  max-width: 1280px;
   margin-inline: auto;
 }
 .marketing-page .marketing-hero { padding-block: var(--section-space) 64px; }
