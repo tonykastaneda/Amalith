@@ -318,6 +318,9 @@ footer {
 .skip-link:focus { transform: translateY(0); }
 .download-note { max-width: 650px; margin: 24px auto 0; line-height: 1.6; }
 .download-note a, .policy-page a { text-decoration: underline; text-underline-offset: 3px; }
+.downloads-disclaimer { max-width: 620px; margin: 34px auto 0; color: #aaa89f; font-size: 15px; line-height: 1.55; }
+.downloads-disclaimer a { color: var(--paper); text-decoration: underline; text-underline-offset: 4px; }
+.downloads-disclaimer a:hover { color: var(--yellow); }
 .platform-download--unavailable, .platform-download--unavailable:hover { cursor: default; transform: none; box-shadow: none; background: #f4f4f4; }
 .policy-page { max-width: 850px; margin: auto; padding: 64px 24px 100px; line-height: 1.7; overflow-wrap: anywhere; }
 .policy-page h1 { font-size: clamp(36px, 6vw, 64px); line-height: 1.1; margin-bottom: 24px; }

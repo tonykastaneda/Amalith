@@ -53,6 +53,9 @@ export default function Downloads() {
               <span>creatives <em>create.</em></span>
             </h1>
             <DownloadLinks platforms={platforms} />
+            <p className="downloads-disclaimer">
+              Amalith is currently in alpha and isn&rsquo;t ready for prime time yet. If you&rsquo;d like to contribute, visit the <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">Amalith GitHub repository</a>.
+            </p>
           </div>
         </section>
       </main>
