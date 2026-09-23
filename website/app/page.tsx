@@ -51,7 +51,7 @@ export default function Home() {
           </div>
           <section className="home-intro" id="features">
             <p className="home-eyebrow">Meet Amalith</p>
-            <h2>One place for your ideas.<br /><span>From the first mark<br />to the final detail.</span></h2>
+            <h2>The full-circle, anti-slop workflow<br /><span>for humans who create<br />integrated design system.</span></h2>
             <p>Space to explore. Tools that feel familiar. An open foundation you can shape around your own creative process.</p>
             <div className="home-disciplines" aria-label="Design disciplines"><span>Vector</span><span>Raster</span><span>Typography</span><span>Automation</span></div>
           </section>
