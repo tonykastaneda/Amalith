@@ -5,6 +5,9 @@ export function Footer({ basePath }: { basePath: string }) {
   return (
     <footer className="amalith-footer">
       <div className="footer-links">
+        <a className="footer-icon" href={`${basePath}/#top`} aria-label="Amalith home">
+          <img src={`${basePath}/brand/favicon.svg`} alt="Amalith" width="60" height="60" />
+        </a>
         <div>
           <p>Project</p>
           <a href={`${basePath}/why/`}>Why Amalith</a>

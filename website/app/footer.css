@@ -10,7 +10,9 @@ footer.amalith-footer::after {
   background-size: 12px 12px;
 }
 .amalith-footer .footer-links, .amalith-footer .footer-note { position: relative; z-index: 2; }
-.amalith-footer .footer-links { width: min(1120px, calc(100% - 96px)); margin: 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 40px; }
+.amalith-footer .footer-links { width: min(1120px, calc(100% - 96px)); margin: 0 auto; grid-template-columns: 80px repeat(4, minmax(0, 1fr)); gap: 40px; }
+.amalith-footer .footer-icon { width: 60px; height: 60px; display: block; }
+.amalith-footer .footer-icon img { width: 100%; height: 100%; object-fit: contain; }
 .amalith-footer .footer-links p { color: #929188; font-weight: 400; }
 .amalith-footer .footer-links a { font-size: 16px; line-height: 1.5; }
 .amalith-footer .footer-note { width: min(1120px, calc(100% - 96px)); margin: 72px auto 48px; font-size: 12px; }
