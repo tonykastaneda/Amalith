@@ -38,6 +38,9 @@
 .marketing-page .manifesto, .marketing-page .why-cost-intro { display: grid; grid-template-columns: 1fr 2fr; gap: 48px; padding: var(--section-space) 0; border-bottom: 1px solid var(--line); border-top: 0; }
 .marketing-page .manifesto h2, .marketing-page .why-cost-intro h2 { margin: 0; }
 .marketing-page .manifesto div > p, .marketing-page .why-cost-intro div > p { margin: 24px 0 0; max-width: 620px; color: var(--muted); font-size: 18px; line-height: 1.6; letter-spacing: 0; }
+.marketing-page .feature-stack { padding-top: var(--section-space); }
+.marketing-page .feature-stack__intro { margin: 24px 0 0; max-width: 900px; }
+.marketing-page .feature-stack__lede { margin: 24px 0 0; max-width: 620px; color: var(--muted); font-size: 18px; line-height: 1.6; }
 .marketing-page .feature { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 64px; padding: 64px 0; background: transparent; border-top: 0; border-bottom: 1px solid var(--line); }
 .marketing-page .feature__copy h2 { margin: 24px 0; font-size: clamp(32px, 3vw, 44px); }
 .marketing-page .feature__copy > p:last-child { color: var(--muted); font-size: 18px; line-height: 1.6; margin: 0; }

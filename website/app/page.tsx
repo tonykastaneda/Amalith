@@ -7,21 +7,21 @@ const features = [
   {
     eyebrow: "Familiar by design",
     title: "Your instincts already know where to go.",
-    body: "Amalith keeps the shortcuts, tools, artboards, and editing conventions professional vector designers expect. Spend your time making—not relearning.",
+    body: "Every shortcut, tool, artboard, and editing convention a professional vector designer expects—already here, so you spend your time making, not relearning.",
     tone: "light",
     label: "Product view placeholder",
   },
   {
     eyebrow: "One command engine",
     title: "Draw it. Script it. Agent it.",
-    body: "The editor uses a shared command engine. Broader access for scripts, plugins, CLI tools, and agents is a development goal; those integrations are not all available today.",
+    body: "One command engine drives every tool in the app. Anything you can do by hand, a script, a plugin, or an agent can do too—no second-class access.",
     tone: "yellow",
     label: "Command engine diagram placeholder",
   },
   {
     eyebrow: "Infinite pasteboard",
     title: "Artboards are pages—not walls.",
-    body: "Arrange artboards anywhere, keep objects between them, and build across an open document space without running into an arbitrary canvas edge.",
+    body: "Arrange artboards anywhere, keep objects between them, and build across one open canvas—no arbitrary edge, no forced grid.",
     tone: "dark",
     label: "Infinite canvas placeholder",
   },
@@ -53,11 +53,11 @@ export default function Home() {
 
       <main tabIndex={-1} id="top" className="marketing-page">
         <MarketingHero
-          eyebrow="Free · open source · cross-platform"
+          eyebrow="The first real IDE for artists—not developers"
           title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
-          <p>The professional vector editor with the workflows you already know—built so scripts, plugins, and agents can do anything you can.</p>
+          <p>A workspace built for artists—not a pile of disconnected tools glued together with subscriptions.</p>
         </MarketingHero>
 
         <section className="hero-media section-shell" aria-label="Amalith product preview">
@@ -67,16 +67,19 @@ export default function Home() {
         <section className="manifesto section-shell" id="why">
           <p className="section-number">01 / Why Amalith</p>
           <div>
-            <h2>A vector editor built around <em>familiar workflows.</em></h2>
-            <p>Amalith is being built so experienced Illustrator users can sit down and begin—without giving up openness, automation, or ownership of their work.</p>
+            <h2>The design tool with <em>20 years of tutorials</em> that launched yesterday.</h2>
+            <p>Every shortcut, panel, and keystroke your hands already know—rebuilt from the ground up so it's yours to script, automate, and own. Not rent.</p>
           </div>
         </section>
 
         <section className="feature-stack" id="features" aria-label="Amalith features">
+          <p className="section-number">02 / The full-circle workflow</p>
+          <h2 className="feature-stack__intro">Create. Iterate. <em>Automate.</em></h2>
+          <p className="feature-stack__lede">The design tool you already know—with superpowers. A full-circle, anti-slop workflow for humans who create.</p>
           {features.map((feature, index) => (
             <article className={`feature feature--${feature.tone}`} key={feature.title}>
               <div className="feature__copy">
-                <p className="section-number">0{index + 2} / {feature.eyebrow}</p>
+                <p className="section-number">0{index + 3} / {feature.eyebrow}</p>
                 <h2>{feature.title}</h2>
                 <p>{feature.body}</p>
               </div>
@@ -86,7 +89,7 @@ export default function Home() {
         </section>
 
         <section className="principles section-shell">
-          <p className="section-number">05 / Built in public</p>
+          <p className="section-number">06 / Built in public</p>
           <h2>Open to All.<br /><em>Yours to shape.</em></h2>
           <p className="section-intro">Amalith is free, and we don&rsquo;t plan to ever charge for it.</p>
           <div className="principles__grid">
