@@ -6,7 +6,7 @@ import { MarketingHero } from "./MarketingHero";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const pages = [
   { slug: "privacy", label: "Privacy & cookies" },
-  { slug: "terms", label: "Terms & payments" },
+  { slug: "terms", label: "Terms" },
   { slug: "contact", label: "Contact & accessibility" },
 ];
 

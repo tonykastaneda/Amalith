@@ -7,7 +7,7 @@ export function ArrowUpRight() {
       aria-hidden="true"
       focusable="false"
     >
-      <path d="M3 13 13 3M5 3h8v8" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M3 13 13 3M5 3h8v8" stroke="currentColor" strokeWidth="2.25" />
     </svg>
   );
 }

@@ -17,7 +17,7 @@ export function Footer({ basePath }: { basePath: string }) {
         <div>
           <p>Community &amp; policies</p>
           <a href={`${basePath}/privacy/`}>Privacy &amp; cookies</a>
-          <a href={`${basePath}/terms/`}>Terms &amp; payments</a>
+          <a href={`${basePath}/terms/`}>Terms</a>
           <a href={`${basePath}/contact/`}>Contact &amp; accessibility</a>
           <a href="https://github.com/tonykastaneda/Amalith" target="_blank" rel="noreferrer">GitHub <ArrowUpRight /></a>
           <a href="https://github.com/tonykastaneda/Amalith/issues" target="_blank" rel="noreferrer">Issues <ArrowUpRight /></a>

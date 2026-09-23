@@ -17,7 +17,10 @@ Write-Host "==> Building release ($Version)"
 cargo build --release -p amalith-shell
 
 $StageDir = "target/package/windows"
-$ZipName = "Amalith-$Version-Windows.zip"
+# No version in the filename (like the macOS .dmg) so the website can link
+# to a stable releases/latest/download/Amalith-Windows.zip URL that never
+# needs updating.
+$ZipName = "Amalith-Windows.zip"
 Remove-Item -Recurse -Force $StageDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 Copy-Item "target/release/Amalith.exe" "$StageDir/Amalith.exe"

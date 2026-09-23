@@ -12,7 +12,10 @@ cd "$root"
 
 APP="Amalith"
 APP_ID="org.amalith.Amalith"
-VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+# A pre-set VERSION (release CI passes the git tag) wins over Cargo.toml,
+# so a release's version number always matches its git tag regardless of
+# whether Cargo.toml's own version field was bumped for that commit.
+VERSION="${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)}"
 VERSION="${VERSION:-0.1.0}"
 out="$root/dist/linux"
 work="$(mktemp -d)"

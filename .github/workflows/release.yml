@@ -30,7 +30,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and package (unsigned)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: ./scripts/package-macos.sh
 
       - uses: actions/upload-artifact@v4
@@ -72,6 +83,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Linux build + packaging tools
         run: |
           sudo apt-get update
@@ -81,6 +101,7 @@ jobs:
 
       - name: Build and package
         env:
+          VERSION: ${{ steps.version.outputs.version }}
           # appimagetool ships as an AppImage itself; this makes it extract
           # and run in place instead of mounting via FUSE, which the CI
           # runner doesn't have set up.

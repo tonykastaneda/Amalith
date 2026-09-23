@@ -88,7 +88,7 @@ export default function Home() {
         <section className="principles section-shell">
           <p className="section-number">05 / Built in public</p>
           <h2>Open to All.<br /><em>Yours to shape.</em></h2>
-          <p className="section-intro">Amalith is free today. We plan to charge in the future, but no date or pricing has been announced.</p>
+          <p className="section-intro">Amalith is free, and we don&rsquo;t plan to ever charge for it.</p>
           <div className="principles__grid">
             <p>No payment required</p><p>No mandatory account</p><p>No proprietary cloud</p>
             <p>Open document format</p><p>macOS, Windows &amp; Linux</p><p>MIT or Apache 2.0</p>

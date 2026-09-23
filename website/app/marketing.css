@@ -24,7 +24,7 @@
 .marketing-page .marketing-hero__lede { max-width: 640px; color: var(--muted); font-size: 20px; line-height: 1.6; }
 .marketing-page .marketing-hero__lede p { margin: 0; }
 .marketing-page .marketing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 32px; }
-.marketing-page .marketing-button { display: inline-flex; align-items: center; justify-content: center; gap: 24px; min-height: 48px; padding: 12px 20px; border: 1px solid var(--yellow); border-radius: 8px; background: var(--yellow); color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.5; transition: background 160ms ease, border-color 160ms ease; }
+.marketing-page .marketing-button { display: inline-flex; align-items: center; justify-content: center; gap: 24px; min-height: 48px; padding: 12px 20px; border: 1px solid var(--yellow); border-radius: 8px; background: var(--yellow); color: var(--ink); font-size: 14px; font-weight: 700; line-height: 1.5; white-space: nowrap; flex-shrink: 0; transition: background 160ms ease, border-color 160ms ease; }
 .marketing-page .marketing-button:hover { background: var(--paper); border-color: var(--paper); }
 .marketing-page .marketing-button--secondary { background: var(--surface); color: var(--paper); border-color: var(--line); }
 .marketing-page .marketing-button--secondary:hover { background: #272724; border-color: var(--muted); }

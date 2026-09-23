@@ -25,7 +25,10 @@ cd "$root"
 
 APP_NAME="Amalith"
 BUNDLE_ID="${BUNDLE_ID:-com.tonykastaneda.amalith}"
-VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+# A pre-set VERSION (release CI passes the git tag) wins over Cargo.toml,
+# so a release's version number always matches its git tag regardless of
+# whether Cargo.toml's own version field was bumped for that commit.
+VERSION="${VERSION:-$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)}"
 VERSION="${VERSION:-0.1.0}"
 MIN_MACOS="${MIN_MACOS:-11.0}"
 ICON_SRC="$root/crates/amalith-shell/assets/app-icon.png"
