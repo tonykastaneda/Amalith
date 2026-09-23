@@ -46,6 +46,23 @@ function Placeholder({ label, variant = "window" }: { label: string; variant?: "
   );
 }
 
+function RecordingPlaceholder() {
+  return (
+    <div className="recording-placeholder" role="img" aria-label="Amalith product recording placeholder">
+      <div className="recording-placeholder__grid" aria-hidden="true" />
+      <div className="recording-placeholder__window">
+        <span className="recording-placeholder__play" aria-hidden="true">▶</span>
+        <div>
+          <p className="recording-placeholder__eyebrow">Product recording</p>
+          <p className="recording-placeholder__title">A closer look at Amalith is on the way.</p>
+          <p className="recording-placeholder__note">We’re leaving this space ready for the first walkthrough.</p>
+        </div>
+      </div>
+      <span className="recording-placeholder__label">Recording placeholder</span>
+    </div>
+  );
+}
+
 export default function Home() {
   return (
     <>
@@ -60,12 +77,17 @@ export default function Home() {
           <p>Built for artists. Not a pile of glued-together tools. Not a subscription.</p>
         </MarketingHero>
 
-        <section className="hero-media section-shell" aria-label="Amalith product preview">
-          <Placeholder label="Amalith interface preview placeholder" />
+        <section className="recording-stage section-shell" aria-labelledby="recording-title">
+          <div className="recording-stage__intro">
+            <p className="section-number">01 / See it in motion</p>
+            <h2 id="recording-title">A canvas that stays <em>out of your way.</em></h2>
+            <p>When the walkthrough is ready, this is where we’ll show the real app: the tools, the pasteboard, and the little details that make Amalith feel familiar.</p>
+          </div>
+          <RecordingPlaceholder />
         </section>
 
         <section className="manifesto section-shell" id="why">
-          <p className="section-number">01 / Why Amalith</p>
+          <p className="section-number">02 / Why Amalith</p>
           <div>
             <h2>The design tool with <em>20 years of tutorials</em> that launched yesterday.</h2>
             <p>Every shortcut, panel, and keystroke you already know. Rebuilt from the ground up so it's yours to script, automate, and own. Not rent.</p>
@@ -73,13 +95,13 @@ export default function Home() {
         </section>
 
         <section className="feature-stack" id="features" aria-label="Amalith features">
-          <p className="section-number">02 / The full-circle workflow</p>
+          <p className="section-number">03 / The full-circle workflow</p>
           <h2 className="feature-stack__intro">Create. Iterate. <em>Automate.</em></h2>
           <p className="feature-stack__lede">The design tool you already know, with superpowers. The full-circle, anti-slop workflow for humans who create integrated design systems.</p>
           {features.map((feature, index) => (
             <article className={`feature feature--${feature.tone}`} key={feature.title}>
               <div className="feature__copy">
-                <p className="section-number">0{index + 3} / {feature.eyebrow}</p>
+                <p className="section-number">0{index + 4} / {feature.eyebrow}</p>
                 <h2>{feature.title}</h2>
                 <p>{feature.body}</p>
               </div>
