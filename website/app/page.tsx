@@ -7,21 +7,21 @@ const features = [
   {
     eyebrow: "Familiar by design",
     title: "Your instincts already know where to go.",
-    body: "Every shortcut, tool, artboard, and editing convention a professional vector designer expects—already here, so you spend your time making, not relearning.",
+    body: "Same tools. Same shortcuts. Same muscle memory. You already know how to use Amalith.",
     tone: "light",
     label: "Product view placeholder",
   },
   {
     eyebrow: "One command engine",
     title: "Draw it. Script it. Agent it.",
-    body: "One command engine drives every tool in the app. Anything you can do by hand, a script, a plugin, or an agent can do too—no second-class access.",
+    body: "One engine runs every action in the app. Your hands, your scripts, your agents—all equally capable.",
     tone: "yellow",
     label: "Command engine diagram placeholder",
   },
   {
     eyebrow: "Infinite pasteboard",
     title: "Artboards are pages—not walls.",
-    body: "Arrange artboards anywhere, keep objects between them, and build across one open canvas—no arbitrary edge, no forced grid.",
+    body: "Your canvas doesn't end at an edge. Spread artboards out. Connect your work. Never hit a wall.",
     tone: "dark",
     label: "Infinite canvas placeholder",
   },
@@ -57,7 +57,7 @@ export default function Home() {
           title={<>Design freely.<br /><em>No subscription.</em></>}
           actions={<><a className="marketing-button" href={`${basePath}/downloads/`}>Get Amalith <ArrowUpRight /></a><a className="marketing-button marketing-button--secondary" href="#features">Explore features <span aria-hidden="true">↓</span></a></>}
         >
-          <p>A workspace built for artists—not a pile of disconnected tools glued together with subscriptions.</p>
+          <p>Built for artists. Not a pile of glued-together tools. Not a subscription.</p>
         </MarketingHero>
 
         <section className="hero-media section-shell" aria-label="Amalith product preview">
@@ -68,7 +68,7 @@ export default function Home() {
           <p className="section-number">01 / Why Amalith</p>
           <div>
             <h2>The design tool with <em>20 years of tutorials</em> that launched yesterday.</h2>
-            <p>Every shortcut, panel, and keystroke your hands already know—rebuilt from the ground up so it's yours to script, automate, and own. Not rent.</p>
+            <p>Every shortcut, panel, and keystroke you already know. Rebuilt from the ground up so it's yours to script, automate, and own—not rent.</p>
           </div>
         </section>
 
