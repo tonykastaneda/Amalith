@@ -21,7 +21,11 @@ const platforms: Platform[] = [
     name: "Windows",
     icon: `${basePath}/brand/platform/win.svg`,
     label: "Download for Windows",
-    matchExt: ".zip",
+    // Must stay more specific than ".zip": Linux also ships a .zip now, and
+    // the asset lookup takes the first match — "Amalith-Linux.zip" sorts
+    // ahead of "Amalith-Windows.zip", so a bare ".zip" would hand Windows
+    // users the Linux download.
+    matchExt: "-windows.zip",
   },
   {
     name: "Linux",

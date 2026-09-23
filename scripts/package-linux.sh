@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Build x86_64 Linux release artifacts in dist/linux/.
+# Build x86_64 Linux release artifacts in dist/linux/, plus the single
+# Amalith-Linux.zip that bundles every install method for the release page.
 #
-# Required: cargo, tar, dpkg-deb, rpmbuild, appimagetool, sha256sum
+# Required: cargo, tar, dpkg-deb, rpmbuild, appimagetool, sha256sum, zip
 # Run on an x86_64 Linux host: ./scripts/package-linux.sh
 #
 set -euo pipefail
@@ -27,7 +28,7 @@ if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "x86_64" ]; then
 fi
 
 missing=()
-for tool in cargo tar dpkg-deb rpmbuild appimagetool sha256sum; do
+for tool in cargo tar dpkg-deb rpmbuild appimagetool sha256sum zip; do
   command -v "$tool" >/dev/null || missing+=("$tool")
 done
 if [ "${#missing[@]}" -ne 0 ]; then
@@ -179,6 +180,50 @@ package() {
     "\$pkgdir/usr/share/icons/hicolor/512x512/apps/$APP_ID.png"
 }
 EOF
+
+# One zip with every install method ------------------------------------------
+# The release page carries a single Linux asset instead of four, and the Arch
+# recipe travels with the tarball it checksums — its `source=` is relative to
+# the PKGBUILD, so `arch/` has to stay one level below the tarball. No version
+# in the zip's own name (like the Windows zip and the macOS dmg) so the site
+# can link a stable releases/latest/download URL.
+echo "==> $APP-Linux.zip"
+stage="$work/$APP-Linux-$VERSION"
+mkdir -p "$stage"
+# Copied before the zip is written, so it can't end up inside itself.
+cp -R "$out"/* "$stage/"
+(cd "$stage" && sha256sum ./*.tar.gz ./*.deb ./*.rpm ./*.AppImage > SHA256SUMS)
+cat > "$stage/INSTALL.txt" <<EOF
+$APP $VERSION — Linux x86_64
+
+Every install method is in this archive; pick whichever suits your system.
+Check the downloads first with:  sha256sum -c SHA256SUMS
+
+AppImage — nothing to install, runs anywhere
+  chmod +x $APP-$VERSION-x86_64.AppImage
+  ./$APP-$VERSION-x86_64.AppImage
+
+Debian / Ubuntu
+  sudo apt install ./amalith_${VERSION}_amd64.deb
+
+Fedora / RHEL / openSUSE
+  sudo dnf install ./amalith-$VERSION-1.x86_64.rpm
+
+Arch Linux
+  cd arch && makepkg -si
+  (builds from the .tar.gz beside this file — keep them together)
+
+Portable tarball — no root needed
+  tar -xzf amalith-$VERSION-x86_64.tar.gz
+  cd amalith-$VERSION-x86_64 && ./$APP
+  To integrate it with your desktop, put $APP somewhere on PATH and copy
+  $APP_ID.desktop into ~/.local/share/applications and $APP_ID.png into
+  ~/.local/share/icons/hicolor/512x512/apps.
+
+amalith-script, the headless .jsx runner, ships beside the app in every
+method above; Amalith's built-in terminal puts it on PATH automatically.
+EOF
+(cd "$work" && zip -qr "$out/$APP-Linux.zip" "$APP-Linux-$VERSION")
 
 echo
 echo "done: $out"
