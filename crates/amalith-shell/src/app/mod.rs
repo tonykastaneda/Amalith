@@ -6947,13 +6947,19 @@ impl App {
         }
         let dp = self.doc_point(screen);
         let visible = self.visible_doc_rect();
+        // On a Raster layer the wand samples the working pixel layer (the
+        // one Brush would paint), not whatever sits on top at the click —
+        // a transparent layer above would otherwise swallow every click.
+        let raster_target = (self.current_layer_kind() == Some(amalith_core::LayerKind::Raster))
+            .then(|| self.raster_target().ok().flatten().map(|(_, id)| id))
+            .flatten();
         let doc = self.doc.editor.document();
-        let Some(id) = select::topmost_selectable_at(
+        let Some(id) = raster_target.or_else(|| select::topmost_selectable_at(
             doc,
             dp,
             visible,
             select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
-        ) else {
+        )) else {
             if !additive { self.doc.io_error = Some("Magic Wand: nothing under the cursor.".into()); }
             self.request_main_redraw();
             return;
@@ -10873,6 +10879,75 @@ mod cli_args_tests {
     #[test]
     fn no_arguments_opens_nothing() {
         assert!(parse([]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod raster_target_tests {
+    use super::*;
+
+    /// A Raster layer, bottom to top: pixel layer `low`, a Levels
+    /// adjustment, pixel layer `high`, and a vector rect. The pointer is
+    /// parked far off the artwork so nothing is "under" it.
+    fn app_with_pixel_layers() -> (App, LayerId, [ObjectId; 4]) {
+        let mut document = Document::new("Pixels");
+        let layer = LayerId::new();
+        let mut l = amalith_core::Layer::new(layer, "Photo");
+        l.kind = amalith_core::LayerKind::Raster;
+        document.insert_layer(l, 0);
+        let mut app = App::new();
+        app.doc = Doc::new(Editor::new(document));
+        let parent = amalith_core::ObjectParent::Layer(layer);
+        let image = |app: &mut App, name: &str| {
+            let CommandOutcome::Object(id) = app.doc.editor.execute(Command::CreateImage {
+                parent, index: None, path: format!("images/{name}.png"), bounds: amalith_core::Rect::new(0., 0., 100., 100.),
+                transform: amalith_core::Affine::IDENTITY, name: Some(name.into()), embedded: true, modified: None, size: None,
+            }).unwrap() else { panic!() };
+            id
+        };
+        let low = image(&mut app, "low");
+        let CommandOutcome::Object(adj) = app.doc.editor.execute(Command::CreateAdjustment {
+            layer, index: None, name: None, data: amalith_core::AdjustmentData::new(amalith_core::AdjustmentOp::Invert),
+        }).unwrap() else { panic!() };
+        let high = image(&mut app, "high");
+        let CommandOutcome::Object(rect) = app.doc.editor.execute(Command::CreateRect {
+            parent, rect: amalith_core::Rect::new(0., 0., 10., 10.), name: None,
+        }).unwrap() else { panic!() };
+        app.doc.selected_layer = Some(layer);
+        app.pointer = Point::new(-1.0e6, -1.0e6);
+        (app, layer, [low, adj, high, rect])
+    }
+
+    #[test]
+    fn every_raster_tool_shares_one_target() {
+        let (mut app, layer, [low, adj, high, rect]) = app_with_pixel_layers();
+        assert_eq!(app.raster_target(), Ok(Some((layer, high))), "nothing selected: the topmost pixel layer");
+        app.doc.selection = vec![low];
+        assert_eq!(app.raster_target(), Ok(Some((layer, low))), "the selected pixel layer");
+        app.doc.selection = vec![adj];
+        assert_eq!(app.raster_target(), Ok(Some((layer, high))), "an adjustment isn't paintable yet; fall back");
+        app.doc.selection = vec![rect];
+        assert!(app.raster_target().is_err(), "shapes stay editable vectors");
+
+        app.doc.selection.clear();
+        app.doc.editor.execute(Command::SetLocked { objects: vec![high], locked: true }).unwrap();
+        assert_eq!(app.raster_target(), Ok(Some((layer, low))), "a locked pixel layer is skipped");
+        app.doc.selection = vec![high];
+        assert!(app.raster_target().is_err(), "…and says so when it's the one selected");
+    }
+
+    #[test]
+    fn a_layer_without_pixel_layers_has_no_target() {
+        let mut document = Document::new("Empty");
+        let layer = LayerId::new();
+        let mut l = amalith_core::Layer::new(layer, "Photo");
+        l.kind = amalith_core::LayerKind::Raster;
+        document.insert_layer(l, 0);
+        let mut app = App::new();
+        app.doc = Doc::new(Editor::new(document));
+        app.doc.selected_layer = Some(layer);
+        app.pointer = Point::new(-1.0e6, -1.0e6);
+        assert_eq!(app.raster_target(), Ok(None), "Brush and Fill will start a canvas");
     }
 }
 

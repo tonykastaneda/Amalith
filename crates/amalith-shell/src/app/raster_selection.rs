@@ -7,19 +7,19 @@ impl App {
             self.doc.io_error = Some("Select a raster layer to use pixel selection tools.".into());
             return;
         }
-        let doc = self.doc.editor.document();
-        let layer = self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer);
-        let selected = self.doc.selection.iter().copied().find(|&id| {
-            matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_)))
-                && panels::layers::owning_layer(doc, id) == layer
-        });
-        let hit = select::topmost_selectable_at(doc, self.doc_point(self.pointer), self.visible_doc_rect(), 0.0)
-            .filter(|&id| panels::layers::owning_layer(doc, id) == layer)
-            .filter(|&id| matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))));
-        let Some(object) = selected.or(hit) else {
-            self.doc.io_error = Some("Select an image on this raster layer first.".into());
-            self.request_main_redraw();
-            return;
+        // The same pixel layer Brush would paint.
+        let object = match self.raster_target() {
+            Ok(Some((_, object))) => object,
+            Ok(None) => {
+                self.doc.io_error = Some("This layer has no pixels yet. Use Create Sublayer to add a pixel layer.".into());
+                self.request_main_redraw();
+                return;
+            }
+            Err(message) => {
+                self.doc.io_error = Some(message.into());
+                self.request_main_redraw();
+                return;
+            }
         };
         self.doc.io_error = None;
         self.doc.pixel_selection = None;

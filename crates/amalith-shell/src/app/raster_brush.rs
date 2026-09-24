@@ -451,14 +451,8 @@ impl App {
     /// An empty raster layer paints a new canvas at one pixel per unit.
     fn raster_hover_pixel_to_doc(&mut self) -> vello::kurbo::Affine {
         let fallback = vello::kurbo::Affine::IDENTITY;
+        let Ok(Some((_, id))) = self.raster_target() else { return fallback };
         let doc = self.doc.editor.document();
-        let Some(layer) = self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer) else {
-            return fallback;
-        };
-        let hit = select::topmost_selectable_at(doc, self.doc_point(self.pointer), self.visible_doc_rect(), 0.0);
-        let Some(id) = self.doc.selection.first().copied().or(hit).filter(|&id| panels::layers::owning_layer(doc, id) == Some(layer)) else {
-            return fallback;
-        };
         let Some(amalith_core::ObjectKind::Image(image)) = doc.object(id).map(|o| &o.kind) else { return fallback };
         let (bounds, world) = (image.local_bounds, crate::convert::affine(doc.world_transform(id)));
         let asset = if self.doc.editing_mask == Some(id) { image.mask.map_or(image.asset, |m| m.asset) } else { image.asset };
