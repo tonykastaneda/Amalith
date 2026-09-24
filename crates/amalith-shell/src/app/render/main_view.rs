@@ -172,6 +172,7 @@ pub(in crate::app) fn paint_main(
     terminal_pane: Option<crate::terminal_paint::TerminalPaintArgs<'_>>,
     mux_back: &Scene,
     mux_front: &Scene,
+    adjust: &mut crate::adjust::AdjustCollector,
 ) {
     scene.fill(
         Fill::NonZero,
@@ -227,6 +228,7 @@ pub(in crate::app) fn paint_main(
         grid_spacing,
         pixel_selection,
         ants_dash_offset,
+        adjust,
     );
 
     if let Some(args) = &terminal_pane {

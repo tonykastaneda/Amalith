@@ -272,6 +272,7 @@ pub fn export_scene(
     outline: bool,
     text: &mut TextContext,
     link_ink: Color,
+    adjust: &mut crate::adjust::AdjustCollector,
 ) -> Scene {
     let mut scene = Scene::new();
     let px = Rect::new(
@@ -289,16 +290,16 @@ pub fn export_scene(
         if !layer.visible {
             continue;
         }
-        for &id in &layer.children {
+        adjust.paint_layer(&mut scene, doc, layer.id, &layer.children, px, |scene, id| {
             // A static export never has a live cursor or selection to
             // gate the Linked-image contour on — always off, regardless
             // of layer kind (matching what a real hover/select gate
             // would produce for content nobody's looking at right now).
             paint_object(
-                &mut scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink,
+                scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink,
                 layer.kind, Point::new(-1.0, -1.0), &[],
             );
-        }
+        });
     }
     scene.pop_layer();
     scene
@@ -429,6 +430,9 @@ pub fn paint(
     // outline; `ants_dash_offset` drives the animation.
     pixel_selection: Option<(ObjectId, &[Vec<Point>])>,
     ants_dash_offset: f64,
+    // Adjustment layers: routes content beneath an adjustment through the
+    // GPU pass (see `crate::adjust`).
+    adjust: &mut crate::adjust::AdjustCollector,
 ) {
     scene.push_clip_layer(Fill::NonZero, Affine::IDENTITY, &viewport);
 
@@ -511,7 +515,7 @@ pub fn paint(
         if !layer.visible {
             continue;
         }
-        for &id in &layer.children {
+        adjust.paint_layer(scene, doc, layer.id, &layer.children, viewport, |scene, id| {
             paint_object(
                 scene,
                 doc,
@@ -529,7 +533,7 @@ pub fn paint(
                 pointer,
                 selection,
             );
-        }
+        });
     }
 
     // Isolation mode: scrim the whole canvas, then repaint the isolated

@@ -1522,6 +1522,8 @@ impl App {
                                 let doc = if i == self.active { &self.doc } else { &self.tabs[i] };
                                 let mut view = active.view;
                                 view.pan += body(r).origin().to_vec2();
+                                // Each pane keeps its own placeholders.
+                                self.adjust.set_pane(pane.id as u64 + 1);
                                 canvas::paint(
                                     &mut back,
                                     self.recolor_dialog.as_ref().filter(|d| d.preview && d.document == doc.id && d.revision == doc.editor.revision()).map_or(doc.editor.document(), |d| &d.rendered),
@@ -1551,6 +1553,7 @@ impl App {
                                     self.settings.grid_spacing,
                                     None,
                                     0.0,
+                                    &mut self.adjust,
                                 );
                             }
                         }

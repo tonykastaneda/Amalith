@@ -39,6 +39,13 @@ impl App {
 
         let menu: &[(&str, &str, MenuAction)] = &[
             ("Recolor Artwork", "Edit", MenuAction::RecolorArtwork),
+            ("New Levels Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::Levels)),
+            ("New Curves Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::Curves)),
+            ("New Exposure Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::Exposure)),
+            ("New Hue/Saturation Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::HueSaturation)),
+            ("New Color Balance Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::ColorBalance)),
+            ("New Black & White Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::BlackWhite)),
+            ("New Invert Adjustment", "Layer", MenuAction::NewAdjustment(amalith_core::AdjustmentKind::Invert)),
             ("New", "File", MenuAction::New),
             ("New Tab", "File", MenuAction::NewTab),
             ("Split Right", "File", MenuAction::SplitRight),

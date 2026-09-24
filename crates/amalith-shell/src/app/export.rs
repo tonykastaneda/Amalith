@@ -276,6 +276,9 @@ impl App {
         let w = ((src.x1 - src.x0) * scale).round().max(1.0) as u32;
         let h = ((src.y1 - src.y0) * scale).round().max(1.0) as u32;
         let ksrc = vello::kurbo::Rect::new(src.x0, src.y0, src.x1, src.y1);
+        // Adjustments render in export too, at one pixel per export pixel.
+        let mut adjust = crate::adjust::AdjustCollector::disabled();
+        adjust.begin_frame(self.export_adjustments_available(), 1.0);
         let scene = crate::canvas::export_scene(
             self.doc.editor.document(),
             ksrc,
@@ -285,9 +288,11 @@ impl App {
             self.outline_mode,
             &mut self.text,
             self.theme.accent,
+            &mut adjust,
         );
+        let (jobs, _) = adjust.finish();
         let rgba = self
-            .render_scene_to_rgba(&scene, w, h)
+            .render_scene_to_rgba(&scene, w, h, jobs)
             .ok_or_else(|| io_err("offscreen render failed"))?;
 
         let img = image::RgbaImage::from_raw(w, h, rgba)
@@ -402,11 +407,22 @@ impl App {
     /// Render `scene` (already sized in pixels) headlessly to RGBA8 bytes,
     /// sRGB-encoded and un-premultiplied, top-to-bottom. Also used by
     /// `thumbnails.rs` for Home-screen recent-file previews.
+    /// Whether an export can render adjustment layers (the main window's
+    /// device has an adjustment engine).
+    fn export_adjustments_available(&self) -> bool {
+        self.main_id
+            .and_then(|id| self.hosts.get(&id))
+            .is_some_and(|host| self.adjust_engines.contains_key(&host.surface.dev_id))
+    }
+
+    /// `jobs` are the adjustment jobs recorded while `scene` was built;
+    /// they run first, against the export renderer.
     pub(in crate::app) fn render_scene_to_rgba(
         &mut self,
         scene: &Scene,
         w: u32,
         h: u32,
+        jobs: Vec<crate::adjust::LayerJob>,
     ) -> Option<Vec<u8>> {
         let dev_id = self.hosts.get(&self.main_id?)?.surface.dev_id;
         if self.export_renderer.is_none() {
@@ -424,6 +440,10 @@ impl App {
         }
         let renderer = self.export_renderer.as_mut()?;
         let dev = &self.context.devices[dev_id];
+        if !jobs.is_empty() {
+            let engine = self.adjust_engines.get_mut(&dev_id)?;
+            engine.run(&dev.device, &dev.queue, jobs, &[], renderer);
+        }
 
         let tex = dev.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("export target"),

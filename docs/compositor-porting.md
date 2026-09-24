@@ -161,7 +161,16 @@ How it fits Amalith's model:
   runs the shader, and swaps the result in through vello's `override_image`.
   PDF and SVG export bake adjusted layers into pixels.
 
-The phase-by-phase status is tracked in this section as work lands.
+Status:
+
+- Done: the model and commands; the color math (`amalith-adjust`, with a
+  65³ cube rather than upstream's 33³ for accuracy); GPU rendering on the
+  canvas, in split panes and in PNG/JPG export (`amalith-shell/src/adjust/`),
+  checked against the CPU reference on a real GPU and translated to HLSL
+  and MSL in tests. Adjustments can be created from the command palette.
+- Next: the Layers panel button and Layer menu, adjustment masks on
+  screen, the Properties panel, Levels/Curves editors, blur and noise, and
+  baking adjusted layers into PDF/SVG.
 
 ## Candidate ports, in suggested order
 

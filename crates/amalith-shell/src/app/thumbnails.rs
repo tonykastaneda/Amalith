@@ -89,8 +89,9 @@ impl App {
             false,
             &mut self.text,
             self.theme.accent,
+            &mut crate::adjust::AdjustCollector::disabled(),
         );
-        let rgba = self.render_scene_to_rgba(&scene, w, h)?;
+        let rgba = self.render_scene_to_rgba(&scene, w, h, Vec::new())?;
 
         if let Some(parent) = cache_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -169,7 +170,7 @@ impl App {
             &mut self.text,
             self.theme.accent,
         );
-        let rgba = self.render_scene_to_rgba(&scene, w, h)?;
+        let rgba = self.render_scene_to_rgba(&scene, w, h, Vec::new())?;
         Some(ImageData {
             data: Blob::from(rgba),
             format: ImageFormat::Rgba8,

@@ -180,6 +180,7 @@ name = "amalith-shell"
 version = "0.0.1"
 dependencies = [
  "alacritty_terminal",
+ "amalith-adjust",
  "amalith-commands",
  "amalith-core",
  "amalith-io",
@@ -191,6 +192,7 @@ dependencies = [
  "kurbo 0.11.3",
  "lcms2",
  "muda",
+ "naga",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",

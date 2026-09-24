@@ -610,6 +610,8 @@ enum NoticeKind {
 /// is the same set routed through one dispatcher.
 #[derive(Clone, Debug)]
 enum MenuAction {
+    /// Layer ▸ New Adjustment Layer ▸ … — see `App::new_adjustment`.
+    NewAdjustment(amalith_core::AdjustmentKind),
     About,
     Preferences,
     /// Amalith ▸ Check for Updates — re-runs the same background check
@@ -1185,6 +1187,13 @@ struct App {
     /// Redraws run sequentially on the event loop. Reuse compiled shaders
     /// and GPU caches across windows instead of rebuilding them per dialog.
     window_renderers: HashMap<usize, Renderer>,
+    /// Adjustment-layer GPU engines, one per device like `window_renderers`.
+    /// A device without one (pipeline creation failed) shows adjustments as
+    /// having no effect rather than crashing.
+    adjust_engines: HashMap<usize, crate::adjust::engine::AdjustEngine>,
+    /// Records this frame's adjustment jobs while the canvas is painted;
+    /// see `crate::adjust`.
+    adjust: crate::adjust::AdjustCollector,
     /// A headless vello renderer, made on first use by Export for Screens.
     export_renderer: Option<Renderer>,
     hosts: HashMap<WindowId, WindowHost>,
@@ -1750,6 +1759,8 @@ impl App {
         let mut app = Self {
             context: RenderContext::new(),
             window_renderers: HashMap::new(),
+            adjust_engines: HashMap::new(),
+            adjust: crate::adjust::AdjustCollector::disabled(),
             export_renderer: None,
             hosts: HashMap::new(),
             main_id: None,
@@ -3864,6 +3875,35 @@ impl App {
     /// as the Layers panel's own bold-row highlight, `panels::layers`'
     /// `owning_layer`), else the explicitly selected layer row, else
     /// `None` (nothing to confidently show).
+    /// Adds an adjustment layer to the current layer, which must be a
+    /// Raster layer: just above the selected object when that's one of the
+    /// layer's own children, otherwise on top. The new adjustment becomes
+    /// the selection.
+    fn new_adjustment(&mut self, kind: amalith_core::AdjustmentKind) {
+        let doc = self.doc.editor.document();
+        let first = self.doc.selection.first().copied();
+        let Some(layer) = first.and_then(|id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer) else {
+            self.doc.io_error = Some("Select a raster layer to add an adjustment to.".into());
+            return;
+        };
+        let index = first
+            .and_then(|id| doc.children_of(amalith_core::ObjectParent::Layer(layer)).iter().position(|&c| c == id))
+            .map(|i| i + 1);
+        let data = amalith_core::AdjustmentData::new(kind.default_op());
+        match self.doc.editor.execute(Command::CreateAdjustment { layer, index, name: None, data }) {
+            Ok(CommandOutcome::Object(id)) => {
+                self.doc.selection = vec![id];
+                self.doc.io_error = None;
+            }
+            Ok(_) => {}
+            Err(amalith_commands::CommandError::NotARasterLayer(_)) => {
+                self.doc.io_error = Some("Adjustments go on a raster layer.".into());
+            }
+            Err(err) => self.doc.io_error = Some(err.to_string()),
+        }
+        self.request_main_redraw();
+    }
+
     fn current_layer_kind(&self) -> Option<amalith_core::LayerKind> {
         let doc = self.doc.editor.document();
         let layer_id = self
@@ -4954,6 +4994,7 @@ impl App {
             MenuAction::New => self.mux_new_document(),
             MenuAction::NewTab => self.mux_new_tab(),
             MenuAction::RecolorArtwork => self.pending_recolor = true,
+            MenuAction::NewAdjustment(kind) => self.new_adjustment(kind),
             MenuAction::SplitRight => self.mux_split_right(),
             MenuAction::SplitDown => self.mux_split_down(),
             MenuAction::Open => self.open_document(),
@@ -9262,6 +9303,11 @@ impl App {
             },
         )
         .expect("create renderer"));
+        if !self.adjust_engines.contains_key(&surface.dev_id) {
+            if let Some(engine) = crate::adjust::engine::AdjustEngine::new(&self.context.devices[surface.dev_id].device) {
+                self.adjust_engines.insert(surface.dev_id, engine);
+            }
+        }
         WindowHost {
             dpi: crate::window_dpi::WindowDpi::new(window.scale_factor()),
             surface,

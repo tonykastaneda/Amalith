@@ -31,6 +31,14 @@ impl App {
         let Some(role) = self.hosts.get(&id).map(|host| host.role) else { return };
         self.heal_panel_content_heights();
         panels::tools::set_layer_kind(self.current_layer_kind());
+        if matches!(role, Role::Main) {
+            // Adjustment jobs are recorded only when this device's engine
+            // will run them before the frame renders.
+            if let Some(host) = self.hosts.get(&id) {
+                let enabled = self.adjust_engines.contains_key(&host.surface.dev_id);
+                self.adjust.begin_frame(enabled, host.dpi.factor());
+            }
+        }
         let (mux_back, mux_front) = if matches!(role, Role::Main) {
             self.prepare_raster_preview();
             self.prepare_pixel_transform_preview();
@@ -798,6 +806,7 @@ impl App {
                 terminal_pane_arg,
                 &mux_back,
                 &mux_front,
+                &mut self.adjust,
             ),
             Role::Floating(fid) => {
                 let exists = self.dock.master(fid).is_some();
@@ -1349,7 +1358,15 @@ impl App {
                 | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                 _ => return,
             };
-            self.window_renderers.get_mut(&host.surface.dev_id).expect("window renderer")
+            let renderer = self.window_renderers.get_mut(&host.surface.dev_id).expect("window renderer");
+            if matches!(role, Role::Main) {
+                self.adjust.set_pane(0);
+                let (jobs, expired) = self.adjust.finish();
+                if let Some(engine) = self.adjust_engines.get_mut(&host.surface.dev_id) {
+                    engine.run(&device.device, &device.queue, jobs, &expired, renderer);
+                }
+            }
+            renderer
                 .render_to_texture(
                     &device.device,
                     &device.queue,

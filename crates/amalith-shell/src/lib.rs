@@ -27,6 +27,7 @@
 pub mod symbol_name_dialog;
 pub mod image_trace;
 pub mod about;
+pub mod adjust;
 pub mod agent;
 pub mod cli;
 pub mod anchors;

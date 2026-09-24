@@ -25,6 +25,7 @@ embed-resource = "3"
 # kurbo with the shell, so shipping it separately duplicated most of its own
 # size. Only the JS engine is genuinely extra. See `main.rs`.
 amalith-script = { path = "../amalith-script" }
+amalith-adjust = { path = "../amalith-adjust" }
 amalith-trace = { path = "../amalith-trace" }
 # Only used for the startup update check (see update_check::spawn) — a
 # single blocking GET against the GitHub releases API on a background
@@ -100,4 +101,7 @@ objc2-core-graphics = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
+# Validates and translates the adjustment shaders (incl. HLSL for Windows)
+# in tests. Same version wgpu already uses, so nothing extra downloads.
+naga = { version = "29.0.4", features = ["wgsl-in", "hlsl-out", "msl-out"] }
 tempfile = "3"
