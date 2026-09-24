@@ -125,7 +125,7 @@ impl App {
             .current_artboard()
             .and_then(|id| self.doc.editor.document().artboard(id).map(|a| a.rect))
             .unwrap_or_else(|| amalith_core::Rect::new(-10_000.0, -10_000.0, 10_000.0, 10_000.0));
-        let layer = self.ensure_layer();
+        let (container, _) = self.ensure_container();
         let corner = |p: CPoint| Anchor {
             point: p,
             handle_in: None,
@@ -148,7 +148,7 @@ impl App {
                 closed: false,
             }]);
             let _ = self.doc.editor.execute(Command::CreatePath {
-                parent: amalith_core::ObjectParent::Layer(layer),
+                parent: container,
                 path,
                 name: Some("Guide".into()),
             });

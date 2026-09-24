@@ -1207,7 +1207,7 @@ impl App {
                     cur_doc
                 };
                 if (end - start_doc).hypot() > 1.5 {
-                    let layer = self.ensure_layer();
+                    let (container, _) = self.ensure_container();
                     let cp = |p: Point| amalith_core::Point::new(p.x, p.y);
                     let corner = |p: Point| amalith_core::Anchor {
                         point: cp(p),
@@ -1221,7 +1221,7 @@ impl App {
                     }]);
                     if let Ok(CommandOutcome::Object(id)) =
                         self.doc.editor.execute(Command::CreatePath {
-                            parent: amalith_core::ObjectParent::Layer(layer),
+                            parent: container,
                             path,
                             name: None,
                         })
@@ -1250,22 +1250,22 @@ impl App {
                 }
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
                 if r.width() > 0.5 && r.height() > 0.5 {
-                    let layer = self.ensure_layer();
+                    let (container, _) = self.ensure_container();
                     let cmd = match tool {
                         Tool::Rectangle => Command::CreateRect {
-                            parent: amalith_core::ObjectParent::Layer(layer),
+                            parent: container,
                             rect: r,
                             name: None,
                         },
                         Tool::Ellipse => Command::CreateEllipse {
-                            parent: amalith_core::ObjectParent::Layer(layer),
+                            parent: container,
                             rect: r,
                             name: None,
                         },
                         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Arc | Tool::Spiral => {
                             match primitive_path(tool, r) {
                                 Some(path) => Command::CreatePath {
-                                    parent: amalith_core::ObjectParent::Layer(layer),
+                                    parent: container,
                                     path,
                                     name: None,
                                 },

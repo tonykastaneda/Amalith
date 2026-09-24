@@ -135,6 +135,9 @@ impl App {
     pub(in crate::app) fn enter_isolation(&mut self, id: ObjectId) {
         let is_container = match self.doc.editor.document().object(id).map(|o| &o.kind) {
             Some(amalith_core::ObjectKind::Text(_)) | None => return,
+            // A sublayer's contents are already clickable one by one;
+            // there's nothing to isolate into.
+            Some(amalith_core::ObjectKind::Group(g)) if g.sublayer => return,
             Some(amalith_core::ObjectKind::Group(_) | amalith_core::ObjectKind::Symbol(_)) => true,
             Some(_) => false,
         };

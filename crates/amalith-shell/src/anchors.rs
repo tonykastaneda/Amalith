@@ -72,6 +72,13 @@ fn hover_leaves_rec(doc: &Document, parent: ObjectParent, out: &mut Vec<ObjectId
             // entries are checked first (`nearest_painted_leaf` walks the
             // list in reverse), so a precise child match still wins over
             // the group's own broader bounding-box fallback.
+            // A sublayer is a container, not a hover unit: only its
+            // contents highlight (and a locked one, nothing).
+            Some(ObjectKind::Group(g)) if g.sublayer => {
+                if !doc.object(id).is_some_and(|o| o.locked) {
+                    hover_leaves_rec(doc, ObjectParent::Group(id), out);
+                }
+            }
             Some(ObjectKind::Group(_)) => {
                 out.push(id);
                 hover_leaves_rec(doc, ObjectParent::Group(id), out);

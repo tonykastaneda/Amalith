@@ -1007,9 +1007,38 @@ struct Doc {
     paste_nudge: u32,
 }
 
+/// The sublayer `id` is, or sits inside (sublayers are always direct layer
+/// children, so this is the topmost group on the way up, if it's flagged).
+pub(crate) fn sublayer_containing(doc: &Document, id: ObjectId) -> Option<ObjectId> {
+    let mut current = id;
+    loop {
+        let obj = doc.object(current)?;
+        match obj.parent {
+            amalith_core::ObjectParent::Layer(_) => {
+                return matches!(&obj.kind, amalith_core::ObjectKind::Group(g) if g.sublayer).then_some(current);
+            }
+            amalith_core::ObjectParent::Group(parent) => current = parent,
+            amalith_core::ObjectParent::Symbol(_) => return None,
+        }
+    }
+}
+
 impl Doc {
     /// Use the same layer context as the toolbar; only fall back when
     /// neither an object nor a layer is selected.
+    /// Where new artwork goes — the one "current container" rule every
+    /// creating tool shares: the selected sublayer; else the sublayer the
+    /// first selected object sits in; else the layer [`Self::creation_layer`]
+    /// picks. (A selected pixel sublayer is an image, not a container, so
+    /// new vector art goes on its layer.)
+    fn creation_container(&self) -> Option<amalith_core::ObjectParent> {
+        let doc = self.editor.document();
+        if let Some(sub) = self.selection.first().and_then(|&id| sublayer_containing(doc, id)) {
+            return Some(amalith_core::ObjectParent::Group(sub));
+        }
+        self.creation_layer().map(amalith_core::ObjectParent::Layer)
+    }
+
     fn creation_layer(&self) -> Option<LayerId> {
         let doc = self.editor.document();
         self.selection.first()
@@ -4765,9 +4794,9 @@ impl App {
             closed,
         };
         let path = amalith_core::PathData::from_subpaths(vec![subpath]);
-        let layer = self.ensure_layer();
+        let (container, _) = self.ensure_container();
         if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(Command::CreatePath {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: container,
             path,
             name: None,
         }) {
@@ -5847,14 +5876,14 @@ impl App {
             return;
         };
         let (w, h) = (nw as f64, nh as f64);
-        let layer = self.ensure_layer();
+        let (container, layer) = self.ensure_container();
         let name = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned());
         let src = path.to_string_lossy().into_owned();
         let (modified, size) = canvas::file_stamp(path);
         let cmd = Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: container,
             path: src.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
@@ -6076,9 +6105,9 @@ impl App {
         let stem = if name.is_empty() { "Image" } else { name };
         let container = format!("images/{stem}-{}.png", amalith_core::AssetId::new());
         self.doc.asset_store.insert(&container, bytes.to_vec());
-        let layer = self.ensure_layer();
+        let (target, _) = self.ensure_container();
         let cmd = Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: target,
             path: container.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
@@ -7274,7 +7303,7 @@ impl App {
     /// lines (see `vertical_text.rs`); meaningless for `TextKind::Path`,
     /// which the caller never sets it for.
     fn create_text(&mut self, kind: amalith_core::TextKind, origin: Point, vertical: bool) {
-        let layer = self.ensure_layer();
+        let (container, _) = self.ensure_container();
         // Seed with placeholder text, selected on open (see `enter_text_edit`),
         // so the first keystroke replaces it — and so a click-away leaves a
         // visible object behind instead of nothing.
@@ -7300,7 +7329,7 @@ impl App {
         // right after typing) must not leave a zero-size, unclickable box.
         data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
         let cmd = Command::CreateText {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: container,
             data,
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
@@ -7364,7 +7393,7 @@ impl App {
         // their physical endpoint, just as Illustrator's end bracket does.
         let end = if closed { start + total } else { total };
 
-        let layer = self.ensure_layer();
+        let (container, _) = self.ensure_container();
         let pt = amalith_core::PathTextData {
             path: path_id,
             start,
@@ -7391,7 +7420,7 @@ impl App {
             pathtext::text_bounds(&mut self.text, &data, &pt, &arc, amalith_core::Affine::IDENTITY)
         };
         let cmd = Command::CreateText {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: container,
             data,
             transform: amalith_core::Affine::IDENTITY,
             name: None,
@@ -7407,7 +7436,7 @@ impl App {
     /// A blank fixed-size area-text frame (no placeholder, not opened for
     /// editing) — the receiving end of a text thread.
     fn create_empty_area_text(&mut self, w: f64, h: f64, origin: Point) -> Option<ObjectId> {
-        let layer = self.ensure_layer();
+        let (container, _) = self.ensure_container();
         let mut data = amalith_core::TextData {
             path_geometry: None,
             content: String::new(),
@@ -7427,7 +7456,7 @@ impl App {
         };
         data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
         match self.doc.editor.execute(Command::CreateText {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: container,
             data,
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
@@ -7740,7 +7769,7 @@ impl App {
             doc.layers()
                 .iter()
                 .filter(|l| l.visible)
-                .flat_map(|l| l.children.iter().copied())
+                .flat_map(|l| select::selectable_roots(doc, l.id))
                 .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
                 .collect()
         };
@@ -7755,7 +7784,7 @@ impl App {
         doc.layers()
             .iter()
             .filter(|l| l.visible)
-            .flat_map(|l| l.children.iter().copied())
+            .flat_map(|l| select::selectable_roots(doc, l.id))
             .filter(|id| doc.object(*id).is_some_and(|o| o.visible && !o.locked))
             .collect()
     }
@@ -7997,10 +8026,29 @@ impl App {
             PastePlace::InFront => (artboard_delta, PasteStack::InFront),
             PastePlace::Behind => (artboard_delta, PasteStack::Behind),
         };
-        if let Ok(ids) = self.doc.editor.paste(delta, stack) {
+        // A plain paste lands in the active layer or sublayer.
+        let target = self.doc.creation_container();
+        if let Ok(ids) = self.doc.editor.paste_into(delta, stack, target) {
             self.doc.selection = ids;
         }
         self.request_main_redraw();
+    }
+
+    /// [`Doc::creation_container`], creating a first layer if the document
+    /// has none; also returns the layer that container lives in.
+    fn ensure_container(&mut self) -> (amalith_core::ObjectParent, LayerId) {
+        if let Some(container) = self.doc.creation_container() {
+            let layer = match container {
+                amalith_core::ObjectParent::Layer(l) => Some(l),
+                amalith_core::ObjectParent::Group(g) => self.doc.editor.document().layer_of(g),
+                amalith_core::ObjectParent::Symbol(_) => None,
+            };
+            if let Some(layer) = layer {
+                return (container, layer);
+            }
+        }
+        let layer = self.ensure_layer();
+        (amalith_core::ObjectParent::Layer(layer), layer)
     }
 
     /// The layer new shapes should land in — the topmost, creating one if
@@ -10252,6 +10300,50 @@ mod shift_swapped_type_tool_tests {
 #[cfg(test)]
 mod shared_layer_tool_tests {
     use super::*;
+
+    /// A layer holding rect `a`, and a sublayer holding rect `b`.
+    fn layer_with_sublayer() -> (Doc, LayerId, ObjectId, ObjectId, ObjectId) {
+        let mut document = Document::new("Sublayers");
+        let layer = LayerId::new();
+        document.insert_layer(amalith_core::Layer::new(layer, "Art"), 0);
+        let mut doc = Doc::new(Editor::new(document));
+        let rect = |doc: &mut Doc, parent, r| {
+            let CommandOutcome::Object(id) = doc.editor.execute(Command::CreateRect { parent, rect: r, name: None }).unwrap() else { panic!() };
+            id
+        };
+        let a = rect(&mut doc, amalith_core::ObjectParent::Layer(layer), amalith_core::Rect::new(0., 0., 10., 10.));
+        let CommandOutcome::Object(sub) = doc.editor.execute(Command::CreateSublayer { layer, index: None, name: None }).unwrap() else { panic!() };
+        let b = rect(&mut doc, amalith_core::ObjectParent::Group(sub), amalith_core::Rect::new(50., 50., 60., 60.));
+        (doc, layer, sub, a, b)
+    }
+
+    #[test]
+    fn new_art_goes_into_the_active_sublayer() {
+        let (mut doc, layer, sub, a, b) = layer_with_sublayer();
+        doc.selection = vec![sub];
+        assert_eq!(doc.creation_container(), Some(amalith_core::ObjectParent::Group(sub)), "the selected sublayer");
+        doc.selection = vec![b];
+        assert_eq!(doc.creation_container(), Some(amalith_core::ObjectParent::Group(sub)), "the sublayer the selection sits in");
+        doc.selection = vec![a];
+        assert_eq!(doc.creation_container(), Some(amalith_core::ObjectParent::Layer(layer)), "loose layer content");
+        doc.selection.clear();
+        doc.selected_layer = Some(layer);
+        assert_eq!(doc.creation_container(), Some(amalith_core::ObjectParent::Layer(layer)));
+    }
+
+    #[test]
+    fn the_canvas_clicks_through_a_sublayer_to_its_contents() {
+        let (mut doc, layer, sub, a, b) = layer_with_sublayer();
+        let visible = amalith_core::Rect::new(-1000., -1000., 1000., 1000.);
+        let visible = crate::convert::rect(visible);
+        assert_eq!(select::selectable_roots(doc.editor.document(), layer), vec![a, b]);
+        let hit = select::topmost_selectable_at(doc.editor.document(), vello::kurbo::Point::new(55., 55.), visible, 0.0);
+        assert_eq!(hit, Some(b), "the shape, never the sublayer itself");
+        doc.editor.execute(Command::SetLocked { objects: vec![sub], locked: true }).unwrap();
+        assert_eq!(select::selectable_roots(doc.editor.document(), layer), vec![a]);
+        let hit = select::topmost_selectable_at(doc.editor.document(), vello::kurbo::Point::new(55., 55.), visible, 0.0);
+        assert_eq!(hit, None, "a locked sublayer's contents can't be clicked");
+    }
 
     #[test]
     fn shapes_and_text_remain_editable_on_the_active_raster_layer() {

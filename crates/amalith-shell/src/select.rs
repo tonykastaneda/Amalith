@@ -91,6 +91,26 @@ fn effective_bounds(doc: &Document, id: ObjectId) -> Option<Rect> {
     }
 }
 
+/// A layer's canvas-selectable roots, in paint order: its direct children,
+/// except that a **sublayer** is see-through — its own children take its
+/// place, because a sublayer is a container you work *in*, not an object
+/// you click. A hidden or locked sublayer contributes nothing.
+pub fn selectable_roots(doc: &Document, layer: amalith_core::LayerId) -> Vec<ObjectId> {
+    let mut out = Vec::new();
+    for &id in doc.children_of(ObjectParent::Layer(layer)) {
+        match doc.object(id) {
+            Some(o) if matches!(&o.kind, ObjectKind::Group(g) if g.sublayer) => {
+                if o.visible && !o.locked {
+                    out.extend_from_slice(doc.children_of(ObjectParent::Group(id)));
+                }
+            }
+            Some(_) => out.push(id),
+            None => {}
+        }
+    }
+    out
+}
+
 /// Frontmost layer-child whose bounds contain `point` and overlap
 /// `visible`. Layer direct children only. A plain path or compound path
 /// has to have `point` inside its *real* outline, not just its
@@ -113,7 +133,7 @@ pub fn topmost_selectable_at(doc: &Document, point: Point, visible: Rect, tol: f
         if !layer.visible {
             continue;
         }
-        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+        for &id in selectable_roots(doc, layer.id).iter().rev() {
             let Some(obj) = doc.object(id) else { continue };
             if !obj.visible || obj.locked {
                 continue;
@@ -356,7 +376,7 @@ pub fn visible_top_level_bounds(doc: &Document, visible: Rect, excluding: &[Obje
         if !layer.visible {
             continue;
         }
-        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+        for &id in selectable_roots(doc, layer.id).iter().rev() {
             if excluding.contains(&id) {
                 continue;
             }
@@ -633,7 +653,7 @@ pub fn topmost_path_near(doc: &Document, point: Point, visible: Rect, tol: f64) 
         if !layer.visible || layer.locked {
             continue;
         }
-        for &id in doc.children_of(ObjectParent::Layer(layer.id)).iter().rev() {
+        for &id in selectable_roots(doc, layer.id).iter().rev() {
             let Some(obj) = doc.object(id) else { continue };
             if !obj.visible || obj.locked || !matches!(obj.kind, ObjectKind::Path(_)) {
                 continue;
@@ -778,7 +798,7 @@ pub fn within(doc: &Document, marquee: Rect) -> Vec<ObjectId> {
         if !layer.visible {
             continue;
         }
-        for &id in doc.children_of(ObjectParent::Layer(layer.id)) {
+        for &id in &selectable_roots(doc, layer.id) {
             if doc.object(id).is_some_and(|o| !o.visible || o.locked) {
                 continue;
             }

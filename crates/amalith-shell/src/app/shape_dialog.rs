@@ -160,20 +160,20 @@ impl App {
         if commit {
             dlg.commit_all();
             dlg.write_params(&mut self.shape_params);
-            let layer = self.ensure_layer();
+            let (container, _) = self.ensure_container();
             let cmd = match dlg.geometry() {
                 shapedialog::Geometry::Rect(rect) => Command::CreateRect {
-                    parent: amalith_core::ObjectParent::Layer(layer),
+                    parent: container,
                     rect,
                     name: None,
                 },
                 shapedialog::Geometry::Ellipse(rect) => Command::CreateEllipse {
-                    parent: amalith_core::ObjectParent::Layer(layer),
+                    parent: container,
                     rect,
                     name: None,
                 },
                 shapedialog::Geometry::Path(path) => Command::CreatePath {
-                    parent: amalith_core::ObjectParent::Layer(layer),
+                    parent: container,
                     path,
                     name: None,
                 },
