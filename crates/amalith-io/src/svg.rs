@@ -150,7 +150,7 @@ fn export_node(document: &Document, id: ObjectId, out: &mut String, defs: &mut D
         // to defer to either — a future build adds its own SVG export
         // alongside real support for the kind, same as every other case
         // here eventually will.
-        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Unknown { .. } => {}
+        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Adjustment(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

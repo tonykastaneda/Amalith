@@ -288,7 +288,7 @@ fn collect_one(document: &Document, id: ObjectId, out: &mut Vec<(Vec<Point>, boo
                 out.extend(flatten_polylines(&(xf * sub.clone())));
             }
         }
-        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Unknown { .. } => {}
+        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Adjustment(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

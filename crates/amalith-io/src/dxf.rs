@@ -510,7 +510,7 @@ fn collect_one(document: &Document, id: ObjectId, out: &mut Vec<(Vec<(Vec<Point>
             let polys = cp.subpaths.iter().flat_map(|s| flatten_polylines(&(xf * s.clone()))).collect();
             out.push((polys, color(&object.appearance)));
         }
-        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Unknown { .. } => {}
+        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Adjustment(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

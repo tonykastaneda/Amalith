@@ -2383,6 +2383,9 @@ fn paint_object(
                 }
             }
         }
+        // Nothing of its own to draw: an adjustment changes the content
+        // beneath it in its layer, which the layer loop handles.
+        ObjectKind::Adjustment(_) => {}
         // A kind this build doesn't recognize (see `ObjectKind::Unknown`'s
         // docs) — draw whatever flattened fallback its writer left, so it
         // reads as real content rather than nothing. Nothing to draw at

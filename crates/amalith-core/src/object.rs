@@ -1295,6 +1295,9 @@ pub enum ObjectKind {
     Image(ImageData),
     CompoundPath(CompoundPathData),
     Symbol(SymbolData),
+    /// An adjustment layer: changes everything beneath it in its own layer.
+    /// See [`crate::adjustment`].
+    Adjustment(crate::adjustment::AdjustmentData),
     /// A kind this build doesn't recognize, preserved losslessly (its
     /// original tag name and raw JSON body) instead of refusing to open
     /// the document. Renders via the owning [`Object`]'s `fallback`
@@ -1321,6 +1324,7 @@ enum ObjectKindKnown {
     Image(ImageData),
     CompoundPath(CompoundPathData),
     Symbol(SymbolData),
+    Adjustment(crate::adjustment::AdjustmentData),
 }
 
 impl From<ObjectKindKnown> for ObjectKind {
@@ -1332,6 +1336,7 @@ impl From<ObjectKindKnown> for ObjectKind {
             ObjectKindKnown::Image(i) => ObjectKind::Image(i),
             ObjectKindKnown::CompoundPath(c) => ObjectKind::CompoundPath(c),
             ObjectKindKnown::Symbol(s) => ObjectKind::Symbol(s),
+            ObjectKindKnown::Adjustment(a) => ObjectKind::Adjustment(a),
         }
     }
 }
@@ -1388,6 +1393,7 @@ impl Serialize for ObjectKind {
             ObjectKind::Image(i) => one(serializer, "Image", i),
             ObjectKind::CompoundPath(c) => one(serializer, "CompoundPath", c),
             ObjectKind::Symbol(s) => one(serializer, "Symbol", s),
+            ObjectKind::Adjustment(a) => one(serializer, "Adjustment", a),
             ObjectKind::Unknown { kind, raw } => one(serializer, kind, raw),
         }
     }
@@ -1409,6 +1415,25 @@ impl ObjectKind {
             _ => None,
         }
     }
+    /// The layer mask on an image or adjustment, if any.
+    pub fn mask(&self) -> Option<ImageMask> {
+        match self {
+            Self::Image(image) => image.mask,
+            Self::Adjustment(adjustment) => adjustment.mask,
+            _ => None,
+        }
+    }
+
+    /// The mask slot of an object that can carry one (an image or an
+    /// adjustment); `None` for kinds that can't.
+    pub fn mask_slot_mut(&mut self) -> Option<&mut Option<ImageMask>> {
+        match self {
+            Self::Image(image) => Some(&mut image.mask),
+            Self::Adjustment(adjustment) => Some(&mut adjustment.mask),
+            _ => None,
+        }
+    }
+
     /// Geometry-only bounds in the object's own local space, ignoring its
     /// `transform`. `None` for an empty group/compound path.
     ///
@@ -1423,6 +1448,9 @@ impl ObjectKind {
             ObjectKind::Image(i) => Some(i.local_bounds),
             ObjectKind::Symbol(s) => Some(s.local_bounds),
             ObjectKind::Group(_) => None,
+            // An adjustment affects its whole layer; it has no extent of
+            // its own to hit-test, select or fit to.
+            ObjectKind::Adjustment(_) => None,
             // No geometry of its own to report — callers that care about
             // an `Unknown` object's extent fall back to `Object::fallback`
             // instead (see `Document::bounds_of`), since that's a sibling

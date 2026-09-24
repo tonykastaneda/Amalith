@@ -75,6 +75,9 @@ fn kind_name(kind: &ObjectKind, host: &SharedHost, key: DocKey) -> String {
                 .unwrap_or(false);
             if embedded { "RasterItem".to_string() } else { "PlacedItem".to_string() }
         }
+        // Illustrator has no adjustment layers, so there's no real
+        // typename to match; scripts can still see and skip them.
+        ObjectKind::Adjustment(_) => "AdjustmentItem".to_string(),
         ObjectKind::Unknown { .. } => "Unknown".to_string(),
     }
 }

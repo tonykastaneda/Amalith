@@ -482,7 +482,7 @@ fn layer_rows(doc: &Document, expanded: &HashSet<ObjectId>, collapsed_layers: &H
                 expanded: is_expanded,
                 color: amalith_core::LayerColor::Blue,
                 layer_kind: LayerKind::Vector,
-                mask: match &obj.kind { ObjectKind::Image(img) => img.mask, _ => None },
+                mask: obj.kind.mask(),
             });
             if is_expanded {
                 walk(doc, ObjectParent::Group(id), depth + 1, expanded, rows);
@@ -741,6 +741,7 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
         Some(ObjectKind::Text(_)) => "Text",
         Some(ObjectKind::Image(_)) => "Image",
         Some(ObjectKind::Symbol(_)) => "Symbol",
+        Some(ObjectKind::Adjustment(a)) => a.op.kind().label(),
         Some(ObjectKind::Unknown { .. }) | None => "?",
     }
     .to_string()

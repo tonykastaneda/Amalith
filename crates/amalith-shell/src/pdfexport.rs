@@ -855,7 +855,9 @@ fn walk(ctx: &mut PdfCtx<'_>, doc: &Document, id: ObjectId, text: &mut TextConte
         ObjectKind::Symbol(_) => {}
         // A kind this build doesn't recognize — no PDF export for it yet
         // either (would draw `obj.fallback` once one exists to draw).
-        ObjectKind::Unknown { .. } => {}
+        // Adjusted layers are baked into an image before the walk (planned);
+        // the adjustment itself has nothing to emit.
+        ObjectKind::Adjustment(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

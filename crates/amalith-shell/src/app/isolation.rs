@@ -214,6 +214,7 @@ impl App {
                         .map(|d| d.name.clone())
                         .unwrap_or_else(|| "Symbol".into()),
                     Some(amalith_core::ObjectKind::Text(_)) => "Type".into(),
+                    Some(amalith_core::ObjectKind::Adjustment(a)) => a.op.kind().label().into(),
                     Some(amalith_core::ObjectKind::Unknown { .. }) | None => "Object".into(),
                 });
             out.push(name);

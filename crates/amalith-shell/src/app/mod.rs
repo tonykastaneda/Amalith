@@ -6189,6 +6189,10 @@ impl App {
                         if let Some(mask) = i.mask { out.insert(mask.asset); }
                     }
                     amalith_core::ObjectKind::Group(g) => walk(doc, &g.children, vis, out),
+                    // No bounds to cull by: an adjustment covers its layer.
+                    amalith_core::ObjectKind::Adjustment(a) => {
+                        if let Some(mask) = a.mask { out.insert(mask.asset); }
+                    }
                     _ => {}
                 }
             }

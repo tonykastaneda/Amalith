@@ -666,6 +666,16 @@ impl Editor {
             .collect()
     }
 
+    /// The current mask of an object that can carry one (an image or an
+    /// adjustment). Errors if the object is missing or can't have a mask.
+    fn mask_of(&self, object: ObjectId) -> Result<Option<amalith_core::ImageMask>, CommandError> {
+        let obj = self.document.object(object).ok_or(CommandError::ObjectNotFound(object))?;
+        match obj.kind {
+            ObjectKind::Image(_) | ObjectKind::Adjustment(_) => Ok(obj.kind.mask()),
+            _ => Err(CommandError::NotMaskable(object)),
+        }
+    }
+
     fn compile(&self, command: Command) -> Result<Vec<Edit>, CommandError> {
         let edits = match command {
             Command::ExpandImageTrace { id, width, height, paths } => {
@@ -898,6 +908,46 @@ impl Editor {
                         index,
                     },
                 ]
+            }
+            Command::CreateAdjustment { layer, index, name, mut data } => {
+                let target = self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
+                if target.kind != amalith_core::LayerKind::Raster {
+                    return Err(CommandError::NotARasterLayer(layer));
+                }
+                if target.locked {
+                    return Err(CommandError::LayerLocked(layer));
+                }
+                if !data.validate() {
+                    return Err(CommandError::InvalidAdjustment);
+                }
+                let children = self.document.children_of(ObjectParent::Layer(layer));
+                if data.mask_bounds.is_zero_area() {
+                    // Where a mask painted later gets stretched: the layer's
+                    // current content, else the first artboard.
+                    data.mask_bounds = children
+                        .iter()
+                        .filter_map(|&id| self.document.bounds_of(id))
+                        .reduce(|a, b| a.union(b))
+                        .or_else(|| self.document.artboards().first().map(|a| a.rect))
+                        .unwrap_or(Rect::ZERO);
+                }
+                let index = index.unwrap_or(children.len()).min(children.len());
+                let label = data.op.kind().label();
+                let mut object = Object::new(ObjectId::new(), ObjectParent::Layer(layer), ObjectKind::Adjustment(data));
+                object.appearance.set_fill(Paint::None);
+                object.appearance.set_stroke(Paint::None);
+                object.name = Some(name.unwrap_or_else(|| label.to_string()));
+                vec![Edit::InsertObject { object: Box::new(object), index }]
+            }
+            Command::SetAdjustment { object, mut data } => {
+                let Some(ObjectKind::Adjustment(existing)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnAdjustment(object));
+                };
+                if !data.validate() {
+                    return Err(CommandError::InvalidAdjustment);
+                }
+                data.mask = existing.mask;
+                vec![Edit::SetAdjustment { object, data }]
             }
             Command::CreatePath { layer, path, name } => {
                 let mut object = Object::new(
@@ -1403,6 +1453,9 @@ impl Editor {
                         .document
                         .object(id)
                         .ok_or(CommandError::ObjectNotFound(id))?;
+                    if matches!(object.kind, ObjectKind::Adjustment(_)) {
+                        return Err(CommandError::CannotGroupAdjustment);
+                    }
                     match parent {
                         None => parent = Some(object.parent),
                         Some(p) if p == object.parent => {}
@@ -1978,10 +2031,7 @@ impl Editor {
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageAsset { object, asset: id }]
             }
             Command::AddLayerMask { object, mut asset } => {
-                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
-                    return Err(CommandError::NotAnImage(object));
-                };
-                if image.mask.is_some() {
+                if self.mask_of(object)?.is_some() {
                     return Err(CommandError::AlreadyHasMask(object));
                 }
                 asset.id = AssetId::new();
@@ -1989,19 +2039,13 @@ impl Editor {
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
             }
             Command::RemoveLayerMask { object } => {
-                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
-                    return Err(CommandError::NotAnImage(object));
-                };
-                if image.mask.is_none() {
+                if self.mask_of(object)?.is_none() {
                     return Err(CommandError::NoLayerMask(object));
                 }
                 vec![Edit::SetImageMask { object, mask: None }]
             }
             Command::ReplaceMaskAsset { object, mut asset } => {
-                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
-                    return Err(CommandError::NotAnImage(object));
-                };
-                let Some(existing) = image.mask else {
+                let Some(existing) = self.mask_of(object)? else {
                     return Err(CommandError::NoLayerMask(object));
                 };
                 asset.id = AssetId::new();
@@ -2009,10 +2053,7 @@ impl Editor {
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
             }
             Command::SetMaskEnabled { object, enabled } => {
-                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
-                    return Err(CommandError::NotAnImage(object));
-                };
-                let Some(existing) = image.mask else {
+                let Some(existing) = self.mask_of(object)? else {
                     return Err(CommandError::NoLayerMask(object));
                 };
                 vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { asset: existing.asset, enabled }) }]

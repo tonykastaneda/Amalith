@@ -15,7 +15,8 @@ fn targets(doc: &Document, roots: &[ObjectId]) -> Vec<ObjectId> {
             continue;
         };
         // Symbol definitions are shared; never rewrite them through an instance.
-        if matches!(object.kind, ObjectKind::Symbol(_) | ObjectKind::Image(_)) {
+        // Images and adjustments have no fills or strokes to recolor.
+        if matches!(object.kind, ObjectKind::Symbol(_) | ObjectKind::Image(_) | ObjectKind::Adjustment(_)) {
             continue;
         }
         ids.push(id);

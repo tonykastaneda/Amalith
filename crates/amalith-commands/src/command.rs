@@ -17,11 +17,11 @@ use crate::align::{AlignKind, AlignTo};
 pub enum Command {
     /// Copy-on-write pixel edit: only this image switches to the new asset.
     ReplaceImageAsset { object: ObjectId, asset: amalith_core::Asset },
-    /// Adds a non-destructive raster mask to an `Image` object. `asset`'s
+    /// Adds a non-destructive raster mask to an image or adjustment. `asset`'s
     /// alpha channel is coverage (255 reveals, 0 hides); RGB is unused.
-    /// Errors if `object` isn't an image or already has a mask.
+    /// Errors if `object` can't carry a mask or already has one.
     AddLayerMask { object: ObjectId, asset: amalith_core::Asset },
-    /// Removes an `Image` object's mask entirely. Errors if it has none.
+    /// Removes an image's or adjustment's mask entirely. Errors if it has none.
     RemoveLayerMask { object: ObjectId },
     /// Copy-on-write pixel edit for an existing mask, mirroring
     /// `ReplaceImageAsset`. Errors if `object` has no mask yet.
@@ -29,6 +29,14 @@ pub enum Command {
     /// Shows or hides an existing mask's effect without discarding it.
     /// Errors if `object` has no mask.
     SetMaskEnabled { object: ObjectId, enabled: bool },
+    /// Creates an adjustment layer among `layer`'s top-level children, at
+    /// `index` (`None` puts it on top). It changes everything beneath it in
+    /// that layer. `layer` must be an unlocked Raster layer. An empty
+    /// `data.mask_bounds` is filled in with the layer's content bounds.
+    CreateAdjustment { layer: LayerId, index: Option<usize>, name: Option<String>, data: amalith_core::AdjustmentData },
+    /// Replaces an adjustment's settings (op, blend mode, mask bounds) in one
+    /// undo step. The mask is left as it is; the mask commands own it.
+    SetAdjustment { object: ObjectId, data: amalith_core::AdjustmentData },
     /// Replace an image in-place with a group of traced, image-pixel paths.
     /// Preserves the original ID, transform, appearance and stacking position;
     /// undo restores the exact linked/embedded image in one step.

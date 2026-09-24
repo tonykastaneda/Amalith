@@ -928,6 +928,148 @@ mod tests {
         assert_eq!(asset_of(&editor, copy), original);
     }
 
+    /// A new, unlocked Raster layer, made the way the Layers panel does it.
+    fn raster_layer(editor: &mut Editor) -> LayerId {
+        let CommandOutcome::Layer(id) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
+        let l = editor.document().layer(id).unwrap();
+        let options = LayerOptions {
+            name: l.name.clone(), color: l.color, visible: l.visible, locked: l.locked, template: l.template,
+            print: l.print, preview: l.preview, dim_images_to: l.dim_images_to, kind: amalith_core::LayerKind::Raster,
+        };
+        editor.execute(Command::SetLayerOptions { id, options }).unwrap();
+        id
+    }
+
+    fn levels() -> amalith_core::AdjustmentData {
+        amalith_core::AdjustmentData::new(amalith_core::AdjustmentKind::Levels.default_op())
+    }
+
+    #[test]
+    fn create_adjustment_inserts_above_content_and_undoes() {
+        let mut editor = new_editor();
+        let layer = raster_layer(&mut editor);
+        let CommandOutcome::Object(image) = editor.execute(Command::CreateImage {
+            layer, path: "images/photo.png".into(), bounds: Rect::new(10., 20., 110., 70.), transform: Affine::IDENTITY,
+            name: None, embedded: true, modified: None, size: None,
+        }).unwrap() else { panic!() };
+
+        let CommandOutcome::Object(adj) = editor.execute(Command::CreateAdjustment {
+            layer, index: None, name: None, data: levels(),
+        }).unwrap() else { panic!() };
+        let doc = editor.document();
+        assert_eq!(doc.children_of(ObjectParent::Layer(layer)), &[image, adj], "on top of the layer by default");
+        let obj = doc.object(adj).unwrap();
+        assert_eq!(obj.name.as_deref(), Some("Levels"));
+        let ObjectKind::Adjustment(data) = &obj.kind else { panic!() };
+        assert_eq!(data.mask_bounds, Rect::new(10., 20., 110., 70.), "mask area seeded from the layer's content");
+        assert_eq!(doc.bounds_of(adj), None, "adjustments have no bounds of their own");
+
+        editor.undo().unwrap();
+        assert!(editor.document().object(adj).is_none());
+        editor.redo().unwrap();
+        assert!(editor.document().object(adj).is_some());
+
+        // An explicit index puts it beneath the image.
+        let CommandOutcome::Object(below) = editor.execute(Command::CreateAdjustment {
+            layer, index: Some(0), name: Some("Warm".into()), data: levels(),
+        }).unwrap() else { panic!() };
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[below, image, adj]);
+    }
+
+    #[test]
+    fn create_adjustment_requires_an_unlocked_raster_layer_and_valid_settings() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(vector) = editor.execute(Command::CreateLayer { name: "Art".into(), index: None }).unwrap() else { panic!() };
+        assert_eq!(
+            editor.execute(Command::CreateAdjustment { layer: vector, index: None, name: None, data: levels() }),
+            Err(CommandError::NotARasterLayer(vector))
+        );
+
+        let raster = raster_layer(&mut editor);
+        let mut bad = levels();
+        let amalith_core::AdjustmentOp::Levels(p) = &mut bad.op else { panic!() };
+        p.ranges[0].gamma = 0.0;
+        assert_eq!(
+            editor.execute(Command::CreateAdjustment { layer: raster, index: None, name: None, data: bad }),
+            Err(CommandError::InvalidAdjustment)
+        );
+
+        let l = editor.document().layer(raster).unwrap();
+        let options = LayerOptions {
+            name: l.name.clone(), color: l.color, visible: l.visible, locked: true, template: l.template,
+            print: l.print, preview: l.preview, dim_images_to: l.dim_images_to, kind: l.kind,
+        };
+        editor.execute(Command::SetLayerOptions { id: raster, options }).unwrap();
+        assert_eq!(
+            editor.execute(Command::CreateAdjustment { layer: raster, index: None, name: None, data: levels() }),
+            Err(CommandError::LayerLocked(raster))
+        );
+    }
+
+    #[test]
+    fn set_adjustment_is_one_undo_step_and_keeps_the_mask() {
+        let mut editor = new_editor();
+        let layer = raster_layer(&mut editor);
+        let CommandOutcome::Object(adj) = editor.execute(Command::CreateAdjustment {
+            layer, index: None, name: None, data: levels(),
+        }).unwrap() else { panic!() };
+        editor.execute(Command::AddLayerMask {
+            object: adj, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", AssetKind::Image, "images/mask.png"),
+        }).unwrap();
+        let data_of = |editor: &Editor| match &editor.document().object(adj).unwrap().kind {
+            ObjectKind::Adjustment(a) => a.clone(), _ => panic!(),
+        };
+        let mask = data_of(&editor).mask.expect("adjustments take layer masks too");
+
+        // The panel's copy has no mask (stale); SetAdjustment must not drop it.
+        let mut edited = amalith_core::AdjustmentData::new(amalith_core::AdjustmentKind::Exposure.default_op());
+        let amalith_core::AdjustmentOp::Exposure(p) = &mut edited.op else { panic!() };
+        p.exposure = 1.5;
+        edited.blend_mode = amalith_core::appearance::BlendMode::Multiply;
+        editor.execute(Command::SetAdjustment { object: adj, data: edited.clone() }).unwrap();
+        let now = data_of(&editor);
+        assert_eq!(now.op, edited.op);
+        assert_eq!(now.blend_mode, edited.blend_mode);
+        assert_eq!(now.mask, Some(mask));
+
+        editor.undo().unwrap();
+        assert_eq!(data_of(&editor).op, levels().op);
+        assert_eq!(data_of(&editor).mask, Some(mask));
+
+        editor.execute(Command::SetMaskEnabled { object: adj, enabled: false }).unwrap();
+        assert!(!data_of(&editor).mask.unwrap().enabled);
+        editor.execute(Command::RemoveLayerMask { object: adj }).unwrap();
+        assert_eq!(data_of(&editor).mask, None);
+
+        assert!(matches!(
+            editor.execute(Command::SetAdjustment { object: adj, data: amalith_core::AdjustmentData::new(amalith_core::AdjustmentOp::GaussianBlur(amalith_core::GaussianBlurParams { radius: -1.0 })) }),
+            Err(CommandError::InvalidAdjustment)
+        ));
+    }
+
+    #[test]
+    fn adjustments_cannot_be_grouped_and_paths_cannot_take_masks() {
+        let mut editor = new_editor();
+        let layer = raster_layer(&mut editor);
+        let CommandOutcome::Object(adj) = editor.execute(Command::CreateAdjustment {
+            layer, index: None, name: None, data: levels(),
+        }).unwrap() else { panic!() };
+        let CommandOutcome::Object(path) = editor.execute(Command::CreateRect {
+            layer, rect: Rect::new(0., 0., 5., 5.), name: None,
+        }).unwrap() else { panic!() };
+        assert_eq!(editor.execute(Command::Group { ids: vec![path, adj], name: None }), Err(CommandError::CannotGroupAdjustment));
+        assert_eq!(
+            editor.execute(Command::AddLayerMask {
+                object: path, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", AssetKind::Image, "images/m.png"),
+            }),
+            Err(CommandError::NotMaskable(path))
+        );
+        assert_eq!(
+            editor.execute(Command::SetAdjustment { object: path, data: levels() }),
+            Err(CommandError::NotAnAdjustment(path))
+        );
+    }
+
     #[test]
     fn layer_mask_add_replace_disable_remove_are_each_undoable() {
         let mut editor = new_editor();

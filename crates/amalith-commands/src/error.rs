@@ -62,8 +62,20 @@ pub enum CommandError {
     NothingToDefine,
     #[error("object {0} is not a symbol instance")]
     NotASymbolInstance(ObjectId),
-    #[error("image {0} already has a layer mask")]
+    #[error("object {0} already has a layer mask")]
     AlreadyHasMask(ObjectId),
-    #[error("image {0} has no layer mask")]
+    #[error("object {0} has no layer mask")]
     NoLayerMask(ObjectId),
+    #[error("object {0} can't have a layer mask (only images and adjustments can)")]
+    NotMaskable(ObjectId),
+    #[error("object {0} is not an adjustment")]
+    NotAnAdjustment(ObjectId),
+    #[error("adjustments can only be added to a raster layer")]
+    NotARasterLayer(LayerId),
+    #[error("layer {0} is locked")]
+    LayerLocked(LayerId),
+    #[error("adjustment settings are out of range")]
+    InvalidAdjustment,
+    #[error("adjustments can't be grouped; they belong directly in a layer")]
+    CannotGroupAdjustment,
 }

@@ -538,7 +538,7 @@ fn collect_one(document: &Document, id: ObjectId, out: &mut Vec<(BezPath, Appear
                 out.push((xf * sub.clone(), object.appearance.clone()));
             }
         }
-        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Unknown { .. } => {}
+        ObjectKind::Text(_) | ObjectKind::Image(_) | ObjectKind::Symbol(_) | ObjectKind::Adjustment(_) | ObjectKind::Unknown { .. } => {}
     }
 }
 

@@ -8,6 +8,7 @@
 //! top of the primitives exported here. See `document.rs` for the
 //! coordinate-system and ownership-tree writeup, and `DESIGN.md` for why
 //! this crate does not model an XML/SVG repr tree.
+pub mod adjustment;
 pub mod appearance;
 pub mod artboard;
 pub mod asset;
@@ -37,6 +38,11 @@ pub use appearance::{
 pub use artboard::Artboard;
 pub use asset::{Asset, AssetKind, AssetSource};
 pub use document::Document;
+pub use adjustment::{
+    AddNoiseParams, AdjustmentData, AdjustmentKind, AdjustmentOp, BlackWhiteParams, ColorBalanceParams, ColorRange,
+    CurvePoint, CurvesParams, ExposureParams, GaussianBlurParams, HueBand, HueSaturationParams, LevelRange,
+    LevelsParams, MotionBlurParams, RangeAdjustment,
+};
 pub use error::DocumentError;
 pub use geom::{Affine, Bounds, Point, Rect, Size, Vec2};
 pub use gradient::{FreeformPoint, Gradient, GradientKind, GradientStop};

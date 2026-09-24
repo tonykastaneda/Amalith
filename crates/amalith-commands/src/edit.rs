@@ -132,7 +132,9 @@ pub(crate) enum Edit {
         index: usize,
     },
     SetImageAsset { object: ObjectId, asset: AssetId },
+    /// Sets the mask on an image or adjustment.
     SetImageMask { object: ObjectId, mask: Option<amalith_core::ImageMask> },
+    SetAdjustment { object: ObjectId, data: amalith_core::AdjustmentData },
     RemoveAsset {
         id: AssetId,
     },
@@ -436,9 +438,17 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         }
         Edit::SetImageMask { object, mask } => {
             let obj = doc.object_mut(object).ok_or(CommandError::ObjectNotFound(object))?;
-            let ObjectKind::Image(image) = &mut obj.kind else { return Err(CommandError::NotAnImage(object)); };
-            let old = std::mem::replace(&mut image.mask, mask);
+            let slot = obj.kind.mask_slot_mut().ok_or(CommandError::NotMaskable(object))?;
+            let old = std::mem::replace(slot, mask);
             Ok((Edit::SetImageMask { object, mask: old }, None))
+        }
+        Edit::SetAdjustment { object, data } => {
+            let obj = doc.object_mut(object).ok_or(CommandError::ObjectNotFound(object))?;
+            let ObjectKind::Adjustment(adjustment) = &mut obj.kind else {
+                return Err(CommandError::NotAnAdjustment(object));
+            };
+            let old = std::mem::replace(adjustment, data);
+            Ok((Edit::SetAdjustment { object, data: old }, None))
         }
         Edit::RemoveAsset { id } => {
             let (asset, index) = doc
