@@ -352,6 +352,63 @@ impl App {
         self.request_main_redraw();
     }
 
+    /// The native pixel size of an image asset, from its file header and
+    /// cached; `None` if the format can't be read that way and it isn't
+    /// already decoded.
+    fn image_native_size(&mut self, id: amalith_core::AssetId) -> Option<(u32, u32)> {
+        if let Some(&size) = self.image_native_sizes.get(&id) {
+            return Some(size);
+        }
+        let doc = self.doc.editor.document();
+        let size = match &doc.asset(id)?.source {
+            amalith_core::AssetSource::Embedded { container_path } => {
+                let bytes = self.doc.asset_store.get(container_path)?;
+                image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+            }
+            amalith_core::AssetSource::Linked { path, .. } => image::image_dimensions(path).ok(),
+        }
+        .or_else(|| self.magic_wand_cache.as_ref().filter(|(cached, _)| *cached == id).map(|(_, img)| img.dimensions()))?;
+        self.image_native_sizes.insert(id, size);
+        Some(size)
+    }
+
+    /// Where a click would paint, as the map from that image's pixels to
+    /// document space — the same answer `raster_paint_target` gives, but
+    /// without decoding anything, so it's cheap enough for every frame.
+    /// An empty raster layer paints a new canvas at one pixel per unit.
+    fn raster_hover_pixel_to_doc(&mut self) -> vello::kurbo::Affine {
+        let fallback = vello::kurbo::Affine::IDENTITY;
+        let doc = self.doc.editor.document();
+        let Some(layer) = self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer) else {
+            return fallback;
+        };
+        let hit = select::topmost_selectable_at(doc, self.doc_point(self.pointer), self.visible_doc_rect(), 0.0);
+        let Some(id) = self.doc.selection.first().copied().or(hit).filter(|&id| panels::layers::owning_layer(doc, id) == Some(layer)) else {
+            return fallback;
+        };
+        let Some(amalith_core::ObjectKind::Image(image)) = doc.object(id).map(|o| &o.kind) else { return fallback };
+        let (bounds, world) = (image.local_bounds, crate::convert::affine(doc.world_transform(id)));
+        let asset = if self.doc.editing_mask == Some(id) { image.mask.map_or(image.asset, |m| m.asset) } else { image.asset };
+        let (w, h) = match self.image_native_size(asset) {
+            Some(size) => size,
+            None => (bounds.width().max(1.0) as u32, bounds.height().max(1.0) as u32),
+        };
+        world
+            * vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
+            * vello::kurbo::Affine::scale_non_uniform(bounds.width() / w.max(1) as f64, bounds.height() / h.max(1) as f64)
+    }
+
+    /// The brush-size ring: a circle of `radius` image pixels at `center`
+    /// (image pixel space), drawn one screen pixel wide, dark then light so
+    /// it reads over any artwork. An image scaled unevenly or rotated shows
+    /// the ellipse the brush will actually paint.
+    fn paint_brush_ring(&mut self, pixel_to_screen: vello::kurbo::Affine, center: Point, radius: f64) {
+        use vello::kurbo::Shape;
+        let ring = pixel_to_screen * vello::kurbo::Circle::new(center, radius).to_path(0.1);
+        self.content.stroke(&vello::kurbo::Stroke::new(2.0), ID, vello::peniko::Color::from_rgba8(0, 0, 0, 160), None, &ring);
+        self.content.stroke(&vello::kurbo::Stroke::new(1.0), ID, vello::peniko::Color::WHITE, None, &ring);
+    }
+
     pub(super) fn paint_raster_brush_preview(&mut self) {
         if matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) && self.canvas_viewport().contains(self.pointer) && matches!(self.drag, Drag::None) {
             let (size, hardness) = match self.active_tool {
@@ -359,6 +416,14 @@ impl App {
                 Tool::RasterCloneStamp => (self.raster_clone_size, self.raster_clone_hardness),
                 _ => (self.raster_brush_size, self.raster_brush_hardness),
             };
+            // The size circle, always shown while the tool hovers the
+            // canvas — like the vector Eraser's — so the brush's reach is
+            // visible before the click, not only mid-stroke.
+            let pixel_to_screen = self.doc.view.to_screen() * self.raster_hover_pixel_to_doc();
+            let center = pixel_to_screen.inverse() * self.pointer;
+            self.content.push_clip_layer(Fill::NonZero, ID, &self.canvas_viewport());
+            self.paint_brush_ring(pixel_to_screen, center, size * 0.5);
+            self.content.pop_layer();
             let label = if self.active_tool == Tool::RasterCloneStamp {
                 format!("{} px · {:.0}% hard · {}", size as u32, hardness * 100.0, if self.raster_clone_aligned { "Aligned" } else { "Not Aligned" })
             } else {
@@ -370,13 +435,14 @@ impl App {
         if stroke.preview.is_none() { return; }
         self.content.push_clip_layer(Fill::NonZero, ID, &self.canvas_viewport());
         let to_screen = self.doc.view.to_screen() * stroke.pixel_to_doc;
-        self.content.stroke(&vello::kurbo::Stroke::new(1.0 / self.doc.view.zoom), to_screen, vello::peniko::Color::WHITE, None, &vello::kurbo::Circle::new(stroke.last, stroke.radius));
-        if let PixelSource::Clone { offset } = stroke.source {
+        let (last, radius, source) = (stroke.last, stroke.radius, stroke.source);
+        self.paint_brush_ring(to_screen, last, radius);
+        if let PixelSource::Clone { offset } = source {
             // The moving source crosshair, so aiming stays visible while
             // the destination-side circle above tracks the actual cursor.
-            let source = stroke.last + offset;
+            let source = last + offset;
             let gold = vello::peniko::Color::from_rgb8(0xff, 0xd5, 0x00);
-            self.content.stroke(&vello::kurbo::Stroke::new(1.0 / self.doc.view.zoom), to_screen, gold, None, &vello::kurbo::Circle::new(source, stroke.radius));
+            self.content.stroke(&vello::kurbo::Stroke::new(1.0 / self.doc.view.zoom), to_screen, gold, None, &vello::kurbo::Circle::new(source, radius));
             let cross = 4.0 / self.doc.view.zoom;
             self.content.stroke(&vello::kurbo::Stroke::new(1.0 / self.doc.view.zoom), to_screen, gold, None,
                 &vello::kurbo::Line::new(Point::new(source.x - cross, source.y), Point::new(source.x + cross, source.y)));

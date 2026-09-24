@@ -1360,6 +1360,10 @@ struct App {
     /// slow) full-resolution re-decode. Not persisted; just a per-session
     /// convenience.
     magic_wand_cache: Option<(amalith_core::AssetId, image::RgbaImage)>,
+    /// Native pixel size of image assets, read from the file header (see
+    /// `App::image_native_size`) so the raster brush can size its hover
+    /// circle without decoding the image.
+    image_native_sizes: HashMap<amalith_core::AssetId, (u32, u32)>,
     /// Installed font family names, sorted — built once, for the Character
     /// panel's family dropdown.
     font_families: Vec<String>,
@@ -1825,6 +1829,7 @@ impl App {
             text_blink: Instant::now(),
             ants_phase: Instant::now(),
             magic_wand_cache: None,
+            image_native_sizes: HashMap::new(),
             font_families: Vec::new(),
             font_menu: None,
             panel_menu: None,
