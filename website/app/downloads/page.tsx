@@ -6,34 +6,22 @@ import { DownloadLinks, type Platform } from "./DownloadLinks";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 export const metadata: Metadata = {
-  title: "Download Amalith",
-  description: "Download Amalith for macOS, Windows 10/11, and Linux.",
+  title: "Amalith Downloads — Coming Soon",
+  description: "Amalith for macOS, Windows, and Linux is coming soon.",
 };
 
 const platforms: Platform[] = [
   {
     name: "macOS",
     icon: `${basePath}/brand/platform/mac.svg`,
-    label: "Download for macOS",
-    matchExt: ".dmg",
   },
   {
     name: "Windows",
     icon: `${basePath}/brand/platform/win.svg`,
-    label: "Download for Windows",
-    // The installer (Amalith-Setup.exe) is the only Windows asset. Match its
-    // suffix rather than a bare ".exe" so a future second .exe can't steal it.
-    matchExt: "-setup.exe",
   },
   {
     name: "Linux",
     icon: `${basePath}/brand/platform/linux.svg`,
-    label: "Download for Linux",
-    // One zip now carries every install method — AppImage, deb, rpm,
-    // portable tarball and the Arch PKGBUILD — with an INSTALL.txt giving
-    // the command for each, so there's a single asset to link rather than
-    // four for the user to choose between on the release page.
-    matchExt: "-linux.zip",
   },
 ];
 
