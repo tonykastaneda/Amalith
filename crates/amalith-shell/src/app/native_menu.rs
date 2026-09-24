@@ -365,6 +365,10 @@ impl NativeMenu {
         let quit_i = reg(&mut items, mk("Quit Amalith", sup, Code::KeyQ), MenuAction::Quit);
         #[cfg(not(target_os = "macos"))]
         let quit_i = reg(&mut items, MenuItem::new("Exit", true, None), MenuAction::Quit);
+        // The app-named menu is a macOS convention. Windows has none, so
+        // there these four items lead the File menu instead (see
+        // `file_items`, below).
+        #[cfg(target_os = "macos")]
         let app = Submenu::with_items(
             "Amalith",
             true,
@@ -447,7 +451,21 @@ impl NativeMenu {
         let file_sep4 = sep();
         let file_sep5 = sep();
         let file_sep6 = sep();
-        let mut file_items: Vec<&dyn muda::IsMenuItem> = vec![&new_i, &new_tab_i];
+        let mut file_items: Vec<&dyn muda::IsMenuItem> = Vec::new();
+        #[cfg(not(target_os = "macos"))]
+        let (app_sep1, app_sep2, app_sep3) = (sep(), sep(), sep());
+        #[cfg(not(target_os = "macos"))]
+        file_items.extend([
+            &about_i as &dyn muda::IsMenuItem,
+            &check_updates_i,
+            &app_sep1,
+            &prefs_i,
+            &app_sep2,
+            &quit_i,
+            &app_sep3,
+        ]);
+        file_items.push(&new_i);
+        file_items.push(&new_tab_i);
         if !hide_wip {
             file_items.push(&new_from_template_wip);
         }
@@ -1305,6 +1323,7 @@ impl NativeMenu {
         let help_menu = Submenu::with_items("Help", true, &help_items).expect("help menu");
 
         let menu = Menu::new();
+        #[cfg(target_os = "macos")]
         menu.append(&app).expect("append app menu");
         menu.append(&file).expect("append file menu");
         menu.append(&edit).expect("append edit menu");
