@@ -179,7 +179,7 @@ impl App {
                 },
             };
             let suppress_fill = dlg.suppress_fill();
-            if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+            if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(cmd) {
                 self.doc.selection = vec![id];
                 self.apply_new_appearance(id);
                 self.reparent_new_object_into_isolation(id);

@@ -403,9 +403,8 @@ pub enum Action {
     LayerRestack(i32),
     /// Layers footer: delete the object selection.
     DeleteObjects,
-    /// Layers footer: make a blank sublayer in the current layer — a
-    /// transparent pixel layer in a Raster layer, an empty container in a
-    /// Vector one — just above the selected sublayer, else on top.
+    /// Layers footer: make a blank child row in the current layer — a
+    /// transparent pixel object in Raster, or a blank object slot in Vector.
     CreateSublayer,
     /// Layers footer: add a layer mask to the selected image (if it has
     /// none), else toggle whether painting currently targets that mask.

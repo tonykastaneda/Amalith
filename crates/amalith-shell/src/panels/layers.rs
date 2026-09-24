@@ -733,6 +733,9 @@ pub(crate) fn drop_target(
 }
 
 fn kind_name(doc: &Document, id: ObjectId) -> String {
+    if doc.object(id).is_some_and(|object| object.blank_vector_slot) {
+        return "Object".into();
+    }
     match doc.object(id).map(|o| &o.kind) {
         Some(ObjectKind::Path(_)) => "Path",
         Some(ObjectKind::CompoundPath(_)) => "Compound Path",
@@ -924,7 +927,12 @@ fn paint_row(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, row: &LayerRo
                 draw_triangle(scene, indent + metric_col() * 0.5, cy, row.expanded, th.text_dim);
             }
             let icon_x = indent + if is_group { metric_col() * 1.5 } else { metric_col() * 0.5 };
-            draw_object_kind(scene, icon_x, cy, ctx.doc.object(id).map(|o| &o.kind), th.text_dim);
+            let object = ctx.doc.object(id);
+            if object.is_some_and(|o| o.blank_vector_slot) {
+                draw_blank_object_kind(scene, icon_x, cy, th.text_dim);
+            } else {
+                draw_object_kind(scene, icon_x, cy, object.map(|o| &o.kind), th.text_dim);
+            }
             let name_c = if !row.visible || row.locked {
                 th.border
             } else if selected {
@@ -1540,6 +1548,15 @@ fn draw_layer_kind(scene: &mut Scene, cx: f64, cy: f64, kind: LayerKind, color: 
             }
         }
     }
+}
+
+fn draw_blank_object_kind(scene: &mut Scene, cx: f64, cy: f64, color: Color) {
+    let frame = Rect::new(cx - ui_px(4.5), cy - ui_px(4.5), cx + ui_px(4.5), cy + ui_px(4.5));
+    scene.stroke(&Stroke::new(ui_px(1.1)), ID, color, None, &frame);
+    scene.stroke(&Stroke::new(ui_px(1.1)), ID, color, None,
+        &Line::new((cx - ui_px(2.2), cy), (cx + ui_px(2.2), cy)));
+    scene.stroke(&Stroke::new(ui_px(1.1)), ID, color, None,
+        &Line::new((cx, cy - ui_px(2.2)), (cx, cy + ui_px(2.2))));
 }
 
 fn draw_object_kind(scene: &mut Scene, cx: f64, cy: f64, kind: Option<&ObjectKind>, color: Color) {

@@ -933,6 +933,41 @@ mod tests {
         id
     }
 
+    #[test]
+    fn vector_slot_becomes_a_shape_or_text_in_place_and_undo_restores_it() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Art".into(), index: None }).unwrap() else { panic!() };
+        let parent = ObjectParent::Layer(layer);
+        let CommandOutcome::Object(bottom) = editor.execute(Command::CreateRect {
+            parent, rect: Rect::new(0., 0., 10., 10.), name: None,
+        }).unwrap() else { panic!() };
+        let CommandOutcome::Object(slot) = editor.execute(Command::CreateVectorSlot {
+            layer, index: None, name: Some("My object".into()),
+        }).unwrap() else { panic!() };
+        let CommandOutcome::Object(top) = editor.execute(Command::CreateRect {
+            parent, rect: Rect::new(20., 20., 30., 30.), name: None,
+        }).unwrap() else { panic!() };
+        assert_eq!(editor.document().children_of(parent), &[bottom, slot, top]);
+        let result = editor.execute(Command::CreateInVectorSlot {
+            slot,
+            command: Box::new(Command::CreateText {
+                parent, data: amalith_core::TextData { content: "Hello".into(), ..Default::default() },
+                transform: Affine::IDENTITY, name: None,
+            }),
+        }).unwrap();
+        assert_eq!(result, CommandOutcome::Object(slot));
+        assert_eq!(editor.document().children_of(parent), &[bottom, slot, top]);
+        let object = editor.document().object(slot).unwrap();
+        assert_eq!(object.name.as_deref(), Some("My object"));
+        assert!(!object.blank_vector_slot);
+        assert!(matches!(object.kind, ObjectKind::Text(_)));
+        editor.undo().unwrap();
+        assert!(editor.document().object(slot).unwrap().blank_vector_slot);
+        assert_eq!(editor.document().children_of(parent), &[bottom, slot, top]);
+        editor.redo().unwrap();
+        assert!(matches!(editor.document().object(slot).unwrap().kind, ObjectKind::Text(_)));
+    }
+
     fn is_sublayer(editor: &Editor, id: ObjectId) -> bool {
         matches!(editor.document().object(id).map(|o| &o.kind), Some(ObjectKind::Group(g)) if g.sublayer)
     }

@@ -16,6 +16,8 @@ pub enum CommandError {
     LayerNotFound(LayerId),
     #[error("no object with id {0}")]
     ObjectNotFound(ObjectId),
+    #[error("object {0} is not an empty vector row")]
+    NotAVectorSlot(ObjectId),
     #[error("no guide with id {0}")]
     GuideNotFound(GuideId),
     #[error("no gradient with id {0}")]
@@ -72,6 +74,8 @@ pub enum CommandError {
     NotAnAdjustment(ObjectId),
     #[error("adjustments can only be added to a raster layer")]
     NotARasterLayer(LayerId),
+    #[error("vector object rows can only be added to a vector layer")]
+    NotAVectorLayer(LayerId),
     #[error("layer {0} is locked")]
     LayerLocked(LayerId),
     #[error("adjustment settings are out of range")]

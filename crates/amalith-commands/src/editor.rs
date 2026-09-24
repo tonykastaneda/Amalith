@@ -966,6 +966,51 @@ impl Editor {
                 object.name = name;
                 vec![Edit::InsertObject { object: Box::new(object), index }]
             }
+            Command::CreateVectorSlot { layer, index, name } => {
+                let target = self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
+                if target.kind != amalith_core::LayerKind::Vector { return Err(CommandError::NotAVectorLayer(layer)); }
+                if target.locked { return Err(CommandError::LayerLocked(layer)); }
+                let parent = ObjectParent::Layer(layer);
+                let children = self.document.children_of(parent);
+                let mut object = Object::new(
+                    ObjectId::new(), parent,
+                    ObjectKind::Path(amalith_core::PathData::from_subpaths(Vec::new())),
+                );
+                object.blank_vector_slot = true;
+                object.name = name;
+                object.appearance.set_fill(Paint::None);
+                object.appearance.set_stroke(Paint::None);
+                vec![Edit::InsertObject { object: Box::new(object), index: index.unwrap_or(children.len()).min(children.len()) }]
+            }
+            Command::CreateInVectorSlot { slot, command } => {
+                let blank = self.document.object(slot).ok_or(CommandError::ObjectNotFound(slot))?;
+                let ObjectParent::Layer(layer) = blank.parent else { return Err(CommandError::NotAVectorSlot(slot)); };
+                if !blank.blank_vector_slot || blank.locked || self.document.layer(layer).is_none_or(|l| l.locked || l.kind != amalith_core::LayerKind::Vector) {
+                    return Err(CommandError::NotAVectorSlot(slot));
+                }
+                let parent = blank.parent;
+                let index = self.document.children_of(parent).iter().position(|&id| id == slot)
+                    .ok_or(CommandError::ObjectNotFound(slot))?;
+                if !matches!(&*command, Command::CreateRect { .. } | Command::CreateEllipse { .. } | Command::CreatePath { .. } | Command::CreateText { .. }) {
+                    return Err(CommandError::NotAVectorSlot(slot));
+                }
+                let mut created = self.compile(*command)?;
+                if created.len() != 1 {
+                    return Err(CommandError::NotAVectorSlot(slot));
+                }
+                let Edit::InsertObject { object, index: created_index } = &mut created[0] else {
+                    return Err(CommandError::NotAVectorSlot(slot));
+                };
+                if object.parent != parent {
+                    return Err(CommandError::NotAVectorSlot(slot));
+                }
+                object.id = slot;
+                object.name = blank.name.clone();
+                *created_index = index;
+                let mut edits = vec![Edit::RemoveObject { id: slot }];
+                edits.extend(created);
+                edits
+            }
             Command::CreateAdjustment { layer, index, name, mut data } => {
                 let target = self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
                 if target.kind != amalith_core::LayerKind::Raster {

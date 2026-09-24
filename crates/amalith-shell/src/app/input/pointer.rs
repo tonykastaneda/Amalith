@@ -1220,7 +1220,7 @@ impl App {
                         closed: false,
                     }]);
                     if let Ok(CommandOutcome::Object(id)) =
-                        self.doc.editor.execute(Command::CreatePath {
+                        self.doc.execute_new_vector_object(Command::CreatePath {
                             parent: container,
                             path,
                             name: None,
@@ -1303,7 +1303,7 @@ impl App {
                         | Tool::RasterLasso => return,
                         Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => return,
                     };
-                    if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+                    if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(cmd) {
                         self.doc.selection = vec![id];
                         self.apply_new_appearance(id);
                         self.reparent_new_object_into_isolation(id);

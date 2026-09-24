@@ -1486,6 +1486,10 @@ pub struct Object {
     pub locked: bool,
     pub parent: ObjectParent,
     pub kind: ObjectKind,
+    /// An empty vector row awaiting its first shape, path, or text object.
+    /// Ordinary artwork (including an intentionally empty path) is not a slot.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blank_vector_slot: bool,
     /// Fill and stroke. `#[serde(default)]` so a `.amalith` file saved
     /// before this field existed still loads (with the default
     /// appearance) instead of failing to parse.
@@ -1504,6 +1508,8 @@ pub struct Object {
     pub fallback: Option<PathData>,
 }
 
+fn is_false(value: &bool) -> bool { !*value }
+
 impl Object {
     pub fn new(id: ObjectId, parent: ObjectParent, kind: ObjectKind) -> Self {
         Self {
@@ -1514,6 +1520,7 @@ impl Object {
             locked: false,
             parent,
             kind,
+            blank_vector_slot: false,
             appearance: Appearance::default(),
             fallback: None,
         }

@@ -1047,6 +1047,24 @@ impl Doc {
             .or_else(|| doc.layers().last().map(|l| l.id))
     }
 
+    /// Fill a selected blank vector row in place when the next drawing
+    /// tool creates its first object. Other commands use the usual path.
+    fn execute_new_vector_object(&mut self, command: Command) -> Result<CommandOutcome, amalith_commands::CommandError> {
+        let parent = match &command {
+            Command::CreateRect { parent, .. } | Command::CreateEllipse { parent, .. }
+            | Command::CreatePath { parent, .. } | Command::CreateText { parent, .. } => Some(*parent),
+            _ => None,
+        };
+        let slot = self.selection.as_slice().first().copied().filter(|&id| {
+            self.editor.document().object(id).is_some_and(|object| object.blank_vector_slot && Some(object.parent) == parent)
+        });
+        if let Some(slot) = slot {
+            self.editor.execute(Command::CreateInVectorSlot { slot, command: Box::new(command) })
+        } else {
+            self.editor.execute(command)
+        }
+    }
+
     fn new(editor: Editor) -> Self {
         Self {
             id: ObjectId::new(),
@@ -3903,18 +3921,12 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Which layer's mode ("Vector Layer" / "Raster Layer") the tab
-    /// badge should show right now — the layer owning the current object
-    /// selection when there is one (same "the layer you're in" reasoning
-    /// as the Layers panel's own bold-row highlight, `panels::layers`'
-    /// `owning_layer`), else the explicitly selected layer row, else
-    /// `None` (nothing to confidently show).
     /// Layers footer ▸ Create Sublayer: a blank sublayer in the current
     /// layer, just above the selected sublayer (or whatever top-level item
     /// the selection sits in), else on top — then selected, so the next
     /// stroke or shape goes into it. In a Raster layer that's a transparent
-    /// pixel layer the size of the artboard (Photoshop's New Layer); in a
-    /// Vector layer, an empty sublayer container (Illustrator's).
+    /// pixel layer the size of the artboard. In a Vector layer, it's a blank
+    /// object row that the next shape, path, or text fills in place.
     pub(in crate::app) fn create_sublayer(&mut self) {
         let doc = self.doc.editor.document();
         let Some(layer_id) = self.doc.creation_layer() else {
@@ -3945,11 +3957,8 @@ impl App {
         let index = top.and_then(|t| children.iter().position(|&c| c == t)).map(|i| i + 1);
         let outcome = match kind {
             amalith_core::LayerKind::Vector => {
-                let n = 1 + children
-                    .iter()
-                    .filter(|&&c| matches!(doc.object(c).map(|o| &o.kind), Some(amalith_core::ObjectKind::Group(g)) if g.sublayer))
-                    .count();
-                self.doc.editor.execute(Command::CreateSublayer { layer: layer_id, index, name: Some(format!("Sublayer {n}")) })
+                let n = 1 + children.len();
+                self.doc.editor.execute(Command::CreateVectorSlot { layer: layer_id, index, name: Some(format!("Object {n}")) })
             }
             amalith_core::LayerKind::Raster => {
                 let n = 1 + children
@@ -4010,7 +4019,9 @@ impl App {
                 self.doc.anchor_sel.clear();
                 self.doc.io_error = None;
                 self.doc.collapsed_layers.remove(&layer_id);
-                self.doc.expanded_groups.insert(id);
+                if self.doc.editor.document().object(id).is_some_and(|object| object.is_group()) {
+                    self.doc.expanded_groups.insert(id);
+                }
             }
             Ok(_) => {}
             Err(err) => self.doc.io_error = Some(err.to_string()),
@@ -4904,7 +4915,7 @@ impl App {
         };
         let path = amalith_core::PathData::from_subpaths(vec![subpath]);
         let (container, _) = self.ensure_container();
-        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(Command::CreatePath {
+        if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(Command::CreatePath {
             parent: container,
             path,
             name: None,
@@ -7443,7 +7454,7 @@ impl App {
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
         };
-        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+        if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(cmd) {
             self.doc.selection = vec![id];
             self.reparent_new_object_into_isolation(id);
             self.enter_text_edit(id, origin, None);
@@ -7534,7 +7545,7 @@ impl App {
             transform: amalith_core::Affine::IDENTITY,
             name: None,
         };
-        if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(cmd) {
+        if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(cmd) {
             self.doc.selection = vec![id];
             self.reparent_new_object_into_isolation(id);
             let origin = click_doc;
@@ -7564,7 +7575,7 @@ impl App {
             thread_prev: None,
         };
         data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
-        match self.doc.editor.execute(Command::CreateText {
+        match self.doc.execute_new_vector_object(Command::CreateText {
             parent: container,
             data,
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
@@ -10409,6 +10420,44 @@ mod shift_swapped_type_tool_tests {
 #[cfg(test)]
 mod shared_layer_tool_tests {
     use super::*;
+
+    #[test]
+    fn selected_blank_vector_row_is_filled_by_the_next_shape() {
+        let mut document = Document::new("Art");
+        let layer = LayerId::new();
+        document.insert_layer(amalith_core::Layer::new(layer, "Vector"), 0);
+        let mut doc = Doc::new(Editor::new(document));
+        let CommandOutcome::Object(slot) = doc.editor.execute(Command::CreateVectorSlot {
+            layer, index: None, name: Some("Badge".into()),
+        }).unwrap() else { panic!() };
+        doc.selection = vec![slot];
+        let parent = doc.creation_container().unwrap();
+        assert_eq!(parent, amalith_core::ObjectParent::Layer(layer));
+        let outcome = doc.execute_new_vector_object(Command::CreateRect {
+            parent, rect: amalith_core::Rect::new(5., 5., 25., 25.), name: None,
+        }).unwrap();
+        assert_eq!(outcome, CommandOutcome::Object(slot));
+        let object = doc.editor.document().object(slot).unwrap();
+        assert_eq!(object.name.as_deref(), Some("Badge"));
+        assert!(!object.blank_vector_slot);
+        assert!(matches!(object.kind, amalith_core::ObjectKind::Path(_)));
+    }
+
+    #[test]
+    fn vector_footer_adds_a_blank_object_row() {
+        let mut document = Document::new("Art");
+        let layer = LayerId::new();
+        document.insert_layer(amalith_core::Layer::new(layer, "Vector"), 0);
+        let mut app = App::new();
+        app.doc = Doc::new(Editor::new(document));
+        app.doc.selected_layer = Some(layer);
+        app.create_sublayer();
+        let [slot] = app.doc.selection[..] else { panic!() };
+        let object = app.doc.editor.document().object(slot).unwrap();
+        assert!(object.blank_vector_slot);
+        assert_eq!(object.parent, amalith_core::ObjectParent::Layer(layer));
+        assert!(!object.is_group());
+    }
 
     /// A layer holding rect `a`, and a sublayer holding rect `b`.
     fn layer_with_sublayer() -> (Doc, LayerId, ObjectId, ObjectId, ObjectId) {

@@ -389,6 +389,12 @@ pub enum Command {
         index: Option<usize>,
         name: Option<String>,
     },
+    /// Adds an empty object row to a Vector layer. The next object can
+    /// replace this slot in place through `CreateInVectorSlot`.
+    CreateVectorSlot { layer: LayerId, index: Option<usize>, name: Option<String> },
+    /// Creates a shape, path, or text in a previously created blank row,
+    /// retaining its identity, name, and stacking position in one undo step.
+    CreateInVectorSlot { slot: ObjectId, command: Box<Command> },
     /// Groups `ids` into one new group object, as one undo group. `ids`
     /// must all share the same current parent (a layer, or another
     /// group) â that parent becomes the new group's parent too. The
