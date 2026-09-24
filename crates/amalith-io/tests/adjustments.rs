@@ -65,7 +65,7 @@ fn a_masked_adjustment_round_trips_with_its_mask_bytes() {
     let layer = raster_layer(&mut editor);
     let CommandOutcome::Object(image) = editor
         .execute(Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer),
+            parent: amalith_core::ObjectParent::Layer(layer), index: None,
             path: "images/photo.png".into(),
             bounds: Rect::new(0., 0., 64., 48.),
             transform: Affine::IDENTITY,

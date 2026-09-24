@@ -804,7 +804,7 @@ mod tests {
         };
         let CommandOutcome::Object(id) = editor
             .execute(Command::CreateImage {
-                parent: amalith_core::ObjectParent::Layer(layer),
+                parent: amalith_core::ObjectParent::Layer(layer), index: None,
                 path: "/tmp/photo.png".into(),
                 bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
                 transform: Affine::translate((10.0, 20.0)),
@@ -851,7 +851,7 @@ mod tests {
         };
         let CommandOutcome::Object(obj_id) = editor
             .execute(Command::CreateImage {
-                parent: amalith_core::ObjectParent::Layer(layer),
+                parent: amalith_core::ObjectParent::Layer(layer), index: None,
                 path: "/tmp/photo.png".into(),
                 bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
                 transform: Affine::IDENTITY,
@@ -905,7 +905,7 @@ mod tests {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
         let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer), path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), index: None, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
         let asset_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {
@@ -1034,7 +1034,7 @@ mod tests {
         let mut editor = new_editor();
         let layer = raster_layer(&mut editor);
         let CommandOutcome::Object(image) = editor.execute(Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer), path: "images/photo.png".into(), bounds: Rect::new(10., 20., 110., 70.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), index: None, path: "images/photo.png".into(), bounds: Rect::new(10., 20., 110., 70.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
 
@@ -1160,7 +1160,7 @@ mod tests {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
         let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer), path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), index: None, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
         let mask_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {

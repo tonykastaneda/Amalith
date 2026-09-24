@@ -19,7 +19,7 @@ fn script_embeds_every_linked_placed_item_and_typename_flips_live() {
     };
     editor
         .execute(Command::CreateImage {
-            parent: amalith_core::ObjectParent::Layer(layer_id),
+            parent: amalith_core::ObjectParent::Layer(layer_id), index: None,
             path: linked_path.to_string_lossy().into_owned(),
             bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
             transform: Affine::IDENTITY,

@@ -3909,6 +3909,115 @@ impl App {
     /// as the Layers panel's own bold-row highlight, `panels::layers`'
     /// `owning_layer`), else the explicitly selected layer row, else
     /// `None` (nothing to confidently show).
+    /// Layers footer ▸ Create Sublayer: a blank sublayer in the current
+    /// layer, just above the selected sublayer (or whatever top-level item
+    /// the selection sits in), else on top — then selected, so the next
+    /// stroke or shape goes into it. In a Raster layer that's a transparent
+    /// pixel layer the size of the artboard (Photoshop's New Layer); in a
+    /// Vector layer, an empty sublayer container (Illustrator's).
+    pub(in crate::app) fn create_sublayer(&mut self) {
+        let doc = self.doc.editor.document();
+        let Some(layer_id) = self.doc.creation_layer() else {
+            self.doc.io_error = Some("Create a layer first.".into());
+            self.request_main_redraw();
+            return;
+        };
+        let Some(layer) = doc.layer(layer_id) else { return };
+        if layer.locked {
+            self.doc.io_error = Some("Unlock the layer to add a sublayer.".into());
+            self.request_main_redraw();
+            return;
+        }
+        let kind = layer.kind;
+        let children = doc.children_of(amalith_core::ObjectParent::Layer(layer_id));
+        // The selection's top-level item in this layer: a sublayer itself,
+        // or the sublayer/object its selected content sits under.
+        let top = self.doc.selection.first().and_then(|&id| {
+            let mut current = id;
+            loop {
+                match doc.object(current)?.parent {
+                    amalith_core::ObjectParent::Layer(l) if l == layer_id => return Some(current),
+                    amalith_core::ObjectParent::Group(g) => current = g,
+                    _ => return None,
+                }
+            }
+        });
+        let index = top.and_then(|t| children.iter().position(|&c| c == t)).map(|i| i + 1);
+        let outcome = match kind {
+            amalith_core::LayerKind::Vector => {
+                let n = 1 + children
+                    .iter()
+                    .filter(|&&c| matches!(doc.object(c).map(|o| &o.kind), Some(amalith_core::ObjectKind::Group(g)) if g.sublayer))
+                    .count();
+                self.doc.editor.execute(Command::CreateSublayer { layer: layer_id, index, name: Some(format!("Sublayer {n}")) })
+            }
+            amalith_core::LayerKind::Raster => {
+                let n = 1 + children
+                    .iter()
+                    .filter(|&&c| matches!(doc.object(c).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))))
+                    .count();
+                // Sized like a new paint canvas: the artboard in view, else
+                // the first artboard, else what's visible.
+                let view = self.visible_doc_rect();
+                let bounds = doc
+                    .artboards()
+                    .iter()
+                    .find(|a| crate::convert::rect(a.rect).contains(view.center()))
+                    .or_else(|| doc.artboards().first())
+                    .map(|a| crate::convert::rect(a.rect))
+                    .unwrap_or(view);
+                let (w, h) = (bounds.width().ceil().max(1.0) as u32, bounds.height().ceil().max(1.0) as u32);
+                if w as u64 * h as u64 > 16_777_216 {
+                    self.doc.io_error = Some("The artboard is too large for a pixel layer (over 16 megapixels).".into());
+                    self.request_main_redraw();
+                    return;
+                }
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                if let Err(error) = image::RgbaImage::new(w, h).write_to(&mut bytes, image::ImageFormat::Png) {
+                    self.doc.io_error = Some(format!("Couldn't create the pixel layer: {error}"));
+                    self.request_main_redraw();
+                    return;
+                }
+                let bytes = bytes.into_inner();
+                let path = format!("images/layer-{}.png", amalith_core::AssetId::new());
+                self.doc.asset_store.insert(&path, bytes.clone());
+                let outcome = self.doc.editor.execute(Command::CreateImage {
+                    parent: amalith_core::ObjectParent::Layer(layer_id),
+                    index,
+                    path: path.clone(),
+                    bounds: amalith_core::Rect::new(0.0, 0.0, w as f64, h as f64),
+                    transform: amalith_core::Affine::translate((bounds.x0, bounds.y0)),
+                    name: Some(format!("Layer {n}")),
+                    embedded: true,
+                    modified: None,
+                    size: None,
+                });
+                if let Ok(CommandOutcome::Object(id)) = &outcome {
+                    let asset = match self.doc.editor.document().object(*id).map(|o| &o.kind) {
+                        Some(amalith_core::ObjectKind::Image(d)) => Some(d.asset),
+                        _ => None,
+                    };
+                    if let Some(asset) = asset {
+                        self.request_lod(asset, path, None, Some(bytes), w, h);
+                    }
+                }
+                outcome
+            }
+        };
+        match outcome {
+            Ok(CommandOutcome::Object(id)) => {
+                self.doc.selection = vec![id];
+                self.doc.anchor_sel.clear();
+                self.doc.io_error = None;
+                self.doc.collapsed_layers.remove(&layer_id);
+                self.doc.expanded_groups.insert(id);
+            }
+            Ok(_) => {}
+            Err(err) => self.doc.io_error = Some(err.to_string()),
+        }
+        self.request_main_redraw();
+    }
+
     /// Adds an adjustment layer to the current layer, which must be a
     /// Raster layer: just above the selected object when that's one of the
     /// layer's own children, otherwise on top. The new adjustment becomes
@@ -5883,7 +5992,7 @@ impl App {
         let src = path.to_string_lossy().into_owned();
         let (modified, size) = canvas::file_stamp(path);
         let cmd = Command::CreateImage {
-            parent: container,
+            parent: container, index: None,
             path: src.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
@@ -6107,7 +6216,7 @@ impl App {
         self.doc.asset_store.insert(&container, bytes.to_vec());
         let (target, _) = self.ensure_container();
         let cmd = Command::CreateImage {
-            parent: target,
+            parent: target, index: None,
             path: container.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),

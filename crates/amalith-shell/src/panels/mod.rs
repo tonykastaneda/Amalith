@@ -403,8 +403,10 @@ pub enum Action {
     LayerRestack(i32),
     /// Layers footer: delete the object selection.
     DeleteObjects,
-    /// Layers footer: group the current selection.
-    GroupSelection,
+    /// Layers footer: make a blank sublayer in the current layer — a
+    /// transparent pixel layer in a Raster layer, an empty container in a
+    /// Vector one — just above the selected sublayer, else on top.
+    CreateSublayer,
     /// Layers footer: add a layer mask to the selected image (if it has
     /// none), else toggle whether painting currently targets that mask.
     AddOrToggleLayerMask,

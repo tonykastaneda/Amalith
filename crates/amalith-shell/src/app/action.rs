@@ -669,7 +669,7 @@ impl App {
                 self.request_main_redraw();
             }
             panels::Action::LayerRestack(dir) => self.restack(dir),
-            panels::Action::GroupSelection => self.group_selection(),
+            panels::Action::CreateSublayer => self.create_sublayer(),
             panels::Action::AddOrToggleLayerMask => self.add_or_toggle_layer_mask(),
             panels::Action::DeleteObjects => {
                 if !self.doc.selection.is_empty() {

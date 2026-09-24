@@ -906,6 +906,7 @@ impl Editor {
             }
             Command::CreateImage {
                 parent,
+                index,
                 path,
                 bounds,
                 transform,
@@ -938,7 +939,8 @@ impl Editor {
                 object.transform = transform;
                 object.name = name;
                 object.transform = self.rebase_into(parent)? * object.transform;
-                let index = self.document.children_of(parent).len();
+                let len = self.document.children_of(parent).len();
+                let index = index.unwrap_or(len).min(len);
                 let asset_index = self.document.assets().len();
                 vec![
                     Edit::InsertAsset {

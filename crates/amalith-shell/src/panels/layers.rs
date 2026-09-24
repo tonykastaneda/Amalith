@@ -736,6 +736,7 @@ fn kind_name(doc: &Document, id: ObjectId) -> String {
     match doc.object(id).map(|o| &o.kind) {
         Some(ObjectKind::Path(_)) => "Path",
         Some(ObjectKind::CompoundPath(_)) => "Compound Path",
+        Some(ObjectKind::Group(g)) if g.sublayer => "Sublayer",
         Some(ObjectKind::Group(g)) if g.clip.is_some() => "Clip Group",
         Some(ObjectKind::Group(_)) => "Group",
         Some(ObjectKind::Text(_)) => "Text",
@@ -1012,19 +1013,28 @@ fn draw_footer_adjustment(scene: &mut Scene, r: Rect, color: Color) {
     scene.stroke(&Stroke::new(ui_px(1.2)), ID, color, None, &circle);
 }
 
-fn draw_footer_group(scene: &mut Scene, r: Rect, color: Color) {
-    let (x0, x1) = (r.x0 + ui_px(3.0), r.x1 - ui_px(3.0));
-    let (y0, y1) = (r.y0 + ui_px(6.0), r.y1 - ui_px(4.0));
-    let mut p = BezPath::new();
-    p.move_to((x0, y0));
-    p.line_to((x0 + ui_px(4.0), y0));
-    p.line_to((x0 + ui_px(6.0), y0 - ui_px(2.0)));
-    p.line_to((x1 - ui_px(2.0), y0 - ui_px(2.0)));
-    p.line_to((x1, y0));
-    p.line_to((x1, y1));
-    p.line_to((x0, y1));
-    p.close_path();
-    scene.stroke(&Stroke::new(ui_px(1.3)), ID, color, None, &p);
+/// Create Sublayer: a hooked arrow dropping into a small boxed plus (↳⊞).
+fn draw_footer_sublayer(scene: &mut Scene, r: Rect, color: Color) {
+    let bx = Rect::new(r.x0 + ui_px(8.5), r.y0 + ui_px(7.0), r.x1 - ui_px(1.5), r.y1 - ui_px(1.5));
+    scene.stroke(&Stroke::new(ui_px(1.15)), ID, color, None, &bx.to_rounded_rect(ui_px(1.5)));
+    let c = bx.center();
+    let arm = ui_px(2.5);
+    let mut plus = BezPath::new();
+    plus.move_to((c.x - arm, c.y));
+    plus.line_to((c.x + arm, c.y));
+    plus.move_to((c.x, c.y - arm));
+    plus.line_to((c.x, c.y + arm));
+    scene.stroke(&Stroke::new(ui_px(1.15)), ID, color, None, &plus);
+    let x = r.x0 + ui_px(3.0);
+    let tip = Point::new(bx.x0 - ui_px(1.5), c.y);
+    let mut hook = BezPath::new();
+    hook.move_to((x, r.y0 + ui_px(2.5)));
+    hook.line_to((x, c.y));
+    hook.line_to(tip);
+    hook.move_to((tip.x - ui_px(2.2), c.y - ui_px(2.2)));
+    hook.line_to(tip);
+    hook.line_to((tip.x - ui_px(2.2), c.y + ui_px(2.2)));
+    scene.stroke(&Stroke::new(ui_px(1.15)), ID, color, None, &hook);
 }
 
 /// `raster_only` gates Link/fx/Mask/Adjustment: dimmed unless the current
@@ -1036,7 +1046,7 @@ fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, th
     scene.fill(Fill::NonZero, ID, theme.strip_bg, None, &strip);
     scene.fill(Fill::NonZero, ID, theme.border.with_alpha(0.7), None, &Rect::new(strip.x0, strip.y0, strip.x1, strip.y0 + 0.5));
     let rects = layers_footer_rects(body);
-    let enabled = [raster_only, raster_only, raster_only, raster_only, has_sel, can_edit, has_sel];
+    let enabled = [raster_only, raster_only, raster_only, raster_only, can_edit, can_edit, has_sel];
     for (k, r) in rects.iter().enumerate() {
         let hot = enabled[k] && r.contains(pointer);
         if hot {
@@ -1048,7 +1058,7 @@ fn paint_layers_footer(scene: &mut Scene, text: &mut TextContext, body: Rect, th
             1 => text.draw(scene, "fx", 11.0, c, r.x0 + ui_px(1.0), r.center().y + ui_px(4.0)),
             2 => draw_footer_mask(scene, *r, c),
             3 => draw_footer_adjustment(scene, *r, c),
-            4 => draw_footer_group(scene, *r, c),
+            4 => draw_footer_sublayer(scene, *r, c),
             5 => {
                 scene.stroke(&Stroke::new(ui_px(1.15)), ID, c, None, &r.inset(ui_px(2.0)).to_rounded_rect(ui_px(2.0)));
                 draw_footer_plus(scene, *r, c);
@@ -1143,7 +1153,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         if locate_button_rect(body).contains(local) {
             return if ctx.selection.is_empty() { Action::None } else { Action::LocateSelection };
         }
-        let [link, fx, mask, adjustment, group, add, del] = layers_footer_rects(body);
+        let [link, fx, mask, adjustment, sublayer, add, del] = layers_footer_rects(body);
         // Link/fx/Adjustment have no backing implementation yet (see
         // `paint_layers_footer`'s own doc comment) — a harmless no-op
         // click either way, gated to look enabled only on a Raster layer
@@ -1152,8 +1162,8 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
             Action::None
         } else if mask.contains(local) {
             if ctx.selection.is_empty() { Action::None } else { Action::AddOrToggleLayerMask }
-        } else if group.contains(local) {
-            if ctx.selection.is_empty() { Action::None } else { Action::GroupSelection }
+        } else if sublayer.contains(local) {
+            Action::CreateSublayer
         } else if add.contains(local) {
             Action::ToggleNewLayerMenu
         } else if del.contains(local) {
@@ -1241,7 +1251,7 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<&'static str> {
         if locate_button_rect(body).contains(local) {
             return Some("Locate Object");
         }
-        let [link, fx, mask, adjustment, group, add, del] = layers_footer_rects(body);
+        let [link, fx, mask, adjustment, sublayer, add, del] = layers_footer_rects(body);
         return if link.contains(local) {
             Some("Link Layers")
         } else if fx.contains(local) {
@@ -1250,8 +1260,8 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<&'static str> {
             Some("Add Layer Mask")
         } else if adjustment.contains(local) {
             Some("New Fill or Adjustment Layer")
-        } else if group.contains(local) {
-            Some("New Group")
+        } else if sublayer.contains(local) {
+            Some("Create Sublayer")
         } else if add.contains(local) {
             Some("New Layer")
         } else if del.contains(local) {
@@ -1534,6 +1544,14 @@ fn draw_layer_kind(scene: &mut Scene, cx: f64, cy: f64, kind: LayerKind, color: 
 
 fn draw_object_kind(scene: &mut Scene, cx: f64, cy: f64, kind: Option<&ObjectKind>, color: Color) {
     match kind {
+        // Two stacked sheets: a sublayer is a layer, not a group.
+        Some(ObjectKind::Group(g)) if g.sublayer => {
+            let back = Rect::new(cx - ui_px(3.0), cy - ui_px(4.5), cx + ui_px(5.0), cy + ui_px(1.5));
+            let front = Rect::new(cx - ui_px(5.0), cy - ui_px(2.0), cx + ui_px(3.0), cy + ui_px(4.0));
+            scene.stroke(&Stroke::new(ui_px(1.1)), ID, color, None, &back.to_rounded_rect(ui_px(1.0)));
+            scene.fill(Fill::NonZero, ID, color.with_alpha(0.25), None, &front.to_rounded_rect(ui_px(1.0)));
+            scene.stroke(&Stroke::new(ui_px(1.1)), ID, color, None, &front.to_rounded_rect(ui_px(1.0)));
+        }
         Some(ObjectKind::Group(g)) if g.clip.is_some() => {
             scene.stroke(
                 &Stroke::new(ui_px(1.2)),

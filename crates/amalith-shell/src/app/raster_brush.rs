@@ -341,7 +341,7 @@ impl App {
                 Command::ReplaceImageAsset { object, asset }
             }
         } else {
-            Command::CreateImage { parent: amalith_core::ObjectParent::Layer(stroke.layer), path, bounds: amalith_core::Rect::new(0., 0., stroke.base.width() as f64, stroke.base.height() as f64), transform: crate::convert::affine_to_core(stroke.pixel_to_doc), name: Some("Paint".into()), embedded: true, modified: None, size: None }
+            Command::CreateImage { parent: amalith_core::ObjectParent::Layer(stroke.layer), index: None, path, bounds: amalith_core::Rect::new(0., 0., stroke.base.width() as f64, stroke.base.height() as f64), transform: crate::convert::affine_to_core(stroke.pixel_to_doc), name: Some("Paint".into()), embedded: true, modified: None, size: None }
         };
         match self.doc.editor.execute(command) {
             Ok(CommandOutcome::Object(id)) => self.doc.selection = vec![id],

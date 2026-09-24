@@ -162,6 +162,8 @@ pub enum Command {
     /// if the stamp couldn't be read).
     CreateImage {
         parent: amalith_core::ObjectParent,
+        /// Position among `parent`'s children; `None` puts it on top.
+        index: Option<usize>,
         path: String,
         bounds: Rect,
         transform: Affine,
