@@ -1,8 +1,12 @@
 # Compositor → Amalith Rust ports
 
 Source: https://github.com/robbietilton/Compositor
-Reviewed commit: `37dbe59b3cf71184b016e4f2f4aa74eada533aec`.
-Source snapshot was cloned separately for review, not merged into Amalith.
+Reviewed revisions: each section names the upstream commit it was ported
+from. The earlier ports (brush tip, tiled painting, Clone Stamp, pixel
+transform) used `37dbe59b3cf71184b016e4f2f4aa74eada533aec`; adjustment
+layers use `430620694ab001d80448e0dad44342f108ebbfde`. The per-file record
+is the table in the notice below.
+Upstream is read for reference, never merged into Amalith.
 License and attribution: [Compositor notice](../third_party/compositor/NOTICE.md).
 
 ## Integration approach
@@ -115,14 +119,59 @@ edits (Compositor's `FloatingSelection` can stay "lifted" through several
 operations; here it always resolves to one commit or a full cancel), and
 shear/perspective.
 
+## Layer masks
+
+Implemented, but this is Amalith's own code rather than a translation.
+`ImageMask { asset, enabled }` hangs off `ImageData` (`amalith-core`), and
+only its alpha matters: 255 reveals, 0 hides. `AddLayerMask`,
+`ReplaceMaskAsset`, `SetMaskEnabled` and `RemoveLayerMask` are copy-on-write
+asset commands, each one undo step. The Layers panel footer's mask button
+adds a mask (a white seed) or toggles `Doc.editing_mask`. While that's on,
+Brush, Eraser, Fill and Clone Stamp paint into the mask and commit through
+`ReplaceMaskAsset`. The canvas composites the mask with `Compose::DestIn`
+(`canvas.rs` `paint_raster` / `paint_tiled`). No UI calls the disable and
+delete commands yet.
+
+## Magic Wand
+
+Also Amalith's own code, not a port: `crates/amalith-shell/src/magicwand.rs`
+flood-fills by color tolerance and traces the result into the shared
+`Doc.pixel_selection` contours used by Marquee and Lasso.
+
+## Adjustment layers (in progress)
+
+Photoshop-style adjustment layers, ported from upstream at
+`430620694ab001d80448e0dad44342f108ebbfde`: `Document/LayerAdjustment.swift`,
+`Levels.swift`, `Curves.swift`, `HueSaturation.swift`,
+`ImageAdjustments.swift`, `Rendering/AdjustPixels.c`, `LevelsPixels.c` and
+`NoisePixels.c`. Upstream's blurs are CoreImage, so Gaussian and Motion
+Blur port the behavior (radius as sigma, streak length, margins), not code.
+
+How it fits Amalith's model:
+
+- An adjustment is an object, `ObjectKind::Adjustment`, among a layer's
+  top-level children. It changes everything beneath it **in its own layer
+  only**, since a raster layer is a self-contained unit. Opacity, visibility
+  and name are the ordinary object fields; masks reuse `ImageMask`.
+- Pixel math lives in the `amalith-adjust` crate as plain Rust. Each color
+  op compiles to a lookup table: exact 1D tables for Levels, Curves, Exposure
+  and Invert, and a 33³ cube for Hue/Saturation, Color Balance and
+  Black & White. One GPU shader applies any of them.
+- The canvas renders a layer's content beneath each adjustment offscreen,
+  runs the shader, and swaps the result in through vello's `override_image`.
+  PDF and SVG export bake adjusted layers into pixels.
+
+The phase-by-phase status is tracked in this section as work lands.
+
 ## Candidate ports, in suggested order
 
 | Feature | Upstream implementation | Amalith integration |
 | --- | --- | --- |
 | Tiled brush updates | `Document/BrushStroke.swift`, `Rendering/MetalBrushCoverage.swift` | Live CPU coverage and GPU previews implemented in native Rust; tiled undo and GPU paint kernels remain deferred. |
+| Adjustment layers | See the section above | In progress. |
 | Healing/content-aware fill | `Rendering/HealPixels.c`, `Rendering/ContentFill.c` | Port pure kernels to Rust with deterministic fixtures, explicit bounds checks, and cancellation for expensive work. |
-| Masks/adjustments | `Document/LayerMask.swift`, `Document/LayerAdjustment.swift`, `Rendering/AdjustPixels.c`, `Rendering/LevelsPixels.c` | Requires persistent model/IO changes and renderer integration; implement after the pixel engine and selection operations stabilize. |
 
 Do not import Compositor's document/history model or macOS interface as
 a parallel raster editor. Preserve the copyright/license notice with
-each translated portion and record its exact upstream revision here.
+each translated portion and record its exact upstream revision here and
+in the notice table.
