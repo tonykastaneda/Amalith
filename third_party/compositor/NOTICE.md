@@ -14,6 +14,8 @@ porting anything new, and keep the upstream revision exact.
 | `crates/amalith-shell/src/app/brush_tip.rs` | `Compositor/Document/BrushStroke.swift` (`BrushRaster.falloff`) | `37dbe59b3cf71184b016e4f2f4aa74eada533aec` | The normalized Gaussian soft-tip falloff. Not the full brush engine, tile storage, stroke accumulation, UI or GPU code. |
 | `crates/amalith-shell/src/app/raster_brush.rs` (Clone Stamp) | `Compositor/Document/EditorSession+Brush.swift` (clone behavior) | `37dbe59b3cf71184b016e4f2f4aa74eada533aec` | Clone Stamp interaction: Option-click source point, aligned/non-aligned offset, sampling the un-stroked base. |
 | `crates/amalith-shell/src/app/pixel_transform.rs` | `Compositor/Document/FloatingSelection.swift` | `37dbe59b3cf71184b016e4f2f4aa74eada533aec` | The lift → transform → bake flow for selected pixels. The resampler is Amalith's own. |
+| `crates/amalith-core/src/adjustment.rs` | `Compositor/Document/LayerAdjustment.swift`, `Levels.swift`, `Curves.swift`, `HueSaturation.swift`, `ImageAdjustments.swift` | `430620694ab001d80448e0dad44342f108ebbfde` | Adjustment parameter shapes, Photoshop defaults, valid ranges and blur sampling margins. |
+| `crates/amalith-adjust/src/color.rs` | `Compositor/Document/Levels.swift`, `Curves.swift`, `HueSaturation.swift`, `ImageAdjustments.swift`; `Compositor/Rendering/AdjustPixels.c` | `430620694ab001d80448e0dad44342f108ebbfde` | The Levels, Curves (Hermite spline), Exposure, Hue/Saturation (hue bands, response table, HSL), Black & White and Color Balance color math, on straight rather than premultiplied colors. |
 
 The surrounding Rust integration (commands, undo, rendering, bounds
 checks and tests) is Amalith's own in every case. See

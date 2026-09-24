@@ -8,6 +8,7 @@ members = [
     "crates/amalith-io",
     "crates/amalith-shell",
     "crates/amalith-console",
+    "crates/amalith-adjust",
 ]
 
 [workspace.package]

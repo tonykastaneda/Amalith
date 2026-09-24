@@ -1,0 +1,9 @@
+[package]
+name = "amalith-adjust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pixel math for adjustment layers: exact color functions, lookup-table compilation, and a CPU reference of the GPU pass."
+
+[dependencies]
+amalith-core = { path = "../amalith-core" }
