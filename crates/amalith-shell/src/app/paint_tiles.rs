@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 pub(super) const TILE: u32 = 256;
 static CLEAR: Rgba<u8> = Rgba([0; 4]);
 
+#[derive(Clone, Copy)]
+enum CompositeMode { Paint, Erase, Mask }
+
 pub(super) struct PaintTiles {
     width: u32,
     height: u32,
@@ -18,6 +21,23 @@ pub(super) struct PaintTiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_paint_changes_coverage_in_both_directions_and_matches_preview() {
+        let base = RgbaImage::from_pixel(2, 1, Rgba([255, 255, 255, 255]));
+        let mut paint = PaintTiles::new(2, 1);
+        paint.put_pixel(0, 0, Rgba([0, 0, 0, 255]));
+        paint.put_pixel(1, 0, Rgba([0, 0, 0, 128]));
+        let hidden = paint.result_mask(&base);
+        assert_eq!(hidden.get_pixel(0, 0)[3], 0);
+        assert_eq!(hidden.get_pixel(1, 0)[3], 127);
+        let preview = paint.publish_mask(&base).unwrap().tiles.unwrap();
+        assert_eq!(&preview.tiles[0].image.data.as_ref()[0..4], &hidden.get_pixel(0, 0).0);
+
+        let mut reveal = PaintTiles::new(2, 1);
+        reveal.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
+        assert_eq!(reveal.result_mask(&hidden).get_pixel(0, 0)[3], 255);
+    }
 
     #[test]
     #[ignore = "requires a GPU; compares tiled and whole-image rendering"]
@@ -295,27 +315,37 @@ impl PaintTiles {
             }
         }
     }
-    fn composite(&self, base: &RgbaImage, x: u32, y: u32, erase: bool) -> Rgba<u8> {
+    fn composite(&self, base: &RgbaImage, x: u32, y: u32, mode: CompositeMode) -> Rgba<u8> {
         let mut pixel = *base.get_pixel(x, y);
         let ink = self.get_pixel(x, y);
-        if erase {
-            pixel[3] = ((pixel[3] as u32 * (255 - ink[3] as u32) + 127) / 255) as u8;
-        } else {
-            pixel.blend(ink);
+        match mode {
+            CompositeMode::Erase => pixel[3] = ((pixel[3] as u32 * (255 - ink[3] as u32) + 127) / 255) as u8,
+            CompositeMode::Paint => pixel.blend(ink),
+            CompositeMode::Mask => {
+                let weight = ink[3] as u32;
+                let coverage = (pixel[3] as u32 * (255 - weight) + ink[0] as u32 * weight + 127) / 255;
+                pixel = Rgba([255, 255, 255, coverage as u8]);
+            }
         }
         pixel
     }
     pub(super) fn result(&self, base: &RgbaImage, erase: bool) -> RgbaImage {
+        self.result_mode(base, if erase { CompositeMode::Erase } else { CompositeMode::Paint })
+    }
+    pub(super) fn result_mask(&self, base: &RgbaImage) -> RgbaImage {
+        self.result_mode(base, CompositeMode::Mask)
+    }
+    fn result_mode(&self, base: &RgbaImage, mode: CompositeMode) -> RgbaImage {
         let mut result = base.clone();
         for (&(tx, ty), tile) in &self.ink {
             for (x, y, _) in tile.enumerate_pixels() {
                 let (x, y) = (tx * TILE + x, ty * TILE + y);
-                result.put_pixel(x, y, self.composite(base, x, y, erase));
+                result.put_pixel(x, y, self.composite(base, x, y, mode));
             }
         }
         result
     }
-    fn tile(&self, base: &RgbaImage, tx: u32, ty: u32, erase: bool) -> RasterTile {
+    fn tile(&self, base: &RgbaImage, tx: u32, ty: u32, mode: CompositeMode) -> RasterTile {
         let (x, y) = (tx * TILE, ty * TILE);
         let (right, bottom) = ((x + TILE).min(self.width), (y + TILE).min(self.height));
         let (left, top) = (x.saturating_sub(1), y.saturating_sub(1));
@@ -325,7 +355,7 @@ impl PaintTiles {
         });
         let pixels = if touched {
             RgbaImage::from_fn(r - left, b - top, |px, py| {
-                self.composite(base, left + px, top + py, erase)
+                self.composite(base, left + px, top + py, mode)
             })
         } else {
             image::imageops::crop_imm(base, left, top, r - left, b - top).to_image()
@@ -345,11 +375,17 @@ impl PaintTiles {
     /// Initialize the base preview once, then rebuild only dirty tiles.
     /// None means no pixels changed and the previous snapshot stays valid.
     pub(super) fn publish(&mut self, base: &RgbaImage, erase: bool) -> Option<ImageLods> {
+        self.publish_mode(base, if erase { CompositeMode::Erase } else { CompositeMode::Paint })
+    }
+    pub(super) fn publish_mask(&mut self, base: &RgbaImage) -> Option<ImageLods> {
+        self.publish_mode(base, CompositeMode::Mask)
+    }
+    fn publish_mode(&mut self, base: &RgbaImage, mode: CompositeMode) -> Option<ImageLods> {
         let columns = self.width.div_ceil(TILE);
         if self.gpu.is_empty() {
             for ty in 0..self.height.div_ceil(TILE) {
                 for tx in 0..columns {
-                    self.gpu.push(self.tile(base, tx, ty, erase));
+                    self.gpu.push(self.tile(base, tx, ty, mode));
                 }
             }
         } else {
@@ -357,7 +393,7 @@ impl PaintTiles {
                 return None;
             }
             for &(tx, ty) in &self.dirty {
-                self.gpu[(ty * columns + tx) as usize] = self.tile(base, tx, ty, erase);
+                self.gpu[(ty * columns + tx) as usize] = self.tile(base, tx, ty, mode);
             }
         }
         self.dirty.clear();

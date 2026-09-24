@@ -2148,7 +2148,7 @@ impl Editor {
                     return Err(CommandError::AlreadyHasMask(object));
                 }
                 asset.id = AssetId::new();
-                let mask = amalith_core::ImageMask { asset: asset.id, enabled: true };
+                let mask = amalith_core::ImageMask { asset: asset.id, enabled: true, linked: true, transform: Affine::IDENTITY };
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
             }
             Command::RemoveLayerMask { object } => {
@@ -2157,19 +2157,43 @@ impl Editor {
                 }
                 vec![Edit::SetImageMask { object, mask: None }]
             }
+            Command::ApplyLayerMask { object, mut asset } => {
+                let Some(ObjectKind::Image(image)) = self.document.object(object).map(|o| &o.kind) else {
+                    return Err(CommandError::NotAnImage(object));
+                };
+                if image.mask.is_none() { return Err(CommandError::NoLayerMask(object)); }
+                asset.id = AssetId::new();
+                vec![
+                    Edit::InsertAsset { asset: asset.clone(), index: self.document.assets().len() },
+                    Edit::SetImageAsset { object, asset: asset.id },
+                    Edit::SetImageMask { object, mask: None },
+                ]
+            }
             Command::ReplaceMaskAsset { object, mut asset } => {
                 let Some(existing) = self.mask_of(object)? else {
                     return Err(CommandError::NoLayerMask(object));
                 };
                 asset.id = AssetId::new();
-                let mask = amalith_core::ImageMask { asset: asset.id, enabled: existing.enabled };
+                let mask = amalith_core::ImageMask { asset: asset.id, ..existing };
                 vec![Edit::InsertAsset { asset, index: self.document.assets().len() }, Edit::SetImageMask { object, mask: Some(mask) }]
             }
             Command::SetMaskEnabled { object, enabled } => {
                 let Some(existing) = self.mask_of(object)? else {
                     return Err(CommandError::NoLayerMask(object));
                 };
-                vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { asset: existing.asset, enabled }) }]
+                vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { enabled, ..existing }) }]
+            }
+            Command::SetMaskLinked { object, linked } => {
+                let Some(existing) = self.mask_of(object)? else { return Err(CommandError::NoLayerMask(object)); };
+                vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { linked, ..existing }) }]
+            }
+            Command::MoveLayerMask { object, delta } => {
+                let Some(existing) = self.mask_of(object)? else { return Err(CommandError::NoLayerMask(object)); };
+                if existing.linked { return Err(CommandError::MaskStillLinked(object)); }
+                let inverse = self.document.world_transform(object).inverse();
+                let local_delta = inverse * Point::new(delta.x, delta.y) - inverse * Point::ZERO;
+                let transform = Affine::translate(local_delta) * existing.transform;
+                vec![Edit::SetImageMask { object, mask: Some(amalith_core::ImageMask { transform, ..existing }) }]
             }
             Command::Pathfinder { op, objects } => self.compile_pathfinder(op, objects)?,
             Command::ShapeBuilder {

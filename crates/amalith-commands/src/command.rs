@@ -23,12 +23,20 @@ pub enum Command {
     AddLayerMask { object: ObjectId, asset: amalith_core::Asset },
     /// Removes an image's or adjustment's mask entirely. Errors if it has none.
     RemoveLayerMask { object: ObjectId },
+    /// Permanently multiplies a raster image's alpha by its mask and
+    /// removes the mask in one undoable operation. `asset` is the baked
+    /// image prepared by the caller.
+    ApplyLayerMask { object: ObjectId, asset: amalith_core::Asset },
     /// Copy-on-write pixel edit for an existing mask, mirroring
     /// `ReplaceImageAsset`. Errors if `object` has no mask yet.
     ReplaceMaskAsset { object: ObjectId, asset: amalith_core::Asset },
     /// Shows or hides an existing mask's effect without discarding it.
     /// Errors if `object` has no mask.
     SetMaskEnabled { object: ObjectId, enabled: bool },
+    /// Toggles whether the image and its mask move together.
+    SetMaskLinked { object: ObjectId, linked: bool },
+    /// Moves an unlinked mask's coverage in document space.
+    MoveLayerMask { object: ObjectId, delta: Vec2 },
     /// Creates an adjustment layer among `layer`'s top-level children, at
     /// `index` (`None` puts it on top). It changes everything beneath it in
     /// that layer. `layer` must be an unlocked Raster layer. An empty

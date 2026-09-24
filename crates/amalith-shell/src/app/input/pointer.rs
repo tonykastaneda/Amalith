@@ -1173,7 +1173,14 @@ impl App {
                             d = snap8(d);
                         }
                         let delta = convert::vec2_to_core(d);
-                        if self.alt_down {
+                        let unlinked_mask = match self.doc.selection.as_slice() {
+                            [id] if self.doc.editing_mask == Some(*id) => self.doc.editor.document().object(*id)
+                                .and_then(|o| o.kind.mask()).filter(|mask| !mask.linked).map(|_| *id),
+                            _ => None,
+                        };
+                        if let Some(object) = unlinked_mask {
+                            let _ = self.doc.editor.execute(Command::MoveLayerMask { object, delta });
+                        } else if self.alt_down {
                             if let Ok(new_ids) = self
                                 .doc.editor
                                 .duplicate_objects(&self.doc.selection.clone(), delta)
@@ -1186,7 +1193,9 @@ impl App {
                                 delta,
                             });
                         }
-                        self.record_transform_again(amalith_core::Affine::translate(delta), self.alt_down);
+                        if unlinked_mask.is_none() {
+                            self.record_transform_again(amalith_core::Affine::translate(delta), self.alt_down);
+                        }
                     }
                     self.request_main_redraw();
                 }

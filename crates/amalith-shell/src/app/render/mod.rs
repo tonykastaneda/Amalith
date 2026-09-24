@@ -157,7 +157,8 @@ impl App {
                 last_doc,
                 moved: true,
                 ..
-            } => Some(DragPreview {
+            } if !matches!(self.doc.selection.as_slice(), [id] if self.doc.editing_mask == Some(*id)
+                && self.doc.editor.document().object(*id).and_then(|o| o.kind.mask()).is_some_and(|mask| !mask.linked)) => Some(DragPreview {
                 ids: &self.doc.selection,
                 delta: if self.shift_down {
                     snap8(*last_doc - *start_doc)

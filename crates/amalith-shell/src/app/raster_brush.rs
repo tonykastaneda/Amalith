@@ -36,7 +36,7 @@ pub(super) struct Stroke {
 
 impl Stroke {
     fn result(&self) -> image::RgbaImage {
-        self.ink.result(&self.base, self.erase)
+        if self.editing_mask { self.ink.result_mask(&self.base) } else { self.ink.result(&self.base, self.erase) }
     }
 
     pub(super) fn preview_document(&self, revision: u64) -> Option<&Document> {
@@ -54,7 +54,12 @@ impl Stroke {
                 if src.x < 0.0 || src.y < 0.0 || src.x >= self.base.width() as f64 || src.y >= self.base.height() as f64 {
                     return None;
                 }
-                Some(*self.base.get_pixel(src.x as u32, src.y as u32))
+                let sampled = *self.base.get_pixel(src.x as u32, src.y as u32);
+                if self.editing_mask {
+                    Some(image::Rgba([sampled[3], sampled[3], sampled[3], 255]))
+                } else {
+                    Some(sampled)
+                }
             }
         }
     }
@@ -72,7 +77,8 @@ impl Stroke {
     }
 
     fn refresh_preview(&mut self) {
-        if let Some(preview) = self.ink.publish(&self.base, self.erase) { self.preview = Some(preview); }
+        let next = if self.editing_mask { self.ink.publish_mask(&self.base) } else { self.ink.publish(&self.base, self.erase) };
+        if let Some(preview) = next { self.preview = Some(preview); }
     }
     fn stamp(&mut self, p: Point) {
         let r = self.radius;
@@ -135,54 +141,115 @@ struct PaintTarget {
 }
 
 impl App {
+    /// The one answer every raster tool shares for "which pixels am I
+    /// working on", in the current Raster layer:
+    /// 1. the selected pixel layer (an image) in that layer;
+    /// 2. with nothing of that layer selected, the pixel layer under the
+    ///    pointer, else the topmost visible, unlocked one — Photoshop's
+    ///    "active layer" when you haven't picked one;
+    /// 3. `Ok(None)` if the layer has no pixel layers yet (Brush and Fill
+    ///    then start a canvas).
+    ///
+    /// `Err` is the message for a selection that can't take pixels (a
+    /// shape or text, which stay editable vectors).
+    pub(super) fn raster_target(&self) -> Result<Option<(amalith_core::LayerId, ObjectId)>, &'static str> {
+        let doc = self.doc.editor.document();
+        let Some(layer) = self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer) else {
+            return Ok(None);
+        };
+        let is_image = |id: ObjectId| matches!(doc.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_)));
+        let usable = |id: ObjectId| {
+            let mut current = Some(id);
+            while let Some(c) = current {
+                let Some(o) = doc.object(c) else { return false };
+                if o.locked || !o.visible { return false; }
+                current = match o.parent { amalith_core::ObjectParent::Group(g) => Some(g), _ => None };
+            }
+            true
+        };
+        if let Some(&selected) = self.doc.selection.first().filter(|&&id| panels::layers::owning_layer(doc, id) == Some(layer)) {
+            if is_image(selected) {
+                return if usable(selected) { Ok(Some((layer, selected))) } else { Err("That pixel layer is locked or hidden.") };
+            }
+            if !matches!(doc.object(selected).map(|o| &o.kind), Some(amalith_core::ObjectKind::Adjustment(_))) {
+                return Err("Shapes and text stay editable. Select a pixel layer, or use Create Sublayer to add one.");
+            }
+        }
+        let hit = select::topmost_selectable_at(doc, self.doc_point(self.pointer), self.visible_doc_rect(), 0.0)
+            .filter(|&id| panels::layers::owning_layer(doc, id) == Some(layer) && is_image(id) && usable(id));
+        let topmost = || {
+            doc.children_of(amalith_core::ObjectParent::Layer(layer)).iter().rev().copied().find(|&id| is_image(id) && usable(id))
+        };
+        Ok(hit.or_else(topmost).map(|id| (layer, id)))
+    }
+
     /// Resolves the current paint target. `allow_new_canvas` is false for
     /// tools that only make sense against pixels that already exist
     /// (Eraser, Clone Stamp) — Brush and Fill pass `true` so an empty
     /// Raster layer gets a fresh canvas sized to the artboard under it.
     fn raster_paint_target(&mut self, allow_new_canvas: bool) -> Option<PaintTarget> {
         if self.current_layer_kind() != Some(amalith_core::LayerKind::Raster) { return None; }
+        let target = match self.raster_target() {
+            Ok(target) => target,
+            Err(message) => {
+                self.doc.io_error = Some(message.into());
+                return None;
+            }
+        };
         let doc = self.doc.editor.document();
-        let layer = self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer)?;
+        let layer = target.map(|(l, _)| l).or_else(|| self.doc.selection.first().and_then(|&id| panels::layers::owning_layer(doc, id)).or(self.doc.selected_layer))?;
         if doc.layer(layer).is_none_or(|l| l.locked || !l.visible) { return None; }
-        let selected = self.doc.selection.first().copied();
-        let hit = select::topmost_selectable_at(doc, self.doc_point(self.pointer), self.visible_doc_rect(), 0.0);
-        let object = selected.or(hit).filter(|&id| panels::layers::owning_layer(doc, id) == Some(layer));
+        let object = target.map(|(_, id)| id);
         if let Some(id) = object {
             let obj = doc.object(id)?;
-            let mut parent = Some(id);
-            while let Some(pid) = parent {
-                let o = doc.object(pid)?;
-                if o.locked || !o.visible { return None; }
-                parent = match o.parent { amalith_core::ObjectParent::Group(g) => Some(g), _ => None };
-            }
             let amalith_core::ObjectKind::Image(image) = &obj.kind else {
                 self.doc.io_error = Some("Shapes and text stay editable. Select a pixel image or an empty raster layer to paint.".into());
                 return None;
             };
             let (bounds, world) = (image.local_bounds, crate::convert::affine(doc.world_transform(id)));
             let editing_mask = self.doc.editing_mask == Some(id);
+            let source_asset = image.asset;
+            let mut mask_transform = vello::kurbo::Affine::IDENTITY;
             let asset = if editing_mask {
                 let Some(mask) = image.mask else {
                     self.doc.io_error = Some("This image has no layer mask yet — click Mask in the Layers panel to add one.".into());
                     return None;
                 };
+                mask_transform = crate::convert::affine(mask.transform);
                 mask.asset
             } else {
                 image.asset
             };
             self.magic_wand_cache = None;
-            let base = self.magic_wand_image(asset).cloned()?;
+            let mut base = self.magic_wand_image(asset).cloned()?;
+            if editing_mask {
+                // New masks start as 1×1 reveal-all assets. Expand them to
+                // the image's pixel grid before the first brush stroke.
+                let source = self.magic_wand_image(source_asset)?;
+                if source.width() as u64 * source.height() as u64 > 16_777_216 {
+                    self.doc.io_error = Some("Brush currently supports images up to 16 megapixels.".into());
+                    return None;
+                }
+                if base.dimensions() != source.dimensions() {
+                    base = image::imageops::resize(&base, source.width(), source.height(), image::imageops::FilterType::Nearest);
+                }
+            }
             if base.width() as u64 * base.height() as u64 > 16_777_216 {
                 self.doc.io_error = Some("Brush currently supports images up to 16 megapixels.".into());
                 return None;
             }
             let pixels_to_local = vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
                 * vello::kurbo::Affine::scale_non_uniform(bounds.width() / base.width() as f64, bounds.height() / base.height() as f64);
-            Some(PaintTarget { object: Some(id), layer, base, pixel_to_doc: world * pixels_to_local, local_to_pixel: pixels_to_local.inverse(), editing_mask })
+            Some(PaintTarget {
+                object: Some(id), layer, base,
+                pixel_to_doc: world * mask_transform * pixels_to_local,
+                local_to_pixel: pixels_to_local.inverse() * mask_transform.inverse(),
+                editing_mask,
+            })
         } else {
-            if !allow_new_canvas { return None; }
-            if !doc.children_of(amalith_core::ObjectParent::Layer(layer)).is_empty() {
-                self.doc.io_error = Some("Select an image on this layer before painting.".into());
+            // No pixel layers in this layer yet: Brush and Fill start one.
+            if !allow_new_canvas {
+                self.doc.io_error = Some("This layer has no pixels yet. Use Create Sublayer to add a pixel layer.".into());
                 return None;
             }
             let pointer = self.doc_point(self.pointer);
@@ -246,9 +313,15 @@ impl App {
             object, layer, ink: PaintTiles::new(base.width(), base.height()), base, pixel_to_doc,
             last: start, radius: if erase { self.raster_eraser_size } else { self.raster_brush_size } * 0.5,
             hardness: if erase { self.raster_eraser_hardness } else { self.raster_brush_hardness },
-            source: PixelSource::Flat(image::Rgba([color.r, color.g, color.b, color.a * self.doc.opacity as f32].map(|v| (v.clamp(0., 1.) * 255.).round() as u8))),
+            source: PixelSource::Flat(if editing_mask {
+                let gray = (0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b).clamp(0., 1.);
+                let value = (gray * 255.).round() as u8;
+                image::Rgba([value, value, value, ((color.a * self.doc.opacity as f32).clamp(0., 1.) * 255.).round() as u8])
+            } else {
+                image::Rgba([color.r, color.g, color.b, color.a * self.doc.opacity as f32].map(|v| (v.clamp(0., 1.) * 255.).round() as u8))
+            }),
             selection, changed: false, revision: self.doc.editor.revision(), preview: None,
-            erase, preview_asset, preview_doc, editing_mask,
+            erase: erase && !editing_mask, preview_asset, preview_doc, editing_mask,
         };
         if self.active_tool == Tool::RasterFill {
             stroke.bucket();
@@ -277,7 +350,7 @@ impl App {
                 self.request_main_redraw();
                 return;
             };
-            let anchor = target.local_to_pixel * (target.pixel_to_doc.inverse() * dp);
+            let anchor = target.pixel_to_doc.inverse() * dp;
             self.raster_clone_source = Some((object, anchor));
             self.raster_clone_offset = None;
             self.doc.io_error = None;
@@ -355,7 +428,7 @@ impl App {
     /// The native pixel size of an image asset, from its file header and
     /// cached; `None` if the format can't be read that way and it isn't
     /// already decoded.
-    fn image_native_size(&mut self, id: amalith_core::AssetId) -> Option<(u32, u32)> {
+    pub(in crate::app) fn image_native_size(&mut self, id: amalith_core::AssetId) -> Option<(u32, u32)> {
         if let Some(&size) = self.image_native_sizes.get(&id) {
             return Some(size);
         }

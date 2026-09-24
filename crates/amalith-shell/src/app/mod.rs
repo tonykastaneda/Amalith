@@ -845,6 +845,12 @@ enum SameKind {
 
 #[derive(Clone, Copy, PartialEq)]
 enum CtxAction {
+    MaskSelection(ObjectId, MaskSelectionOp),
+    MaskLink(ObjectId),
+    MaskEnable(ObjectId, bool),
+    MaskDelete(ObjectId),
+    MaskApply(ObjectId),
+    MaskInvert(ObjectId),
     PathAlign(amalith_core::PathTextAlign),
     PathFlip,
     Reflect,
@@ -858,6 +864,9 @@ enum CtxAction {
     ReleaseGuides,
     Join,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum MaskSelectionOp { Replace, Add, Subtract, Intersect }
 
 /// What a command-palette row does when chosen.
 #[derive(Clone)]
@@ -3219,10 +3228,14 @@ impl App {
     }
 
     fn ctx_menu_rect(origin: Point, items: &[CtxItem]) -> Rect {
+        let label_width = items.iter().filter_map(|item| match item {
+            CtxItem::Action { label, .. } => Some(label.chars().count() as f64 * ui_px(7.0) + ui_px(28.0)),
+            CtxItem::Sep => None,
+        }).fold(0.0, f64::max);
         Rect::new(
             origin.x,
             origin.y,
-            origin.x + Self::metric_cm_w(),
+            origin.x + Self::metric_cm_w().max(label_width),
             origin.y + Self::ctx_menu_height(items),
         )
     }
@@ -3396,6 +3409,30 @@ impl App {
         self.request_main_redraw();
     }
 
+    fn open_mask_ctx_menu(&mut self, at: Point, object: ObjectId) {
+        let Some(mask) = self.doc.editor.document().object(object).and_then(|o| o.kind.mask()) else { return };
+        self.doc.selection = vec![object];
+        let items = vec![
+            CtxItem::Action { label: if mask.enabled { "Disable Layer Mask" } else { "Enable Layer Mask" }.into(), action: CtxAction::MaskEnable(object, !mask.enabled), enabled: true },
+            CtxItem::Action { label: if mask.linked { "Unlink Layer Mask" } else { "Link Layer Mask" }.into(), action: CtxAction::MaskLink(object), enabled: true },
+            CtxItem::Action { label: "Invert Layer Mask".into(), action: CtxAction::MaskInvert(object), enabled: true },
+            CtxItem::Sep,
+            CtxItem::Action { label: "Mask to Selection".into(), action: CtxAction::MaskSelection(object, MaskSelectionOp::Replace), enabled: true },
+            CtxItem::Action { label: "Add Mask to Selection".into(), action: CtxAction::MaskSelection(object, MaskSelectionOp::Add), enabled: true },
+            CtxItem::Action { label: "Subtract Mask from Selection".into(), action: CtxAction::MaskSelection(object, MaskSelectionOp::Subtract), enabled: self.doc.pixel_selection.as_ref().is_some_and(|s| s.object == object) },
+            CtxItem::Action { label: "Intersect Mask with Selection".into(), action: CtxAction::MaskSelection(object, MaskSelectionOp::Intersect), enabled: self.doc.pixel_selection.as_ref().is_some_and(|s| s.object == object) },
+            CtxItem::Sep,
+            CtxItem::Action { label: "Apply Layer Mask".into(), action: CtxAction::MaskApply(object), enabled: matches!(self.doc.editor.document().object(object).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))) },
+            CtxItem::Action { label: "Delete Layer Mask".into(), action: CtxAction::MaskDelete(object), enabled: true },
+        ];
+        let h = Self::ctx_menu_height(&items);
+        let (w, wh) = self.main_logical_size().unwrap_or((1280.0, 800.0));
+        let menu_width = Self::ctx_menu_rect(Point::ZERO, &items).width();
+        let origin = Point::new(at.x.min(w - menu_width - 4.0).max(4.0), at.y.min(wh - h - 4.0).max(4.0));
+        self.ctx_menu = Some(CtxMenu { origin, items });
+        self.request_main_redraw();
+    }
+
     /// A left press while the context menu is open: run the row under `p`
     /// (if any) and close. Returns whether the press was consumed.
     fn ctx_menu_click(&mut self, event_loop: &ActiveEventLoop, p: Point) -> bool {
@@ -3422,6 +3459,12 @@ impl App {
         }
         if let Some(a) = hit {
             match a {
+                CtxAction::MaskSelection(object, op) => self.load_mask_selection(object, op),
+                CtxAction::MaskLink(object) => self.toggle_mask_link(object),
+                CtxAction::MaskEnable(object, enabled) => self.set_layer_mask_enabled(object, enabled),
+                CtxAction::MaskDelete(object) => self.delete_layer_mask(object),
+                CtxAction::MaskApply(object) => self.apply_layer_mask(object),
+                CtxAction::MaskInvert(object) => self.invert_layer_mask(object),
                 CtxAction::PathAlign(align) => self.edit_path_options(Some(align)),
                 CtxAction::PathFlip => self.edit_path_options(None),
                 CtxAction::Reflect => self.spawn_xform_dialog(event_loop, xformdlg::Kind::Reflect),
@@ -3472,6 +3515,16 @@ impl App {
         }
         if self.pointer_win != self.main_id {
             return;
+        }
+        if let Some(body) = self.active_panel_body_at_pointer(PanelKind::Layers) {
+            let mask = {
+                let ctx = self.panel_press_ctx(None);
+                panels::layers::mask_thumbnail_at(body, self.pointer, &ctx)
+            };
+            if let Some(object) = mask {
+                self.open_mask_ctx_menu(self.pointer, object);
+                return;
+            }
         }
         let r = self.canvas_region();
         if self.rulers

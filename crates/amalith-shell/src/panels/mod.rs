@@ -409,6 +409,11 @@ pub enum Action {
     /// Layers footer: add a layer mask to the selected image (if it has
     /// none), else toggle whether painting currently targets that mask.
     AddOrToggleLayerMask,
+    /// Click the mask thumbnail to paint coverage rather than image pixels.
+    SelectMask(ObjectId),
+    /// Click the image thumbnail to resume editing the image itself.
+    SelectImagePixels(ObjectId),
+    ToggleMaskLink(ObjectId),
     /// Layers header: open/close the blend-mode menu.
     ToggleLayersBlendMenu,
     /// Layers header: apply a blend mode to every appearance item of the

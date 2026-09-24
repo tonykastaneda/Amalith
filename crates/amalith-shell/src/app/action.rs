@@ -6,6 +6,40 @@
 
 use super::*;
 
+fn mask_coverage_at(
+    mask: &image::RgbaImage,
+    inverse: amalith_core::Affine,
+    bounds: amalith_core::Rect,
+    x: u32, y: u32, width: u32, height: u32,
+) -> u8 {
+    let local = amalith_core::Point::new(
+        bounds.x0 + (x as f64 + 0.5) * bounds.width() / width as f64,
+        bounds.y0 + (y as f64 + 0.5) * bounds.height() / height as f64,
+    );
+    let mask_local = inverse * local;
+    if mask_local.x < bounds.x0 || mask_local.x >= bounds.x1 || mask_local.y < bounds.y0 || mask_local.y >= bounds.y1 {
+        return 0;
+    }
+    let mx = ((mask_local.x - bounds.x0) * mask.width() as f64 / bounds.width()).floor() as u32;
+    let my = ((mask_local.y - bounds.y0) * mask.height() as f64 / bounds.height()).floor() as u32;
+    mask.get_pixel(mx.min(mask.width() - 1), my.min(mask.height() - 1))[3]
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    #[test]
+    fn coverage_sampling_follows_independent_mask_transform() {
+        let mask = image::RgbaImage::from_fn(2, 1, |x, _| image::Rgba([255, 255, 255, if x == 0 { 0 } else { 255 }]));
+        let bounds = amalith_core::Rect::new(0.0, 0.0, 2.0, 1.0);
+        assert_eq!(mask_coverage_at(&mask, amalith_core::Affine::IDENTITY, bounds, 0, 0, 2, 1), 0);
+        assert_eq!(mask_coverage_at(&mask, amalith_core::Affine::IDENTITY, bounds, 1, 0, 2, 1), 255);
+        let inverse = amalith_core::Affine::translate((-1.0, 0.0));
+        assert_eq!(mask_coverage_at(&mask, inverse, bounds, 1, 0, 2, 1), 0);
+    }
+}
+
 impl App {
     pub(in crate::app) fn apply_panel_action(&mut self, action: panels::Action, double: bool) {
         // Docked panels (Layers, Pathfinder, Appearance, ...) live in the
@@ -671,7 +705,42 @@ impl App {
             panels::Action::LayerRestack(dir) => self.restack(dir),
             panels::Action::CreateSublayer => self.create_sublayer(),
             panels::Action::AddOrToggleLayerMask => self.add_or_toggle_layer_mask(),
+            panels::Action::SelectMask(id) => {
+                if self.cmd_down {
+                    let op = match (self.shift_down, self.alt_down) {
+                        (true, true) => MaskSelectionOp::Intersect,
+                        (true, false) => MaskSelectionOp::Add,
+                        (false, true) => MaskSelectionOp::Subtract,
+                        (false, false) => MaskSelectionOp::Replace,
+                    };
+                    self.load_mask_selection(id, op);
+                    return;
+                }
+                if self.shift_down {
+                    if let Some(mask) = self.doc.editor.document().object(id).and_then(|o| o.kind.mask()) {
+                        self.set_layer_mask_enabled(id, !mask.enabled);
+                    }
+                    return;
+                }
+                self.doc.selection = vec![id];
+                self.doc.editing_mask = Some(id);
+                self.request_main_redraw();
+            }
+            panels::Action::SelectImagePixels(id) => {
+                self.doc.selection = vec![id];
+                self.doc.editing_mask = None;
+                self.request_main_redraw();
+            }
+            panels::Action::ToggleMaskLink(id) => self.toggle_mask_link(id),
             panels::Action::DeleteObjects => {
+                if let [id] = self.doc.selection[..] {
+                    if self.doc.editing_mask == Some(id)
+                        && self.doc.editor.document().object(id).and_then(|o| o.kind.mask()).is_some()
+                    {
+                        self.delete_layer_mask(id);
+                        return;
+                    }
+                }
                 if !self.doc.selection.is_empty() {
                     let ids = std::mem::take(&mut self.doc.selection);
                     self.purge_threads(&ids);
@@ -1876,7 +1945,11 @@ impl App {
     /// Eraser/Fill/Clone Stamp currently target that mask instead of the
     /// image's own pixels (see `raster_paint_target` in `raster_brush.rs`).
     fn add_or_toggle_layer_mask(&mut self) {
-        let Some(&object) = self.doc.selection.first() else { return };
+        // The selected image, else the pixel layer the raster tools target.
+        let selected_image = self.doc.selection.first().copied().filter(|&id| {
+            matches!(self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_)))
+        });
+        let Some(object) = selected_image.or_else(|| self.raster_target().ok().flatten().map(|(_, id)| id)) else { return };
         let doc = self.doc.editor.document();
         let Some(amalith_core::ObjectKind::Image(img)) = doc.object(object).map(|o| &o.kind) else {
             self.doc.io_error = Some("Select a pixel image to add a layer mask.".into());
@@ -1888,10 +1961,38 @@ impl App {
             self.request_main_redraw();
             return;
         }
-        // A 1×1 fully-opaque white pixel reveals everything — paint_raster
-        // stretches any mask's own pixel size to fit `local_bounds`, so a
-        // 1x1 seed is all a fresh "reveal all" mask needs.
-        let seed = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        let source_asset = img.asset;
+        let bounds = img.local_bounds;
+        let selection = self.doc.pixel_selection.as_ref()
+            .filter(|selection| selection.object == object)
+            .map(|selection| selection.contours.clone());
+        let hide = self.alt_down;
+        let seed = if let Some(contours) = selection {
+            let Some(source) = self.magic_wand_image(source_asset) else {
+                self.doc.io_error = Some("Couldn't read the image to make a selection mask.".into());
+                return;
+            };
+            let (w, h) = source.dimensions();
+            if w == 0 || h == 0 || w as u64 * h as u64 > 16_777_216 || bounds.is_zero_area() {
+                self.doc.io_error = Some("This image is too large or empty for a selection mask.".into());
+                return;
+            }
+            image::RgbaImage::from_fn(w, h, |x, y| {
+                let mut hits = 0u32;
+                for sy in 0..4 { for sx in 0..4 {
+                    let p = Point::new(
+                        bounds.x0 + (x as f64 + (sx as f64 + 0.5) / 4.0) * bounds.width() / w as f64,
+                        bounds.y0 + (y as f64 + (sy as f64 + 0.5) / 4.0) * bounds.height() / h as f64,
+                    );
+                    hits += u32::from(super::raster_brush::inside(&contours, p));
+                }}
+                let coverage = ((hits * 255 + 8) / 16) as u8;
+                image::Rgba([255, 255, 255, if hide { 255 - coverage } else { coverage }])
+            })
+        } else {
+            // A 1×1 mask stretches across the image until first painted.
+            image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, if hide { 0 } else { 255 }]))
+        };
         let mut bytes = std::io::Cursor::new(Vec::new());
         if seed.write_to(&mut bytes, image::ImageFormat::Png).is_err() {
             self.doc.io_error = Some("Couldn't encode a new layer mask.".into());
@@ -1905,6 +2006,136 @@ impl App {
             Ok(_) => { self.doc.editing_mask = Some(object); self.doc.io_error = None; }
             Err(error) => self.doc.io_error = Some(format!("Couldn't add layer mask: {error}")),
         }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn delete_layer_mask(&mut self, object: ObjectId) {
+        match self.doc.editor.execute(Command::RemoveLayerMask { object }) {
+            Ok(_) => {
+                if self.doc.editing_mask == Some(object) { self.doc.editing_mask = None; }
+                self.doc.io_error = None;
+            }
+            Err(error) => self.doc.io_error = Some(error.to_string()),
+        }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn set_layer_mask_enabled(&mut self, object: ObjectId, enabled: bool) {
+        if let Err(error) = self.doc.editor.execute(Command::SetMaskEnabled { object, enabled }) {
+            self.doc.io_error = Some(error.to_string());
+        } else {
+            self.doc.io_error = None;
+        }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn toggle_mask_link(&mut self, object: ObjectId) {
+        let Some(mask) = self.doc.editor.document().object(object).and_then(|o| o.kind.mask()) else { return };
+        if let Err(error) = self.doc.editor.execute(Command::SetMaskLinked { object, linked: !mask.linked }) {
+            self.doc.io_error = Some(error.to_string());
+        } else {
+            self.doc.io_error = None;
+        }
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn invert_layer_mask(&mut self, object: ObjectId) {
+        let Some(mask) = self.doc.editor.document().object(object).and_then(|o| o.kind.mask()) else { return };
+        let Some(mut pixels) = self.magic_wand_image(mask.asset).cloned() else { return };
+        for pixel in pixels.pixels_mut() {
+            pixel.0 = [255, 255, 255, 255 - pixel[3]];
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        if let Err(error) = pixels.write_to(&mut encoded, image::ImageFormat::Png) {
+            self.doc.io_error = Some(format!("Couldn't invert mask: {error}"));
+            return;
+        }
+        let path = format!("images/mask-{}.png", amalith_core::AssetId::new());
+        self.doc.asset_store.insert(&path, encoded.into_inner());
+        let asset = amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Layer Mask", amalith_core::AssetKind::Image, &path);
+        if let Err(error) = self.doc.editor.execute(Command::ReplaceMaskAsset { object, asset }) {
+            self.doc.io_error = Some(error.to_string());
+        } else {
+            self.doc.io_error = None;
+        }
+        self.magic_wand_cache = None;
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn load_mask_selection(&mut self, object: ObjectId, op: MaskSelectionOp) {
+        let Some((image_asset, mask_data, bounds)) = self.doc.editor.document().object(object).and_then(|o| match &o.kind {
+            amalith_core::ObjectKind::Image(image) => image.mask.map(|mask| (image.asset, mask, image.local_bounds)),
+            _ => None,
+        }) else { return };
+        let Some((width, height)) = self.image_native_size(image_asset) else { return };
+        if width == 0 || height == 0 || width as u64 * height as u64 > 16_777_216 || bounds.is_zero_area() { return; }
+        let Some(mask_image) = self.magic_wand_image(mask_data.asset).cloned() else { return };
+        let inverse = mask_data.transform.inverse();
+        if !inverse.as_coeffs().iter().all(|v| v.is_finite()) { return; }
+        let mut loaded = magicwand::Mask::from_fn(width, height, |x, y| {
+            mask_coverage_at(&mask_image, inverse, bounds, x, y, width, height) >= 128
+        });
+        if op != MaskSelectionOp::Replace {
+            if let Some(selection) = self.doc.pixel_selection.as_ref().filter(|s| s.object == object) {
+                let pixel_contours: Vec<Vec<Point>> = selection.contours.iter().map(|contour| contour.iter().map(|point| Point::new(
+                    (point.x - bounds.x0) * width as f64 / bounds.width(),
+                    (point.y - bounds.y0) * height as f64 / bounds.height(),
+                )).collect()).collect();
+                let mut previous = magicwand::Mask::from_contours(width, height, &pixel_contours);
+                match op {
+                    MaskSelectionOp::Replace => unreachable!(),
+                    MaskSelectionOp::Add => previous.union_with(&loaded),
+                    MaskSelectionOp::Subtract => previous.subtract(&loaded),
+                    MaskSelectionOp::Intersect => previous.intersect_with(&loaded),
+                }
+                loaded = previous;
+            }
+        }
+        let contours = magicwand::mask_to_contours(&loaded).into_iter().map(|contour| {
+            contour.into_iter().map(|p| Point::new(
+                bounds.x0 + p.x * bounds.width() / width as f64,
+                bounds.y0 + p.y * bounds.height() / height as f64,
+            )).collect()
+        }).collect::<Vec<Vec<Point>>>();
+        self.doc.pixel_selection = (!contours.is_empty()).then_some(PixelSelection { object, contours });
+        self.doc.selection = vec![object];
+        self.ants_phase = Instant::now();
+        self.request_main_redraw();
+    }
+
+    pub(in crate::app) fn apply_layer_mask(&mut self, object: ObjectId) {
+        let Some((image_asset, mask_asset, mask_transform, bounds)) = self.doc.editor.document().object(object).and_then(|o| match &o.kind {
+            amalith_core::ObjectKind::Image(image) => image.mask.map(|mask| (image.asset, mask.asset, mask.transform, image.local_bounds)),
+            _ => None,
+        }) else { return };
+        let Some(mut pixels) = self.magic_wand_image(image_asset).cloned() else { return };
+        let Some(mask) = self.magic_wand_image(mask_asset).cloned() else { return };
+        let inverse = mask_transform.inverse();
+        if !inverse.as_coeffs().iter().all(|v| v.is_finite()) || bounds.is_zero_area() || mask.width() == 0 || mask.height() == 0 {
+            self.doc.io_error = Some("Couldn't apply this mask's transform.".into());
+            return;
+        }
+        let (width, height) = pixels.dimensions();
+        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+            let coverage = mask_coverage_at(&mask, inverse, bounds, x, y, width, height);
+            pixel[3] = ((pixel[3] as u32 * coverage as u32 + 127) / 255) as u8;
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        if let Err(error) = pixels.write_to(&mut encoded, image::ImageFormat::Png) {
+            self.doc.io_error = Some(format!("Couldn't apply mask: {error}"));
+            return;
+        }
+        let path = format!("images/masked-{}.png", amalith_core::AssetId::new());
+        self.doc.asset_store.insert(&path, encoded.into_inner());
+        let asset = amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Masked pixels", amalith_core::AssetKind::Image, &path);
+        match self.doc.editor.execute(Command::ApplyLayerMask { object, asset }) {
+            Ok(_) => {
+                if self.doc.editing_mask == Some(object) { self.doc.editing_mask = None; }
+                self.doc.io_error = None;
+            }
+            Err(error) => self.doc.io_error = Some(error.to_string()),
+        }
+        self.magic_wand_cache = None;
         self.request_main_redraw();
     }
 

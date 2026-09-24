@@ -1247,11 +1247,53 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
                 Action::ToggleLocked(id)
             } else if is_group && x < indent + metric_col() {
                 Action::ToggleExpand(id)
+            } else if mask_thumbnail_rect(row, r, ctx.layer_thumbnail_size).is_some_and(|tile| tile.contains(local)) {
+                Action::SelectMask(id)
+            } else if row.mask.is_some() && image_thumbnail_rect(row, r, ctx.layer_thumbnail_size).is_some_and(|tile| tile.contains(local)) {
+                Action::SelectImagePixels(id)
+            } else if mask_link_rect(row, r, ctx.layer_thumbnail_size).is_some_and(|link| link.contains(local)) {
+                Action::ToggleMaskLink(id)
             } else {
                 Action::Select(id)
             }
         }
     }
+}
+
+fn image_thumbnail_rect(row: &LayerRow, rect: Rect, size_pref: crate::prefs::LayerThumbnailSize) -> Option<Rect> {
+    let RowKind::Object { is_group, .. } = row.kind else { return None };
+    let size = ui_px(size_pref.image_px());
+    if size == 0.0 { return None; }
+    let indent = layer_disclosure_rect(rect).x0 + row.depth as f64 * metric_indent();
+    let icon_x = indent + if is_group { metric_col() * 1.5 } else { metric_col() * 0.5 };
+    Some(Rect::from_origin_size((icon_x + metric_col() * 0.7, rect.center().y - size * 0.5), (size, size)))
+}
+
+fn mask_thumbnail_rect(row: &LayerRow, rect: Rect, size_pref: crate::prefs::LayerThumbnailSize) -> Option<Rect> {
+    row.mask?;
+    let image = image_thumbnail_rect(row, rect, size_pref)?;
+    Some(Rect::from_origin_size((image.x1 + ui_px(8.0), image.y0), (image.width(), image.height())))
+}
+
+fn mask_link_rect(row: &LayerRow, rect: Rect, size_pref: crate::prefs::LayerThumbnailSize) -> Option<Rect> {
+    let image = image_thumbnail_rect(row, rect, size_pref)?;
+    let mask = mask_thumbnail_rect(row, rect, size_pref)?;
+    Some(Rect::new(image.x1, image.y0, mask.x0, image.y1))
+}
+
+/// The mask thumbnail under a Layers-panel pointer, for its context menu.
+pub(crate) fn mask_thumbnail_at(body: Rect, local: Point, ctx: &Ctx) -> Option<ObjectId> {
+    let list = list_rect(body);
+    if !list.contains(local) { return None; }
+    let rows = visible_rows(ctx);
+    let scroll = clamp_scroll(ctx.layer_scroll, rows.len(), list.height(), ui_px(ctx.layer_thumbnail_size.row_h()));
+    let index = ((local.y - list.y0 + scroll) / ui_px(ctx.layer_thumbnail_size.row_h())).floor() as usize;
+    let row = rows.get(index)?;
+    let top = list.y0 + index as f64 * ui_px(ctx.layer_thumbnail_size.row_h()) - scroll;
+    let rect = Rect::new(body.x0, top, body.x1, top + ui_px(ctx.layer_thumbnail_size.row_h()));
+    mask_thumbnail_rect(row, rect, ctx.layer_thumbnail_size)
+        .filter(|tile| tile.contains(local))?;
+    match row.kind { RowKind::Object { id, .. } => Some(id), RowKind::Layer(_) => None }
 }
 
 pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<&'static str> {
@@ -1476,7 +1518,11 @@ fn paint_thumbnail(scene: &mut Scene, text: &mut TextContext, ctx: &Ctx, row: &L
         scene.append(&preview, Some(vello::kurbo::Affine::translate(origin)));
     }
     scene.pop_layer();
-    scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.border, None, &tile);
+    let image_active = match row.kind {
+        RowKind::Object { id, .. } => ctx.selection.contains(&id) && ctx.editing_mask != Some(id),
+        RowKind::Layer(_) => false,
+    };
+    scene.stroke(&Stroke::new(ui_px(1.0)), ID, if image_active { ctx.theme.accent } else { ctx.theme.border }, None, &tile);
     let x = x + size + ui_px(8.0);
     if let Some(mask) = row.mask {
         paint_mask_thumbnail(scene, ctx, row, mask, rect, x)
@@ -1495,6 +1541,14 @@ fn paint_mask_thumbnail(scene: &mut Scene, ctx: &Ctx, row: &LayerRow, mask: amal
     let size = ui_px(ctx.layer_thumbnail_size.image_px());
     if size == 0.0 { return x; }
     let tile = Rect::from_origin_size((x, rect.center().y - size * 0.5), (size, size));
+    if mask.linked {
+        let cx = x - ui_px(4.0);
+        let cy = tile.center().y;
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.text_dim, None,
+            &Circle::new((cx - ui_px(1.6), cy), ui_px(1.6)));
+        scene.stroke(&Stroke::new(ui_px(1.0)), ID, ctx.theme.text_dim, None,
+            &Circle::new((cx + ui_px(1.6), cy), ui_px(1.6)));
+    }
     scene.fill(Fill::NonZero, ID, Color::from_rgb8(0x20, 0x20, 0x20), None, &tile);
     if let Some(gpu) = ctx.layer_images.get(&mask.asset).and_then(|l| l.pick(size.max(1.0))) {
         let scale = (size / gpu.width.max(1) as f64).min(size / gpu.height.max(1) as f64);
@@ -1503,9 +1557,14 @@ fn paint_mask_thumbnail(scene: &mut Scene, ctx: &Ctx, row: &LayerRow, mask: amal
         scene.draw_image(gpu, vello::kurbo::Affine::translate(origin) * vello::kurbo::Affine::scale(scale));
     }
     let object = match row.kind { RowKind::Object { id, .. } => Some(id), RowKind::Layer(_) => None };
-    let editing = mask.enabled && object.is_some() && ctx.editing_mask == object;
+    let editing = object.is_some() && ctx.editing_mask == object;
     let border = if editing { ctx.theme.accent } else { ctx.theme.border };
     scene.stroke(&Stroke::new(ui_px(1.0)), ID, border, None, &tile);
+    if !mask.enabled {
+        let red = Color::from_rgb8(0xe7, 0x55, 0x55);
+        scene.stroke(&Stroke::new(ui_px(2.0)), ID, red, None, &Line::new((tile.x0, tile.y0), (tile.x1, tile.y1)));
+        scene.stroke(&Stroke::new(ui_px(2.0)), ID, red, None, &Line::new((tile.x1, tile.y0), (tile.x0, tile.y1)));
+    }
     x + size + ui_px(8.0)
 }
 

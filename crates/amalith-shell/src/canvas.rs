@@ -2323,6 +2323,7 @@ fn paint_object(
                 sb.width().max(sb.height())
             };
             let mask = img.mask.filter(|mk| mk.enabled);
+            let mask_m = mask.map_or(m, |mk| m * convert::affine(mk.transform));
             let mask_tiles = mask.and_then(|mk| images.get(&mk.asset)).and_then(|l| l.tiles.as_ref());
             let mask_static = mask.and_then(|mk| images.get(&mk.asset)).and_then(|l| l.pick(cover));
             let b = convert::rect(img.local_bounds);
@@ -2335,9 +2336,9 @@ fn paint_object(
                 if mask_tiles.is_some() || mask_static.is_some() {
                     scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
                     if let Some(mt) = mask_tiles {
-                        paint_tiled(scene, pixels_to_screen(m, b, mt.width, mt.height), mt, viewport);
+                        paint_tiled(scene, pixels_to_screen(mask_m, b, mt.width, mt.height), mt, viewport);
                     } else if let Some(mg) = mask_static {
-                        scene.draw_image(mg, pixels_to_screen(m, b, mg.width, mg.height));
+                        scene.draw_image(mg, pixels_to_screen(mask_m, b, mg.width, mg.height));
                     }
                     scene.pop_layer();
                 }
@@ -2349,12 +2350,12 @@ fn paint_object(
                     scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
                     scene.draw_image(gpu, pixels_to_screen(m, b, gpu.width, gpu.height));
                     scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
-                    paint_tiled(scene, pixels_to_screen(m, b, mt.width, mt.height), mt, viewport);
+                    paint_tiled(scene, pixels_to_screen(mask_m, b, mt.width, mt.height), mt, viewport);
                     scene.pop_layer();
                     scene.pop_layer();
                 }
             } else if let Some(gpu) = images.get(&img.asset).and_then(|l| l.pick(cover)) {
-                paint_raster(scene, m, gpu, img.local_bounds, mask_static, viewport);
+                paint_raster(scene, m, mask_m, gpu, img.local_bounds, mask_static, viewport);
             } else if let Some(b) = obj.kind.own_local_bounds() {
                 let r = convert::rect(b);
                 scene.fill(
@@ -2466,6 +2467,7 @@ fn paint_tiled(scene: &mut Scene, pixels: Affine, tiles: &crate::lod::RasterTile
 fn paint_raster(
     scene: &mut Scene,
     m: Affine,
+    mask_m: Affine,
     img: &ImageData,
     local_bounds: amalith_core::Rect,
     mask: Option<&ImageData>,
@@ -2486,7 +2488,7 @@ fn paint_raster(
     scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
     scene.draw_image(img, xf);
     scene.push_layer(Fill::NonZero, BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::DestIn), 1.0, Affine::IDENTITY, &viewport);
-    scene.draw_image(mask, pixels_to_screen(m, b, mask.width, mask.height));
+    scene.draw_image(mask, pixels_to_screen(mask_m, b, mask.width, mask.height));
     scene.pop_layer();
     scene.pop_layer();
 }

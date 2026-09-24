@@ -1273,10 +1273,34 @@ pub struct ImageMask {
     pub asset: AssetId,
     #[serde(default = "default_mask_enabled")]
     pub enabled: bool,
+    /// Linked masks follow their image's transforms; unlinking lets the
+    /// image and its coverage move separately.
+    #[serde(default = "default_mask_enabled")]
+    pub linked: bool,
+    /// Mask placement in the image object's local coordinate space.
+    #[serde(default = "identity_affine")]
+    pub transform: Affine,
 }
 
 fn default_mask_enabled() -> bool {
     true
+}
+
+fn identity_affine() -> Affine { Affine::IDENTITY }
+
+#[cfg(test)]
+mod image_mask_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_mask_defaults_to_linked_and_untransformed() {
+        let asset = AssetId::new();
+        let legacy = serde_json::json!({ "asset": asset, "enabled": true });
+        let mask: ImageMask = serde_json::from_value(legacy).unwrap();
+        assert!(mask.linked);
+        assert_eq!(mask.transform, Affine::IDENTITY);
+        assert_eq!(serde_json::from_value::<ImageMask>(serde_json::to_value(mask).unwrap()).unwrap(), mask);
+    }
 }
 
 /// A symbol instance: references a [`crate::SymbolDefinition`] in the

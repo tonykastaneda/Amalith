@@ -68,6 +68,8 @@ pub enum CommandError {
     AlreadyHasMask(ObjectId),
     #[error("object {0} has no layer mask")]
     NoLayerMask(ObjectId),
+    #[error("unlink the mask on object {0} before moving it independently")]
+    MaskStillLinked(ObjectId),
     #[error("object {0} can't have a layer mask (only images and adjustments can)")]
     NotMaskable(ObjectId),
     #[error("object {0} is not an adjustment")]

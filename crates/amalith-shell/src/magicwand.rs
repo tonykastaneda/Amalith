@@ -22,6 +22,14 @@ impl Mask {
         Self { width, height, bits: vec![false; width as usize * height as usize] }
     }
 
+    pub(crate) fn from_fn(width: u32, height: u32, mut selected: impl FnMut(u32, u32) -> bool) -> Self {
+        let mut mask = Self::new(width, height);
+        for y in 0..height { for x in 0..width {
+            if selected(x, y) { mask.set(x, y); }
+        }}
+        mask
+    }
+
     /// Out-of-bounds always reads as unselected — lets boundary code treat
     /// the mask's own edge the same as an interior edge, with no special
     /// casing.
@@ -48,6 +56,16 @@ impl Mask {
         for (a, b) in self.bits.iter_mut().zip(&other.bits) {
             *a |= *b;
         }
+    }
+
+    pub(crate) fn intersect_with(&mut self, other: &Mask) {
+        if self.width != other.width || self.height != other.height { return; }
+        for (a, b) in self.bits.iter_mut().zip(&other.bits) { *a &= *b; }
+    }
+
+    pub(crate) fn subtract(&mut self, other: &Mask) {
+        if self.width != other.width || self.height != other.height { return; }
+        for (a, b) in self.bits.iter_mut().zip(&other.bits) { *a &= !*b; }
     }
 
     /// Rasterizes closed polygons in the same pixel-corner space

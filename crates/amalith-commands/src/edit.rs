@@ -304,6 +304,14 @@ pub(crate) fn apply(edit: Edit, doc: &mut Document) -> Result<(Edit, Option<NewI
         Edit::SetTransform { id, transform } => {
             let object = doc.object_mut(id).ok_or(CommandError::ObjectNotFound(id))?;
             let old_transform = std::mem::replace(&mut object.transform, transform);
+            if let Some(mask) = object.kind.mask_slot_mut().and_then(|slot| slot.as_mut()) {
+                if !mask.linked {
+                    let compensation = transform.inverse() * old_transform;
+                    if compensation.as_coeffs().iter().all(|value| value.is_finite()) {
+                        mask.transform = compensation * mask.transform;
+                    }
+                }
+            }
             Ok((
                 Edit::SetTransform {
                     id,

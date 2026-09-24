@@ -1228,7 +1228,7 @@ mod tests {
         assert!(editor.document().asset(first.asset).is_some(), "copy-on-write: old mask asset stays in the pool");
 
         editor.execute(Command::SetMaskEnabled { object, enabled: false }).unwrap();
-        assert_eq!(mask_of(&editor, object), Some(amalith_core::ImageMask { asset: painted.asset, enabled: false }));
+        assert_eq!(mask_of(&editor, object), Some(amalith_core::ImageMask { enabled: false, ..painted }));
 
         editor.undo().unwrap(); // re-enable
         assert_eq!(mask_of(&editor, object), Some(painted));
@@ -1240,6 +1240,36 @@ mod tests {
         assert_eq!(mask_of(&editor, object), None);
         editor.undo().unwrap();
         assert_eq!(mask_of(&editor, object), Some(first));
+    }
+
+    #[test]
+    fn unlinked_mask_stays_put_when_image_moves_and_apply_undo_restores_both() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
+        let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
+            parent: ObjectParent::Layer(layer), index: None, path: "images/photo.png".into(),
+            bounds: Rect::new(0., 0., 10., 10.), transform: Affine::IDENTITY,
+            name: None, embedded: true, modified: None, size: None,
+        }).unwrap() else { panic!() };
+        editor.execute(Command::AddLayerMask {
+            object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", AssetKind::Image, "images/mask.png"),
+        }).unwrap();
+        editor.execute(Command::SetMaskLinked { object, linked: false }).unwrap();
+        editor.execute(Command::SetTransform { object, transform: Affine::translate((20., 0.)) }).unwrap();
+        let mask = editor.document().object(object).unwrap().kind.mask().unwrap();
+        assert!(!mask.linked);
+        assert_eq!(mask.transform, Affine::translate((-20., 0.)));
+        editor.execute(Command::MoveLayerMask { object, delta: Vec2::new(5., 0.) }).unwrap();
+        assert_eq!(editor.document().object(object).unwrap().kind.mask().unwrap().transform, Affine::translate((-15., 0.)));
+        let baked = amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Baked", AssetKind::Image, "images/baked.png");
+        editor.execute(Command::ApplyLayerMask { object, asset: baked }).unwrap();
+        assert!(editor.document().object(object).unwrap().kind.mask().is_none());
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(object).unwrap().kind.mask().unwrap().transform, Affine::translate((-15., 0.)));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(object).unwrap().kind.mask().unwrap().transform, Affine::translate((-20., 0.)));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().object(object).unwrap().kind.mask().unwrap().transform, Affine::IDENTITY);
     }
 
     #[test]

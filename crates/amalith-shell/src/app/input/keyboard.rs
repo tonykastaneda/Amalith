@@ -638,6 +638,13 @@ impl App {
                 self.gradient_remove_point(self.gradient_point);
             }
             PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
+                if pressed && self.doc.editing_mask.is_some_and(|id| self.doc.selection.contains(&id)) =>
+            {
+                let id = self.doc.editing_mask.expect("checked above");
+                self.delete_layer_mask(id);
+                self.request_main_redraw();
+            }
+            PhysicalKey::Code(KeyCode::Backspace | KeyCode::Delete)
                 if pressed && !self.doc.selection.is_empty() =>
             {
                 let ids = std::mem::take(&mut self.doc.selection);
