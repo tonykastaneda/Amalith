@@ -4767,7 +4767,7 @@ impl App {
         let path = amalith_core::PathData::from_subpaths(vec![subpath]);
         let layer = self.ensure_layer();
         if let Ok(CommandOutcome::Object(id)) = self.doc.editor.execute(Command::CreatePath {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             path,
             name: None,
         }) {
@@ -5854,7 +5854,7 @@ impl App {
         let src = path.to_string_lossy().into_owned();
         let (modified, size) = canvas::file_stamp(path);
         let cmd = Command::CreateImage {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             path: src.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
@@ -6078,7 +6078,7 @@ impl App {
         self.doc.asset_store.insert(&container, bytes.to_vec());
         let layer = self.ensure_layer();
         let cmd = Command::CreateImage {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             path: container.clone(),
             bounds: amalith_core::Rect::new(0.0, 0.0, w, h),
             transform: amalith_core::Affine::translate((center.x - w * 0.5, center.y - h * 0.5)),
@@ -7300,7 +7300,7 @@ impl App {
         // right after typing) must not leave a zero-size, unclickable box.
         data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
         let cmd = Command::CreateText {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             data,
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
@@ -7391,7 +7391,7 @@ impl App {
             pathtext::text_bounds(&mut self.text, &data, &pt, &arc, amalith_core::Affine::IDENTITY)
         };
         let cmd = Command::CreateText {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             data,
             transform: amalith_core::Affine::IDENTITY,
             name: None,
@@ -7427,7 +7427,7 @@ impl App {
         };
         data.local_bounds = textedit::measure_text_data(&data, &mut self.text);
         match self.doc.editor.execute(Command::CreateText {
-            layer,
+            parent: amalith_core::ObjectParent::Layer(layer),
             data,
             transform: amalith_core::Affine::translate((origin.x, origin.y)),
             name: None,
@@ -7518,7 +7518,7 @@ impl App {
                 continue;
             }
             let Ok(CommandOutcome::Object(pid)) = self.doc.editor.execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: amalith_core::PathData::from_bezpath(geometry),
                 name,
             }) else {
@@ -10266,13 +10266,13 @@ mod shared_layer_tool_tests {
         doc.selected_layer = Some(raster);
         assert_eq!(doc.creation_layer(), Some(raster));
         let CommandOutcome::Object(shape) = doc.editor.execute(Command::CreateRect {
-            layer: doc.creation_layer().unwrap(), rect: amalith_core::Rect::new(0., 0., 100., 80.), name: None,
+            parent: amalith_core::ObjectParent::Layer(doc.creation_layer().unwrap()), rect: amalith_core::Rect::new(0., 0., 100., 80.), name: None,
         }).unwrap() else { panic!() };
         doc.selection = vec![shape];
         doc.selected_layer = Some(vector);
         assert_eq!(doc.creation_layer(), Some(raster));
         let CommandOutcome::Object(text) = doc.editor.execute(Command::CreateText {
-            layer: doc.creation_layer().unwrap(), data: amalith_core::TextData { content: "Editable".into(), ..Default::default() },
+            parent: amalith_core::ObjectParent::Layer(doc.creation_layer().unwrap()), data: amalith_core::TextData { content: "Editable".into(), ..Default::default() },
             transform: amalith_core::Affine::IDENTITY, name: None,
         }).unwrap() else { panic!() };
         assert!(matches!(doc.editor.document().object(shape).unwrap().kind, amalith_core::ObjectKind::Path(_)));

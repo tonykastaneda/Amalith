@@ -187,7 +187,13 @@ impl Editor {
     /// `Editor::execute(Command::Paste { .. })` is equivalent but only
     /// surfaces the first root's id.
     pub fn paste(&mut self, delta: Vec2, stack: PasteStack) -> Result<Vec<ObjectId>, CommandError> {
-        let (edits, root_ids) = self.compile_paste(delta, stack)?;
+        self.paste_into(delta, stack, None)
+    }
+
+    /// [`Editor::paste`] with an explicit destination for
+    /// [`PasteStack::Top`] — see `Command::Paste::target`.
+    pub fn paste_into(&mut self, delta: Vec2, stack: PasteStack, target: Option<ObjectParent>) -> Result<Vec<ObjectId>, CommandError> {
+        let (edits, root_ids) = self.compile_paste(delta, stack, target)?;
         let mut inverses = Vec::with_capacity(edits.len());
         for edit in edits {
             let (inverse, _created) = edit::apply(edit, &mut self.document)?;
@@ -247,9 +253,10 @@ impl Editor {
             .iter()
             .copied()
             .filter(|&id| {
+                // Sublayers are never dissolved by Ungroup either.
                 !matches!(
                     self.document.object(id).map(|o| &o.kind),
-                    Some(ObjectKind::Group(g)) if g.clip.is_some()
+                    Some(ObjectKind::Group(g)) if g.clip.is_some() || g.sublayer
                 )
             })
             .collect();
@@ -340,8 +347,8 @@ impl Editor {
         // directly (see `Editor::paste`) rather than through the generic
         // `compile`/apply loop below, and yields the *first* root's id
         // here (see `Command::Paste`'s docs for the full list).
-        if let Command::Paste { delta, stack } = command {
-            let root_ids = self.paste(delta, stack)?;
+        if let Command::Paste { delta, stack, target } = command {
+            let root_ids = self.paste_into(delta, stack, target)?;
             let first = *root_ids
                 .first()
                 .expect("compile_paste always yields at least one root id when it succeeds");
@@ -666,6 +673,38 @@ impl Editor {
             .collect()
     }
 
+    /// Refuses any sublayer in `ids`: sublayers sit directly in a layer and
+    /// never become part of a group, clip, blend or symbol.
+    fn reject_sublayers(&self, ids: &[ObjectId]) -> Result<(), CommandError> {
+        let is_sublayer = |id: &ObjectId| {
+            matches!(self.document.object(*id).map(|o| &o.kind), Some(ObjectKind::Group(g)) if g.sublayer)
+        };
+        if ids.iter().any(is_sublayer) { Err(CommandError::SublayerNotAllowed) } else { Ok(()) }
+    }
+
+    fn parent_exists(&self, parent: ObjectParent) -> bool {
+        match parent {
+            ObjectParent::Layer(l) => self.document.layer(l).is_some(),
+            ObjectParent::Group(g) => matches!(self.document.object(g).map(|o| &o.kind), Some(ObjectKind::Group(_))),
+            ObjectParent::Symbol(s) => self.document.symbol(s).is_some(),
+        }
+    }
+
+    /// The map from document space into `parent`'s own space, so an object
+    /// created with document-space geometry lands where it was drawn even
+    /// inside a transformed group or sublayer. Identity for a layer.
+    fn rebase_into(&self, parent: ObjectParent) -> Result<amalith_core::Affine, CommandError> {
+        match parent {
+            ObjectParent::Group(id) => {
+                if self.document.object(id).is_none() {
+                    return Err(CommandError::ObjectNotFound(id));
+                }
+                Ok(self.document.world_transform(id).inverse())
+            }
+            _ => Ok(amalith_core::Affine::IDENTITY),
+        }
+    }
+
     /// The current mask of an object that can carry one (an image or an
     /// adjustment). Errors if the object is missing or can't have a mask.
     fn mask_of(&self, object: ObjectId) -> Result<Option<amalith_core::ImageMask>, CommandError> {
@@ -837,34 +876,36 @@ impl Editor {
                 let index = index.unwrap_or_else(|| self.document.layers().len());
                 vec![Edit::InsertLayer { layer, index }]
             }
-            Command::CreateRect { layer, rect, name } => {
+            Command::CreateRect { parent, rect, name } => {
                 let mut object = Object::rectangle(
                     amalith_core::ObjectId::new(),
-                    ObjectParent::Layer(layer),
+                    parent,
                     rect,
                 );
                 object.name = name;
-                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
                 vec![Edit::InsertObject {
                     object: Box::new(object),
                     index,
                 }]
             }
-            Command::CreateEllipse { layer, rect, name } => {
+            Command::CreateEllipse { parent, rect, name } => {
                 let mut object = Object::new(
                     amalith_core::ObjectId::new(),
-                    ObjectParent::Layer(layer),
+                    parent,
                     amalith_core::ObjectKind::Path(amalith_core::PathData::ellipse(rect)),
                 );
                 object.name = name;
-                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
                 vec![Edit::InsertObject {
                     object: Box::new(object),
                     index,
                 }]
             }
             Command::CreateImage {
-                layer,
+                parent,
                 path,
                 bounds,
                 transform,
@@ -885,7 +926,7 @@ impl Editor {
                 };
                 let mut object = Object::new(
                     ObjectId::new(),
-                    ObjectParent::Layer(layer),
+                    parent,
                     ObjectKind::Image(amalith_core::ImageData {
                         asset: asset_id,
                         local_bounds: bounds,
@@ -896,7 +937,8 @@ impl Editor {
                 object.appearance.set_stroke(Paint::None);
                 object.transform = transform;
                 object.name = name;
-                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
                 let asset_index = self.document.assets().len();
                 vec![
                     Edit::InsertAsset {
@@ -908,6 +950,19 @@ impl Editor {
                         index,
                     },
                 ]
+            }
+            Command::CreateSublayer { layer, index, name } => {
+                let target = self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
+                if target.locked {
+                    return Err(CommandError::LayerLocked(layer));
+                }
+                let children = self.document.children_of(ObjectParent::Layer(layer));
+                let index = index.unwrap_or(children.len()).min(children.len());
+                let mut object = Object::new(ObjectId::new(), ObjectParent::Layer(layer), ObjectKind::Group(amalith_core::GroupData::sublayer()));
+                object.appearance.set_fill(Paint::None);
+                object.appearance.set_stroke(Paint::None);
+                object.name = name;
+                vec![Edit::InsertObject { object: Box::new(object), index }]
             }
             Command::CreateAdjustment { layer, index, name, mut data } => {
                 let target = self.document.layer(layer).ok_or(CommandError::LayerNotFound(layer))?;
@@ -949,21 +1004,22 @@ impl Editor {
                 data.mask = existing.mask;
                 vec![Edit::SetAdjustment { object, data }]
             }
-            Command::CreatePath { layer, path, name } => {
+            Command::CreatePath { parent, path, name } => {
                 let mut object = Object::new(
                     amalith_core::ObjectId::new(),
-                    ObjectParent::Layer(layer),
+                    parent,
                     amalith_core::ObjectKind::Path(path),
                 );
                 object.name = name;
-                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
                 vec![Edit::InsertObject {
                     object: Box::new(object),
                     index,
                 }]
             }
             Command::CreateText {
-                layer,
+                parent,
                 mut data,
                 transform,
                 name,
@@ -984,7 +1040,7 @@ impl Editor {
                 let mut edits = Vec::new();
                 let mut object = Object::new(
                     amalith_core::ObjectId::new(),
-                    ObjectParent::Layer(layer),
+                    parent,
                     amalith_core::ObjectKind::Text(data),
                 );
                 // Text follows Illustrator's default — black fill, no stroke —
@@ -993,7 +1049,8 @@ impl Editor {
                 object.appearance.set_stroke(Paint::None);
                 object.transform = transform;
                 object.name = name;
-                let index = self.document.children_of(ObjectParent::Layer(layer)).len();
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
                 edits.push(Edit::InsertObject {
                     object: Box::new(object),
                     index,
@@ -1341,6 +1398,9 @@ impl Editor {
                         if !matches!(o.kind, ObjectKind::Group(_)) {
                             return Err(CommandError::Document(DocumentError::NotAGroup(g)));
                         }
+                        // One level only: a sublayer never moves into a group
+                        // or another sublayer.
+                        self.reject_sublayers(&ids)?;
                     }
                     ObjectParent::Symbol(s) => {
                         self.document
@@ -1447,6 +1507,7 @@ impl Editor {
                 if ids.is_empty() {
                     return Err(CommandError::NothingToGroup);
                 }
+                self.reject_sublayers(&ids)?;
                 let mut parent = None;
                 for &id in &ids {
                     let object = self
@@ -1526,6 +1587,7 @@ impl Editor {
                 if ids.is_empty() {
                     return Err(CommandError::NothingToDefine);
                 }
+                self.reject_sublayers(&ids)?;
                 // Same shared-parent / restacking math as `Command::Group`
                 // above — a definition's content is a container exactly
                 // like a group's, just addressed via `ObjectParent::Symbol`
@@ -1664,6 +1726,7 @@ impl Editor {
                 if objects.len() < 2 {
                     return Err(CommandError::NothingToGroup);
                 }
+                self.reject_sublayers(&objects)?;
                 let mut parent = None;
                 for &id in &objects {
                     let object = self
@@ -1709,6 +1772,7 @@ impl Editor {
                     parent,
                     ObjectKind::Group(amalith_core::GroupData {
                         children: Vec::new(),
+                        sublayer: false,
                         clip: clip_id,
                         blend: None,
                     }),
@@ -1745,6 +1809,7 @@ impl Editor {
                 edits
             }
             Command::MakeBlend { start, end, name } => {
+                self.reject_sublayers(&[start, end])?;
                 let start_obj = self
                     .document
                     .object(start)
@@ -1785,6 +1850,7 @@ impl Editor {
                     parent,
                     ObjectKind::Group(amalith_core::GroupData {
                         children: Vec::new(),
+                        sublayer: false,
                         clip: None,
                         blend: Some(BlendData {
                             start,
@@ -2594,6 +2660,7 @@ impl Editor {
         &self,
         delta: Vec2,
         stack: PasteStack,
+        target: Option<ObjectParent>,
     ) -> Result<(Vec<Edit>, Vec<ObjectId>), CommandError> {
         let clipboard = self
             .clipboard
@@ -2629,7 +2696,18 @@ impl Editor {
         for root in &clipboard.roots {
             let (target_parent, target_index) = match stack {
                 PasteStack::Top => {
-                    let parent = resolve_parent(&self.document, root.source_parent, top_layer)?;
+                    let copied_sublayer = matches!(
+                        clipboard.objects.get(&root.source_id).map(|o| &o.kind),
+                        Some(ObjectKind::Group(g)) if g.sublayer
+                    );
+                    let parent = match target.filter(|t| self.parent_exists(*t)) {
+                        // A sublayer only ever sits directly in a layer.
+                        Some(ObjectParent::Group(g)) if copied_sublayer => {
+                            self.document.layer_of(g).map(ObjectParent::Layer).unwrap_or(resolve_parent(&self.document, root.source_parent, top_layer)?)
+                        }
+                        Some(t) => t,
+                        None => resolve_parent(&self.document, root.source_parent, top_layer)?,
+                    };
                     let index = shadow_children(&self.document, &mut shadow, parent).len();
                     (parent, index)
                 }

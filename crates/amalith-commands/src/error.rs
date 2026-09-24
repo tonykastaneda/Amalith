@@ -78,4 +78,6 @@ pub enum CommandError {
     InvalidAdjustment,
     #[error("adjustments can't be grouped; they belong directly in a layer")]
     CannotGroupAdjustment,
+    #[error("sublayers belong directly in a layer; they can't be grouped, clipped, blended, made into symbols or nested")]
+    SublayerNotAllowed,
 }

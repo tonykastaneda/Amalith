@@ -23,14 +23,14 @@ fn main() {
     };
 
     editor
-        .execute(Command::CreateRect { layer: layer_id, rect: Rect::new(10.0, 10.0, 110.0, 60.0), name: Some("box".into()) })
+        .execute(Command::CreateRect { parent: amalith_core::ObjectParent::Layer(layer_id), rect: Rect::new(10.0, 10.0, 110.0, 60.0), name: Some("box".into()) })
         .unwrap();
 
     let mut data = TextData { content: "Hello".into(), ..TextData::default() };
     data.style.family = "Helvetica".into();
     data.style.size = 24.0;
     editor
-        .execute(Command::CreateText { layer: layer_id, data, transform: Affine::translate((10.0, 100.0)), name: Some("greeting".into()) })
+        .execute(Command::CreateText { parent: amalith_core::ObjectParent::Layer(layer_id), data, transform: Affine::translate((10.0, 100.0)), name: Some("greeting".into()) })
         .unwrap();
 
     amalith_io::save(editor.document(), &amalith_io::AssetStore::new(), &out).unwrap();

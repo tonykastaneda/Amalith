@@ -71,7 +71,7 @@ mod tests {
             kind: TextKind::Path(PathTextData { path: id, start: 0.0, end: 80.0, align: PathTextAlign::Baseline, flip: false }),
             ..TextData::default()
         };
-        let outcome = editor.execute(Command::CreateText { layer, data, transform: Affine::IDENTITY, name: None }).unwrap();
+        let outcome = editor.execute(Command::CreateText { parent: amalith_core::ObjectParent::Layer(layer), data, transform: Affine::IDENTITY, name: None }).unwrap();
         assert!(matches!(outcome, CommandOutcome::Object(created) if created == id));
         let converted = editor.document().object(id).unwrap().clone();
         let ObjectKind::Text(text) = &converted.kind else { panic!("conversion did not produce text") };
@@ -108,7 +108,7 @@ mod tests {
         };
         let path = PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0));
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreatePath { layer, path, name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path, name: None })
             .unwrap()
         else {
             panic!()
@@ -156,19 +156,19 @@ mod tests {
             panic!()
         };
         let CommandOutcome::Object(a) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
             .unwrap()
         else {
             panic!()
         };
         let CommandOutcome::Object(b) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(10.0, 10.0, 30.0, 30.0)), name: None })
             .unwrap()
         else {
             panic!()
         };
         let CommandOutcome::Object(c) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(100.0, 100.0, 110.0, 110.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(100.0, 100.0, 110.0, 110.0)), name: None })
             .unwrap()
         else {
             panic!()
@@ -224,13 +224,13 @@ mod tests {
             panic!()
         };
         let CommandOutcome::Object(a) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
             .unwrap()
         else {
             panic!()
         };
         let CommandOutcome::Object(b) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(30.0, 0.0, 50.0, 20.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(30.0, 0.0, 50.0, 20.0)), name: None })
             .unwrap()
         else {
             panic!()
@@ -262,13 +262,13 @@ mod tests {
             panic!()
         };
         let CommandOutcome::Object(a) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(0.0, 0.0, 20.0, 20.0)), name: None })
             .unwrap()
         else {
             panic!()
         };
         let CommandOutcome::Object(b) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(100.0, 100.0, 120.0, 120.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(100.0, 100.0, 120.0, 120.0)), name: None })
             .unwrap()
         else {
             panic!()
@@ -307,7 +307,7 @@ mod tests {
         let mut ids = Vec::new();
         for y in [0.0, 20.0, 100.0] {
             let CommandOutcome::Object(id) = editor.execute(Command::CreatePath {
-                layer, path: PathData::polyline(&[Point::new(0.0, y), Point::new(100.0, y)]), name: None,
+                parent: amalith_core::ObjectParent::Layer(layer), path: PathData::polyline(&[Point::new(0.0, y), Point::new(100.0, y)]), name: None,
             }).unwrap() else { panic!() };
             ids.push(id);
         }
@@ -341,7 +341,7 @@ mod tests {
             panic!()
         };
         let CommandOutcome::Object(a) = editor
-            .execute(Command::CreatePath { layer, path: PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0)), name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: PathData::rectangle(Rect::new(0.0, 0.0, 10.0, 10.0)), name: None })
             .unwrap()
         else {
             panic!()
@@ -368,14 +368,14 @@ mod tests {
         };
         let path_a = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
         let CommandOutcome::Object(a) = editor
-            .execute(Command::CreatePath { layer, path: path_a, name: Some("A".into()) })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: path_a, name: Some("A".into()) })
             .unwrap()
         else {
             panic!()
         };
         let path_b = amalith_core::PathData::polyline(&[Point::new(20.0, 0.0), Point::new(30.0, 0.0)]);
         let CommandOutcome::Object(b) = editor
-            .execute(Command::CreatePath { layer, path: path_b, name: Some("B".into()) })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: path_b, name: Some("B".into()) })
             .unwrap()
         else {
             panic!()
@@ -419,7 +419,7 @@ mod tests {
         // open path" branch of `join_anchors`.
         let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(5.0, 10.0)]);
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreatePath { layer, path: open, name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: open, name: None })
             .unwrap()
         else {
             panic!()
@@ -447,7 +447,7 @@ mod tests {
         };
         let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreatePath { layer, path: open, name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: open, name: None })
             .unwrap()
         else {
             panic!()
@@ -483,7 +483,7 @@ mod tests {
         };
         let open = amalith_core::PathData::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0)]);
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreatePath { layer, path: open, name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path: open, name: None })
             .unwrap()
         else {
             panic!()
@@ -557,7 +557,7 @@ mod tests {
         };
         let path = PathData::polyline(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0)]);
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreatePath { layer, path, name: None })
+            .execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer), path, name: None })
             .unwrap()
         else {
             panic!()
@@ -590,7 +590,7 @@ mod tests {
             name: "Widths".into(), index: None,
         }).unwrap() else { panic!() };
         let CommandOutcome::Object(id) = editor.execute(Command::CreatePath {
-            layer, path: PathData::polyline(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0)]), name: None,
+            parent: amalith_core::ObjectParent::Layer(layer), path: PathData::polyline(&[Point::new(0.0, 0.0), Point::new(100.0, 0.0)]), name: None,
         }).unwrap() else { panic!() };
         editor.execute(Command::SetStrokeWidth { objects: vec![id], width: 4.0 }).unwrap();
         let points = vec![WidthPoint { distance: 50.0, left: 0.0, right: 4.0 }];
@@ -739,7 +739,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: Some("Rectangle 1".into()),
             })
@@ -804,7 +804,7 @@ mod tests {
         };
         let CommandOutcome::Object(id) = editor
             .execute(Command::CreateImage {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: "/tmp/photo.png".into(),
                 bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
                 transform: Affine::translate((10.0, 20.0)),
@@ -851,7 +851,7 @@ mod tests {
         };
         let CommandOutcome::Object(obj_id) = editor
             .execute(Command::CreateImage {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: "/tmp/photo.png".into(),
                 bounds: Rect::new(0.0, 0.0, 200.0, 100.0),
                 transform: Affine::IDENTITY,
@@ -905,7 +905,7 @@ mod tests {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
         let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
-            layer, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
         let asset_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {
@@ -926,6 +926,91 @@ mod tests {
         editor.redo().unwrap();
         assert_eq!(asset_of(&editor, object), painted);
         assert_eq!(asset_of(&editor, copy), original);
+    }
+
+    fn sublayer(editor: &mut Editor, layer: LayerId, index: Option<usize>) -> ObjectId {
+        let CommandOutcome::Object(id) = editor.execute(Command::CreateSublayer { layer, index, name: Some("Sub".into()) }).unwrap() else { panic!() };
+        id
+    }
+
+    fn is_sublayer(editor: &Editor, id: ObjectId) -> bool {
+        matches!(editor.document().object(id).map(|o| &o.kind), Some(ObjectKind::Group(g)) if g.sublayer)
+    }
+
+    #[test]
+    fn create_sublayer_goes_on_top_or_just_above_and_undoes() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "L".into(), index: None }).unwrap() else { panic!() };
+        let a = sublayer(&mut editor, layer, None);
+        let b = sublayer(&mut editor, layer, None);
+        // "Just above a": index of a + 1.
+        let c = sublayer(&mut editor, layer, Some(1));
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[a, c, b]);
+        assert!(is_sublayer(&editor, c));
+        assert_eq!(editor.document().object(c).unwrap().name.as_deref(), Some("Sub"));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Layer(layer)), &[a, b]);
+    }
+
+    #[test]
+    fn drawing_into_a_sublayer_is_one_undo_step_and_stays_where_drawn() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "L".into(), index: None }).unwrap() else { panic!() };
+        let sub = sublayer(&mut editor, layer, None);
+        // Even if the sublayer has been moved, new art lands where it's drawn.
+        editor.execute(Command::SetTransform { object: sub, transform: Affine::translate((100.0, 50.0)) }).unwrap();
+        let CommandOutcome::Object(rect) = editor.execute(Command::CreateRect {
+            parent: ObjectParent::Group(sub), rect: Rect::new(10., 10., 30., 20.), name: None,
+        }).unwrap() else { panic!() };
+        assert_eq!(editor.document().children_of(ObjectParent::Group(sub)), &[rect]);
+        assert_eq!(editor.document().bounds_of(rect), Some(Rect::new(10., 10., 30., 20.)));
+        editor.undo().unwrap();
+        assert!(editor.document().object(rect).is_none());
+        assert!(editor.document().children_of(ObjectParent::Group(sub)).is_empty(), "one undo removes it entirely");
+        assert_eq!(editor.document().layer_of(sub), Some(layer));
+    }
+
+    #[test]
+    fn sublayers_refuse_ungroup_group_clip_and_nesting() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "L".into(), index: None }).unwrap() else { panic!() };
+        let sub = sublayer(&mut editor, layer, None);
+        let other = sublayer(&mut editor, layer, None);
+        let CommandOutcome::Object(rect) = editor.execute(Command::CreateRect {
+            parent: ObjectParent::Layer(layer), rect: Rect::new(0., 0., 5., 5.), name: None,
+        }).unwrap() else { panic!() };
+
+        // Ungroup skips sublayers (with nothing else named, that's a no-op error).
+        assert!(editor.ungroup(&[sub]).map_or(true, |freed| freed.is_empty()));
+        assert!(is_sublayer(&editor, sub));
+        assert_eq!(editor.execute(Command::Group { ids: vec![sub, rect], name: None }), Err(CommandError::SublayerNotAllowed));
+        assert_eq!(editor.execute(Command::ClipMake { objects: vec![rect, sub], name: None }), Err(CommandError::SublayerNotAllowed));
+        assert_eq!(
+            editor.execute(Command::Reparent { ids: vec![other], parent: ObjectParent::Group(sub), index: 0 }),
+            Err(CommandError::SublayerNotAllowed),
+            "one level only"
+        );
+        // Ordinary content can move into a sublayer.
+        editor.execute(Command::Reparent { ids: vec![rect], parent: ObjectParent::Group(sub), index: 0 }).unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Group(sub)), &[rect]);
+    }
+
+    #[test]
+    fn paste_goes_to_the_target_and_a_copied_sublayer_stays_top_level() {
+        let mut editor = new_editor();
+        let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "L".into(), index: None }).unwrap() else { panic!() };
+        let sub = sublayer(&mut editor, layer, None);
+        let CommandOutcome::Object(rect) = editor.execute(Command::CreateRect {
+            parent: ObjectParent::Layer(layer), rect: Rect::new(0., 0., 5., 5.), name: None,
+        }).unwrap() else { panic!() };
+        editor.copy(&[rect]).unwrap();
+        let pasted = editor.paste_into(Vec2::ZERO, PasteStack::Top, Some(ObjectParent::Group(sub))).unwrap();
+        assert_eq!(editor.document().children_of(ObjectParent::Group(sub)), pasted.as_slice());
+
+        editor.copy(&[sub]).unwrap();
+        let copies = editor.paste_into(Vec2::ZERO, PasteStack::Top, Some(ObjectParent::Group(sub))).unwrap();
+        assert_eq!(editor.document().object(copies[0]).unwrap().parent, ObjectParent::Layer(layer), "never nested");
+        assert!(is_sublayer(&editor, copies[0]));
     }
 
     /// A new, unlocked Raster layer, made the way the Layers panel does it.
@@ -949,7 +1034,7 @@ mod tests {
         let mut editor = new_editor();
         let layer = raster_layer(&mut editor);
         let CommandOutcome::Object(image) = editor.execute(Command::CreateImage {
-            layer, path: "images/photo.png".into(), bounds: Rect::new(10., 20., 110., 70.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), path: "images/photo.png".into(), bounds: Rect::new(10., 20., 110., 70.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
 
@@ -1055,7 +1140,7 @@ mod tests {
             layer, index: None, name: None, data: levels(),
         }).unwrap() else { panic!() };
         let CommandOutcome::Object(path) = editor.execute(Command::CreateRect {
-            layer, rect: Rect::new(0., 0., 5., 5.), name: None,
+            parent: amalith_core::ObjectParent::Layer(layer), rect: Rect::new(0., 0., 5., 5.), name: None,
         }).unwrap() else { panic!() };
         assert_eq!(editor.execute(Command::Group { ids: vec![path, adj], name: None }), Err(CommandError::CannotGroupAdjustment));
         assert_eq!(
@@ -1075,7 +1160,7 @@ mod tests {
         let mut editor = new_editor();
         let CommandOutcome::Layer(layer) = editor.execute(Command::CreateLayer { name: "Pixels".into(), index: None }).unwrap() else { panic!() };
         let CommandOutcome::Object(object) = editor.execute(Command::CreateImage {
-            layer, path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
+            parent: amalith_core::ObjectParent::Layer(layer), path: "images/original.png".into(), bounds: Rect::new(0., 0., 20., 20.), transform: Affine::IDENTITY,
             name: None, embedded: true, modified: None, size: None,
         }).unwrap() else { panic!() };
         let mask_of = |editor: &Editor, id| match &editor.document().object(id).unwrap().kind {
@@ -1136,7 +1221,7 @@ mod tests {
         };
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -1184,7 +1269,7 @@ mod tests {
         };
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateEllipse {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect: Rect::new(0.0, 0.0, 100.0, 80.0),
                 name: None,
             })
@@ -1242,7 +1327,7 @@ mod tests {
         };
         let create = |editor: &mut Editor, rect| match editor
             .execute(Command::CreateEllipse {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: None,
             })
@@ -1315,7 +1400,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 20.0, 10.0);
         let CommandOutcome::Object(original) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: Some("Rectangle 1".into()),
             })
@@ -1365,7 +1450,7 @@ mod tests {
         let rect = Rect::new(3.0, 4.0, 23.0, 14.0);
         let CommandOutcome::Object(object) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: None,
             })
@@ -1428,7 +1513,7 @@ mod tests {
         };
         let CommandOutcome::Object(object) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: object_rect,
                 name: None,
             })
@@ -1551,7 +1636,7 @@ mod tests {
         let mut create = |name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -1600,7 +1685,7 @@ mod tests {
         };
         let CommandOutcome::Object(top) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: Some("Top".into()),
             })
@@ -1679,7 +1764,7 @@ mod tests {
         let create = |editor: &mut Editor, name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -1727,7 +1812,7 @@ mod tests {
         let create = |editor: &mut Editor, name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -1807,7 +1892,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: None,
             })
@@ -1835,7 +1920,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: None,
             })
@@ -1874,7 +1959,7 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 100.0, 50.0);
         let CommandOutcome::Object(object_id) = editor
             .execute(Command::CreateRect {
-                layer: layer_id,
+                parent: amalith_core::ObjectParent::Layer(layer_id),
                 rect,
                 name: None,
             })
@@ -1913,7 +1998,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: Some("A".into()),
             })
@@ -1923,7 +2008,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(20.0, 0.0, 30.0, 10.0),
                 name: Some("B".into()),
             })
@@ -1974,7 +2059,7 @@ mod tests {
         };
         let CommandOutcome::Object(source) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2009,7 +2094,7 @@ mod tests {
         let create = |editor: &mut Editor, name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -2142,7 +2227,7 @@ mod tests {
         };
         let CommandOutcome::Object(source) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2181,6 +2266,7 @@ mod tests {
             .execute(Command::Paste {
                 delta: Vec2::ZERO,
                 stack: PasteStack::Top,
+                target: None,
             })
             .unwrap_err();
         assert_eq!(err, CommandError::EmptyClipboard);
@@ -2252,7 +2338,7 @@ mod tests {
             };
             let CommandOutcome::Object(bottom) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some("Bottom".into()),
                 })
@@ -2262,7 +2348,7 @@ mod tests {
             };
             let CommandOutcome::Object(top) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(20.0, 0.0, 30.0, 10.0),
                     name: Some("Top".into()),
                 })
@@ -2360,7 +2446,7 @@ mod tests {
         };
         let CommandOutcome::Object(copied) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: Some("Copied".into()),
             })
@@ -2370,7 +2456,7 @@ mod tests {
         };
         let CommandOutcome::Object(dragged) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(20.0, 0.0, 30.0, 10.0),
                 name: Some("Dragged".into()),
             })
@@ -2420,7 +2506,7 @@ mod tests {
         let create = |editor: &mut Editor, name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -2517,7 +2603,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreateRect {
-                layer: layer_a,
+                parent: amalith_core::ObjectParent::Layer(layer_a),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2527,7 +2613,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreateRect {
-                layer: layer_b,
+                parent: amalith_core::ObjectParent::Layer(layer_b),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2587,7 +2673,7 @@ mod tests {
         };
         let CommandOutcome::Object(object) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: Some("Original".into()),
             })
@@ -2642,7 +2728,7 @@ mod tests {
         let create = |editor: &mut Editor, name: &str| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: Some(name.into()),
                 })
@@ -2699,7 +2785,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2709,7 +2795,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(20.0, 0.0, 30.0, 10.0),
                 name: None,
             })
@@ -2770,7 +2856,7 @@ mod tests {
         };
         let CommandOutcome::Object(object) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2809,7 +2895,7 @@ mod tests {
         };
         let create = |editor: &mut Editor, rect: Rect| {
             let CommandOutcome::Object(id) = editor
-                .execute(Command::CreateRect { layer, rect, name: None })
+                .execute(Command::CreateRect { parent: amalith_core::ObjectParent::Layer(layer), rect, name: None })
                 .unwrap()
             else {
                 panic!()
@@ -2870,7 +2956,7 @@ mod tests {
         };
         let CommandOutcome::Object(object) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2901,7 +2987,7 @@ mod tests {
         };
         let CommandOutcome::Object(obj) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -2983,7 +3069,7 @@ mod tests {
         let create = |editor: &mut Editor| {
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                     name: None,
                 })
@@ -3053,7 +3139,7 @@ mod tests {
             panic!()
         };
         let CommandOutcome::Object(id) = editor
-            .execute(Command::CreateRect { layer, rect: Rect::new(0.0, 0.0, 10.0, 10.0), name: None })
+            .execute(Command::CreateRect { parent: amalith_core::ObjectParent::Layer(layer), rect: Rect::new(0.0, 0.0, 10.0, 10.0), name: None })
             .unwrap()
         else {
             panic!()
@@ -3112,7 +3198,7 @@ mod tests {
         };
         let create = |editor: &mut Editor| match editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -3194,7 +3280,7 @@ mod tests {
         };
         let create = |editor: &mut Editor| match editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -3247,7 +3333,7 @@ mod tests {
         };
         let CommandOutcome::Object(id) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 10.0, 10.0),
                 name: None,
             })
@@ -3323,7 +3409,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(0.0, 0.0, 20.0, 20.0),
                 name: Some("A".into()),
             })
@@ -3333,7 +3419,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreateRect {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 rect: Rect::new(100.0, 0.0, 120.0, 20.0),
                 name: Some("B".into()),
             })

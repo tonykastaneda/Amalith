@@ -131,25 +131,26 @@ pub enum Command {
         name: String,
         index: Option<usize>,
     },
-    /// Creates a rectangle path object as the top-most child of `layer`.
+    /// Creates a rectangle path object as the top-most child of `parent` (a
+    /// layer, or a sublayer/group; document-space geometry is rebased into it).
     CreateRect {
-        layer: LayerId,
+        parent: amalith_core::ObjectParent,
         rect: Rect,
         name: Option<String>,
     },
-    /// Creates a closed ellipse path as the top-most child of `layer`.
+    /// Creates a closed ellipse path as the top-most child of `parent`.
     CreateEllipse {
-        layer: LayerId,
+        parent: amalith_core::ObjectParent,
         rect: Rect,
         name: Option<String>,
     },
-    /// Creates an arbitrary path primitive as the top-most child of `layer`.
+    /// Creates an arbitrary path primitive as the top-most child of `parent`.
     CreatePath {
-        layer: LayerId,
+        parent: amalith_core::ObjectParent,
         path: PathData,
         name: Option<String>,
     },
-    /// Places a raster image as the top-most child of `layer`.
+    /// Places a raster image as the top-most child of `parent`.
     /// `path` is the source file for a linked asset, or the container path
     /// for an embedded one (`embedded: true`). `bounds` is the image's
     /// local box (typically `0,0,px_w,px_h`); `transform` puts that box
@@ -160,7 +161,7 @@ pub enum Command {
     /// reads this stamp at the same time; `None` for an embedded asset, or
     /// if the stamp couldn't be read).
     CreateImage {
-        layer: LayerId,
+        parent: amalith_core::ObjectParent,
         path: String,
         bounds: Rect,
         transform: Affine,
@@ -169,10 +170,10 @@ pub enum Command {
         modified: Option<i64>,
         size: Option<u64>,
     },
-    /// Creates a text object as the top-most child of `layer`, with
+    /// Creates a text object as the top-most child of `parent`, with
     /// `transform` placing its anchor in document space.
     CreateText {
-        layer: LayerId,
+        parent: amalith_core::ObjectParent,
         data: TextData,
         transform: Affine,
         name: Option<String>,
@@ -370,6 +371,21 @@ pub enum Command {
     Paste {
         delta: Vec2,
         stack: PasteStack,
+        /// Where [`PasteStack::Top`] puts the copies — the active layer or
+        /// sublayer. `None` keeps each copy's original parent (falling back
+        /// to the top layer). A copied sublayer always lands directly in a
+        /// layer, never inside another sublayer.
+        target: Option<ObjectParent>,
+    },
+    /// Creates an empty vector sublayer (an Illustrator-style named
+    /// container; see `amalith_core::GroupData::sublayer`) among `layer`'s
+    /// top-level children, at `index` (`None` puts it on top). Yields
+    /// [`CommandOutcome::Object`]. Raster sublayers are transparent images,
+    /// made with [`Command::CreateImage`].
+    CreateSublayer {
+        layer: LayerId,
+        index: Option<usize>,
+        name: Option<String>,
     },
     /// Groups `ids` into one new group object, as one undo group. `ids`
     /// must all share the same current parent (a layer, or another

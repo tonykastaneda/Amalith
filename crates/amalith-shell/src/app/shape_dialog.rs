@@ -163,17 +163,17 @@ impl App {
             let layer = self.ensure_layer();
             let cmd = match dlg.geometry() {
                 shapedialog::Geometry::Rect(rect) => Command::CreateRect {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect,
                     name: None,
                 },
                 shapedialog::Geometry::Ellipse(rect) => Command::CreateEllipse {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     rect,
                     name: None,
                 },
                 shapedialog::Geometry::Path(path) => Command::CreatePath {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     path,
                     name: None,
                 },

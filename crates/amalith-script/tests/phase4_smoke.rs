@@ -20,7 +20,7 @@ fn create_outline_converts_text_into_filled_path_geometry() {
     data.style.size = 48.0;
 
     let text_id = match editor
-        .execute(Command::CreateText { layer: layer_id, data, transform: Affine::translate((10.0, 10.0)), name: Some("nam".into()) })
+        .execute(Command::CreateText { parent: amalith_core::ObjectParent::Layer(layer_id), data, transform: Affine::translate((10.0, 10.0)), name: Some("nam".into()) })
         .unwrap()
     {
         CommandOutcome::Object(id) => id,

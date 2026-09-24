@@ -884,6 +884,7 @@ mod smart_guide_bounds_tests {
                 ObjectParent::Layer(layer),
                 ObjectKind::Group(GroupData {
                     children: Vec::new(),
+                    sublayer: false,
                     clip: None,
                     blend: Some(amalith_core::BlendData {
                         start,
@@ -935,6 +936,7 @@ mod smart_guide_bounds_tests {
                 ObjectParent::Layer(layer),
                 ObjectKind::Group(GroupData {
                     children: Vec::new(),
+                    sublayer: false,
                     clip: None,
                     blend: Some(amalith_core::BlendData {
                         start,
@@ -1608,6 +1610,7 @@ mod smart_guide_bounds_tests {
                 ObjectParent::Layer(layer),
                 ObjectKind::Group(GroupData {
                     children: Vec::new(),
+                    sublayer: false,
                     clip: None,
                     blend: Some(amalith_core::BlendData {
                         start,
@@ -1684,6 +1687,7 @@ mod smart_guide_bounds_tests {
                 ObjectParent::Layer(layer),
                 ObjectKind::Group(GroupData {
                     children: Vec::new(),
+                    sublayer: false,
                     clip: None,
                     blend: Some(amalith_core::BlendData {
                         start,

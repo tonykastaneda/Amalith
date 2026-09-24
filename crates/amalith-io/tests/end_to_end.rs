@@ -35,7 +35,7 @@ fn create_move_undo_save_load_roundtrip() {
     let original_rect = Rect::new(200.0, 200.0, 400.0, 350.0);
     let CommandOutcome::Object(object_id) = editor
         .execute(Command::CreateRect {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             rect: original_rect,
             name: Some("Rectangle 1".into()),
         })

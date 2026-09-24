@@ -966,6 +966,20 @@ pub struct GroupData {
     /// from (`amalith-commands` owns *when* to rebuild).
     #[serde(default)]
     pub blend: Option<BlendData>,
+    /// When set, this group is a vector **sublayer**: an Illustrator-style
+    /// named container sitting directly in a layer (never deeper). Unlike a
+    /// plain group, the canvas selects its children individually, it can't
+    /// be ungrouped or grouped, and new drawing goes into it while it's
+    /// the active container. An older build reads it as a plain group.
+    #[serde(default)]
+    pub sublayer: bool,
+}
+
+impl GroupData {
+    /// A new, empty sublayer.
+    pub fn sublayer() -> Self {
+        Self { sublayer: true, ..Self::default() }
+    }
 }
 
 /// A blend group's own data: the two original shapes it interpolates
@@ -2037,4 +2051,16 @@ mod path_data_tests {
         let mut closed = vec![Subpath { anchors: vec![Anchor::corner(Point::ZERO), Anchor::corner(Point::new(5.0, 0.0))], closed: true }];
         assert!(trim_to_split(&mut closed, 0, true, 0.5).is_none());
     }
+
+#[cfg(test)]
+mod sublayer_tests {
+    use super::*;
+
+    #[test]
+    fn group_without_sublayer_field_loads_as_plain_group() {
+        let g: GroupData = serde_json::from_str(r#"{"children":[]}"#).unwrap();
+        assert!(!g.sublayer);
+        assert!(GroupData::sublayer().sublayer);
+    }
+}
 }

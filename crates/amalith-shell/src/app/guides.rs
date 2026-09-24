@@ -148,7 +148,7 @@ impl App {
                 closed: false,
             }]);
             let _ = self.doc.editor.execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path,
                 name: Some("Guide".into()),
             });

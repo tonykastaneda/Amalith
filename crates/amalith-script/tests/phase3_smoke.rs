@@ -19,7 +19,7 @@ fn script_embeds_every_linked_placed_item_and_typename_flips_live() {
     };
     editor
         .execute(Command::CreateImage {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             path: linked_path.to_string_lossy().into_owned(),
             bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
             transform: Affine::IDENTITY,
@@ -96,7 +96,7 @@ fn document_save_as_retargets_to_svg() {
     };
     editor
         .execute(Command::CreateRect {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             rect: Rect::new(0.0, 0.0, 50.0, 50.0),
             name: Some("square".into()),
         })

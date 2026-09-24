@@ -417,7 +417,7 @@ mod tests {
             id
         };
         let rect = |editor: &mut Editor, layer, r: Rect, c: Rgba| {
-            let CommandOutcome::Object(id) = editor.execute(Command::CreateRect { layer, rect: r, name: None }).unwrap() else { panic!() };
+            let CommandOutcome::Object(id) = editor.execute(Command::CreateRect { parent: amalith_core::ObjectParent::Layer(layer), rect: r, name: None }).unwrap() else { panic!() };
             editor.execute(Command::SetFill { objects: vec![id], paint: Paint::Solid(c) }).unwrap();
             editor.execute(Command::SetStroke { objects: vec![id], paint: Paint::None }).unwrap();
         };

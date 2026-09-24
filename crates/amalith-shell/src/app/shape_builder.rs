@@ -350,7 +350,7 @@ mod tests {
             originals.push(path.geometry.clone());
             let CommandOutcome::Object(id) = editor
                 .execute(Command::CreatePath {
-                    layer,
+                    parent: amalith_core::ObjectParent::Layer(layer),
                     path,
                     name: None,
                 })
@@ -473,7 +473,7 @@ mod tests {
         let r = CoreRect::new(0.0, 0.0, 40.0, 40.0);
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(r),
                 name: None,
             })
@@ -483,7 +483,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(r),
                 name: None,
             })
@@ -510,7 +510,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(CoreRect::new(0.0, 0.0, 40.0, 40.0)),
                 name: None,
             })
@@ -520,7 +520,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(CoreRect::new(20.0, 0.0, 60.0, 40.0)),
                 name: None,
             })
@@ -589,7 +589,7 @@ mod tests {
         };
         let CommandOutcome::Object(a) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(CoreRect::new(0.0, 0.0, 380.0, 380.0)),
                 name: None,
             })
@@ -599,7 +599,7 @@ mod tests {
         };
         let CommandOutcome::Object(b) = editor
             .execute(Command::CreatePath {
-                layer,
+                parent: amalith_core::ObjectParent::Layer(layer),
                 path: PathData::ellipse(CoreRect::new(230.0, 0.0, 610.0, 380.0)),
                 name: None,
             })

@@ -1221,7 +1221,7 @@ impl App {
                     }]);
                     if let Ok(CommandOutcome::Object(id)) =
                         self.doc.editor.execute(Command::CreatePath {
-                            layer,
+                            parent: amalith_core::ObjectParent::Layer(layer),
                             path,
                             name: None,
                         })
@@ -1253,19 +1253,19 @@ impl App {
                     let layer = self.ensure_layer();
                     let cmd = match tool {
                         Tool::Rectangle => Command::CreateRect {
-                            layer,
+                            parent: amalith_core::ObjectParent::Layer(layer),
                             rect: r,
                             name: None,
                         },
                         Tool::Ellipse => Command::CreateEllipse {
-                            layer,
+                            parent: amalith_core::ObjectParent::Layer(layer),
                             rect: r,
                             name: None,
                         },
                         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Arc | Tool::Spiral => {
                             match primitive_path(tool, r) {
                                 Some(path) => Command::CreatePath {
-                                    layer,
+                                    parent: amalith_core::ObjectParent::Layer(layer),
                                     path,
                                     name: None,
                                 },

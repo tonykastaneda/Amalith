@@ -18,14 +18,14 @@ fn build_fixture_document() -> Editor {
     };
     editor
         .execute(Command::CreateRect {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             rect: Rect::new(0.0, 0.0, 10.0, 10.0),
             name: Some("keep".into()),
         })
         .unwrap();
     editor
         .execute(Command::CreateRect {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             rect: Rect::new(20.0, 20.0, 30.0, 30.0),
             name: Some("doomed".into()),
         })

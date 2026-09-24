@@ -484,7 +484,7 @@ impl JsPageItem {
         let Some(open) = state.documents.get_mut(&key) else { return Ok(JsValue::undefined()) };
 
         let Ok(CommandOutcome::Object(new_id)) =
-            open.editor.execute(Command::CreatePath { layer: layer_id, path: path_data, name: None })
+            open.editor.execute(Command::CreatePath { parent: amalith_core::ObjectParent::Layer(layer_id), path: path_data, name: None })
         else {
             return Ok(JsValue::undefined());
         };

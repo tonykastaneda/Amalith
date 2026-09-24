@@ -177,6 +177,20 @@ impl Document {
         self.objects.values()
     }
 
+    /// The layer an object ultimately lives in, walking up through groups
+    /// and sublayers. `None` for an object inside a symbol definition (or
+    /// a missing id).
+    pub fn layer_of(&self, id: ObjectId) -> Option<LayerId> {
+        let mut current = self.object(id)?;
+        loop {
+            match current.parent {
+                ObjectParent::Layer(layer) => return Some(layer),
+                ObjectParent::Group(group) => current = self.object(group)?,
+                ObjectParent::Symbol(_) => return None,
+            }
+        }
+    }
+
     /// Ordered child-id list for a layer or group, matching the paint-order
     /// convention documented on `Layer::children`.
     pub fn children_of(&self, parent: ObjectParent) -> &[ObjectId] {

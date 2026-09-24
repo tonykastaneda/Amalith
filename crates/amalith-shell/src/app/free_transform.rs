@@ -397,7 +397,7 @@ mod tests {
     fn selected_groups_expand_to_unique_path_leaves() {
         let mut editor=Editor::new(amalith_core::Document::new("warp test"));
         let CommandOutcome::Layer(layer)=editor.execute(Command::CreateLayer {name:"test".into(),index:None}).unwrap() else {panic!()};
-        let CommandOutcome::Object(path)=editor.execute(Command::CreateRect {layer,rect:amalith_core::Rect::new(0.,0.,100.,100.),name:None}).unwrap() else {panic!()};
+        let CommandOutcome::Object(path)=editor.execute(Command::CreateRect {parent: amalith_core::ObjectParent::Layer(layer),rect:amalith_core::Rect::new(0.,0.,100.,100.),name:None}).unwrap() else {panic!()};
         let CommandOutcome::Object(group)=editor.execute(Command::Group {ids:vec![path],name:None}).unwrap() else {panic!()};
         assert_eq!(warp_targets(editor.document(),&[group,path]),vec![path]);
         assert!(warp_targets(editor.document(),&[]).is_empty());

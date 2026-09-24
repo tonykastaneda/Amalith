@@ -51,7 +51,7 @@ fn a_future_object_kind_still_opens_and_round_trips_losslessly() {
     };
     let CommandOutcome::Object(object_id) = editor
         .execute(Command::CreateRect {
-            layer: layer_id,
+            parent: amalith_core::ObjectParent::Layer(layer_id),
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
             name: Some("Rectangle 1".into()),
         })
