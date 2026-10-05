@@ -439,7 +439,7 @@ impl App {
     /// preview of the stroke swept so far, in the same red used for
     /// Shape Builder's own erase mode.
     pub(in crate::app) fn paint_eraser_preview(&mut self) {
-        if self.active_tool != Tool::Eraser {
+        if self.active_tool != Tool::Eraser || self.target_prefers_pixels() {
             return;
         }
         let ink = shape_builder::ERASE_INK;
@@ -453,6 +453,20 @@ impl App {
         }
         let r = self.eraser_size * 0.5;
         self.content.stroke(&Stroke::new(1.0), ID, ink, None, &vello::kurbo::Circle::new(self.pointer, r));
+    }
+
+    /// The pencil's in-progress polyline uses the same document samples
+    /// that will become anchors when the pointer is released.
+    pub(in crate::app) fn paint_pencil_preview(&mut self) {
+        let Drag::PencilStroke { points } = &self.drag else { return };
+        let Some(&first) = points.first() else { return };
+        let mut path = BezPath::new();
+        let transform = self.doc.view.to_screen();
+        path.move_to(transform * first);
+        for &point in &points[1..] {
+            path.line_to(transform * point);
+        }
+        self.content.stroke(&Stroke::new(1.5), ID, self.theme.accent, None, &path);
     }
 
     /// All guide geometry is clipped to the canvas, never over panels or menus.

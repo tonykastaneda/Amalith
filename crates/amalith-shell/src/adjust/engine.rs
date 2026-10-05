@@ -133,6 +133,14 @@ impl AdjustEngine {
                         min_binding_size: None,
                     },
                 ),
+                entry(
+                    4,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -186,7 +194,18 @@ impl AdjustEngine {
                 let result = match self.lut(device, queue, &step.op) {
                     Some(lut) => {
                         let output = texture(device, job.width, job.height, "adjustment output");
-                        self.dispatch(device, queue, &input, &output, lut, step.blend, step.opacity);
+                        let mask_texture = step.mask.as_ref().map(|mask| {
+                            let tex = texture(device, job.width, job.height, "adjustment mask");
+                            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                            let _ = self.renderer.render_to_texture(device, queue, mask, &view, &RenderParams {
+                                base_color: Color::TRANSPARENT,
+                                width: job.width,
+                                height: job.height,
+                                antialiasing_method: AaConfig::Area,
+                            });
+                            tex
+                        });
+                        self.dispatch(device, queue, &input, &output, mask_texture.as_ref(), lut, step.blend, step.opacity);
                         output
                     }
                     // Not a color op: pass the content through unchanged.
@@ -245,6 +264,7 @@ impl AdjustEngine {
         queue: &wgpu::Queue,
         input: &wgpu::Texture,
         output: &wgpu::Texture,
+        mask: Option<&wgpu::Texture>,
         lut: usize,
         blend: BlendMode,
         opacity: f32,
@@ -252,7 +272,7 @@ impl AdjustEngine {
         let lut = &self.luts[lut];
         let (width, height) = (input.width(), input.height());
         let mut uniform = Vec::with_capacity(32);
-        for word in [width, height, lut.mode, lut.n, blend_index(blend), opacity.to_bits(), 0, 0] {
+        for word in [width, height, lut.mode, lut.n, blend_index(blend), opacity.to_bits(), u32::from(mask.is_some()), 0] {
             uniform.extend_from_slice(&word.to_le_bytes());
         }
         let params = device.create_buffer(&wgpu::BufferDescriptor {
@@ -264,6 +284,7 @@ impl AdjustEngine {
         queue.write_buffer(&params, 0, &uniform);
         let input_view = input.create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask_view = mask.unwrap_or(input).create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("adjustment color pass"),
             layout: &self.layout,
@@ -272,6 +293,7 @@ impl AdjustEngine {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&output_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: params.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: lut.buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&mask_view) },
             ],
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("adjustment") });
@@ -316,7 +338,7 @@ impl AdjustEngine {
         );
         let output = texture(device, width, height, "parity output");
         let lut = self.lut(device, queue, op).expect("color op");
-        self.dispatch(device, queue, &input, &output, lut, blend, opacity);
+        self.dispatch(device, queue, &input, &output, None, lut, blend, opacity);
         self.read_back(device, queue, &output)
     }
 

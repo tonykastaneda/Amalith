@@ -124,6 +124,11 @@ impl App {
     /// (used by the Gradient panel's Linear / Radial buttons when the
     /// current paint isn't a gradient yet).
     pub(in crate::app) fn apply_gradient_kind(&mut self, kind: GradientKind) {
+        if self.target_prefers_pixels() && self.doc.selection.first().is_some_and(|&id| matches!(
+            self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))
+        )) {
+            self.active_slot = panels::PaintSlot::Fill;
+        }
         let slot = self.active_slot;
         let stroke = slot == panels::PaintSlot::Stroke;
 
@@ -634,7 +639,6 @@ impl App {
     /// under the cursor), make sure it carries a gradient on the active
     /// slot, and arm the axis drag.
     pub(in crate::app) fn begin_gradient_drag(&mut self, dp: Point) {
-        let stroke = self.active_slot == panels::PaintSlot::Stroke;
         let vis = self.visible_doc_rect();
         let target = {
             let doc = self.doc.editor.document();
@@ -659,6 +663,12 @@ impl App {
         let Some(id) = target else {
             return;
         };
+        if self.target_prefers_pixels() && matches!(
+            self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))
+        ) {
+            self.active_slot = panels::PaintSlot::Fill;
+        }
+        let stroke = self.active_slot == panels::PaintSlot::Stroke;
 
         let existing = Self::obj_slot_paint(self.doc.editor.document(), id, stroke)
             .and_then(|p| p.gradient_id());

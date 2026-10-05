@@ -80,6 +80,7 @@ pub enum Icon {
     // Tools panel's greyed-out "(WIP)" placeholder slots.
     MagicWand,
     Lasso,
+    RasterPolygonLasso,
     RasterMarquee,
     RasterEllipse,
     PaintBucket,
@@ -113,7 +114,7 @@ fn brand_svg(icon: Icon) -> &'static str {
         | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
         | Icon::Eraser | Icon::VerticalText | Icon::AreaType | Icon::PathType
         | Icon::VerticalAreaType | Icon::VerticalPathType
-        | Icon::MagicWand | Icon::Lasso | Icon::RasterMarquee | Icon::RasterEllipse | Icon::PaintBucket | Icon::CloneStamp | Icon::CurvaturePen | Icon::Paintbrush
+        | Icon::MagicWand | Icon::Lasso | Icon::RasterPolygonLasso | Icon::RasterMarquee | Icon::RasterEllipse | Icon::PaintBucket | Icon::CloneStamp | Icon::CurvaturePen | Icon::Paintbrush
         | Icon::Pencil | Icon::Mesh | Icon::Measure | Icon::SymbolSprayer
         | Icon::Slice | Icon::Shaper | Icon::PerspectiveGrid | Icon::ColumnGraph => "",
     }
@@ -262,6 +263,20 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::Lasso {
         draw_lasso_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::RasterPolygonLasso {
+        let xf = Affine::translate((box_.x0, box_.y0)) * Affine::scale(box_.width() / 24.0);
+        let mut path = BezPath::new();
+        path.move_to((4., 7.));
+        path.line_to((12., 4.));
+        path.line_to((20., 9.));
+        path.line_to((16., 17.));
+        path.line_to((6., 16.));
+        path.close_path();
+        path.move_to((16., 17.));
+        path.line_to((20., 21.));
+        scene.stroke(&Stroke::new(1.6), xf, color, None, &path);
         return;
     }
     if icon == Icon::CurvaturePen {

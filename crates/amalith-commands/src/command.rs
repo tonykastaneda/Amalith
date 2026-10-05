@@ -158,6 +158,15 @@ pub enum Command {
         path: PathData,
         name: Option<String>,
     },
+    /// Creates an arbitrary path with its complete starting appearance in
+    /// the same undo step. Used by freehand tools whose open paths need a
+    /// stroke but no fill from the moment they enter the document.
+    CreateStyledPath {
+        parent: amalith_core::ObjectParent,
+        path: PathData,
+        name: Option<String>,
+        appearance: Appearance,
+    },
     /// Places a raster image as the top-most child of `parent`.
     /// `path` is the source file for a linked asset, or the container path
     /// for an embedded one (`embedded: true`). `bounds` is the image's

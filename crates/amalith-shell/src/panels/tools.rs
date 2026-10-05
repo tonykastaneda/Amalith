@@ -96,6 +96,7 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
         v.push(Slot::Wip("Lasso", Icon::Lasso));
     }
     v.push(Slot::Tool(Tool::Pen));
+    v.push(Slot::Tool(Tool::Pencil));
     if !hide_wip {
         v.push(Slot::Wip("Curvature Pen", Icon::CurvaturePen));
     }
@@ -104,7 +105,6 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
     v.push(Slot::Shape(shape));
     if !hide_wip {
         v.push(Slot::Wip("Paintbrush", Icon::Paintbrush));
-        v.push(Slot::Wip("Pencil", Icon::Pencil));
     }
     v.push(Slot::Flyout(ToolGroup::RotateReflect, rotate_group));
     v.push(Slot::Flyout(ToolGroup::ScaleShear, scale_group));
@@ -145,10 +145,9 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
 /// Move, pixel selections (wand, rectangular/elliptical marquee, lasso),
 /// Brush, Pixel Eraser, Paint Bucket, and shared editable vector tools.
 fn raster_slots(shape: Tool, type_group: Tool, _hide_wip: bool) -> Vec<Slot> {
-    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::MagicWand)];
-    v.extend([Slot::Tool(Tool::RasterMarquee), Slot::Tool(Tool::RasterEllipse), Slot::Tool(Tool::RasterLasso)]);
+    let mut v = vec![Slot::Tool(Tool::Select), Slot::Flyout(crate::tool::ToolGroup::RasterSelection, Tool::RasterMarquee)];
     v.push(Slot::Tool(Tool::RasterBrush));
-    v.push(Slot::Tool(Tool::RasterEraser));
+    v.push(Slot::Tool(Tool::Eraser));
     v.push(Slot::Tool(Tool::RasterFill));
     v.push(Slot::Tool(Tool::RasterCloneStamp));
     v.push(Slot::Flyout(crate::tool::ToolGroup::Type, type_group));
@@ -158,6 +157,8 @@ fn raster_slots(shape: Tool, type_group: Tool, _hide_wip: bool) -> Vec<Slot> {
     v.push(Slot::Tool(Tool::Spiral));
     v.push(Slot::Tool(Tool::DirectSelect));
     v.push(Slot::Tool(Tool::Eyedropper));
+    v.push(Slot::Tool(Tool::Gradient));
+    v.push(Slot::Tool(Tool::FreeTransform));
     v.push(Slot::Tool(Tool::Hand));
     v.push(Slot::Tool(Tool::Zoom));
     v
@@ -185,9 +186,13 @@ mod raster_tests {
     }
     #[test]
     fn pixel_selection_tools_are_live_and_only_in_raster_toolbar() {
-        for tool in [Tool::RasterMarquee, Tool::RasterEllipse, Tool::RasterLasso, Tool::RasterBrush, Tool::RasterEraser, Tool::RasterFill, Tool::RasterCloneStamp] {
-            assert!(raster_slots(Tool::Rectangle, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
-            assert!(!vector_slots(Tool::Rectangle, Tool::Rotate, Tool::Scale, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
+        let raster = raster_slots(Tool::Rectangle, Tool::Text, true);
+        assert!(raster.iter().any(|s| matches!(s, Slot::Flyout(crate::tool::ToolGroup::RasterSelection, _))));
+        for tool in [Tool::RasterMarquee, Tool::RasterEllipse, Tool::RasterLasso, Tool::RasterPolygonLasso, Tool::MagicWand] {
+            assert!(crate::tool::ToolGroup::RasterSelection.contains(tool));
+        }
+        for tool in [Tool::RasterBrush, Tool::Eraser, Tool::RasterFill, Tool::RasterCloneStamp, Tool::Gradient, Tool::Eyedropper, Tool::FreeTransform] {
+            assert!(raster.iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
         }
     }
 }
@@ -475,6 +480,7 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
 
         let Slot::Wip(_, wip_icon) = slot else {
             let tool = match slot {
+                Slot::Flyout(crate::tool::ToolGroup::RasterSelection, _) if crate::tool::ToolGroup::RasterSelection.contains(ctx.active_tool) => ctx.active_tool,
                 Slot::Tool(t) | Slot::Shape(t) | Slot::Flyout(_, t) => t,
                 Slot::Wip(..) => unreachable!(),
             };
@@ -599,6 +605,8 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
             return Some(match slot {
                 Slot::Wip(name, _) => format!("{name} (WIP)"),
                 Slot::Tool(t) | Slot::Shape(t) | Slot::Flyout(_, t) => {
+                    let t = if matches!(slot, Slot::Flyout(crate::tool::ToolGroup::RasterSelection, _))
+                        && crate::tool::ToolGroup::RasterSelection.contains(ctx.active_tool) { ctx.active_tool } else { t };
                     let key = t.key();
                     if key.is_empty() {
                         t.label().to_string()

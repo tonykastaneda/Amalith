@@ -171,7 +171,10 @@ impl App {
             if is_image(selected) {
                 return if usable(selected) { Ok(Some((layer, selected))) } else { Err("That pixel layer is locked or hidden.") };
             }
-            if !matches!(doc.object(selected).map(|o| &o.kind), Some(amalith_core::ObjectKind::Adjustment(_))) {
+            if matches!(doc.object(selected).map(|o| &o.kind), Some(amalith_core::ObjectKind::Adjustment(_))) {
+                return Err("Select the adjustment mask with the Mask button before painting it.");
+            }
+            if self.target_mode != crate::tool::TargetMode::Pixels {
                 return Err("Shapes and text stay editable. Select a pixel layer, or use Create Sublayer to add one.");
             }
         }
@@ -188,8 +191,12 @@ impl App {
     /// (Eraser, Clone Stamp) — Brush and Fill pass `true` so an empty
     /// Raster layer gets a fresh canvas sized to the artboard under it.
     fn raster_paint_target(&mut self, allow_new_canvas: bool) -> Option<PaintTarget> {
-        if self.current_layer_kind() != Some(amalith_core::LayerKind::Raster) { return None; }
-        let target = match self.raster_target() {
+        if !self.target_prefers_pixels() { return None; }
+        let mask_adjustment = self.doc.editing_mask.filter(|&id| {
+            self.doc.selection.contains(&id)
+                && self.doc.editor.document().object(id).is_some_and(|o| !o.locked && o.visible && matches!(o.kind, amalith_core::ObjectKind::Adjustment(_)))
+        }).and_then(|id| panels::layers::owning_layer(self.doc.editor.document(), id).map(|layer| (layer, id)));
+        let target = match mask_adjustment.map(Some).map(Ok).unwrap_or_else(|| self.raster_target()) {
             Ok(target) => target,
             Err(message) => {
                 self.doc.io_error = Some(message.into());
@@ -202,6 +209,30 @@ impl App {
         let object = target.map(|(_, id)| id);
         if let Some(id) = object {
             let obj = doc.object(id)?;
+            if let amalith_core::ObjectKind::Adjustment(adjustment) = &obj.kind {
+                let Some(mask) = adjustment.mask else {
+                    self.doc.io_error = Some("This adjustment has no mask yet — click Mask in the Layers panel to add one.".into());
+                    return None;
+                };
+                let bounds = crate::adjust::mask_bounds(doc, layer);
+                let (w, h) = (bounds.width().ceil().max(1.) as u32, bounds.height().ceil().max(1.) as u32);
+                if w as u64 * h as u64 > 16_777_216 {
+                    self.doc.io_error = Some("Adjustment mask exceeds 16 megapixels.".into());
+                    return None;
+                }
+                let world = crate::convert::affine(doc.world_transform(id)) * crate::convert::affine(mask.transform);
+                self.magic_wand_cache = None;
+                let mut base = self.magic_wand_image(mask.asset).cloned()?;
+                if base.dimensions() != (w, h) { base = image::imageops::resize(&base, w, h, image::imageops::FilterType::Nearest); }
+                let pixels_to_local = vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
+                    * vello::kurbo::Affine::scale_non_uniform(bounds.width() / w as f64, bounds.height() / h as f64);
+                return Some(PaintTarget {
+                    object: Some(id), layer, base,
+                    pixel_to_doc: world * pixels_to_local,
+                    local_to_pixel: pixels_to_local.inverse() * world.inverse(),
+                    editing_mask: true,
+                });
+            }
             let amalith_core::ObjectKind::Image(image) = &obj.kind else {
                 self.doc.io_error = Some("Shapes and text stay editable. Select a pixel image or an empty raster layer to paint.".into());
                 return None;
@@ -248,7 +279,7 @@ impl App {
             })
         } else {
             // No pixel layers in this layer yet: Brush and Fill start one.
-            if !allow_new_canvas {
+            if !allow_new_canvas || self.current_layer_kind() != Some(amalith_core::LayerKind::Raster) {
                 self.doc.io_error = Some("This layer has no pixels yet. Use Create Sublayer to add a pixel layer.".into());
                 return None;
             }
@@ -279,6 +310,10 @@ impl App {
                     } else {
                         image.asset = preview_asset;
                     }
+                } else if let amalith_core::ObjectKind::Adjustment(adjustment) = &mut obj.kind {
+                    if editing_mask {
+                        if let Some(mask) = &mut adjustment.mask { mask.asset = preview_asset; }
+                    }
                 }
             }
         } else {
@@ -294,10 +329,10 @@ impl App {
     }
 
     pub(super) fn raster_brush_press(&mut self) {
-        let erase = self.active_tool == Tool::RasterEraser;
+        let erase = matches!(self.active_tool, Tool::Eraser | Tool::RasterEraser);
         let Some(target) = self.raster_paint_target(!erase) else { return };
         let PaintTarget { object, layer, base, pixel_to_doc, local_to_pixel, editing_mask } = target;
-        let Some(color) = (if erase { Some(amalith_core::Color::rgb(1.,1.,1.)) } else { self.doc.fill.color() }) else {
+        let Some(color) = (if erase { Some(amalith_core::Color::rgb(0.,0.,0.)) } else { self.doc.fill.color() }) else {
             self.doc.io_error = Some("Painting needs a solid foreground color.".into());
             return;
         };
@@ -451,16 +486,31 @@ impl App {
     /// An empty raster layer paints a new canvas at one pixel per unit.
     fn raster_hover_pixel_to_doc(&mut self) -> vello::kurbo::Affine {
         let fallback = vello::kurbo::Affine::IDENTITY;
+        if let Some(id) = self.doc.editing_mask.filter(|id| self.doc.selection.contains(id)) {
+            let doc = self.doc.editor.document();
+            if let Some(amalith_core::ObjectKind::Adjustment(data)) = doc.object(id).map(|o| &o.kind) {
+                if let (Some(mask), Some(layer)) = (data.mask, panels::layers::owning_layer(doc, id)) {
+                    let bounds = crate::adjust::mask_bounds(doc, layer);
+                    let w = bounds.width().ceil().max(1.);
+                    let h = bounds.height().ceil().max(1.);
+                    return crate::convert::affine(doc.world_transform(id)) * crate::convert::affine(mask.transform)
+                        * vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
+                        * vello::kurbo::Affine::scale_non_uniform(bounds.width() / w, bounds.height() / h);
+                }
+            }
+        }
         let Ok(Some((_, id))) = self.raster_target() else { return fallback };
         let doc = self.doc.editor.document();
         let Some(amalith_core::ObjectKind::Image(image)) = doc.object(id).map(|o| &o.kind) else { return fallback };
         let (bounds, world) = (image.local_bounds, crate::convert::affine(doc.world_transform(id)));
-        let asset = if self.doc.editing_mask == Some(id) { image.mask.map_or(image.asset, |m| m.asset) } else { image.asset };
-        let (w, h) = match self.image_native_size(asset) {
+        let mask_transform = if self.doc.editing_mask == Some(id) {
+            image.mask.map(|m| crate::convert::affine(m.transform)).unwrap_or(vello::kurbo::Affine::IDENTITY)
+        } else { vello::kurbo::Affine::IDENTITY };
+        let (w, h) = match self.image_native_size(image.asset) {
             Some(size) => size,
             None => (bounds.width().max(1.0) as u32, bounds.height().max(1.0) as u32),
         };
-        world
+        world * mask_transform
             * vello::kurbo::Affine::translate((bounds.x0, bounds.y0))
             * vello::kurbo::Affine::scale_non_uniform(bounds.width() / w.max(1) as f64, bounds.height() / h.max(1) as f64)
     }
@@ -477,9 +527,11 @@ impl App {
     }
 
     pub(super) fn paint_raster_brush_preview(&mut self) {
-        if matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) && self.canvas_viewport().contains(self.pointer) && matches!(self.drag, Drag::None) {
+        if (matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp)
+            || (self.active_tool == Tool::Eraser && self.target_prefers_pixels()))
+            && self.canvas_viewport().contains(self.pointer) && matches!(self.drag, Drag::None) {
             let (size, hardness) = match self.active_tool {
-                Tool::RasterEraser => (self.raster_eraser_size, self.raster_eraser_hardness),
+                Tool::Eraser | Tool::RasterEraser => (self.raster_eraser_size, self.raster_eraser_hardness),
                 Tool::RasterCloneStamp => (self.raster_clone_size, self.raster_clone_hardness),
                 _ => (self.raster_brush_size, self.raster_brush_hardness),
             };
@@ -540,6 +592,40 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn adjustment_mask_is_a_paint_target_and_preview_keeps_its_kind() {
+        use amalith_commands::{Command, CommandOutcome, Editor};
+        use amalith_core::{AdjustmentData, AdjustmentOp, Document, Layer, LayerKind, LayerId};
+        let mut document = Document::new("Mask");
+        let layer = LayerId::new();
+        let mut raster = Layer::new(layer, "Photo");
+        raster.kind = LayerKind::Raster;
+        document.insert_layer(raster, 0);
+        let mut app = App::new();
+        app.doc = Doc::new(Editor::new(document));
+        let CommandOutcome::Object(id) = app.doc.editor.execute(Command::CreateAdjustment {
+            layer, index: None, name: None, data: AdjustmentData::new(AdjustmentOp::Invert),
+        }).unwrap() else { panic!() };
+        let path = "images/adjustment-test-mask.png";
+        let seed = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        seed.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        app.doc.asset_store.insert(path, bytes.into_inner());
+        app.doc.editor.execute(Command::AddLayerMask {
+            object: id,
+            asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Mask", amalith_core::AssetKind::Image, path),
+        }).unwrap();
+        app.doc.selected_layer = Some(layer);
+        app.doc.selection = vec![id];
+        app.doc.editing_mask = Some(id);
+        let target = app.raster_paint_target(false).expect("paintable adjustment mask");
+        assert_eq!(target.object, Some(id));
+        assert!(target.editing_mask);
+        assert_eq!(target.base.dimensions(), (1024, 1024));
+        let preview = app.raster_preview_doc(amalith_core::AssetId::new(), target.object, layer,
+            &target.base, target.pixel_to_doc, true);
+        assert!(matches!(preview.object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Adjustment(_))));
+    }
     fn stroke() -> Stroke {
         Stroke { object: None, layer: amalith_core::LayerId::new(), base: image::RgbaImage::new(32, 32), ink: PaintTiles::new(32, 32), pixel_to_doc: vello::kurbo::Affine::IDENTITY, last: Point::new(4., 16.), radius: 2., hardness: 1.0, source: PixelSource::Flat(image::Rgba([255, 0, 0, 128])), selection: None, changed: false, revision: 0, preview: None, erase: false, preview_asset: amalith_core::AssetId::new(), preview_doc: None, editing_mask: false }
     }

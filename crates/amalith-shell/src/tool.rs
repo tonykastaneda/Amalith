@@ -2,11 +2,21 @@
 
 use crate::icons::Icon;
 
+/// Where context-sensitive tools act. Auto follows the selected item.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TargetMode {
+    #[default]
+    Auto,
+    Objects,
+    Pixels,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
     DirectSelect,
     Pen,
+    Pencil,
     Line,
     Text,
     Rectangle,
@@ -40,6 +50,7 @@ pub enum Tool {
     RasterMarquee,
     RasterEllipse,
     RasterLasso,
+    RasterPolygonLasso,
     RasterBrush,
     RasterEraser,
     RasterFill,
@@ -48,16 +59,17 @@ pub enum Tool {
 
 impl Tool {
     pub fn is_raster_selection(self) -> bool {
-        matches!(self, Tool::RasterMarquee | Tool::RasterEllipse | Tool::RasterLasso)
+        matches!(self, Tool::MagicWand | Tool::RasterMarquee | Tool::RasterEllipse | Tool::RasterLasso | Tool::RasterPolygonLasso)
     }
     pub fn is_raster_tool(self) -> bool {
         self.is_raster_selection()
             || matches!(self, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp)
     }
-    pub const ALL: [Tool; 40] = [
+    pub const ALL: [Tool; 42] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
+        Tool::Pencil,
         Tool::Line,
         Tool::Text,
         Tool::Rectangle,
@@ -91,6 +103,7 @@ impl Tool {
         Tool::RasterMarquee,
         Tool::RasterEllipse,
         Tool::RasterLasso,
+        Tool::RasterPolygonLasso,
         Tool::RasterBrush,
         Tool::RasterEraser,
         Tool::RasterFill,
@@ -119,6 +132,7 @@ impl Tool {
             Tool::Select => "Selection",
             Tool::DirectSelect => "Direct Selection",
             Tool::Pen => "Pen",
+            Tool::Pencil => "Pencil",
             Tool::Line => "Line Segment",
             Tool::Text => "Type",
             Tool::Rectangle => "Rectangle",
@@ -152,6 +166,7 @@ impl Tool {
             Tool::RasterMarquee => "Rectangular Marquee",
             Tool::RasterEllipse => "Elliptical Marquee",
             Tool::RasterLasso => "Lasso",
+            Tool::RasterPolygonLasso => "Polygonal Lasso",
             Tool::RasterBrush => "Brush",
             Tool::RasterEraser => "Pixel Eraser",
             Tool::RasterFill => "Paint Bucket",
@@ -165,6 +180,7 @@ impl Tool {
             Tool::Select => "V",
             Tool::DirectSelect => "A",
             Tool::Pen => "P",
+            Tool::Pencil => "N",
             Tool::Line => "\\",
             Tool::Text => "T",
             Tool::Rectangle => "M",
@@ -186,6 +202,7 @@ impl Tool {
             Tool::RasterMarquee => "M",
             Tool::RasterEllipse => "⇧M",
             Tool::RasterLasso => "L",
+            Tool::RasterPolygonLasso => "⇧L",
             Tool::RasterBrush => "B",
             Tool::RasterEraser => "⇧E",
             Tool::RasterFill => "K",
@@ -202,6 +219,7 @@ impl Tool {
             Tool::Select => Icon::Select,
             Tool::DirectSelect => Icon::DirectSelect,
             Tool::Pen => Icon::Pen,
+            Tool::Pencil => Icon::Pencil,
             Tool::Line => Icon::Line,
             Tool::Text => Icon::Text,
             Tool::Rectangle => Icon::Rectangle,
@@ -235,6 +253,7 @@ impl Tool {
             Tool::RasterMarquee => Icon::RasterMarquee,
             Tool::RasterEllipse => Icon::RasterEllipse,
             Tool::RasterLasso => Icon::Lasso,
+            Tool::RasterPolygonLasso => Icon::RasterPolygonLasso,
             Tool::RasterBrush => Icon::Paintbrush,
             Tool::RasterEraser => Icon::Eraser,
             Tool::RasterFill => Icon::PaintBucket,
@@ -252,10 +271,11 @@ pub enum ToolGroup {
     RotateReflect,
     ScaleShear,
     Type,
+    RasterSelection,
 }
 
 impl ToolGroup {
-    pub const ALL: [ToolGroup; 3] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear, ToolGroup::Type];
+    pub const ALL: [ToolGroup; 4] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear, ToolGroup::Type, ToolGroup::RasterSelection];
 
     pub fn tools(self) -> &'static [Tool] {
         match self {
@@ -269,6 +289,10 @@ impl ToolGroup {
                 Tool::VerticalText,
                 Tool::VerticalAreaType,
                 Tool::VerticalPathType,
+            ],
+            ToolGroup::RasterSelection => &[
+                Tool::RasterMarquee, Tool::RasterEllipse, Tool::RasterLasso,
+                Tool::RasterPolygonLasso, Tool::MagicWand,
             ],
         }
     }
@@ -298,6 +322,7 @@ mod tests {
                 Tool::Select
                 | Tool::DirectSelect
                 | Tool::Pen
+                | Tool::Pencil
                 | Tool::Line
                 | Tool::Text
                 | Tool::Rectangle
@@ -330,7 +355,8 @@ mod tests {
                 | Tool::MagicWand
                 | Tool::RasterMarquee
                 | Tool::RasterEllipse
-                | Tool::RasterLasso => true,
+                | Tool::RasterLasso
+                | Tool::RasterPolygonLasso => true,
                 Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => true,
             }
         }
@@ -349,7 +375,7 @@ mod tests {
     fn tool_group_all_covers_every_variant_exactly_once() {
         fn covered(g: ToolGroup) -> bool {
             match g {
-                ToolGroup::RotateReflect | ToolGroup::ScaleShear | ToolGroup::Type => true,
+                ToolGroup::RotateReflect | ToolGroup::ScaleShear | ToolGroup::Type | ToolGroup::RasterSelection => true,
             }
         }
         for g in ToolGroup::ALL {

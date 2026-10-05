@@ -37,6 +37,7 @@ mod embed;
 mod fill_stroke;
 mod opacity;
 mod status;
+mod target;
 mod stroke;
 pub(crate) use stroke::paint_width_profile_icon;
 mod xform;
@@ -56,6 +57,9 @@ pub struct Ctx<'a> {
     pub doc: &'a amalith_core::Document,
     /// Size of the object selection.
     pub selection_len: usize,
+    pub target_mode: crate::tool::TargetMode,
+    pub mask_active: bool,
+    pub target_available: bool,
     /// True when text is the editing focus (caret in a text object, or the
     /// whole selection is text) — flips the `character` segment on and the
     /// paint / stroke segments off.
@@ -121,6 +125,7 @@ pub struct Ctx<'a> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SegKind {
     Status,
+    Target,
     FillStroke,
     Stroke,
     Opacity,
@@ -146,6 +151,7 @@ struct Segment {
 /// list serves every selection kind.
 const SEGMENTS: &[Segment] = &[
     status::SEGMENT,
+    target::SEGMENT,
     artboard::SEGMENT,
     xform::SEGMENT,
     align::SEGMENT,
