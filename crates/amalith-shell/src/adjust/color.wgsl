@@ -12,13 +12,15 @@ struct Params {
     n: u32,
     blend: u32,
     opacity: f32,
-    _pad: vec2<u32>,
+    has_mask: u32,
+    _pad: u32,
 }
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var dst: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> params: Params;
 @group(0) @binding(3) var<storage, read> lut: array<vec4<f32>>;
+@group(0) @binding(4) var coverage: texture_2d<f32>;
 
 fn cube_at(i: vec3<u32>) -> vec3<f32> {
     let n = params.n;
@@ -155,6 +157,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let blended = blend(params.blend, c.rgb, lookup(c.rgb));
-    let t = clamp(params.opacity, 0.0, 1.0);
+    var t = clamp(params.opacity, 0.0, 1.0);
+    if (params.has_mask != 0u) {
+        t *= textureLoad(coverage, p, 0).a;
+    }
     textureStore(dst, p, vec4<f32>(clamp(mix(c.rgb, blended, t), vec3<f32>(0.0), vec3<f32>(1.0)), c.a));
 }

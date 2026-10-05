@@ -991,7 +991,7 @@ impl Editor {
                 let parent = blank.parent;
                 let index = self.document.children_of(parent).iter().position(|&id| id == slot)
                     .ok_or(CommandError::ObjectNotFound(slot))?;
-                if !matches!(&*command, Command::CreateRect { .. } | Command::CreateEllipse { .. } | Command::CreatePath { .. } | Command::CreateText { .. }) {
+                if !matches!(&*command, Command::CreateRect { .. } | Command::CreateEllipse { .. } | Command::CreatePath { .. } | Command::CreateStyledPath { .. } | Command::CreateText { .. }) {
                     return Err(CommandError::NotAVectorSlot(slot));
                 }
                 let mut created = self.compile(*command)?;
@@ -1080,6 +1080,18 @@ impl Editor {
                     edits.push(Edit::InsertObject { object: Box::new(child), index });
                 }
                 edits
+            }
+            Command::CreateStyledPath { parent, path, name, appearance } => {
+                let mut object = Object::new(
+                    amalith_core::ObjectId::new(),
+                    parent,
+                    amalith_core::ObjectKind::Path(path),
+                );
+                object.name = name;
+                object.appearance = appearance;
+                object.transform = self.rebase_into(parent)? * object.transform;
+                let index = self.document.children_of(parent).len();
+                vec![Edit::InsertObject { object: Box::new(object), index }]
             }
             Command::CreateText {
                 parent,

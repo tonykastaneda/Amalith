@@ -29,6 +29,8 @@ pub(in crate::app) fn paint_main(
     pixel_selection: Option<(ObjectId, &[Vec<Point>])>,
     ants_dash_offset: f64,
     active_tool: Tool,
+    target_mode: crate::tool::TargetMode,
+    mask_active: bool,
     active_slot: panels::PaintSlot,
     picker: Option<crate::picker::Picker>,
     representative: Option<amalith_core::Appearance>,
@@ -830,6 +832,11 @@ pub(in crate::app) fn paint_main(
         theme,
         doc,
         selection_len: selection.len(),
+        target_mode,
+        mask_active,
+        target_available: selected_layer.and_then(|id| doc.layer(id)).is_some_and(|l| l.kind == amalith_core::LayerKind::Raster)
+            || selection.iter().any(|id| matches!(doc.object(*id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_)))
+                || doc.layer_of(*id).and_then(|layer| doc.layer(layer)).is_some_and(|l| l.kind == amalith_core::LayerKind::Raster)),
         text_context: text_ctx,
         representative,
         fill_mixed,

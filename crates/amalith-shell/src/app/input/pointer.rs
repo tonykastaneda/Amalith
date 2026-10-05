@@ -43,6 +43,7 @@ impl App {
             || self.smart_guide_hit.is_some()
             || self.sg_hovered_path.is_some()
             || self.active_tool == Tool::Eraser
+            || self.raster_polygon.is_some()
             || (matches!(self.active_tool, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
                 && !self.doc.selection.is_empty()
                 && matches!(self.drag, Drag::None))
@@ -577,6 +578,12 @@ impl App {
                 let mut path = path.clone();
                 self.eraser_move(&mut path);
                 self.drag = Drag::EraserStroke { path };
+                self.request_main_redraw();
+            }
+            Drag::PencilStroke { points } => {
+                let mut points = points.clone();
+                self.pencil_move(&mut points);
+                self.drag = Drag::PencilStroke { points };
                 self.request_main_redraw();
             }
             Drag::RasterSelection { object, tool, points } => {
@@ -1290,6 +1297,7 @@ impl App {
                         Tool::Select
                         | Tool::DirectSelect
                         | Tool::Pen
+                        | Tool::Pencil
                         | Tool::Line
                         | Tool::Text
                         | Tool::Artboard
@@ -1315,7 +1323,8 @@ impl App {
                         | Tool::MagicWand
                         | Tool::RasterMarquee
                         | Tool::RasterEllipse
-                        | Tool::RasterLasso => return,
+                        | Tool::RasterLasso
+                        | Tool::RasterPolygonLasso => return,
                         Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => return,
                         Tool::AddAnchor
                         | Tool::DeleteAnchor
@@ -1649,6 +1658,10 @@ impl App {
             Drag::EraserStroke { mut path } => {
                 self.eraser_move(&mut path);
                 self.commit_eraser(path);
+            }
+            Drag::PencilStroke { mut points } => {
+                self.pencil_move(&mut points);
+                self.commit_pencil(points);
             }
             Drag::RasterSelection { object, tool, mut points } => {
                 self.raster_selection_move(object, tool, &mut points);

@@ -731,6 +731,8 @@ impl App {
                 self.doc.pixel_selection.as_ref().map(|ps| (ps.object, ps.contours.as_slice())),
                 ants_dash_offset,
                 self.active_tool,
+                self.target_mode,
+                self.doc.editing_mask.is_some(),
                 self.active_slot,
                 self.picker,
                 representative.clone(),
@@ -1252,6 +1254,8 @@ impl App {
             self.paint_liquify_brush();
             self.paint_shape_builder_preview();
             self.paint_eraser_preview();
+            self.paint_pencil_preview();
+            self.paint_raster_polygon_preview();
             self.paint_raster_brush_preview();
             self.paint_pixel_transform_preview();
             self.paint_offset_preview();

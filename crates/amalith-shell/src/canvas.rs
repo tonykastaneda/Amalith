@@ -311,7 +311,7 @@ pub fn export_scene(
                 scene, doc, id, vt, scale, px, None, text, None, images, outline, link_ink,
                 layer.kind, Point::new(-1.0, -1.0), &[],
             );
-        });
+        }, |scene, id| paint_adjustment_mask(scene, doc, id, vt, images));
     }
     scene.pop_layer();
     scene
@@ -545,7 +545,7 @@ pub fn paint(
                 pointer,
                 selection,
             );
-        });
+        }, |scene, id| paint_adjustment_mask(scene, doc, id, vt, images));
     }
 
     // Isolation mode: scrim the whole canvas, then repaint the isolated
@@ -2349,6 +2349,13 @@ fn paint_object(
                 }
                 return;
             }
+            // An image can carry the same editable gradient fill as a path.
+            // Isolate it so SourceAtop uses only this image's alpha (and its
+            // mask), never artwork already painted behind the image.
+            let gradient_fill = obj.appearance.fill().gradient_id().and_then(|id| doc.gradient(id));
+            if gradient_fill.is_some() {
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &viewport);
+            }
             // Screen-space long side of the object (zoom × native size).
             // Native bounds stay full-res; only the GPU copy is swapped.
             let cover = {
@@ -2398,6 +2405,29 @@ fn paint_object(
                     None,
                     &r,
                 );
+            }
+            if let Some(g) = gradient_fill {
+                let rect = convert::rect(img.local_bounds);
+                let mut cover = vello::kurbo::BezPath::new();
+                cover.move_to((rect.x0, rect.y0));
+                cover.line_to((rect.x1, rect.y0));
+                cover.line_to((rect.x1, rect.y1));
+                cover.line_to((rect.x0, rect.y1));
+                cover.close_path();
+                scene.push_layer(
+                    Fill::NonZero,
+                    BlendMode::new(vello::peniko::Mix::Normal, vello::peniko::Compose::SrcAtop),
+                    1.0,
+                    Affine::IDENTITY,
+                    &viewport,
+                );
+                if g.kind == amalith_core::GradientKind::Freeform {
+                    if let Some(xf) = bbox_xf { paint_freeform_fill(scene, m, xf, g, &cover); }
+                } else if let Some((gradient, xf)) = resolve_grad(obj.appearance.fill()) {
+                    scene.fill(Fill::NonZero, m, &gradient, Some(xf), &cover);
+                }
+                scene.pop_layer();
+                scene.pop_layer();
             }
             // A Linked image gets a crossed-box contour on top of its
             // pixels — an Embedded one never does (⇐ the user's own
@@ -2497,6 +2527,26 @@ fn paint_tiled(scene: &mut Scene, pixels: Affine, tiles: &crate::lod::RasterTile
 /// composited in as coverage: its alpha (not color) is multiplied into
 /// everything drawn so far via `Compose::DestIn`, non-destructively — see
 /// `docs/compositor-porting.md`'s Layer Mask section.
+/// Draw adjustment-mask coverage in document coordinates. Its 1×1 seed
+/// stretches across the artwork; painting expands the asset without moving
+/// the mask, so screen and export use the same coordinates.
+fn paint_adjustment_mask(
+    scene: &mut Scene,
+    doc: &Document,
+    id: ObjectId,
+    view: Affine,
+    images: &HashMap<AssetId, ImageLods>,
+) {
+    let Some(ObjectKind::Adjustment(data)) = doc.object(id).map(|o| &o.kind) else { return };
+    let Some(mask) = data.mask.filter(|mask| mask.enabled) else { return };
+    let Some(layer) = crate::panels::layers::owning_layer(doc, id) else { return };
+    let bounds = crate::adjust::mask_bounds(doc, layer);
+    let m = view * convert::affine(doc.world_transform(id)) * convert::affine(mask.transform);
+    let cover = m.transform_rect_bbox(bounds).width().max(m.transform_rect_bbox(bounds).height());
+    let Some(image) = images.get(&mask.asset).and_then(|lod| lod.pick(cover)) else { return };
+    scene.draw_image(image, pixels_to_screen(m, bounds, image.width, image.height));
+}
+
 fn paint_raster(
     scene: &mut Scene,
     m: Affine,

@@ -39,6 +39,8 @@ pub struct Step {
     pub op: AdjustmentOp,
     pub blend: BlendMode,
     pub opacity: f32,
+    /// Optional alpha coverage, rendered in the same pixel space as content.
+    pub mask: Option<Scene>,
     /// Where the result is published: a later step's input, or (for the
     /// last step) the placeholder the canvas drew.
     pub output: ImageData,
@@ -174,6 +176,7 @@ impl AdjustCollector {
         children: &[ObjectId],
         region: Rect,
         mut paint: impl FnMut(&mut Scene, ObjectId),
+        mut paint_mask: impl FnMut(&mut Scene, ObjectId),
     ) {
         let active = if self.enabled { active_adjustments(doc, children) } else { Vec::new() };
         let Some(&last) = active.last() else {
@@ -205,12 +208,20 @@ impl AdjustCollector {
             }
             let mut content = Scene::new();
             content.append(&local, Some(to_pixels));
+            let mask = data.mask.filter(|m| m.enabled).map(|_| {
+                let mut local = Scene::new();
+                paint_mask(&mut local, children[k]);
+                let mut scene = Scene::new();
+                scene.append(&local, Some(to_pixels));
+                scene
+            });
             let output = self.slot(layer, i, width, height);
             steps.push(Step {
                 content,
                 op: data.op.clone(),
                 blend: data.blend_mode,
                 opacity: obj.appearance.opacity,
+                mask,
                 output: output.clone(),
             });
             previous = Some(output);
@@ -238,6 +249,21 @@ fn job_space(region: Rect, dpi: f64) -> Option<(u32, u32, Affine)> {
     let width = (region.width() * scale).ceil().max(1.0) as u32;
     let height = (region.height() * scale).ceil().max(1.0) as u32;
     Some((width, height, Affine::scale(scale) * Affine::translate(-region.origin().to_vec2())))
+}
+
+/// Stable document-space extent for a painted adjustment mask. Artboards
+/// anchor the mask when present; imported documents without artboards use
+/// the visible layer artwork, with a fixed canvas for an empty layer.
+pub(crate) fn mask_bounds(doc: &Document, layer: LayerId) -> Rect {
+    let boards = doc.artboards().iter().map(|a| crate::convert::rect(a.rect));
+    let content = doc.children_of(amalith_core::ObjectParent::Layer(layer)).iter().filter_map(|&id| {
+        let bounds = doc.object(id)?.kind.own_local_bounds()?;
+        Some(crate::convert::affine(doc.world_transform(id)).transform_rect_bbox(crate::convert::rect(bounds)))
+    });
+    boards.reduce(|a, b| a.union(b))
+        .or_else(|| content.reduce(|a, b| a.union(b)))
+        .filter(|r| r.width() > 0.0 && r.height() > 0.0)
+        .unwrap_or(Rect::new(0.0, 0.0, 1024.0, 1024.0))
 }
 
 #[cfg(test)]
@@ -296,7 +322,7 @@ mod tests {
         let mut painted_total = Vec::new();
         c.paint_layer(&mut Scene::new(), &doc, layer, &ids, Rect::new(10., 20., 110., 70.), |_, id| {
             painted_total.push(id);
-        });
+        }, |_, _| {});
         // Every non-adjustment child is painted exactly once, in order.
         assert_eq!(painted_total, vec![ids[0], ids[1], ids[3], ids[5]]);
         let (jobs, _) = c.finish();
@@ -314,7 +340,7 @@ mod tests {
         let mut c = AdjustCollector::disabled();
         let mut run = |c: &mut AdjustCollector| {
             c.begin_frame(true, 1.0);
-            c.paint_layer(&mut Scene::new(), &doc, layer, &ids, region, |_, _| {});
+            c.paint_layer(&mut Scene::new(), &doc, layer, &ids, region, |_, _| {}, |_, _| {});
             c.finish()
         };
         let (a, _) = run(&mut c);
@@ -334,7 +360,7 @@ mod tests {
         let (doc, layer, ids) = doc_with(&[None, invert(), None]);
         let mut c = AdjustCollector::disabled();
         let mut painted = Vec::new();
-        c.paint_layer(&mut Scene::new(), &doc, layer, &ids, Rect::new(0., 0., 10., 10.), |_, id| painted.push(id));
+        c.paint_layer(&mut Scene::new(), &doc, layer, &ids, Rect::new(0., 0., 10., 10.), |_, id| painted.push(id), |_, _| {});
         assert_eq!(painted, vec![ids[0], ids[1], ids[2]]);
         assert!(c.finish().0.is_empty());
     }
@@ -343,5 +369,23 @@ mod tests {
     fn huge_regions_are_scaled_to_fit_the_atlas() {
         let (w, h, _) = job_space(Rect::new(0., 0., 10_000., 5_000.), 2.0).unwrap();
         assert_eq!((w, h), (8192, 4096));
+    }
+
+    #[test]
+    fn masked_adjustment_collects_coverage_with_its_step() {
+        let (mut doc, layer, ids) = doc_with(&[None, invert()]);
+        let ObjectKind::Adjustment(data) = &mut doc.object_mut(ids[1]).unwrap().kind else { panic!() };
+        data.mask = Some(amalith_core::ImageMask {
+            asset: amalith_core::AssetId::new(), enabled: true, linked: true,
+            transform: amalith_core::Affine::IDENTITY,
+        });
+        let mut collector = AdjustCollector::disabled();
+        collector.begin_frame(true, 1.0);
+        let mut mask_painted = false;
+        collector.paint_layer(&mut Scene::new(), &doc, layer, &ids, Rect::new(0., 0., 20., 20.),
+            |_, _| {}, |_, id| { assert_eq!(id, ids[1]); mask_painted = true; });
+        let (jobs, _) = collector.finish();
+        assert!(mask_painted);
+        assert!(jobs[0].steps[0].mask.is_some());
     }
 }

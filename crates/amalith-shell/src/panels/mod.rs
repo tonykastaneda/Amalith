@@ -338,6 +338,7 @@ pub enum Action {
     ImageTrace(crate::image_trace::Hit),
     None,
     SetTool(Tool),
+    SetTargetMode(crate::tool::TargetMode),
     Select(ObjectId),
     /// Layers panel: a layer-header row was clicked.
     SelectLayer(LayerId),

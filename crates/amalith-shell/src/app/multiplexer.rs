@@ -782,6 +782,7 @@ impl App {
     /// changes, or a tab closes out from under it.
     fn mux_rebind(&mut self, pane: PaneId) {
         self.mux.switching = true;
+        self.raster_polygon = None;
         let Some((p, r)) = self
             .mux
             .model

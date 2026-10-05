@@ -995,6 +995,10 @@ impl App {
                     self.eyedrop_at(self.pointer);
                     return;
                 }
+                if self.active_tool == Tool::Eraser && self.target_prefers_pixels() {
+                    self.raster_brush_press();
+                    return;
+                }
                 // Magic Wand: flood-fill the placed image under the cursor.
                 if matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill) {
                     self.raster_brush_press();
@@ -1004,6 +1008,10 @@ impl App {
                 // click paints from it.
                 if self.active_tool == Tool::RasterCloneStamp {
                     self.raster_clone_stamp_press();
+                    return;
+                }
+                if self.active_tool == Tool::RasterPolygonLasso {
+                    self.raster_polygon_press(double);
                     return;
                 }
                 if matches!(self.active_tool, Tool::RasterMarquee | Tool::RasterEllipse | Tool::RasterLasso) {
@@ -1069,6 +1077,10 @@ impl App {
                 // defines what gets touched, so there's no "missed"
                 // state the way Shape Builder has.
                 if self.active_tool == Tool::Eraser && self.eraser_press() {
+                    return;
+                }
+                if self.active_tool == Tool::Pencil {
+                    self.pencil_press();
                     return;
                 }
                 if self.liquify_press() {

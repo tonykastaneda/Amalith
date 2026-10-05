@@ -21,6 +21,7 @@ mod action;
 mod blend_dialog;
 mod command_palette;
 mod eraser_tool;
+mod pencil_tool;
 mod raster_selection;
 mod raster_brush;
 mod brush_tip;
@@ -512,6 +513,10 @@ enum Drag {
         start_doc: Point,
         last_doc: Point,
         moved: bool,
+    },
+    /// Freehand vector path, sampled in document coordinates until release.
+    PencilStroke {
+        points: Vec<Point>,
     },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
@@ -1106,7 +1111,8 @@ impl Doc {
     fn execute_new_vector_object(&mut self, command: Command) -> Result<CommandOutcome, amalith_commands::CommandError> {
         let parent = match &command {
             Command::CreateRect { parent, .. } | Command::CreateEllipse { parent, .. }
-            | Command::CreatePath { parent, .. } | Command::CreateText { parent, .. } => Some(*parent),
+            | Command::CreatePath { parent, .. } | Command::CreateStyledPath { parent, .. }
+            | Command::CreateText { parent, .. } => Some(*parent),
             _ => None,
         };
         let slot = self.selection.as_slice().first().copied().filter(|&id| {
@@ -1410,6 +1416,8 @@ struct App {
     /// at the start of every new stroke instead.
     raster_clone_aligned: bool,
     raster_preview_asset: Option<amalith_core::AssetId>,
+    /// Anchors of an unfinished point-by-point pixel selection.
+    raster_polygon: Option<raster_selection::PolygonSelection>,
     /// Menu / shortcut have no `event_loop`; the window spawns next
     /// `about_to_wait`.
     pending_export: bool,
@@ -1518,6 +1526,7 @@ struct App {
     /// The Preferences modal, when open.
     prefs: Option<prefs::Prefs>,
     active_tool: Tool,
+    target_mode: crate::tool::TargetMode,
     /// The tool that was active when the Artboard tool was entered, so
     /// Escape can drop straight back to it.
     pre_artboard_tool: Tool,
@@ -1922,6 +1931,7 @@ impl App {
             raster_clone_offset: None,
             raster_clone_aligned: true,
             raster_preview_asset: None,
+            raster_polygon: None,
             home: home::Home::new(recent::load()),
             text_edit: None,
             text_defaults: amalith_core::TextStyle::default(),
@@ -1964,6 +1974,7 @@ impl App {
             keymaps: crate::keymap::load(),
             prefs: None,
             active_tool: Tool::Select,
+            target_mode: crate::tool::TargetMode::Auto,
             pre_artboard_tool: Tool::Select,
             active_slot: panels::PaintSlot::Fill,
             last_shape_tool: Tool::Rectangle,
@@ -2550,6 +2561,7 @@ impl App {
             self.request_main_redraw();
             return;
         }
+        self.raster_polygon = None;
         self.mux_save_view();
         self.tabs[self.active] = self.take_active_doc();
         let doc = std::mem::replace(&mut self.tabs[i], Doc::placeholder());
@@ -4168,6 +4180,32 @@ impl App {
             .and_then(|&id| panels::layers::owning_layer(doc, id))
             .or(self.doc.selected_layer)?;
         Some(doc.layer(layer_id)?.kind)
+    }
+
+    fn target_control_available(&self) -> bool {
+        self.current_layer_kind() == Some(amalith_core::LayerKind::Raster)
+            || self.doc.selection.iter().any(|id| matches!(
+                self.doc.editor.document().object(*id).map(|o| &o.kind),
+                Some(amalith_core::ObjectKind::Image(_))
+            ))
+    }
+
+    /// Resolve the user's chosen editing target from the selected object,
+    /// then the layer only when no object is selected.
+    fn target_prefers_pixels(&self) -> bool {
+        match self.target_mode {
+            crate::tool::TargetMode::Objects => false,
+            crate::tool::TargetMode::Pixels => true,
+            crate::tool::TargetMode::Auto => {
+                if self.doc.editing_mask.is_some_and(|id| self.doc.selection.first() == Some(&id))
+                    || self.doc.pixel_selection.as_ref().is_some_and(|s| self.doc.selection.is_empty() || self.doc.selection.contains(&s.object)) { return true; }
+                if let Some(&id) = self.doc.selection.first() {
+                    return matches!(self.doc.editor.document().object(id).map(|o| &o.kind),
+                        Some(amalith_core::ObjectKind::Image(_)));
+                }
+                self.current_layer_kind() == Some(amalith_core::LayerKind::Raster)
+            }
+        }
     }
 
     /// Appearance panel footer: pushes a new Fill on top of the target's
@@ -6636,6 +6674,15 @@ impl App {
     }
 
     fn set_tool(&mut self, t: Tool) {
+        if t.is_raster_tool() { self.target_mode = crate::tool::TargetMode::Pixels; }
+        let t = if t == Tool::RasterEraser { Tool::Eraser } else { t };
+        if t == Tool::Gradient && self.target_prefers_pixels()
+            && self.doc.selection.first().is_some_and(|&id| matches!(
+                self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_))
+            )) {
+            self.active_slot = panels::PaintSlot::Fill;
+        }
+        if t != Tool::RasterPolygonLasso { self.raster_polygon = None; }
         if matches!(self.drag, Drag::RasterBrush(_)) { self.drag = Drag::None; }
         if matches!(self.drag, Drag::RasterSelection { .. }) {
             self.drag = Drag::None;
@@ -6910,14 +6957,47 @@ impl App {
     fn eyedrop_at(&mut self, screen: Point) {
         let dp = self.doc_point(screen);
         let visible = self.visible_doc_rect();
-        let Some(src) = select::topmost_selectable_at(
+        let hit = select::topmost_selectable_at(
             self.doc.editor.document(),
             dp,
             visible,
             select::DEFAULT_CLICK_TOLERANCE / self.doc.view.zoom,
-        ) else {
+        );
+        let src = if self.target_prefers_pixels() {
+            hit.filter(|&id| matches!(self.doc.editor.document().object(id).map(|o| &o.kind),
+                Some(amalith_core::ObjectKind::Image(_))))
+                .or_else(|| self.raster_target().ok().flatten().map(|(_, id)| id))
+        } else { hit };
+        let Some(src) = src else {
             return;
         };
+        if self.target_prefers_pixels() {
+            let target = self.doc.editor.document().object(src).and_then(|o| match &o.kind {
+                amalith_core::ObjectKind::Image(image) => {
+                    let mask = (self.doc.editing_mask == Some(src)).then_some(image.mask).flatten();
+                    let asset = mask.map_or(image.asset, |m| m.asset);
+                    let world = self.doc.editor.document().world_transform(src)
+                        * mask.map_or(amalith_core::Affine::IDENTITY, |m| m.transform);
+                    Some((asset, image.local_bounds, world))
+                }
+                _ => None,
+            });
+            if let Some((asset, bounds, world)) = target {
+                let local = world.inverse() * amalith_core::Point::new(dp.x, dp.y);
+                if local.x >= bounds.x0 && local.y >= bounds.y0 && local.x < bounds.x1 && local.y < bounds.y1 {
+                    if let Some(image) = self.magic_wand_image(asset) {
+                        let x = ((local.x - bounds.x0) * image.width() as f64 / bounds.width()) as u32;
+                        let y = ((local.y - bounds.y0) * image.height() as f64 / bounds.height()) as u32;
+                        if let Some(pixel) = image.get_pixel_checked(x, y) {
+                            let [r, g, b, a] = pixel.0.map(|v| v as f32 / 255.0);
+                            self.doc.fill = amalith_core::Paint::Solid(amalith_core::Color::rgba(r, g, b, a));
+                            self.request_main_redraw();
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         let src_obj = self.doc.editor.document().object(src);
         let Some(app) = src_obj.map(|o| o.appearance.clone()) else {
             return;
@@ -6993,7 +7073,7 @@ impl App {
         // On a Raster layer the wand samples the working pixel layer (the
         // one Brush would paint), not whatever sits on top at the click —
         // a transparent layer above would otherwise swallow every click.
-        let raster_target = (self.current_layer_kind() == Some(amalith_core::LayerKind::Raster))
+        let raster_target = self.target_prefers_pixels()
             .then(|| self.raster_target().ok().flatten().map(|(_, id)| id))
             .flatten();
         let doc = self.doc.editor.document();
@@ -7392,6 +7472,9 @@ impl App {
             theme: &self.theme,
             doc: self.doc.editor.document(),
             selection_len: self.doc.selection.len(),
+            target_mode: self.target_mode,
+            mask_active: self.doc.editing_mask.is_some(),
+            target_available: self.target_control_available(),
             text_context: self.text_context(),
             representative: None,
             fill_mixed: false,
@@ -7452,6 +7535,9 @@ impl App {
             theme: &self.theme,
             doc: self.doc.editor.document(),
             selection_len: self.doc.selection.len(),
+            target_mode: self.target_mode,
+            mask_active: self.doc.editing_mask.is_some(),
+            target_available: self.target_control_available(),
             text_context: self.text_context(),
             representative: self.representative(),
             fill_mixed: false,
@@ -10972,7 +11058,7 @@ mod raster_target_tests {
         app.doc.selection = vec![low];
         assert_eq!(app.raster_target(), Ok(Some((layer, low))), "the selected pixel layer");
         app.doc.selection = vec![adj];
-        assert_eq!(app.raster_target(), Ok(Some((layer, high))), "an adjustment isn't paintable yet; fall back");
+        assert!(app.raster_target().is_err(), "an unselected adjustment mask cannot silently retarget another image");
         app.doc.selection = vec![rect];
         assert!(app.raster_target().is_err(), "shapes stay editable vectors");
 
@@ -10995,6 +11081,46 @@ mod raster_target_tests {
         app.doc.selected_layer = Some(layer);
         app.pointer = Point::new(-1.0e6, -1.0e6);
         assert_eq!(app.raster_target(), Ok(None), "Brush and Fill will start a canvas");
+    }
+
+    #[test]
+    fn target_control_resolves_selection_then_explicit_mode() {
+        let (mut app, layer, [image, adjustment, _, shape]) = app_with_pixel_layers();
+        assert!(app.target_prefers_pixels(), "empty selection on a raster layer paints pixels");
+        app.doc.selection = vec![shape];
+        assert!(!app.target_prefers_pixels(), "a vector object remains editable on a raster layer");
+        app.target_mode = crate::tool::TargetMode::Pixels;
+        assert!(app.target_prefers_pixels());
+        assert!(app.raster_target().unwrap().is_some(), "explicit pixel mode resolves an image beneath a shape");
+        app.target_mode = crate::tool::TargetMode::Auto;
+        app.doc.selection = vec![image];
+        assert!(app.target_prefers_pixels());
+        app.target_mode = crate::tool::TargetMode::Objects;
+        assert!(!app.target_prefers_pixels());
+        app.doc.selection = vec![adjustment];
+        app.target_mode = crate::tool::TargetMode::Auto;
+        assert!(!app.target_prefers_pixels(), "an adjustment row is an object until its mask is selected");
+        app.doc.editing_mask = Some(adjustment);
+        assert!(app.target_prefers_pixels());
+        assert_eq!(app.doc.selected_layer, Some(layer));
+    }
+
+    #[test]
+    fn eyedropper_samples_image_pixels_in_pixel_mode() {
+        let (mut app, _, [low, _, _, _]) = app_with_pixel_layers();
+        let pixel = image::Rgba([12, 34, 56, 255]);
+        let image = image::RgbaImage::from_pixel(2, 2, pixel);
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        app.doc.asset_store.insert("images/low.png", bytes.into_inner());
+        app.doc.selection = vec![low];
+        app.target_mode = crate::tool::TargetMode::Pixels;
+        let screen = app.doc.view.to_screen() * Point::new(25.0, 25.0);
+        app.eyedrop_at(screen);
+        let color = app.doc.fill.color().expect("sampled color");
+        assert!((color.r - 12.0 / 255.0).abs() < 0.001);
+        assert!((color.g - 34.0 / 255.0).abs() < 0.001);
+        assert!((color.b - 56.0 / 255.0).abs() < 0.001);
     }
 }
 

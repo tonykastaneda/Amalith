@@ -69,8 +69,17 @@ impl App {
             panels::Action::ImageTrace(hit) => self.trace_hit(hit),
             panels::Action::None => {}
             panels::Action::SetTool(t) => self.set_tool(t),
+            panels::Action::SetTargetMode(mode) => {
+                self.target_mode = mode;
+                if mode != crate::tool::TargetMode::Auto { self.doc.editing_mask = None; }
+                if mode == crate::tool::TargetMode::Objects && self.active_tool.is_raster_tool() {
+                    self.set_tool(Tool::Select);
+                }
+                self.request_main_redraw();
+            }
             panels::Action::Select(id) => {
                 self.doc.selection = vec![id];
+                if self.doc.editing_mask != Some(id) { self.doc.editing_mask = None; }
                 self.sync_align_mode();
                 if double {
                     self.begin_rename(panels::RenameId::Object(id));
@@ -81,6 +90,7 @@ impl App {
                 // show its plain blue highlight.
                 self.doc.selection.clear();
                 self.doc.anchor_sel.clear();
+                self.doc.editing_mask = None;
                 self.doc.selected_layer = Some(id);
                 if double {
                     self.begin_rename(panels::RenameId::Layer(id));
@@ -1947,10 +1957,31 @@ impl App {
     fn add_or_toggle_layer_mask(&mut self) {
         // The selected image, else the pixel layer the raster tools target.
         let selected_image = self.doc.selection.first().copied().filter(|&id| {
-            matches!(self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_)))
+            matches!(self.doc.editor.document().object(id).map(|o| &o.kind), Some(amalith_core::ObjectKind::Image(_) | amalith_core::ObjectKind::Adjustment(_)))
         });
         let Some(object) = selected_image.or_else(|| self.raster_target().ok().flatten().map(|(_, id)| id)) else { return };
         let doc = self.doc.editor.document();
+        if let Some(amalith_core::ObjectKind::Adjustment(adjustment)) = doc.object(object).map(|o| &o.kind) {
+            if adjustment.mask.is_some() {
+                self.doc.editing_mask = if self.doc.editing_mask == Some(object) { None } else { Some(object) };
+                self.target_mode = crate::tool::TargetMode::Pixels;
+                self.request_main_redraw();
+                return;
+            }
+            let seed = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 255, 255, if self.alt_down { 0 } else { 255 }]));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            if seed.write_to(&mut bytes, image::ImageFormat::Png).is_err() { return; }
+            let path = format!("images/mask-{}.png", amalith_core::AssetId::new());
+            self.doc.asset_store.insert(&path, bytes.into_inner());
+            match self.doc.editor.execute(Command::AddLayerMask {
+                object, asset: amalith_core::Asset::embedded(amalith_core::AssetId::new(), "Adjustment Mask", amalith_core::AssetKind::Image, &path),
+            }) {
+                Ok(_) => { self.doc.editing_mask = Some(object); self.target_mode = crate::tool::TargetMode::Pixels; self.doc.io_error = None; }
+                Err(error) => self.doc.io_error = Some(format!("Couldn't add adjustment mask: {error}")),
+            }
+            self.request_main_redraw();
+            return;
+        }
         let Some(amalith_core::ObjectKind::Image(img)) = doc.object(object).map(|o| &o.kind) else {
             self.doc.io_error = Some("Select a pixel image to add a layer mask.".into());
             self.request_main_redraw();

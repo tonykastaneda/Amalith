@@ -28,7 +28,7 @@ Early development, macOS first. What works today:
 - **Core** — document model, undoable command engine, `.amalith` container (zip + JSON) save/load
 - **UI scale** — Preferences → General offers 100%, 125%, and 150% chrome sizing, saved between launches. Canvas zoom is independent; native menu text follows OS settings.
 - **App shell** — winit + wgpu + vello, a custom dockable panel system (tear panels off into their own OS windows), document tabs, and a Home / welcome screen
-- **Tools** — Selection, Direct Selection (hold <kbd>Space</kbd> to peek every node), Pen, Rectangle / Rounded Rectangle / Ellipse / Polygon / Star, Artboard, and **Type**
+- **Tools** — Selection, Direct Selection (hold <kbd>Space</kbd> to peek every node), Pen, freehand vector Pencil, Rectangle / Rounded Rectangle / Ellipse / Polygon / Star, Artboard, and **Type**
 - **Text** — point and area type with a live editor (caret, selection, IME) and a **Character panel** (font family / style, size, leading, tracking, under/strikethrough, small caps, sub/superscript)
 - **Appearance** — fill & stroke paint, colour picker, stroke cap / join / dash flyout
 - **Editing** — grouping, duplicate, z-order, marquee & shift-click select, transform handles

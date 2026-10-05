@@ -512,10 +512,10 @@ impl App {
             // Eraser brush size, like most brush tools' own convention —
             // guarded off `cmd_down` so it never shadows ⌘[ / ⌘] z-order.
             PhysicalKey::Code(KeyCode::BracketRight)
-                if pressed && self.shift_down && !self.cmd_down && matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
+                if pressed && self.shift_down && !self.cmd_down && (matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) || (self.active_tool == Tool::Eraser && self.target_prefers_pixels())) =>
             {
                 let hardness = match self.active_tool {
-                    Tool::RasterEraser => &mut self.raster_eraser_hardness,
+                    Tool::Eraser | Tool::RasterEraser => &mut self.raster_eraser_hardness,
                     Tool::RasterCloneStamp => &mut self.raster_clone_hardness,
                     _ => &mut self.raster_brush_hardness,
                 };
@@ -523,10 +523,10 @@ impl App {
                 self.request_main_redraw();
             }
             PhysicalKey::Code(KeyCode::BracketLeft)
-                if pressed && self.shift_down && !self.cmd_down && matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
+                if pressed && self.shift_down && !self.cmd_down && (matches!(self.active_tool, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) || (self.active_tool == Tool::Eraser && self.target_prefers_pixels())) =>
             {
                 let hardness = match self.active_tool {
-                    Tool::RasterEraser => &mut self.raster_eraser_hardness,
+                    Tool::Eraser | Tool::RasterEraser => &mut self.raster_eraser_hardness,
                     Tool::RasterCloneStamp => &mut self.raster_clone_hardness,
                     _ => &mut self.raster_brush_hardness,
                 };
@@ -541,7 +541,7 @@ impl App {
             PhysicalKey::Code(KeyCode::BracketRight)
                 if pressed && !self.cmd_down && matches!(self.active_tool, Tool::Eraser | Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
             {
-                if self.active_tool == Tool::RasterEraser {
+                if self.active_tool == Tool::RasterEraser || (self.active_tool == Tool::Eraser && self.target_prefers_pixels()) {
                     self.raster_eraser_size = (self.raster_eraser_size + 2.0).min(500.0);
                 } else if self.active_tool == Tool::RasterBrush {
                     self.raster_brush_size = (self.raster_brush_size + 2.0).min(500.0);
@@ -555,7 +555,7 @@ impl App {
             PhysicalKey::Code(KeyCode::BracketLeft)
                 if pressed && !self.cmd_down && matches!(self.active_tool, Tool::Eraser | Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
             {
-                if self.active_tool == Tool::RasterEraser {
+                if self.active_tool == Tool::RasterEraser || (self.active_tool == Tool::Eraser && self.target_prefers_pixels()) {
                     self.raster_eraser_size = (self.raster_eraser_size - 2.0).max(1.0);
                 } else if self.active_tool == Tool::RasterBrush {
                     self.raster_brush_size = (self.raster_brush_size - 2.0).max(1.0);
@@ -842,6 +842,9 @@ impl App {
                     KeyCode::Enter | KeyCode::NumpadEnter if !self.pen.is_empty() => {
                         self.commit_pen(false);
                     }
+                    KeyCode::Enter | KeyCode::NumpadEnter if self.raster_polygon.is_some() => {
+                        self.finish_raster_polygon();
+                    }
                     // Enter ends the Curvature tool's path, keeping it
                     // selected (the next click starts a fresh one).
                     KeyCode::Enter | KeyCode::NumpadEnter if self.active_tool == Tool::Curvature => {
@@ -859,6 +862,10 @@ impl App {
                         self.request_main_redraw();
                     }
                     KeyCode::Escape => {
+                        if self.raster_polygon.take().is_some() {
+                            self.request_main_redraw();
+                            return;
+                        }
                         if matches!(self.drag, Drag::RasterBrush(_)) {
                             self.drag = Drag::None;
                             self.request_main_redraw();
@@ -918,14 +925,14 @@ impl App {
                             cmd: false,
                             alt: false,
                         };
-                        let raster = self.current_layer_kind() == Some(amalith_core::LayerKind::Raster);
+                        let raster = self.target_prefers_pixels();
                         if let Some((i, _)) = self
                             .settings
                             .tool_keys
                             .iter()
                             .enumerate()
                             .filter(|(i, k)| **k == Some(chord) && (raster || !Tool::ALL[*i].is_raster_tool()))
-                            .min_by_key(|(i, _)| !Tool::ALL[*i].is_raster_tool())
+                            .min_by_key(|(i, _)| Tool::ALL[*i].is_raster_tool() != raster)
                         {
                             self.set_tool(Tool::ALL[i]);
                         } else if let Some(i) = self
