@@ -214,6 +214,10 @@ impl App {
             Drag::MoveHandle { .. } => {
                 self.recompute_move_handle();
             }
+            Drag::PullHandles { .. } | Drag::ConvertHandle { .. } | Drag::CurvaturePoint { .. } | Drag::Reshape { .. } => {
+                self.path_tool_drag_move();
+            }
+            Drag::Liquify { .. } | Drag::LiquifyResize { .. } => self.liquify_move(),
             Drag::PickColor { in_hue } => {
                 let in_hue = *in_hue;
                 if let Some(pk) = self.picker {
@@ -1026,11 +1030,7 @@ impl App {
         // Same, for a quick tap on a flyout-group slot.
         if let Some((_, _, group)) = self.tool_flyout_press.take() {
             if self.tool_flyout.is_none() {
-                let t = match group {
-                    ToolGroup::RotateReflect => self.last_rotate_tool,
-                    ToolGroup::ScaleShear => self.last_scale_tool,
-                    ToolGroup::Type => self.last_type_tool,
-                };
+                let t = self.group_tools.get(group);
                 self.set_tool(t);
             }
         }
@@ -1258,6 +1258,12 @@ impl App {
                     return;
                 }
                 let r = shape_rect(start_doc, cur_doc, self.shift_down, self.alt_down);
+                if matches!(tool, Tool::RectangularGrid | Tool::PolarGrid) {
+                    if r.width() > 0.5 && r.height() > 0.5 {
+                        self.create_grid(self.shape_params.grid_paths(tool, r));
+                    }
+                    return;
+                }
                 if r.width() > 0.5 && r.height() > 0.5 {
                     let (container, _) = self.ensure_container();
                     let cmd = match tool {
@@ -1311,6 +1317,22 @@ impl App {
                         | Tool::RasterEllipse
                         | Tool::RasterLasso => return,
                         Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => return,
+                        Tool::AddAnchor
+                        | Tool::DeleteAnchor
+                        | Tool::AnchorPoint
+                        | Tool::Curvature
+                        | Tool::Scissors
+                        | Tool::GroupSelect
+                        | Tool::Reshape
+                        | Tool::RectangularGrid
+                        | Tool::PolarGrid
+                        | Tool::Warp
+                        | Tool::Twirl
+                        | Tool::Pucker
+                        | Tool::Bloat
+                        | Tool::Scallop
+                        | Tool::Crystallize
+                        | Tool::Wrinkle => return,
                     };
                     if let Ok(CommandOutcome::Object(id)) = self.doc.execute_new_vector_object(cmd) {
                         self.doc.selection = vec![id];
@@ -1728,6 +1750,11 @@ impl App {
                     self.request_main_redraw();
                 }
             }
+            drag @ (Drag::PullHandles { .. }
+            | Drag::ConvertHandle { .. }
+            | Drag::CurvaturePoint { .. }
+            | Drag::Reshape { .. }) => self.path_tool_release(drag),
+            drag @ (Drag::Liquify { .. } | Drag::LiquifyResize { .. }) => self.liquify_release(drag),
             Drag::AnchorMarquee { start } => {
                 let moved = (self.pointer - start).hypot() > 3.0;
                 if moved {

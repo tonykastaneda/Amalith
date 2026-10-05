@@ -28,6 +28,7 @@
 
 mod arc;
 mod ellipse;
+mod grid;
 mod polygon;
 mod rectangle;
 mod roundrect;
@@ -119,6 +120,8 @@ fn shape_for(tool: Tool) -> Box<dyn Shape> {
         Tool::Star => Box::new(star::Star),
         Tool::Arc => Box::new(arc::Arc::default()),
         Tool::Spiral => Box::new(spiral::Spiral::default()),
+        Tool::RectangularGrid => Box::new(grid::Grid { polar: false }),
+        Tool::PolarGrid => Box::new(grid::Grid { polar: true }),
         _ => Box::new(rectangle::Rectangle),
     }
 }
@@ -143,6 +146,25 @@ pub struct Params {
     pub arc: (f64, f64, f64, bool, bool, bool),
     /// `(Radius, Decay %, Segments, winds clockwise)`.
     pub spiral: (f64, f64, f64, bool),
+    /// `(Width, Height, Horizontal dividers, Vertical dividers)` — the
+    /// counts also drive the Rectangular Grid tool's drags.
+    pub rect_grid: (f64, f64, f64, f64),
+    /// `(Width, Height, Concentric dividers, Radial dividers)`.
+    pub polar_grid: (f64, f64, f64, f64),
+}
+
+impl Params {
+    /// The grid `tool` (Rectangular / Polar Grid) draws into `r` with the
+    /// remembered divider counts.
+    pub fn grid_paths(&self, tool: Tool, r: amalith_core::Rect) -> Vec<amalith_core::PathData> {
+        if tool == Tool::PolarGrid {
+            let (_, _, c, n) = self.polar_grid;
+            amalith_core::grid::polar_grid(r, grid::dividers(c), grid::dividers(n))
+        } else {
+            let (_, _, h, v) = self.rect_grid;
+            amalith_core::grid::rectangular_grid(r, grid::dividers(h), grid::dividers(v))
+        }
+    }
 }
 
 impl Default for Params {
@@ -155,6 +177,8 @@ impl Default for Params {
             star: (19.0983, 50.0, 5.0),
             arc: (100.0, 100.0, 50.0, true, true, false),
             spiral: (50.0, 80.0, 10.0, true),
+            rect_grid: (100.0, 100.0, 5.0, 5.0),
+            polar_grid: (100.0, 100.0, 5.0, 5.0),
         }
     }
 }
@@ -163,6 +187,8 @@ pub enum Geometry {
     Rect(amalith_core::Rect),
     Ellipse(amalith_core::Rect),
     Path(amalith_core::PathData),
+    /// Several paths, created together as one group (the grids).
+    Paths(Vec<amalith_core::PathData>),
 }
 
 /// Where a pointer at `local` (panel-body coordinates) landed.
@@ -208,6 +234,8 @@ impl ShapeDialog {
             Tool::Star => "Star",
             Tool::Arc => "Arc Segment Tool Options",
             Tool::Spiral => "Spiral",
+            Tool::RectangularGrid => "Rectangular Grid Tool Options",
+            Tool::PolarGrid => "Polar Grid Tool Options",
             _ => "Shape",
         }
     }

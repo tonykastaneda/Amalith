@@ -58,6 +58,8 @@ pub enum PanelKind {
     ShapedlgStar,
     ShapedlgArc,
     ShapedlgSpiral,
+    ShapedlgRectGrid,
+    ShapedlgPolarGrid,
     XformdlgReflect,
     XformdlgShear,
     Blenddlg,
@@ -74,7 +76,7 @@ impl PanelKind {
     /// Every real panel kind, in the order the Window ▸ Panels menu's
     /// alphabetical listing doesn't care about (that ordering lives in
     /// `App::WINDOW_PANELS` instead, a deliberate subset of this list).
-    pub const ALL: [PanelKind; 33] = [
+    pub const ALL: [PanelKind; 35] = [
         PanelKind::Tools,
         PanelKind::Layers,
         PanelKind::Links,
@@ -99,6 +101,8 @@ impl PanelKind {
         PanelKind::ShapedlgStar,
         PanelKind::ShapedlgArc,
         PanelKind::ShapedlgSpiral,
+        PanelKind::ShapedlgRectGrid,
+        PanelKind::ShapedlgPolarGrid,
         PanelKind::XformdlgReflect,
         PanelKind::XformdlgShear,
         PanelKind::Blenddlg,
@@ -141,6 +145,8 @@ impl PanelKind {
             PanelKind::ShapedlgStar => "shapedlg.star",
             PanelKind::ShapedlgArc => "shapedlg.arc",
             PanelKind::ShapedlgSpiral => "shapedlg.spiral",
+            PanelKind::ShapedlgRectGrid => "shapedlg.rectgrid",
+            PanelKind::ShapedlgPolarGrid => "shapedlg.polargrid",
             PanelKind::XformdlgReflect => "xformdlg.reflect",
             PanelKind::XformdlgShear => "xformdlg.shear",
             PanelKind::Blenddlg => "blenddlg",
@@ -183,6 +189,8 @@ impl PanelKind {
             "shapedlg.star" => PanelKind::ShapedlgStar,
             "shapedlg.arc" => PanelKind::ShapedlgArc,
             "shapedlg.spiral" => PanelKind::ShapedlgSpiral,
+            "shapedlg.rectgrid" => PanelKind::ShapedlgRectGrid,
+            "shapedlg.polargrid" => PanelKind::ShapedlgPolarGrid,
             "xformdlg.reflect" => PanelKind::XformdlgReflect,
             "xformdlg.shear" => PanelKind::XformdlgShear,
             "blenddlg" => PanelKind::Blenddlg,
@@ -223,6 +231,8 @@ impl PanelKind {
             PanelKind::ShapedlgStar => "Star",
             PanelKind::ShapedlgArc => "Arc Segment Tool Options",
             PanelKind::ShapedlgSpiral => "Spiral",
+            PanelKind::ShapedlgRectGrid => "Rectangular Grid Tool Options",
+            PanelKind::ShapedlgPolarGrid => "Polar Grid Tool Options",
             PanelKind::XformdlgReflect => "Reflect",
             PanelKind::XformdlgShear => "Shear",
             PanelKind::Blenddlg => "Blend Options",
@@ -899,6 +909,8 @@ mod tests {
                 | PanelKind::ShapedlgStar
                 | PanelKind::ShapedlgArc
                 | PanelKind::ShapedlgSpiral
+                | PanelKind::ShapedlgRectGrid
+                | PanelKind::ShapedlgPolarGrid
                 | PanelKind::XformdlgReflect
                 | PanelKind::XformdlgShear
                 | PanelKind::Blenddlg
@@ -911,7 +923,7 @@ mod tests {
                 PanelKind::Unknown(_) => false,
             }
         }
-        assert_eq!(PanelKind::ALL.len(), 33);
+        assert_eq!(PanelKind::ALL.len(), 35);
         for k in PanelKind::ALL {
             assert!(covered(k), "{k:?} missing from the exhaustive check above");
         }
@@ -932,7 +944,7 @@ mod tests {
         for k in PanelKind::ALL {
             assert_eq!(PanelKind::from_id_str(k.id_str()), k);
         }
-        let expected: [(PanelKind, &str); 31] = [
+        let expected: [(PanelKind, &str); 33] = [
             (PanelKind::Tools, "tools"),
             (PanelKind::Layers, "layers"),
             (PanelKind::Links, "links"),
@@ -956,6 +968,8 @@ mod tests {
             (PanelKind::ShapedlgStar, "shapedlg.star"),
             (PanelKind::ShapedlgArc, "shapedlg.arc"),
             (PanelKind::ShapedlgSpiral, "shapedlg.spiral"),
+            (PanelKind::ShapedlgRectGrid, "shapedlg.rectgrid"),
+            (PanelKind::ShapedlgPolarGrid, "shapedlg.polargrid"),
             (PanelKind::XformdlgReflect, "xformdlg.reflect"),
             (PanelKind::XformdlgShear, "xformdlg.shear"),
             (PanelKind::Blenddlg, "blenddlg"),

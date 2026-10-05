@@ -123,6 +123,7 @@ pub fn key_char(code: KeyCode) -> Option<char> {
         Digit4 => '4', Digit5 => '5', Digit6 => '6', Digit7 => '7',
         Digit8 => '8', Digit9 => '9',
         Backslash => '\\',
+        Equal => '=', Minus => '-', Backquote => '`',
         BracketLeft => '[', BracketRight => ']',
         ArrowLeft => '←', ArrowRight => '→', ArrowUp => '↑', ArrowDown => '↓',
         Tab => '⇥',
@@ -144,6 +145,7 @@ pub fn key_code(c: char) -> Option<KeyCode> {
         '4' => Digit4, '5' => Digit5, '6' => Digit6, '7' => Digit7,
         '8' => Digit8, '9' => Digit9,
         '\\' => Backslash,
+        '=' => Equal, '-' => Minus, '`' => Backquote,
         '[' => BracketLeft, ']' => BracketRight,
         '←' => ArrowLeft, '→' => ArrowRight, '↑' => ArrowUp, '↓' => ArrowDown,
         '⇥' => Tab,
@@ -184,9 +186,17 @@ pub fn default_tool_key(tool: Tool) -> Option<KeyChord> {
         Tool::RasterEraser => KeyChord::with_shift(KeyE),
         Tool::RasterFill => KeyChord::plain(KeyK),
         Tool::RasterCloneStamp => KeyChord::plain(KeyC),
+        Tool::AddAnchor => KeyChord::plain(Equal),
+        Tool::DeleteAnchor => KeyChord::plain(Minus),
+        Tool::AnchorPoint => KeyChord::with_shift(KeyC),
+        Tool::Curvature => KeyChord::with_shift(Backquote),
+        Tool::Scissors => KeyChord::plain(KeyC),
+        Tool::Warp => KeyChord::with_shift(KeyR),
         Tool::RoundedRect | Tool::Polygon | Tool::Star | Tool::Shear | Tool::Arc | Tool::Spiral
         | Tool::Join | Tool::AreaType | Tool::PathType | Tool::VerticalAreaType
-        | Tool::VerticalPathType => {
+        | Tool::VerticalPathType | Tool::GroupSelect | Tool::Reshape
+        | Tool::RectangularGrid | Tool::PolarGrid | Tool::Twirl | Tool::Pucker | Tool::Bloat
+        | Tool::Scallop | Tool::Crystallize | Tool::Wrinkle => {
             return None
         }
     })

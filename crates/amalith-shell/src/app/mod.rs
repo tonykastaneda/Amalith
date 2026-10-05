@@ -33,6 +33,8 @@ mod guides;
 mod input;
 mod isolation;
 mod join_tool;
+mod liquify_tool;
+mod path_tools;
 mod shape_builder;
 mod smart_guides;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -467,6 +469,49 @@ enum Drag {
     /// computed once, on release.
     EraserStroke {
         path: Vec<Point>,
+    },
+    /// Anchor Point tool: dragging symmetric handles out of `anchor`
+    /// (flat ordinal) of `object` — its out-handle follows the pointer.
+    /// A release that never `moved` is a plain click (smooth → corner).
+    PullHandles {
+        object: ObjectId,
+        anchor: usize,
+        last_doc: Point,
+        moved: bool,
+    },
+    /// Anchor Point tool: dragging one handle of `anchor` on its own,
+    /// breaking it from its partner.
+    ConvertHandle {
+        object: ObjectId,
+        anchor: usize,
+        side: amalith_core::HandleSide,
+        start_doc: Point,
+        last_doc: Point,
+    },
+    /// Curvature tool: dragging point `index` of `object`'s curve.
+    CurvaturePoint {
+        object: ObjectId,
+        index: usize,
+        last_doc: Point,
+        moved: bool,
+    },
+    /// A liquify brush stroke: `stroke` is every document-space sample so
+    /// far, `targets` the paths it may bend (fixed at press), and
+    /// `preview` what the bent ones look like right now.
+    Liquify {
+        stroke: Vec<amalith_core::Point>,
+        targets: Vec<ObjectId>,
+        preview: Vec<(ObjectId, amalith_core::PathData)>,
+    },
+    /// A liquify tool's Alt-drag sizing the brush about `center`.
+    LiquifyResize { center: Point },
+    /// Reshape tool: dragging `object`'s path from `at` (local space).
+    Reshape {
+        object: ObjectId,
+        at: amalith_core::Point,
+        start_doc: Point,
+        last_doc: Point,
+        moved: bool,
     },
     /// Rubber-banding a new shape with the Rectangle / Ellipse tool.
     DrawShape {
@@ -1487,9 +1532,12 @@ struct App {
     shape_flyout: Option<Rect>,
     /// The tool each Tools-panel flyout group slot represents / re-activates
     /// — whichever tool in that group was last used.
-    last_rotate_tool: Tool,
-    last_scale_tool: Tool,
-    last_type_tool: Tool,
+    group_tools: crate::tool::GroupTools,
+    /// The Curvature tool's drawing session.
+    curvature: path_tools::CurvatureState,
+    /// The liquify brushes' shared size and strength (the tool picks the
+    /// effect — see `Tool::liquify_kind`).
+    liquify: amalith_core::liquify::LiquifyParams,
     /// The Free Transform tool's on-canvas flyout: which sub-mode is
     /// active, and whether Constrain is on. Both persist across tool
     /// switches, like `last_shape_tool`.
@@ -1921,9 +1969,9 @@ impl App {
             last_shape_tool: Tool::Rectangle,
             shape_press: None,
             shape_flyout: None,
-            last_rotate_tool: Tool::Rotate,
-            last_scale_tool: Tool::Scale,
-            last_type_tool: Tool::Text,
+            group_tools: crate::tool::GroupTools::default(),
+            curvature: path_tools::CurvatureState::default(),
+            liquify: amalith_core::liquify::LiquifyParams::new(amalith_core::liquify::LiquifyKind::Warp),
             free_transform_mode: free_transform::FreeTransformMode::Transform,
             free_transform_constrain: false,
             last_transform: None,
@@ -6610,6 +6658,9 @@ impl App {
         if t != Tool::DirectSelect {
             self.doc.anchor_sel.clear();
         }
+        if t != Tool::Curvature {
+            self.end_curvature();
+        }
         if t == Tool::Artboard && self.active_tool != Tool::Artboard {
             self.pre_artboard_tool = self.active_tool;
         }
@@ -6621,15 +6672,7 @@ impl App {
         if t.is_shape() {
             self.last_shape_tool = t;
         }
-        if ToolGroup::RotateReflect.contains(t) {
-            self.last_rotate_tool = t;
-        }
-        if ToolGroup::ScaleShear.contains(t) {
-            self.last_scale_tool = t;
-        }
-        if ToolGroup::Type.contains(t) {
-            self.last_type_tool = t;
-        }
+        self.group_tools.remember(t);
         if !matches!(t, Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale) {
             // A transform tool's custom reference point is per-session.
             self.transform_pivot = None;
@@ -8403,9 +8446,7 @@ impl App {
             cur_fill: self.doc.fill,
             cur_stroke: self.doc.stroke,
             shape_tool: self.last_shape_tool,
-            rotate_group_tool: self.last_rotate_tool,
-            scale_group_tool: self.last_scale_tool,
-            type_group_tool: self.last_type_tool,
+            group_tools: self.group_tools,
             hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
             collapsed_layers: &self.doc.collapsed_layers,
@@ -8496,9 +8537,7 @@ impl App {
             cur_fill: self.doc.fill,
             cur_stroke: self.doc.stroke,
             shape_tool: self.last_shape_tool,
-            rotate_group_tool: self.last_rotate_tool,
-            scale_group_tool: self.last_scale_tool,
-            type_group_tool: self.last_type_tool,
+            group_tools: self.group_tools,
             hide_wip_tools: self.settings.hide_wip_tools,
             expanded: &self.doc.expanded_groups,
             collapsed_layers: &self.doc.collapsed_layers,
@@ -9121,7 +9160,15 @@ impl App {
                         CanvasCursor::IBeam(vertical)
                     }
                 }
-                Tool::Select | Tool::DirectSelect | Tool::Pen => CanvasCursor::Glyph,
+                Tool::Select
+                | Tool::DirectSelect
+                | Tool::GroupSelect
+                | Tool::Reshape
+                | Tool::Pen
+                | Tool::AddAnchor
+                | Tool::DeleteAnchor
+                | Tool::AnchorPoint
+                | Tool::Curvature => CanvasCursor::Glyph,
                 Tool::Hand => CanvasCursor::Grab,
                 Tool::Zoom => {
                     self.zoom_sign = if self.alt_down { -1 } else { 1 };
@@ -10603,8 +10650,8 @@ mod shared_layer_tool_tests {
 /// where the actual click point sits.
 fn cursor_hotspot(t: Tool) -> (f64, f64) {
     match t {
-        Tool::Select | Tool::DirectSelect => (0.32, 0.13),
-        Tool::Pen => (0.29, 0.08),
+        Tool::Select | Tool::DirectSelect | Tool::GroupSelect | Tool::Reshape => (0.32, 0.13),
+        Tool::Pen | Tool::AddAnchor | Tool::DeleteAnchor | Tool::AnchorPoint | Tool::Curvature => (0.29, 0.08),
         _ => (0.5, 0.5),
     }
 }

@@ -78,9 +78,7 @@ pub(in crate::app) fn paint_main(
     cursor_mode: CanvasCursor,
     shape_tool: Tool,
     shape_flyout: Option<Rect>,
-    last_rotate_tool: Tool,
-    last_scale_tool: Tool,
-    last_type_tool: Tool,
+    group_tools: crate::tool::GroupTools,
     tool_flyout: Option<(Rect, crate::tool::ToolGroup)>,
     blend_spine_hover: Option<Vec<Point>>,
     stroke_popover: bool,
@@ -652,9 +650,7 @@ pub(in crate::app) fn paint_main(
         cur_fill,
         cur_stroke,
         shape_tool,
-        rotate_group_tool: last_rotate_tool,
-        scale_group_tool: last_scale_tool,
-        type_group_tool: last_type_tool,
+        group_tools,
         hide_wip_tools,
         expanded,
         collapsed_layers,
@@ -892,11 +888,7 @@ pub(in crate::app) fn paint_main(
     if let Some((anchor, group)) = tool_flyout {
         let tools = group.tools();
         paint_flyout_bg(scene, theme, anchor, tools.len());
-        let current = match group {
-            crate::tool::ToolGroup::RotateReflect => last_rotate_tool,
-            crate::tool::ToolGroup::ScaleShear => last_scale_tool,
-            crate::tool::ToolGroup::Type => last_type_tool,
-        };
+        let current = group_tools.get(group);
         for (i, t) in tools.iter().enumerate() {
             paint_flyout_row(scene, text, theme, pointer, tool_flyout_row(anchor, i), *t, current);
         }
@@ -936,9 +928,11 @@ pub(in crate::app) fn paint_main(
         let y0 = pointer.y - sz * hy;
         let box_ = Rect::new(x0, y0, x0 + sz, y0 + sz);
         let src = match tool {
-            Tool::DirectSelect => icons::CURSOR_DIRECT_SELECT_SVG,
+            Tool::DirectSelect | Tool::GroupSelect | Tool::Reshape => icons::CURSOR_DIRECT_SELECT_SVG,
             Tool::Pen if hint == PenHint::Closing => icons::CURSOR_PEN_CLOSING_SVG,
-            Tool::Pen => icons::CURSOR_PEN_DRAWING_SVG,
+            Tool::Pen | Tool::AddAnchor | Tool::DeleteAnchor | Tool::AnchorPoint | Tool::Curvature => {
+                icons::CURSOR_PEN_DRAWING_SVG
+            }
             _ => icons::CURSOR_SELECT_SVG,
         };
         icons::draw_cursor(scene, src, box_);
@@ -963,6 +957,35 @@ pub(in crate::app) fn paint_main(
                 None,
                 &Rect::new(c.x - a, c.y - a, c.x + a, c.y + a),
             );
+        }
+        // The Pen-flyout tools and Group Selection wear their own badge
+        // in the same spot as the Pen's "+" below: `+` adds (an anchor,
+        // or the next group up), `−` deletes, a caret converts.
+        if matches!(tool, Tool::AddAnchor | Tool::DeleteAnchor | Tool::AnchorPoint | Tool::GroupSelect) {
+            use vello::kurbo::{Line, Stroke};
+            let c = vello::kurbo::Point::new(x0 + sz * 0.78, y0 + sz * if tool == Tool::GroupSelect { 0.82 } else { 0.30 });
+            let a = 4.0;
+            let ink = crate::icons::CURSOR_INK;
+            let halo = vello::peniko::Color::WHITE;
+            for (col, w) in [(halo, 4.0), (ink, 2.0)] {
+                let stroke = Stroke::new(w);
+                match tool {
+                    Tool::DeleteAnchor => {
+                        scene.stroke(&stroke, Affine::IDENTITY, col, None, &Line::new((c.x - a, c.y), (c.x + a, c.y)));
+                    }
+                    Tool::AnchorPoint => {
+                        let mut caret = BezPath::new();
+                        caret.move_to((c.x - a, c.y + a * 0.6));
+                        caret.line_to((c.x, c.y - a * 0.6));
+                        caret.line_to((c.x + a, c.y + a * 0.6));
+                        scene.stroke(&stroke, Affine::IDENTITY, col, None, &caret);
+                    }
+                    _ => {
+                        scene.stroke(&stroke, Affine::IDENTITY, col, None, &Line::new((c.x - a, c.y), (c.x + a, c.y)));
+                        scene.stroke(&stroke, Affine::IDENTITY, col, None, &Line::new((c.x, c.y - a), (c.x, c.y + a)));
+                    }
+                }
+            }
         }
         // A small "+" badge when a click would insert an anchor.
         if tool == Tool::Pen && hint == PenHint::AddPoint {

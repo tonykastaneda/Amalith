@@ -63,6 +63,8 @@ pub fn draw(scene: &mut Scene, panel: PanelId, rect: Rect, color: Color) {
         | PanelKind::ShapedlgStar
         | PanelKind::ShapedlgArc
         | PanelKind::ShapedlgSpiral
+        | PanelKind::ShapedlgRectGrid
+        | PanelKind::ShapedlgPolarGrid
         | PanelKind::XformdlgReflect
         | PanelKind::XformdlgShear
         | PanelKind::Blenddlg

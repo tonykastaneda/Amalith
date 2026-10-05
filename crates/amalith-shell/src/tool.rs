@@ -44,6 +44,22 @@ pub enum Tool {
     RasterEraser,
     RasterFill,
     RasterCloneStamp,
+    AddAnchor,
+    DeleteAnchor,
+    AnchorPoint,
+    Curvature,
+    Scissors,
+    GroupSelect,
+    Reshape,
+    RectangularGrid,
+    PolarGrid,
+    Warp,
+    Twirl,
+    Pucker,
+    Bloat,
+    Scallop,
+    Crystallize,
+    Wrinkle,
 }
 
 impl Tool {
@@ -54,7 +70,7 @@ impl Tool {
         self.is_raster_selection()
             || matches!(self, Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp)
     }
-    pub const ALL: [Tool; 40] = [
+    pub const ALL: [Tool; 56] = [
         Tool::Select,
         Tool::DirectSelect,
         Tool::Pen,
@@ -95,7 +111,39 @@ impl Tool {
         Tool::RasterEraser,
         Tool::RasterFill,
         Tool::RasterCloneStamp,
+        Tool::AddAnchor,
+        Tool::DeleteAnchor,
+        Tool::AnchorPoint,
+        Tool::Curvature,
+        Tool::Scissors,
+        Tool::GroupSelect,
+        Tool::Reshape,
+        Tool::RectangularGrid,
+        Tool::PolarGrid,
+        Tool::Warp,
+        Tool::Twirl,
+        Tool::Pucker,
+        Tool::Bloat,
+        Tool::Scallop,
+        Tool::Crystallize,
+        Tool::Wrinkle,
     ];
+
+    /// The liquify brush this tool paints with, for the Warp flyout's
+    /// seven tools.
+    pub fn liquify_kind(self) -> Option<amalith_core::liquify::LiquifyKind> {
+        use amalith_core::liquify::LiquifyKind as K;
+        Some(match self {
+            Tool::Warp => K::Warp,
+            Tool::Twirl => K::Twirl,
+            Tool::Pucker => K::Pucker,
+            Tool::Bloat => K::Bloat,
+            Tool::Scallop => K::Scallop,
+            Tool::Crystallize => K::Crystallize,
+            Tool::Wrinkle => K::Wrinkle,
+            _ => return None,
+        })
+    }
 
     /// A drag-a-box shape tool — the five that share the toolbar's Shape
     /// flyout slot. Arc has its own exact-size dialog too (see
@@ -111,7 +159,7 @@ impl Tool {
     /// A plain click (no drag) with this tool pops an exact-size dialog
     /// instead of rubber-banding a shape.
     pub fn has_exact_size_dialog(self) -> bool {
-        self.is_shape() || matches!(self, Tool::Arc | Tool::Spiral)
+        self.is_shape() || matches!(self, Tool::Arc | Tool::Spiral | Tool::RectangularGrid | Tool::PolarGrid)
     }
 
     pub fn label(self) -> &'static str {
@@ -156,6 +204,22 @@ impl Tool {
             Tool::RasterEraser => "Pixel Eraser",
             Tool::RasterFill => "Paint Bucket",
             Tool::RasterCloneStamp => "Clone Stamp",
+            Tool::AddAnchor => "Add Anchor Point",
+            Tool::DeleteAnchor => "Delete Anchor Point",
+            Tool::AnchorPoint => "Anchor Point",
+            Tool::Curvature => "Curvature",
+            Tool::Scissors => "Scissors",
+            Tool::GroupSelect => "Group Selection",
+            Tool::Reshape => "Reshape",
+            Tool::RectangularGrid => "Rectangular Grid",
+            Tool::PolarGrid => "Polar Grid",
+            Tool::Warp => "Warp",
+            Tool::Twirl => "Twirl",
+            Tool::Pucker => "Pucker",
+            Tool::Bloat => "Bloat",
+            Tool::Scallop => "Scallop",
+            Tool::Crystallize => "Crystallize",
+            Tool::Wrinkle => "Wrinkle",
         }
     }
 
@@ -190,6 +254,12 @@ impl Tool {
             Tool::RasterEraser => "⇧E",
             Tool::RasterFill => "K",
             Tool::RasterCloneStamp => "C",
+            Tool::AddAnchor => "+",
+            Tool::DeleteAnchor => "-",
+            Tool::AnchorPoint => "⇧C",
+            Tool::Curvature => "⇧~",
+            Tool::Scissors => "C",
+            Tool::Warp => "⇧R",
             // Matching Illustrator's own Type flyout: only the plain Type
             // Tool has a default shortcut: the other five (Area/Path ×
             // horizontal/vertical) are flyout-only.
@@ -239,6 +309,22 @@ impl Tool {
             Tool::RasterEraser => Icon::Eraser,
             Tool::RasterFill => Icon::PaintBucket,
             Tool::RasterCloneStamp => Icon::CloneStamp,
+            Tool::AddAnchor => Icon::AddAnchor,
+            Tool::DeleteAnchor => Icon::DeleteAnchor,
+            Tool::AnchorPoint => Icon::AnchorPoint,
+            Tool::Curvature => Icon::CurvaturePen,
+            Tool::Scissors => Icon::Scissors,
+            Tool::GroupSelect => Icon::GroupSelect,
+            Tool::Reshape => Icon::Reshape,
+            Tool::RectangularGrid => Icon::RectangularGrid,
+            Tool::PolarGrid => Icon::PolarGrid,
+            Tool::Warp => Icon::Warp,
+            Tool::Twirl => Icon::Twirl,
+            Tool::Pucker => Icon::Pucker,
+            Tool::Bloat => Icon::Bloat,
+            Tool::Scallop => Icon::Scallop,
+            Tool::Crystallize => Icon::Crystallize,
+            Tool::Wrinkle => Icon::Wrinkle,
         }
     }
 }
@@ -252,15 +338,29 @@ pub enum ToolGroup {
     RotateReflect,
     ScaleShear,
     Type,
+    Pen,
+    DirectSelect,
+    Eraser,
+    Grid,
+    Width,
 }
 
 impl ToolGroup {
-    pub const ALL: [ToolGroup; 3] = [ToolGroup::RotateReflect, ToolGroup::ScaleShear, ToolGroup::Type];
+    pub const ALL: [ToolGroup; 8] = [
+        ToolGroup::RotateReflect,
+        ToolGroup::ScaleShear,
+        ToolGroup::Type,
+        ToolGroup::Pen,
+        ToolGroup::DirectSelect,
+        ToolGroup::Eraser,
+        ToolGroup::Grid,
+        ToolGroup::Width,
+    ];
 
     pub fn tools(self) -> &'static [Tool] {
         match self {
             ToolGroup::RotateReflect => &[Tool::Rotate, Tool::Reflect],
-            ToolGroup::ScaleShear => &[Tool::Scale, Tool::Shear],
+            ToolGroup::ScaleShear => &[Tool::Scale, Tool::Shear, Tool::Reshape],
             // Matches Illustrator's own Type flyout order.
             ToolGroup::Type => &[
                 Tool::Text,
@@ -270,11 +370,56 @@ impl ToolGroup {
                 Tool::VerticalAreaType,
                 Tool::VerticalPathType,
             ],
+            // Illustrator's Pen flyout (Curvature has its own slot).
+            ToolGroup::Pen => &[Tool::Pen, Tool::AddAnchor, Tool::DeleteAnchor, Tool::AnchorPoint],
+            ToolGroup::DirectSelect => &[Tool::DirectSelect, Tool::GroupSelect],
+            ToolGroup::Eraser => &[Tool::Eraser, Tool::Scissors],
+            ToolGroup::Grid => &[Tool::RectangularGrid, Tool::PolarGrid],
+            // Illustrator's Width flyout: Width plus the liquify brushes.
+            ToolGroup::Width => &[
+                Tool::Width,
+                Tool::Warp,
+                Tool::Twirl,
+                Tool::Pucker,
+                Tool::Bloat,
+                Tool::Scallop,
+                Tool::Crystallize,
+                Tool::Wrinkle,
+            ],
         }
     }
 
     pub fn contains(self, t: Tool) -> bool {
         self.tools().contains(&t)
+    }
+
+    /// The group `t` belongs to, if any.
+    pub fn of(t: Tool) -> Option<ToolGroup> {
+        ToolGroup::ALL.into_iter().find(|g| g.contains(t))
+    }
+}
+
+/// Which tool each flyout group's toolbar slot currently shows — the one
+/// last picked from it, Illustrator-style.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GroupTools([Tool; ToolGroup::ALL.len()]);
+
+impl Default for GroupTools {
+    fn default() -> Self {
+        Self(ToolGroup::ALL.map(|g| g.tools()[0]))
+    }
+}
+
+impl GroupTools {
+    pub fn get(&self, group: ToolGroup) -> Tool {
+        self.0[group as usize]
+    }
+
+    /// Remembers `t` as its group's current tool (no-op outside a group).
+    pub fn remember(&mut self, t: Tool) {
+        if let Some(g) = ToolGroup::of(t) {
+            self.0[g as usize] = t;
+        }
     }
 }
 
@@ -332,6 +477,21 @@ mod tests {
                 | Tool::RasterEllipse
                 | Tool::RasterLasso => true,
                 Tool::RasterBrush | Tool::RasterEraser | Tool::RasterFill | Tool::RasterCloneStamp => true,
+                Tool::AddAnchor
+                | Tool::DeleteAnchor
+                | Tool::AnchorPoint
+                | Tool::Curvature
+                | Tool::Scissors
+                | Tool::GroupSelect
+                | Tool::Reshape => true,
+                Tool::RectangularGrid | Tool::PolarGrid => true,
+                Tool::Warp
+                | Tool::Twirl
+                | Tool::Pucker
+                | Tool::Bloat
+                | Tool::Scallop
+                | Tool::Crystallize
+                | Tool::Wrinkle => true,
             }
         }
         for t in Tool::ALL {
@@ -349,11 +509,20 @@ mod tests {
     fn tool_group_all_covers_every_variant_exactly_once() {
         fn covered(g: ToolGroup) -> bool {
             match g {
-                ToolGroup::RotateReflect | ToolGroup::ScaleShear | ToolGroup::Type => true,
+                ToolGroup::RotateReflect
+                | ToolGroup::ScaleShear
+                | ToolGroup::Type
+                | ToolGroup::Pen
+                | ToolGroup::DirectSelect
+                | ToolGroup::Eraser
+                | ToolGroup::Grid
+                | ToolGroup::Width => true,
             }
         }
         for g in ToolGroup::ALL {
             assert!(covered(g), "{g:?} missing from the exhaustive check above");
+            // `GroupTools` indexes by discriminant.
+            assert_eq!(ToolGroup::ALL[g as usize], g);
         }
         let mut seen: Vec<ToolGroup> = Vec::new();
         for g in ToolGroup::ALL {

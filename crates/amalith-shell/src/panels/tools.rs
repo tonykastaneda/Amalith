@@ -13,7 +13,7 @@ use vello::Scene;
 use crate::icons;
 use crate::text::TextContext;
 use crate::theme::Theme;
-use crate::tool::Tool;
+use crate::tool::{GroupTools, Tool};
 
 use super::{Action, Ctx, PaintSlot, ID, MIXED_SWATCH_BG};
 
@@ -88,26 +88,28 @@ enum Slot {
 }
 
 /// The Vector Layer toolset — everything above, unchanged.
-fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool) -> Vec<Slot> {
+fn vector_slots(shape: Tool, groups: GroupTools, hide_wip: bool) -> Vec<Slot> {
     use crate::tool::ToolGroup;
     use icons::Icon;
-    let mut v = vec![Slot::Tool(Tool::Select), Slot::Tool(Tool::DirectSelect), Slot::Tool(Tool::MagicWand)];
+    let mut v = vec![
+        Slot::Tool(Tool::Select),
+        Slot::Flyout(ToolGroup::DirectSelect, groups.get(ToolGroup::DirectSelect)),
+        Slot::Tool(Tool::MagicWand),
+    ];
     if !hide_wip {
         v.push(Slot::Wip("Lasso", Icon::Lasso));
     }
-    v.push(Slot::Tool(Tool::Pen));
-    if !hide_wip {
-        v.push(Slot::Wip("Curvature Pen", Icon::CurvaturePen));
-    }
-    v.push(Slot::Flyout(ToolGroup::Type, type_group));
+    v.push(Slot::Flyout(ToolGroup::Pen, groups.get(ToolGroup::Pen)));
+    v.push(Slot::Tool(Tool::Curvature));
+    v.push(Slot::Flyout(ToolGroup::Type, groups.get(ToolGroup::Type)));
     v.push(Slot::Tool(Tool::Line));
     v.push(Slot::Shape(shape));
     if !hide_wip {
         v.push(Slot::Wip("Paintbrush", Icon::Paintbrush));
         v.push(Slot::Wip("Pencil", Icon::Pencil));
     }
-    v.push(Slot::Flyout(ToolGroup::RotateReflect, rotate_group));
-    v.push(Slot::Flyout(ToolGroup::ScaleShear, scale_group));
+    v.push(Slot::Flyout(ToolGroup::RotateReflect, groups.get(ToolGroup::RotateReflect)));
+    v.push(Slot::Flyout(ToolGroup::ScaleShear, groups.get(ToolGroup::ScaleShear)));
     v.push(Slot::Tool(Tool::Gradient));
     if !hide_wip {
         v.push(Slot::Wip("Mesh", Icon::Mesh));
@@ -126,13 +128,14 @@ fn vector_slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: 
     }
     v.push(Slot::Tool(Tool::Hand));
     v.push(Slot::Tool(Tool::Zoom));
-    v.push(Slot::Tool(Tool::Width));
+    v.push(Slot::Flyout(ToolGroup::Width, groups.get(ToolGroup::Width)));
     v.push(Slot::Tool(Tool::Arc));
     v.push(Slot::Tool(Tool::Spiral));
+    v.push(Slot::Flyout(ToolGroup::Grid, groups.get(ToolGroup::Grid)));
     v.push(Slot::Tool(Tool::FreeTransform));
     v.push(Slot::Tool(Tool::Join));
     v.push(Slot::Tool(Tool::ShapeBuilder));
-    v.push(Slot::Tool(Tool::Eraser));
+    v.push(Slot::Flyout(ToolGroup::Eraser, groups.get(ToolGroup::Eraser)));
     if !hide_wip {
         v.push(Slot::Wip("Shaper", Icon::Shaper));
         v.push(Slot::Wip("Perspective Grid", Icon::PerspectiveGrid));
@@ -171,7 +174,9 @@ mod raster_tests {
         for kind in [amalith_core::LayerKind::Vector, amalith_core::LayerKind::Raster] {
             set_layer_kind(Some(kind));
             for hide_wip in [true, false] {
-                let all = slots(Tool::Star, Tool::Rotate, Tool::Scale, Tool::VerticalAreaType, hide_wip, Some(kind));
+                let mut groups = GroupTools::default();
+                groups.remember(Tool::VerticalAreaType);
+                let all = slots(Tool::Star, groups, hide_wip, Some(kind));
                 let shape = all.iter().position(|s| matches!(s, Slot::Shape(Tool::Star))).unwrap();
                 let text = all.iter().position(|s| matches!(s, Slot::Flyout(crate::tool::ToolGroup::Type, Tool::VerticalAreaType))).unwrap();
                 for width in [metric_cell(), metric_cell() * 2.0 + ui_px(10.0)] {
@@ -187,7 +192,7 @@ mod raster_tests {
     fn pixel_selection_tools_are_live_and_only_in_raster_toolbar() {
         for tool in [Tool::RasterMarquee, Tool::RasterEllipse, Tool::RasterLasso, Tool::RasterBrush, Tool::RasterEraser, Tool::RasterFill, Tool::RasterCloneStamp] {
             assert!(raster_slots(Tool::Rectangle, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
-            assert!(!vector_slots(Tool::Rectangle, Tool::Rotate, Tool::Scale, Tool::Text, true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
+            assert!(!vector_slots(Tool::Rectangle, GroupTools::default(), true).iter().any(|s| matches!(s, Slot::Tool(t) if *t == tool)));
         }
     }
 }
@@ -196,10 +201,12 @@ mod raster_tests {
 /// layer that owns the current context is confidently a Raster Layer;
 /// anything ambiguous (nothing selected yet, no document) keeps the
 /// familiar Vector grid rather than flickering between the two.
-fn slots(shape: Tool, rotate_group: Tool, scale_group: Tool, type_group: Tool, hide_wip: bool, kind: Option<amalith_core::LayerKind>) -> Vec<Slot> {
+fn slots(shape: Tool, groups: GroupTools, hide_wip: bool, kind: Option<amalith_core::LayerKind>) -> Vec<Slot> {
     match kind {
-        Some(amalith_core::LayerKind::Raster) => raster_slots(shape, type_group, hide_wip),
-        _ => vector_slots(shape, rotate_group, scale_group, type_group, hide_wip),
+        Some(amalith_core::LayerKind::Raster) => {
+            raster_slots(shape, groups.get(crate::tool::ToolGroup::Type), hide_wip)
+        }
+        _ => vector_slots(shape, groups, hide_wip),
     }
 }
 
@@ -229,7 +236,7 @@ fn cols(body: Rect) -> usize {
 /// for the splitter-drag minimum. Depends on width via the column reflow.
 pub fn natural_height(width: f64, hide_wip: bool) -> f64 {
     let cols = if width >= 2.0 * metric_cell() + ui_px(6.0) { 2 } else { 1 };
-    let n = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind()).len();
+    let n = slots(Tool::Select, GroupTools::default(), hide_wip, layer_kind()).len();
     let rows = n.div_ceil(cols) as f64;
     // grid + the bottom-anchored Fill/Stroke proxy block (see `proxy`).
     metric_top() + rows * metric_cell() + ui_px(12.0) + metric_proxy_h()
@@ -250,14 +257,14 @@ fn cell(body: Rect, i: usize, cols: usize) -> Rect {
 
 /// Screen rect of the Shape slot in the active layer's toolbar.
 pub fn shape_slot_rect(body: Rect, hide_wip: bool) -> Rect {
-    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind());
+    let s = slots(Tool::Select, GroupTools::default(), hide_wip, layer_kind());
     let i = s.iter().position(|s| matches!(s, Slot::Shape(_))).unwrap_or(0);
     cell(body, i, cols(body))
 }
 
 /// Screen rect of a flyout-group slot — its labeled flyout anchors here.
 pub fn group_slot_rect(body: Rect, group: crate::tool::ToolGroup, hide_wip: bool) -> Rect {
-    let s = slots(Tool::Select, Tool::Select, Tool::Select, Tool::Select, hide_wip, layer_kind());
+    let s = slots(Tool::Select, GroupTools::default(), hide_wip, layer_kind());
     let i = s
         .iter()
         .position(|s| matches!(s, Slot::Flyout(g, _) if *g == group))
@@ -469,7 +476,7 @@ fn paint_proxy(scene: &mut Scene, text: &mut crate::text::TextContext, body: Rec
 
 pub fn paint(scene: &mut Scene, text: &mut TextContext, body: Rect, ctx: &Ctx) {
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
+    let all = slots(ctx.shape_tool, ctx.group_tools, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         let r = cell(body, i, cols);
 
@@ -554,7 +561,7 @@ pub(super) fn hit(body: Rect, local: Point, ctx: &Ctx) -> Action {
         return Action::SetPaint(Paint::None);
     }
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
+    let all = slots(ctx.shape_tool, ctx.group_tools, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
             return match slot {
@@ -593,7 +600,7 @@ pub(super) fn tip(body: Rect, local: Point, ctx: &Ctx) -> Option<String> {
         return Some("Fill".into());
     }
     let cols = cols(body);
-    let all = slots(ctx.shape_tool, ctx.rotate_group_tool, ctx.scale_group_tool, ctx.type_group_tool, ctx.hide_wip_tools, ctx_layer_kind(ctx));
+    let all = slots(ctx.shape_tool, ctx.group_tools, ctx.hide_wip_tools, ctx_layer_kind(ctx));
     for (i, slot) in all.into_iter().enumerate() {
         if cell(body, i, cols).contains(local) {
             return Some(match slot {

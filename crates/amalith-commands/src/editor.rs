@@ -1065,6 +1065,22 @@ impl Editor {
                     index,
                 }]
             }
+            Command::CreatePathGroup { parent, paths, appearance, name } => {
+                let group_id = ObjectId::new();
+                let mut group = Object::new(group_id, parent, ObjectKind::Group(Default::default()));
+                group.name = name;
+                group.transform = self.rebase_into(parent)? * group.transform;
+                let index = self.document.children_of(parent).len();
+                let mut edits = vec![Edit::InsertObject { object: Box::new(group), index }];
+                for (index, path) in paths.into_iter().enumerate() {
+                    let mut child = Object::new(ObjectId::new(), ObjectParent::Group(group_id), ObjectKind::Path(path));
+                    if let Some(appearance) = &appearance {
+                        child.appearance = appearance.clone();
+                    }
+                    edits.push(Edit::InsertObject { object: Box::new(child), index });
+                }
+                edits
+            }
             Command::CreateText {
                 parent,
                 mut data,
@@ -1286,6 +1302,49 @@ impl Editor {
             Command::DeleteAnchor { object, anchor } => {
                 let mut data = self.path_data(object)?;
                 data.edit_subpaths(|sp| amalith_core::delete_anchor(sp, anchor));
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::RemoveAnchor { object, anchor } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| amalith_core::remove_anchor(sp, anchor));
+                // Nothing left to draw — the path goes, as in Illustrator.
+                if data.subpaths().is_empty() && matches!(self.document.object(object).map(|o| &o.kind), Some(ObjectKind::Path(_))) {
+                    vec![Edit::RemoveObject { id: object }]
+                } else {
+                    vec![Edit::SetPathData { id: object, data }]
+                }
+            }
+            Command::PullAnchorHandles { object, anchor, handle_out } => {
+                let mut data = self.path_data(object)?;
+                data.edit_subpaths(|sp| amalith_core::pull_anchor_handles(sp, anchor, handle_out));
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::SplitPath { object, at } => self.compile_split_path(object, at)?,
+            Command::SetCurvaturePath { object, subpath, points, closed } => {
+                let mut data = self.path_data(object)?;
+                if subpath >= data.subpaths().len() || points.is_empty() {
+                    return Ok(Vec::new());
+                }
+                data.edit_subpaths(|sp| sp[subpath] = amalith_core::curvature_subpath(&points, closed));
+                vec![Edit::SetPathData { id: object, data }]
+            }
+            Command::Liquify { objects, stroke, params } => {
+                let dab_pts = amalith_core::liquify::dabs(&stroke, params.dab_spacing());
+                let mut edits = Vec::new();
+                for (i, id) in objects.into_iter().enumerate() {
+                    let Ok(data) = self.path_data(id) else { continue };
+                    let to_doc = self.document.world_transform(id);
+                    if let Some(data) = amalith_core::liquify::liquify_path(&data, to_doc, &dab_pts, &params, i as u64) {
+                        edits.push(Edit::SetPathData { id, data });
+                    }
+                }
+                edits
+            }
+            Command::ReshapePath { object, at, delta, tolerance } => {
+                let mut data = self.path_data(object)?;
+                if !data.edit_subpaths_ret(|sp| amalith_core::reshape(sp, at, delta, tolerance)) {
+                    return Ok(Vec::new());
+                }
                 vec![Edit::SetPathData { id: object, data }]
             }
             Command::JoinAnchors { anchor_a: (oa, na), anchor_b: (ob, nb) } => {
@@ -2555,6 +2614,41 @@ impl Editor {
     /// since erasing never needs to combine anything, just remove part
     /// of what's already there. An object the stroke never actually
     /// overlaps is skipped outright: no edit references it at all.
+    /// `Command::SplitPath`: the cut path keeps its id; a piece cut off an
+    /// open path becomes a sibling object directly above it. A variable-
+    /// width profile is dropped from both — its points are placed by
+    /// fraction of the whole path's length, which a cut changes.
+    fn compile_split_path(&self, object: ObjectId, at: crate::command::PathPoint) -> Result<Vec<Edit>, CommandError> {
+        let source = self.document.object(object).ok_or(CommandError::ObjectNotFound(object))?;
+        let ObjectKind::Path(original) = &source.kind else {
+            return Err(CommandError::NotAPath(object));
+        };
+        let mut data = original.clone();
+        let split = data.edit_subpaths_ret(|sp| match at {
+            crate::command::PathPoint::Anchor(n) => amalith_core::split_at_anchor(sp, n),
+            crate::command::PathPoint::Segment { segment, t } => amalith_core::split_at_segment(sp, segment, t),
+        });
+        let Some(split) = split else {
+            return Ok(Vec::new());
+        };
+        data.width_points.clear();
+        let mut edits = vec![Edit::SetPathData { id: object, data }];
+        if let amalith_core::Split::Detached(tail) = split {
+            let index = self
+                .document
+                .children_of(source.parent)
+                .iter()
+                .position(|&s| s == object)
+                .map_or(0, |i| i + 1);
+            let mut piece = source.clone();
+            piece.id = ObjectId::new();
+            piece.name = None;
+            piece.kind = ObjectKind::Path(PathData::from_subpaths(vec![tail]));
+            edits.push(Edit::InsertObject { object: Box::new(piece), index });
+        }
+        Ok(edits)
+    }
+
     fn compile_erase_area(&self, objects: Vec<ObjectId>, area: PathData) -> Result<Vec<Edit>, CommandError> {
         let mut edits = Vec::new();
         let wanted: HashSet<_> = objects.into_iter().collect();

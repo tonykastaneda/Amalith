@@ -120,9 +120,7 @@ pub struct Ctx<'a> {
     pub shape_tool: Tool,
     /// Which tool each Tools-panel flyout group slot stands in for —
     /// whichever tool in that group was last used.
-    pub rotate_group_tool: Tool,
-    pub scale_group_tool: Tool,
-    pub type_group_tool: Tool,
+    pub group_tools: crate::tool::GroupTools,
     /// Preferences ▸ Debug ▸ Hide WIP Tools — hides the Tools panel's
     /// placeholder slots for real Illustrator tools Amalith doesn't
     /// implement yet, instead of showing them greyed out.
@@ -288,6 +286,8 @@ pub(crate) fn shape_dialog_tool(id: PanelId) -> Option<Tool> {
         PanelKind::ShapedlgStar => Tool::Star,
         PanelKind::ShapedlgArc => Tool::Arc,
         PanelKind::ShapedlgSpiral => Tool::Spiral,
+        PanelKind::ShapedlgRectGrid => Tool::RectangularGrid,
+        PanelKind::ShapedlgPolarGrid => Tool::PolarGrid,
         _ => return None,
     })
 }
@@ -748,7 +748,9 @@ pub fn paint(scene: &mut Scene, text: &mut TextContext, id: PanelId, body: Rect,
         | PanelKind::ShapedlgPolygon
         | PanelKind::ShapedlgStar
         | PanelKind::ShapedlgArc
-        | PanelKind::ShapedlgSpiral => {
+        | PanelKind::ShapedlgSpiral
+        | PanelKind::ShapedlgRectGrid
+        | PanelKind::ShapedlgPolarGrid => {
             if let Some((dlg, caret)) = ctx.shape_dialog {
                 crate::shapedialog::paint(scene, dlg, body, ctx.theme, text, caret);
             }
@@ -835,7 +837,9 @@ pub fn hit(id: PanelId, body: Rect, local: Point, ctx: &Ctx) -> Action {
         | PanelKind::ShapedlgPolygon
         | PanelKind::ShapedlgStar
         | PanelKind::ShapedlgArc
-        | PanelKind::ShapedlgSpiral => {
+        | PanelKind::ShapedlgSpiral
+        | PanelKind::ShapedlgRectGrid
+        | PanelKind::ShapedlgPolarGrid => {
             match ctx.shape_dialog.map(|(d, _)| d.hit(body, local)) {
                 Some(crate::shapedialog::Hit::Field(i)) => Action::ShapeField(i),
                 Some(crate::shapedialog::Hit::Step(i, d)) => Action::ShapeStep(i, d),
@@ -929,7 +933,9 @@ pub fn min_body_height(id: PanelId, width: f64) -> f64 {
         | PanelKind::ShapedlgPolygon
         | PanelKind::ShapedlgStar
         | PanelKind::ShapedlgArc
-        | PanelKind::ShapedlgSpiral => crate::shapedialog::body_height(shape_dialog_tool(id).unwrap()),
+        | PanelKind::ShapedlgSpiral
+        | PanelKind::ShapedlgRectGrid
+        | PanelKind::ShapedlgPolarGrid => crate::shapedialog::body_height(shape_dialog_tool(id).unwrap()),
         PanelKind::Unknown(_) => ui_px(60.0),
     }
 }
