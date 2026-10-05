@@ -151,7 +151,26 @@ impl App {
             && !self.doc.selection.is_empty()
             && self.symbols_drop_target_at_pointer();
 
+        let path_preview: Vec<_> = self.path_tool_preview().into_iter().collect();
+        let live_paths: &[(ObjectId, amalith_core::PathData)] = match &self.drag {
+            Drag::Liquify { preview, .. } => preview,
+            _ => &path_preview,
+        };
         let preview = match &self.drag {
+            _ if !live_paths.is_empty() => Some(DragPreview {
+                ids: &[],
+                delta: Vec2::ZERO,
+                dup: false,
+                xf: None,
+                dup_xf: false,
+                anchors: None,
+                handle: None,
+                text_boxes: &[],
+                path_text: None,
+                width_points: None,
+                paths: live_paths,
+                appearance_effect: appearance_effect_preview,
+            }),
             Drag::MoveObjects {
                 start_doc,
                 last_doc,
@@ -173,6 +192,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             Drag::Warp { preview, warping: false, .. }
@@ -187,6 +207,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             // Alt-drag with one of these dedicated transform tools shows
@@ -214,6 +235,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             Drag::ResizeTextBox { .. } => Some(DragPreview {
@@ -227,6 +249,7 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             Drag::MoveAnchors {
@@ -251,6 +274,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             Drag::MoveHandle {
@@ -275,6 +299,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             Drag::PathTextBracket { object, edit } => {
@@ -291,6 +316,7 @@ impl App {
                     text_boxes: &[],
                     path_text: live.map(|pt| (*object, pt)),
                     width_points: None,
+                    paths: &[],
                     appearance_effect: appearance_effect_preview,
                 })
             }
@@ -305,6 +331,7 @@ impl App {
                 text_boxes: &[],
                 path_text: None,
                 width_points: Some((*object, points.as_slice())),
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             _ if !resize_previews.is_empty() || appearance_effect_preview.is_some() => Some(DragPreview {
@@ -318,11 +345,14 @@ impl App {
                 text_boxes: &resize_previews,
                 path_text: None,
                 width_points: None,
+                paths: &[],
                 appearance_effect: appearance_effect_preview,
             }),
             _ => None,
         };
         let draw_shape = match &self.drag {
+            // Grids are several paths — `paint_grid_preview` draws them.
+            Drag::DrawShape { tool: Tool::RectangularGrid | Tool::PolarGrid, .. } => None,
             // Line preview: raw start → end (Shift snaps to 45°), packed
             // into a Rect the canvas reads as its two endpoints — not a
             // bbox, which would collapse a horizontal / vertical line.
@@ -471,8 +501,20 @@ impl App {
         // The Rotate / Reflect / Shear tools do the same — you're
         // transforming about a reference point, so the 8 scale handles
         // would be misleading; show nodes.
-        let pen_nodes = matches!(self.active_tool, Tool::Pen | Tool::Rotate | Tool::Reflect | Tool::Shear | Tool::Scale)
-            && !self.doc.selection.is_empty();
+        let pen_nodes = matches!(
+            self.active_tool,
+            Tool::Pen
+                | Tool::Rotate
+                | Tool::Reflect
+                | Tool::Shear
+                | Tool::Scale
+                | Tool::AddAnchor
+                | Tool::DeleteAnchor
+                | Tool::AnchorPoint
+                | Tool::Curvature
+                | Tool::Scissors
+                | Tool::Reshape
+        ) && !self.doc.selection.is_empty();
         // Hold Space with the Selection tool to peek at every node (read-only;
         // the bounding box stays). Direct Selection proper takes precedence.
         let peek = !direct && !pen_nodes && self.space_peek();
@@ -734,9 +776,7 @@ impl App {
                 self.cursor_mode,
                 self.last_shape_tool,
                 self.shape_flyout,
-                self.last_rotate_tool,
-                self.last_scale_tool,
-                self.last_type_tool,
+                self.group_tools,
                 self.tool_flyout,
                 blend_spine_hover,
                 self.stroke_popover,
@@ -858,9 +898,7 @@ impl App {
                             cur_fill: self.doc.fill,
                             cur_stroke: self.doc.stroke,
                             shape_tool: self.last_shape_tool,
-                            rotate_group_tool: self.last_rotate_tool,
-                            scale_group_tool: self.last_scale_tool,
-                            type_group_tool: self.last_type_tool,
+                            group_tools: self.group_tools,
                             hide_wip_tools: self.settings.hide_wip_tools,
                             expanded: &self.doc.expanded_groups,
                             collapsed_layers: &self.doc.collapsed_layers,
@@ -957,9 +995,7 @@ impl App {
                                 cur_fill: self.doc.fill,
                                 cur_stroke: self.doc.stroke,
                                 shape_tool: self.last_shape_tool,
-                                rotate_group_tool: self.last_rotate_tool,
-                                scale_group_tool: self.last_scale_tool,
-                                type_group_tool: self.last_type_tool,
+                                group_tools: self.group_tools,
                                 hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
                                 collapsed_layers: &self.doc.collapsed_layers,
@@ -1069,9 +1105,7 @@ impl App {
                                 cur_fill: self.doc.fill,
                                 cur_stroke: self.doc.stroke,
                                 shape_tool: self.last_shape_tool,
-                                rotate_group_tool: self.last_rotate_tool,
-                                scale_group_tool: self.last_scale_tool,
-                                type_group_tool: self.last_type_tool,
+                                group_tools: self.group_tools,
                                 hide_wip_tools: self.settings.hide_wip_tools,
                                 expanded: &self.doc.expanded_groups,
                                 collapsed_layers: &self.doc.collapsed_layers,
@@ -1213,6 +1247,9 @@ impl App {
             self.paint_path_text_brackets();
             self.paint_width_points();
             self.paint_join_preview();
+            self.paint_curvature_preview();
+            self.paint_grid_preview();
+            self.paint_liquify_brush();
             self.paint_shape_builder_preview();
             self.paint_eraser_preview();
             self.paint_raster_brush_preview();

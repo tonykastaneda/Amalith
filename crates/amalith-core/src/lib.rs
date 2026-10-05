@@ -17,12 +17,15 @@ pub mod document;
 pub mod error;
 pub mod geom;
 pub mod gradient;
+pub mod grid;
 pub mod guide;
 pub mod ids;
 pub mod layer;
+pub mod liquify;
 pub mod measure;
 pub mod metadata;
 pub mod object;
+pub mod pathedit;
 pub mod pathtext;
 pub mod swatch;
 pub mod symbol;
@@ -51,6 +54,10 @@ pub use ids::{ArtboardId, AssetId, GradientId, LayerId, ObjectId, SymbolId};
 pub use layer::{Layer, LayerColor, LayerKind};
 pub use measure::{format_measurement, parse_measurement, Kind as MeasureKind};
 pub use metadata::{Bleed, ColorMode, Metadata, PreviewMode, RasterEffects, Settings};
+pub use pathedit::{
+    curvature_points, curvature_subpath, pull_anchor_handles, remove_anchor, reshape, split_at_anchor,
+    split_at_segment, CurvaturePoint, Split,
+};
 pub use pathtext::ArcLengthPath;
 pub use object::{
     anchor_at, anchor_count, anchor_is_open_endpoint, break_handle_mirror, delete_anchor,

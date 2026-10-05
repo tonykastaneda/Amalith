@@ -17,6 +17,8 @@ impl App {
             Tool::Star => PanelKind::ShapedlgStar,
             Tool::Arc => PanelKind::ShapedlgArc,
             Tool::Spiral => PanelKind::ShapedlgSpiral,
+            Tool::RectangularGrid => PanelKind::ShapedlgRectGrid,
+            Tool::PolarGrid => PanelKind::ShapedlgPolarGrid,
             _ => PanelKind::ShapedlgRect,
         })
     }
@@ -162,6 +164,12 @@ impl App {
             dlg.write_params(&mut self.shape_params);
             let (container, _) = self.ensure_container();
             let cmd = match dlg.geometry() {
+                shapedialog::Geometry::Paths(paths) => {
+                    self.create_grid(paths);
+                    self.dock.remove(pid);
+                    self.close_dead_floating_hosts();
+                    return;
+                }
                 shapedialog::Geometry::Rect(rect) => Command::CreateRect {
                     parent: container,
                     rect,
@@ -194,6 +202,36 @@ impl App {
         }
         // Drop the panel and close the window it lived in.
         self.dock.remove(pid);
+        self.close_dead_floating_hosts();
+    }
+
+    /// Creates a Rectangular / Polar Grid as one group of `paths`
+    /// (document space) — unfilled, stroked with the current stroke (black
+    /// when that's None, so the grid never comes out invisible) — and
+    /// selects it.
+    pub(in crate::app) fn create_grid(&mut self, paths: Vec<amalith_core::PathData>) {
+        let mut look = amalith_core::Appearance::default();
+        look.set_fill(amalith_core::Paint::None);
+        look.set_stroke(match self.doc.stroke {
+            amalith_core::Paint::None => amalith_core::Paint::Solid(amalith_core::Color::rgb(0.0, 0.0, 0.0)),
+            stroke => stroke,
+        });
+        look.set_stroke_width(self.doc.stroke_w);
+        look.set_stroke_style(self.doc.stroke_style);
+        let (parent, _) = self.ensure_container();
+        if let Ok(CommandOutcome::Object(id)) =
+            self.doc.editor.execute(Command::CreatePathGroup { parent, paths, appearance: Some(look), name: None })
+        {
+            self.doc.selection = vec![id];
+            self.reparent_new_object_into_isolation(id);
+            self.sync_align_mode();
+        }
+        self.request_main_redraw();
+    }
+
+    /// Drops the host window of every floating group whose panels are all
+    /// gone.
+    fn close_dead_floating_hosts(&mut self) {
         let dead: Vec<WindowId> = self
             .hosts
             .iter()

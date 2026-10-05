@@ -1071,6 +1071,26 @@ impl App {
                 if self.active_tool == Tool::Eraser && self.eraser_press() {
                     return;
                 }
+                if self.liquify_press() {
+                    return;
+                }
+                // The Pen-flyout anchor tools, Curvature, Scissors,
+                // Reshape and Group Selection: a press on a path (or, for
+                // Curvature and Group Selection, anywhere) is theirs; a
+                // miss falls through to the Selection tool below.
+                if matches!(
+                    self.active_tool,
+                    Tool::AddAnchor
+                        | Tool::DeleteAnchor
+                        | Tool::AnchorPoint
+                        | Tool::Curvature
+                        | Tool::Scissors
+                        | Tool::Reshape
+                        | Tool::GroupSelect
+                ) && self.path_tool_press(double)
+                {
+                    return;
+                }
                 // Gradient tool: press near an annotator handle edits that
                 // handle (drag a stop along the line, or move an endpoint);
                 // anywhere else lays down a fresh axis on the object under
@@ -1483,7 +1503,10 @@ impl App {
                 // rubber-bands a single straight segment (same drag state,
                 // committed differently on release).
                 if self.active_tool.is_shape()
-                    || matches!(self.active_tool, Tool::Line | Tool::Arc | Tool::Spiral)
+                    || matches!(
+                        self.active_tool,
+                        Tool::Line | Tool::Arc | Tool::Spiral | Tool::RectangularGrid | Tool::PolarGrid
+                    )
                 {
                     let (dp,hit)=self.sg_point_snap(dp,&[]);
                     self.smart_guide_hit=hit;

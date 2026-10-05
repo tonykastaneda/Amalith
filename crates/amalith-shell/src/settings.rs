@@ -276,6 +276,22 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::RasterEraser => "RasterEraser",
         Tool::RasterFill => "RasterFill",
         Tool::RasterCloneStamp => "RasterCloneStamp",
+        Tool::AddAnchor => "AddAnchor",
+        Tool::DeleteAnchor => "DeleteAnchor",
+        Tool::AnchorPoint => "AnchorPoint",
+        Tool::Curvature => "Curvature",
+        Tool::Scissors => "Scissors",
+        Tool::GroupSelect => "GroupSelect",
+        Tool::Reshape => "Reshape",
+        Tool::RectangularGrid => "RectangularGrid",
+        Tool::PolarGrid => "PolarGrid",
+        Tool::Warp => "Warp",
+        Tool::Twirl => "Twirl",
+        Tool::Pucker => "Pucker",
+        Tool::Bloat => "Bloat",
+        Tool::Scallop => "Scallop",
+        Tool::Crystallize => "Crystallize",
+        Tool::Wrinkle => "Wrinkle",
     }
 }
 

@@ -303,7 +303,7 @@ pub fn anchor_at(subpaths: &[Subpath], n: usize) -> Option<Anchor> {
 }
 
 /// `(subpath index, index within that subpath)` for flat ordinal `n`.
-fn locate(subpaths: &[Subpath], n: usize) -> Option<(usize, usize)> {
+pub(crate) fn locate(subpaths: &[Subpath], n: usize) -> Option<(usize, usize)> {
     let mut acc = 0;
     for (si, s) in subpaths.iter().enumerate() {
         if n < acc + s.anchors.len() {
@@ -731,8 +731,6 @@ pub fn trim_to_split(subpaths: &mut Vec<Subpath>, subpath: usize, at_end: bool, 
 ///
 /// Subpaths that fall below two anchors are dropped.
 pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
-    use kurbo::{CubicBez, ParamCurve};
-
     let Some((si, ai)) = locate(subpaths, n) else {
         return;
     };
@@ -753,45 +751,53 @@ pub fn delete_anchor(subpaths: &mut Vec<Subpath>, n: usize) {
         return;
     }
     let m = sp.anchors.len();
-    let prev_i = if ai > 0 { Some(ai - 1) } else { None };
-    let next_i = if ai + 1 < m { Some(ai + 1) } else { None };
-    if let (Some(pi), Some(ni)) = (prev_i, next_i) {
-        let a = sp.anchors[pi];
-        let b = sp.anchors[ai];
-        let c = sp.anchors[ni];
-        let straight = a.handle_out.is_none()
-            && b.handle_in.is_none()
-            && b.handle_out.is_none()
-            && c.handle_in.is_none();
-        if straight {
-            sp.anchors[pi].handle_out = None;
-            sp.anchors[ni].handle_in = None;
-        } else {
-            let s1 = CubicBez::new(
-                a.point,
-                a.handle_out.unwrap_or(a.point),
-                b.handle_in.unwrap_or(b.point),
-                b.point,
-            );
-            let s2 = CubicBez::new(
-                b.point,
-                b.handle_out.unwrap_or(b.point),
-                c.handle_in.unwrap_or(c.point),
-                c.point,
-            );
-            // Points at 1/3 and 2/3 of the combined a..c walk.
-            let q1 = s1.eval(2.0 / 3.0).to_vec2();
-            let q2 = s2.eval(1.0 / 3.0).to_vec2();
-            let p0 = a.point.to_vec2();
-            let p3 = c.point.to_vec2();
-            let p1 = (p0 * -5.0 + q1 * 18.0 - q2 * 9.0 + p3 * 2.0) * (1.0 / 6.0);
-            let p2 = (p0 * 2.0 - q1 * 9.0 + q2 * 18.0 - p3 * 5.0) * (1.0 / 6.0);
-            sp.anchors[pi].handle_out = Some(p1.to_point());
-            sp.anchors[ni].handle_in = Some(p2.to_point());
-        }
+    if ai > 0 && ai + 1 < m {
+        refit_across(sp, ai - 1, ai, ai + 1);
     }
     sp.anchors.remove(ai);
     subpaths.retain(|s| s.anchors.len() >= 2);
+}
+
+/// Re-fits the facing handles of anchors `pi` and `ni` so the single
+/// segment between them approximates the two segments through `ai` that
+/// it's about to replace (cubic through the points at 1/3 and 2/3 of the
+/// old pair). Leaves `ai` itself in place — the caller removes it.
+pub(crate) fn refit_across(sp: &mut Subpath, pi: usize, ai: usize, ni: usize) {
+    use kurbo::{CubicBez, ParamCurve};
+
+    let a = sp.anchors[pi];
+    let b = sp.anchors[ai];
+    let c = sp.anchors[ni];
+    let straight = a.handle_out.is_none()
+        && b.handle_in.is_none()
+        && b.handle_out.is_none()
+        && c.handle_in.is_none();
+    if straight {
+        sp.anchors[pi].handle_out = None;
+        sp.anchors[ni].handle_in = None;
+    } else {
+        let s1 = CubicBez::new(
+            a.point,
+            a.handle_out.unwrap_or(a.point),
+            b.handle_in.unwrap_or(b.point),
+            b.point,
+        );
+        let s2 = CubicBez::new(
+            b.point,
+            b.handle_out.unwrap_or(b.point),
+            c.handle_in.unwrap_or(c.point),
+            c.point,
+        );
+        // Points at 1/3 and 2/3 of the combined a..c walk.
+        let q1 = s1.eval(2.0 / 3.0).to_vec2();
+        let q2 = s2.eval(1.0 / 3.0).to_vec2();
+        let p0 = a.point.to_vec2();
+        let p3 = c.point.to_vec2();
+        let p1 = (p0 * -5.0 + q1 * 18.0 - q2 * 9.0 + p3 * 2.0) * (1.0 / 6.0);
+        let p2 = (p0 * 2.0 - q1 * 9.0 + q2 * 18.0 - p3 * 5.0) * (1.0 / 6.0);
+        sp.anchors[pi].handle_out = Some(p1.to_point());
+        sp.anchors[ni].handle_in = Some(p2.to_point());
+    }
 }
 
 impl PathData {

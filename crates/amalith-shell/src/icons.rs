@@ -76,6 +76,21 @@ pub enum Icon {
     PathType,
     VerticalAreaType,
     VerticalPathType,
+    AddAnchor,
+    DeleteAnchor,
+    AnchorPoint,
+    Scissors,
+    GroupSelect,
+    Reshape,
+    RectangularGrid,
+    PolarGrid,
+    Warp,
+    Twirl,
+    Pucker,
+    Bloat,
+    Scallop,
+    Crystallize,
+    Wrinkle,
     // Illustrator tools Amalith doesn't implement yet — used only by the
     // Tools panel's greyed-out "(WIP)" placeholder slots.
     MagicWand,
@@ -113,6 +128,10 @@ fn brand_svg(icon: Icon) -> &'static str {
         | Icon::Arc | Icon::Spiral | Icon::FreeTransform | Icon::Join | Icon::ShapeBuilder
         | Icon::Eraser | Icon::VerticalText | Icon::AreaType | Icon::PathType
         | Icon::VerticalAreaType | Icon::VerticalPathType
+        | Icon::AddAnchor | Icon::DeleteAnchor | Icon::AnchorPoint | Icon::Scissors
+        | Icon::GroupSelect | Icon::Reshape | Icon::RectangularGrid | Icon::PolarGrid
+        | Icon::Warp | Icon::Twirl | Icon::Pucker | Icon::Bloat | Icon::Scallop | Icon::Crystallize
+        | Icon::Wrinkle
         | Icon::MagicWand | Icon::Lasso | Icon::RasterMarquee | Icon::RasterEllipse | Icon::PaintBucket | Icon::CloneStamp | Icon::CurvaturePen | Icon::Paintbrush
         | Icon::Pencil | Icon::Mesh | Icon::Measure | Icon::SymbolSprayer
         | Icon::Slice | Icon::Shaper | Icon::PerspectiveGrid | Icon::ColumnGraph => "",
@@ -266,6 +285,34 @@ pub fn draw(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
     }
     if icon == Icon::CurvaturePen {
         draw_curvature_pen_glyph(scene, box_, color);
+        return;
+    }
+    if matches!(icon, Icon::AddAnchor | Icon::DeleteAnchor | Icon::AnchorPoint) {
+        draw_pen_variant_glyph(scene, icon, box_, color);
+        return;
+    }
+    if icon == Icon::GroupSelect {
+        paint_brand(scene, DIRECT_SELECT_SVG, box_, color, true);
+        draw_badge_plus(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Scissors {
+        draw_scissors_glyph(scene, box_, color);
+        return;
+    }
+    if icon == Icon::Reshape {
+        draw_reshape_glyph(scene, box_, color);
+        return;
+    }
+    if matches!(
+        icon,
+        Icon::Warp | Icon::Twirl | Icon::Pucker | Icon::Bloat | Icon::Scallop | Icon::Crystallize | Icon::Wrinkle
+    ) {
+        draw_liquify_glyph(scene, icon, box_, color);
+        return;
+    }
+    if matches!(icon, Icon::RectangularGrid | Icon::PolarGrid) {
+        draw_grid_glyph(scene, icon == Icon::PolarGrid, box_, color);
         return;
     }
     if icon == Icon::Paintbrush {
@@ -790,6 +837,182 @@ fn draw_curvature_pen_glyph(scene: &mut Scene, box_: Rect, color: Color) {
     scene.stroke(&Stroke::new((w * 0.05).max(1.0)), ID, color, None, &Circle::new(b, r));
     scene.fill(Fill::NonZero, ID, color, None, &Circle::new(a, r * 0.45));
     scene.fill(Fill::NonZero, ID, color, None, &Circle::new(b, r * 0.45));
+}
+
+/// The Pen nib with a corner badge: `+` Add Anchor Point, `−` Delete
+/// Anchor Point, a caret for Anchor Point (convert).
+fn draw_pen_variant_glyph(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
+    let nib = Rect::new(box_.x0, box_.y0, box_.x1 - box_.width() * 0.18, box_.y1 - box_.height() * 0.18);
+    paint_brand(scene, PEN_SVG, nib, color, false);
+    match icon {
+        Icon::AddAnchor => draw_badge_plus(scene, box_, color),
+        Icon::DeleteAnchor => {
+            let (c, a, sw) = badge_geometry(box_);
+            scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((c.x - a, c.y), (c.x + a, c.y)));
+        }
+        _ => {
+            let (c, a, sw) = badge_geometry(box_);
+            let mut caret = BezPath::new();
+            caret.move_to((c.x - a, c.y + a * 0.6));
+            caret.line_to((c.x, c.y - a * 0.6));
+            caret.line_to((c.x + a, c.y + a * 0.6));
+            scene.stroke(&Stroke::new(sw), ID, color, None, &caret);
+        }
+    }
+}
+
+/// Centre, half-size and stroke width of a tool icon's bottom-right badge.
+fn badge_geometry(box_: Rect) -> (Point, f64, f64) {
+    let w = box_.width();
+    (Point::new(box_.x1 - w * 0.16, box_.y1 - w * 0.16), w * 0.13, (w * 0.08).max(1.3))
+}
+
+/// A `+` in the icon's bottom-right corner.
+fn draw_badge_plus(scene: &mut Scene, box_: Rect, color: Color) {
+    let (c, a, sw) = badge_geometry(box_);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((c.x - a, c.y), (c.x + a, c.y)));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new((c.x, c.y - a), (c.x, c.y + a)));
+}
+
+/// Two crossed blades with finger loops — the Scissors tool.
+fn draw_scissors_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let sw = (w * 0.08).max(1.4);
+    let pivot = Point::new(box_.x0 + w * 0.52, box_.y0 + h * 0.46);
+    let loop_a = Point::new(box_.x0 + w * 0.26, box_.y1 - h * 0.24);
+    let loop_b = Point::new(box_.x1 - w * 0.26, box_.y1 - h * 0.24);
+    let tip_a = Point::new(box_.x1 - w * 0.18, box_.y0 + h * 0.14);
+    let tip_b = Point::new(box_.x0 + w * 0.30, box_.y0 + h * 0.14);
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(loop_a, tip_a));
+    scene.stroke(&Stroke::new(sw), ID, color, None, &Line::new(loop_b, tip_b));
+    let r = w * 0.12;
+    scene.stroke(&Stroke::new(sw * 0.8), ID, color, None, &Circle::new(loop_a, r));
+    scene.stroke(&Stroke::new(sw * 0.8), ID, color, None, &Circle::new(loop_b, r));
+    scene.fill(Fill::NonZero, ID, color, None, &Circle::new(pivot, sw * 0.7));
+}
+
+/// A curve bulged up from a straight baseline by a grabbed point — the
+/// Reshape tool.
+fn draw_reshape_glyph(scene: &mut Scene, box_: Rect, color: Color) {
+    let w = box_.width();
+    let h = box_.height();
+    let a = Point::new(box_.x0 + w * 0.14, box_.y1 - h * 0.28);
+    let b = Point::new(box_.x1 - w * 0.14, box_.y1 - h * 0.28);
+    let grab = Point::new(box_.center().x, box_.y0 + h * 0.26);
+    let mut p = BezPath::new();
+    p.move_to(a);
+    p.curve_to(Point::new(a.x + w * 0.18, a.y), Point::new(grab.x - w * 0.22, grab.y), grab);
+    p.curve_to(Point::new(grab.x + w * 0.22, grab.y), Point::new(b.x - w * 0.18, b.y), b);
+    scene.stroke(&Stroke::new((w * 0.08).max(1.4)), ID, color, None, &p);
+    let s = w * 0.16;
+    scene.fill(Fill::NonZero, ID, color, None, &Rect::from_center_size(grab, (s, s)));
+    scene.stroke(
+        &Stroke::new((w * 0.05).max(1.0)).with_dashes(0.0, [w * 0.06, w * 0.05]),
+        ID,
+        color,
+        None,
+        &Line::new(a, b),
+    );
+}
+
+/// The liquify brushes: each is a closed outline `r(θ)` showing what the
+/// brush does to a circle — pinched, inflated, scalloped, spiked — except
+/// Twirl (a spiral), Wrinkle (two rippled lines) and Warp (a wave pushed
+/// sideways by an arrow).
+fn draw_liquify_glyph(scene: &mut Scene, icon: Icon, box_: Rect, color: Color) {
+    use std::f64::consts::{PI, TAU};
+    let c = box_.center();
+    let big = box_.width().min(box_.height()) * 0.40;
+    let sw = (box_.width() * 0.07).max(1.3);
+    let stroke = Stroke::new(sw);
+    let polyline = |pts: &mut dyn Iterator<Item = Point>, close: bool| {
+        let mut p = BezPath::new();
+        for (i, q) in pts.enumerate() {
+            if i == 0 {
+                p.move_to(q);
+            } else {
+                p.line_to(q);
+            }
+        }
+        if close {
+            p.close_path();
+        }
+        p
+    };
+    let radial = |f: &dyn Fn(f64) -> f64| {
+        polyline(
+            &mut (0..120).map(|i| {
+                let a = i as f64 / 120.0 * TAU;
+                c + Vec2::new(a.cos(), a.sin()) * (big * f(a))
+            }),
+            true,
+        )
+    };
+    let path = match icon {
+        Icon::Pucker => radial(&|a| 1.0 - 0.5 * (2.0 * a).sin().powi(2)),
+        Icon::Bloat => radial(&|a| 0.82 + 0.16 * (4.0 * a).cos().abs().sqrt()),
+        Icon::Scallop => radial(&|a| 0.86 + 0.14 * (1.0 - (4.0 * a).sin().abs())),
+        Icon::Crystallize => radial(&|a| 0.62 + 0.38 * (5.0 * a).cos().abs().powi(6)),
+        Icon::Twirl => polyline(
+            &mut (0..=96).map(|i| {
+                let t = i as f64 / 96.0;
+                let a = t * 3.0 * PI - PI / 2.0;
+                c + Vec2::new(a.cos(), a.sin()) * (big * (0.12 + 0.88 * t))
+            }),
+            false,
+        ),
+        Icon::Wrinkle => {
+            let mut p = BezPath::new();
+            for (row, dy) in [-0.35, 0.35].into_iter().enumerate() {
+                let line = polyline(
+                    &mut (0..=24).map(|i| {
+                        let t = i as f64 / 24.0;
+                        let wobble = ((i * 7 + row * 3) % 5) as f64 / 4.0 - 0.5;
+                        Point::new(c.x - big + 2.0 * big * t, c.y + big * (dy + 0.22 * wobble))
+                    }),
+                    false,
+                );
+                p.extend(line);
+            }
+            p
+        }
+        _ => {
+            // Warp: a wave bowed to the right, and the arrow pushing it.
+            let mut p = polyline(
+                &mut (0..=40).map(|i| {
+                    let t = i as f64 / 40.0;
+                    Point::new(c.x - big * 0.55 + big * 0.55 * (PI * t).sin(), c.y - big + 2.0 * big * t)
+                }),
+                false,
+            );
+            let (from, to) = (Point::new(c.x - big * 0.2, c.y), Point::new(c.x + big, c.y));
+            p.move_to(from);
+            p.line_to(to);
+            p.move_to(Point::new(to.x - big * 0.35, to.y - big * 0.3));
+            p.line_to(to);
+            p.line_to(Point::new(to.x - big * 0.35, to.y + big * 0.3));
+            p
+        }
+    };
+    scene.stroke(&stroke, ID, color, None, &path);
+}
+
+/// A 3×3 cell grid, or rings crossed by spokes for the polar one.
+fn draw_grid_glyph(scene: &mut Scene, polar: bool, box_: Rect, color: Color) {
+    let r = box_.inset(box_.width() * 0.16);
+    let sw = (box_.width() * 0.06).max(1.1);
+    let scale = r.width() / 100.0;
+    let paths = if polar {
+        amalith_core::grid::polar_grid(amalith_core::Rect::new(0., 0., 100., 100.), 1, 4)
+    } else {
+        amalith_core::grid::rectangular_grid(amalith_core::Rect::new(0., 0., 100., 100.), 2, 2)
+    };
+    let xf = Affine::translate((r.x0, r.y0)) * Affine::scale(scale);
+    for p in paths {
+        let path = xf * crate::convert::bez_path(&p.geometry);
+        scene.stroke(&Stroke::new(sw), ID, color, None, &path);
+    }
 }
 
 /// A bristled brush tip on an angled handle — the Paintbrush tool.

@@ -118,6 +118,11 @@ pub struct DragPreview<'a> {
     /// one path object, overriding its committed `width_points` in the
     /// ribbon this frame renders.
     pub width_points: Option<(ObjectId, &'a [amalith_core::WidthPoint])>,
+    /// Live whole-path edits (the Anchor Point, Curvature, Reshape and
+    /// liquify tools' drags): each listed path's anchor model as it would
+    /// be if the drag were released now, drawn in place of the committed
+    /// one — fill, stroke, contour and nodes alike.
+    pub paths: &'a [(ObjectId, amalith_core::PathData)],
     /// A dialog editing one entry in an Appearance item's effect stack
     /// (`offsetdlg::Target::AppearanceItem`) and previewing live: that
     /// entry isn't committed to the document until OK, so while the
@@ -127,6 +132,13 @@ pub struct DragPreview<'a> {
     /// `app/render/mod.rs`'s `usize::MAX` sentinel) means "append", for
     /// previewing an effect being *added* rather than edited.
     pub appearance_effect: Option<(ObjectId, usize, usize, amalith_core::Effect)>,
+}
+
+impl<'a> DragPreview<'a> {
+    /// `id`'s live whole-path edit, if this drag has one.
+    pub fn live_path(&self, id: ObjectId) -> Option<&'a amalith_core::PathData> {
+        self.paths.iter().find(|(o, _)| *o == id).map(|(_, p)| p)
+    }
 }
 
 /// One area-text box being resized by a Selection-tool handle drag, or
@@ -1340,9 +1352,12 @@ pub fn paint(
                 continue;
             };
             let m = vt * sel_ambient * convert::affine(doc.world_transform(id));
-            let preview_pd = hdrag
-                .filter(|&(o, ..)| o == id)
-                .map(|(_, n, side, hd)| crate::anchors::deformed_handle(pd, n, side, hd));
+            let live_path = drag.and_then(|d| d.live_path(id)).cloned();
+            let preview_pd = live_path.or_else(|| {
+                hdrag
+                    .filter(|&(o, ..)| o == id)
+                    .map(|(_, n, side, hd)| crate::anchors::deformed_handle(pd, n, side, hd))
+            });
             let g = if let Some(ppd) = &preview_pd {
                 ppd.geometry.clone()
             } else {
@@ -1395,9 +1410,22 @@ pub fn paint(
         for &id in av.paths {
             let resuming = av.pen_resume_object == Some(id);
             let any_sel = av.selected.iter().any(|(o, _)| *o == id);
-            for (idx, pos) in crate::anchors::anchors_of(doc, id) {
+            let live = drag.and_then(|d| d.live_path(id));
+            let nodes = match live {
+                Some(p) => {
+                    let m = convert::affine(doc.world_transform(id));
+                    p.subpaths()
+                        .iter()
+                        .flat_map(|s| s.anchors.iter())
+                        .enumerate()
+                        .map(|(n, a)| (n, m * convert::point(a.point)))
+                        .collect()
+                }
+                None => crate::anchors::anchors_of(doc, id),
+            };
+            for (idx, pos) in nodes {
                 let sel = av.selected.contains(&(id, idx));
-                let moved = sel && hdrag.is_none_or(|(o, ..)| o != id);
+                let moved = sel && live.is_none() && hdrag.is_none_or(|(o, ..)| o != id);
                 let doc_pos = if moved { pos + dv } else { pos };
                 // The hovered node swells so it's clear which one a click
                 // (or a rotation) will act on.
@@ -2087,7 +2115,9 @@ fn paint_object(
                 })
                 .unwrap_or_default();
             let hdrag = drag.and_then(|d| d.handle).filter(|&(o, ..)| o == id);
-            if let Some((_, n, side, hd)) = hdrag {
+            if let Some(live) = drag.and_then(|d| d.live_path(id)) {
+                paint_path(scene, &convert::bez_path(&live.geometry), None);
+            } else if let Some((_, n, side, hd)) = hdrag {
                 let g = crate::anchors::deformed_handle(pd, n, side, hd);
                 paint_path(scene, &convert::bez_path(&g.geometry), None);
             } else if let (false, Some((_, dv))) =
@@ -2245,6 +2275,9 @@ fn paint_object(
                     // A dangling `path` (deleted out from under the text)
                     // just paints nothing, rather than erroring.
                     let preview_path = td.path_geometry.as_ref().and_then(|pd| {
+                        if let Some(live) = drag.and_then(|d| d.live_path(id)) {
+                            return Some(live.clone());
+                        }
                         if let Some((_, n, side, delta)) = drag.and_then(|d| d.handle).filter(|&(o, ..)| o == id) {
                             return Some(crate::anchors::deformed_handle(pd, n, side, delta));
                         }

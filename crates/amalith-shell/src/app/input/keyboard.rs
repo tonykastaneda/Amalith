@@ -533,6 +533,11 @@ impl App {
                 *hardness = (*hardness - 0.1).max(0.0);
                 self.request_main_redraw();
             }
+            PhysicalKey::Code(code @ (KeyCode::BracketLeft | KeyCode::BracketRight))
+                if pressed && !self.cmd_down && self.active_tool.liquify_kind().is_some() =>
+            {
+                self.liquify_resize_step(code == KeyCode::BracketRight);
+            }
             PhysicalKey::Code(KeyCode::BracketRight)
                 if pressed && !self.cmd_down && matches!(self.active_tool, Tool::Eraser | Tool::RasterBrush | Tool::RasterEraser | Tool::RasterCloneStamp) =>
             {
@@ -837,6 +842,11 @@ impl App {
                     KeyCode::Enter | KeyCode::NumpadEnter if !self.pen.is_empty() => {
                         self.commit_pen(false);
                     }
+                    // Enter ends the Curvature tool's path, keeping it
+                    // selected (the next click starts a fresh one).
+                    KeyCode::Enter | KeyCode::NumpadEnter if self.active_tool == Tool::Curvature => {
+                        self.end_curvature();
+                    }
                     // Illustrator's Convert Anchor Point (Shift+C): toggle
                     // every selected anchor between smooth and corner.
                     KeyCode::KeyC if self.shift_down && !self.doc.anchor_sel.is_empty() => {
@@ -879,6 +889,9 @@ impl App {
                             // Exit the Artboard tool back to the
                             // tool that was active before it.
                             self.set_tool(self.pre_artboard_tool);
+                        } else if self.active_tool == Tool::Curvature && self.end_curvature() {
+                            // Esc ends the Curvature path being drawn; the
+                            // path itself stays as drawn.
                         } else if self.active_tool == Tool::Pen && !self.pen.is_empty() {
                             // Illustrator: Esc ends the path in progress. Two
                             // or more anchors commit as an open path (a line);

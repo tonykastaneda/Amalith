@@ -38,7 +38,7 @@ pub mod recolor;
 mod pathfinder;
 
 pub use align::{AlignKind, AlignTo};
-pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathfinderOp};
+pub use command::{Command, CommandOutcome, GradientRef, JoinTrim, LayerOptions, PasteStack, PathPoint, PathfinderOp};
 pub use pathfinder::{
     shape_builder_regions, shape_builder_union, polygon_path, apply as pathfinder_apply, flatten_path,
     has_visible_stroke, offset_path, pucker_bloat, roughen, transform_effect, tweak, twist, zig_zag,

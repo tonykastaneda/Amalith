@@ -158,6 +158,16 @@ pub enum Command {
         path: PathData,
         name: Option<String>,
     },
+    /// Creates a group of paths as the top-most child of `parent`, each
+    /// path taking `appearance` (the default appearance when `None`) — one
+    /// undo step for a multi-path primitive like the Rectangular / Polar
+    /// Grid tools'. The outcome is the group.
+    CreatePathGroup {
+        parent: amalith_core::ObjectParent,
+        paths: Vec<PathData>,
+        appearance: Option<Appearance>,
+        name: Option<String>,
+    },
     /// Places a raster image as the top-most child of `parent`.
     /// `path` is the source file for a linked asset, or the container path
     /// for an embedded one (`embedded: true`). `bounds` is the image's
@@ -263,6 +273,57 @@ pub enum Command {
     },
     /// Removes anchor `anchor` (flat ordinal) from `object`.
     DeleteAnchor { object: ObjectId, anchor: usize },
+    /// The Delete Anchor Point tool: removes anchor `anchor` (flat
+    /// ordinal) and refits its neighbours so the shape stays as close as
+    /// it can — a closed path stays closed, unlike [`Command::DeleteAnchor`]
+    /// (the Delete key), which opens the shape where the point was. A path
+    /// left with nothing to draw is removed.
+    RemoveAnchor { object: ObjectId, anchor: usize },
+    /// The Anchor Point tool's drag off an anchor: turns anchor `anchor`
+    /// (flat ordinal) into a symmetric smooth point with its out-handle at
+    /// `handle_out` (local space) and its in-handle mirrored. A handle on
+    /// the anchor itself leaves a plain corner.
+    PullAnchorHandles {
+        object: ObjectId,
+        anchor: usize,
+        handle_out: Point,
+    },
+    /// The Scissors tool: cuts `object`'s path at `at`. A closed subpath
+    /// opens there; an open one is cut in two, the part after the cut
+    /// becoming a new path object (a copy of `object`'s appearance and
+    /// transform) just above it — returned as [`CommandOutcome::Object`].
+    /// A cut on an open path's own free end is a no-op.
+    SplitPath { object: ObjectId, at: PathPoint },
+    /// The Curvature tool: replaces subpath `subpath` of `object` with a
+    /// smooth curve through `points` (local space) — see
+    /// [`amalith_core::curvature_subpath`].
+    SetCurvaturePath {
+        object: ObjectId,
+        subpath: usize,
+        points: Vec<amalith_core::CurvaturePoint>,
+        closed: bool,
+    },
+    /// One stroke of the Warp / Twirl / Pucker / Bloat / Scallop /
+    /// Crystallize / Wrinkle brush (`params.kind`) along `stroke`
+    /// (document space) across `objects`; anything that isn't a path, or
+    /// that the brush never reaches, is left alone. Deterministic: the
+    /// same stroke always gives the same result — see
+    /// [`amalith_core::liquify`].
+    Liquify {
+        objects: Vec<ObjectId>,
+        stroke: Vec<Point>,
+        params: amalith_core::liquify::LiquifyParams,
+    },
+    /// The Reshape tool: grabs `object`'s path at `at` (local space; its
+    /// nearest anchor within `tolerance`, else a new one on the curve)
+    /// and moves it by `delta`, the rest of that subpath following with a
+    /// soft falloff — see [`amalith_core::reshape`].
+    ReshapePath {
+        object: ObjectId,
+        at: Point,
+        delta: Vec2,
+        tolerance: f64,
+    },
     /// Joins two open-path endpoint anchors — the Join tool's endpoint-
     /// connect drag, or the right-click Join context-menu item.
     /// `anchor_a`'s object always survives (keeps its id, appearance, and
@@ -751,6 +812,14 @@ pub enum GradientRef {
     Existing(GradientId),
     /// Mint a fresh default gradient of this kind into the pool.
     New(GradientKind),
+}
+
+/// A place on a path: an existing anchor (flat ordinal), or parameter `t`
+/// along segment `segment` (flat segment ordinal).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathPoint {
+    Anchor(usize),
+    Segment { segment: usize, t: f64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
