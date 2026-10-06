@@ -105,14 +105,14 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "amalith-adjust"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "amalith-core",
 ]
 
 [[package]]
 name = "amalith-commands"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "amalith-core",
  "amalith-io",
@@ -123,14 +123,14 @@ dependencies = [
 
 [[package]]
 name = "amalith-console"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "amalith-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "kurbo 0.11.3",
  "serde",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "amalith-io"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "amalith-commands",
  "amalith-core",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "amalith-script"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "amalith-commands",
  "amalith-core",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "amalith-shell"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "alacritty_terminal",
  "amalith-adjust",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "amalith-trace"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "amalith-core",
  "image",
