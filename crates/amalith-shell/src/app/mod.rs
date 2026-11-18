@@ -4808,10 +4808,15 @@ impl App {
             return;
         };
         if (dp - press).hypot() > slop {
+            // Pull by the cursor's travel since the press, not toward the
+            // raw cursor: a Shift-click places the anchor on the 45° line,
+            // possibly far from the cursor, and measuring from the cursor
+            // would turn that offset into a long handle on the first jitter.
+            let pull = a.point + (dp - press);
             let h = if shift {
-                constrained(Some(a.point), dp, true)
+                constrained(Some(a.point), pull, true)
             } else {
-                dp
+                pull
             };
             a.handle_out = Some(h);
             if alt {
@@ -5314,17 +5319,13 @@ impl App {
                 if self.text_edit.is_some() {
                     self.commit_text_edit();
                 }
-                let _ = self.doc.editor.undo();
-                self.prune_selection();
-                self.request_main_redraw();
+                self.undo_redo(false);
             }
             MenuAction::Redo => {
                 if self.text_edit.is_some() {
                     self.commit_text_edit();
                 }
-                let _ = self.doc.editor.redo();
-                self.prune_selection();
-                self.request_main_redraw();
+                self.undo_redo(true);
             }
             MenuAction::Cut => {
                 if !self.doc.selection.is_empty() {
@@ -8023,6 +8024,25 @@ impl App {
         let r = te.key(&event.logical_key, mods, text, &mut self.text);
         self.request_main_redraw();
         r
+    }
+
+    /// ⌘Z / ⇧⌘Z from either the keyboard or the native Edit menu (macOS
+    /// routes the shortcut through the menu): the Pen tool steps its anchors
+    /// first, everything else goes to the document undo stack.
+    fn undo_redo(&mut self, redo: bool) {
+        if redo && self.active_tool == Tool::Pen && !self.pen_redo.is_empty() {
+            if let Some(p) = self.pen_redo.pop() {
+                self.pen.push(p);
+            }
+            self.request_main_redraw();
+            return;
+        }
+        if !redo && self.pen_undo_step() {
+            return;
+        }
+        let _ = if redo { self.doc.editor.redo() } else { self.doc.editor.undo() };
+        self.prune_selection();
+        self.request_main_redraw();
     }
 
     /// ⌘Z with the Pen tool: step back one anchor. While still drawing this

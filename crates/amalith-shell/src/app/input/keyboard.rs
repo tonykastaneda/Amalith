@@ -585,23 +585,7 @@ impl App {
                     self.request_main_redraw();
                     return;
                 }
-                let redo = self.shift_down;
-                if redo && self.active_tool == Tool::Pen && !self.pen_redo.is_empty() {
-                    if let Some(p) = self.pen_redo.pop() {
-                        self.pen.push(p);
-                    }
-                    self.request_main_redraw();
-                } else if !redo && self.pen_undo_step() {
-                    // handled
-                } else {
-                    let _ = if redo {
-                        self.doc.editor.redo()
-                    } else {
-                        self.doc.editor.undo()
-                    };
-                    self.prune_selection();
-                    self.request_main_redraw();
-                }
+                self.undo_redo(self.shift_down);
             }
             // Delete with an anchor selection removes those anchors, not
             // the whole object. Highest ordinal first so earlier removals

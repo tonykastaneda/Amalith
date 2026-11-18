@@ -13,3 +13,6 @@
 # ab*.png files beside it) — keep it out of git; a re-export blew past
 # GitHub's 100MB push limit once already.
 crates/amalith-shell/assets/newdoc-art/CNDart.ai
+
+# TypeScript incremental build cache
+*.tsbuildinfo

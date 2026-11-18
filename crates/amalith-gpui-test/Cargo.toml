@@ -1,0 +1,29 @@
+# Throwaway prototype: Amalith's Master → Group → Panel docking, rebuilt on
+# GPUI with GPUI's default look. Deliberately its own workspace (the empty
+# `[workspace]` below) so the main workspace, `cargo test --workspace` and CI
+# never compile GPUI.
+#
+#   cargo run --manifest-path crates/amalith-gpui-test/Cargo.toml
+
+[package]
+name = "amalith-gpui-test"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# `runtime_shaders`: compile Metal shaders at launch, so building does
+# not need the Xcode Metal toolchain.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
+
+raw-window-handle = "0.6"
+
+# GPUI 0.2.2 can't move a window, so a live tear-off moves the NSWindow
+# directly; NSEvent polls the mouse buttons to tell when a native
+# title-bar drag has ended (GPUI delivers no mouse-up for those).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSArray"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSResponder", "NSView", "NSWindow", "NSScreen"] }
